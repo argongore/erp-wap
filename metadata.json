@@ -1,0 +1,6 @@
+{
+  "name": "ERP Wijaya Agro",
+  "description": "Sistem ERP internal PT Wijaya Agro untuk operasional Kasir, Penjualan, Pembelian Hasil Bumi, Kasbon Uang, Bayar Bon, Transfer Antar Rekening, Manajemen Stok, Rekening Koran Mitra, dan Audit Keuangan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
