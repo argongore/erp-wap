@@ -169,45 +169,61 @@ export const DashboardView: React.FC<Props> = ({ stats, loading, onNavigate, onR
       </div>
 
       {/* Saldo Rekening Perusahaan Detail Grid */}
-      <div className="bg-white rounded-xl border border-zinc-200 p-5 shadow-2xs space-y-3">
-        <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+      <div className="bg-white rounded-xl border border-zinc-200 p-5 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 pb-3 gap-2">
           <div>
-            <h2 className="text-sm font-bold text-zinc-900">Posisi Rekening Perusahaan</h2>
-            <p className="text-xs text-zinc-500">Saldo terkini seluruh rekening kas fisik, bank, dan rekening virtual</p>
+            <h2 className="text-sm font-bold text-zinc-900 flex items-center space-x-2">
+              <Landmark className="w-4 h-4 text-emerald-700" />
+              <span>Rekening Perusahaan (Penyimpanan Dana Riil)</span>
+            </h2>
+            <p className="text-xs text-zinc-500">Kas brankas fisik kasir dan seluruh rekening bank resmi perusahaan</p>
           </div>
           <button
             onClick={() => onNavigate('master-rekening')}
-            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 self-start sm:self-auto cursor-pointer"
           >
-            Kelola Master Rekening &rarr;
+            Buka Master Rekening &rarr;
           </button>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {stats.rekeningList.map((rek) => (
-            <div
-              key={rek.kode}
-              className={`p-3 rounded-lg border text-xs ${
-                rek.kode === 'KAS01'
-                  ? 'bg-emerald-50/50 border-emerald-200'
-                  : rek.isVirtual
-                  ? 'bg-amber-50/40 border-amber-200'
-                  : 'bg-zinc-50 border-zinc-200'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-mono font-bold text-zinc-800">{rek.kode}</span>
-                <span className="text-[10px] text-zinc-500 truncate max-w-[120px]">{rek.atasNama}</span>
-              </div>
-              <div className="text-zinc-600 text-[11px] truncate mb-1">{rek.nama}</div>
-              <div className="text-sm font-bold text-zinc-900">{formatRupiah(rek.saldoSaatIni)}</div>
-              {rek.isVirtual && (
-                <div className="mt-1 text-[10px] text-amber-700 font-medium">
-                  {rek.kode === 'BON01' ? '• Piutang Customer' : '• Hutang Hasil Bumi'}
+          {stats.rekeningList
+            .filter((r) => r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-')))
+            .map((rek) => (
+              <div
+                key={rek.kode}
+                className={`p-3 rounded-lg border text-xs ${
+                  rek.kode === 'KAS01'
+                    ? 'bg-emerald-50/70 border-emerald-300'
+                    : 'bg-zinc-50 border-zinc-200'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-mono font-bold text-zinc-800">{rek.kode}</span>
+                  <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
+                    FISIK RIIL
+                  </span>
                 </div>
-              )}
-            </div>
-          ))}
+                <div className="text-zinc-600 text-[11px] truncate mb-1">{rek.nama}</div>
+                <div className="text-sm font-bold text-zinc-900 font-mono">{formatRupiah(rek.saldoSaatIni)}</div>
+              </div>
+            ))}
+        </div>
+
+        {/* Division Operational Accounts Note & Mini Ribbon */}
+        <div className="pt-2 border-t border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-indigo-50/50 p-3 rounded-lg border border-indigo-100">
+          <div className="flex items-center space-x-2">
+            <span className="font-bold text-indigo-950">Rekening Operasional Divisi:</span>
+            <span className="text-zinc-500 text-[11px]">
+              (6 Unit Bisnis: Alokasi &amp; pergerakan upah harian. Penyimpanan fisik tetap di Rekening Perusahaan)
+            </span>
+          </div>
+          <button
+            onClick={() => onNavigate('menu-divisi')}
+            className="text-xs font-bold text-indigo-700 hover:text-indigo-900 cursor-pointer shrink-0"
+          >
+            Lihat Keuangan Divisi &rarr;
+          </button>
         </div>
       </div>
 

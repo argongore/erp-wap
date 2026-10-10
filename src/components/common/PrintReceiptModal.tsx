@@ -15,6 +15,7 @@ export interface ReceiptData {
   detailRows: Array<{ label: string; value: string | number; isTotal?: boolean; highlight?: boolean }>;
   catatan?: string;
   kasir?: string;
+  fotoNota?: string;
 }
 
 interface Props {
@@ -64,6 +65,8 @@ export const PrintReceiptModal: React.FC<Props> = ({ receipt, onClose }) => {
       setTimeout(() => setCopied(false), 2500);
     });
   };
+
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
@@ -153,6 +156,34 @@ export const PrintReceiptModal: React.FC<Props> = ({ receipt, onClose }) => {
             </div>
           )}
 
+          {/* Attached Receipt Image */}
+          {receipt.fotoNota && (
+            <div className="bg-amber-50/60 p-2.5 rounded-lg border border-amber-200 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider block">
+                  📷 Lampiran Foto Nota / Bukti Fisik:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowPhotoModal(true)}
+                  className="text-[10px] text-amber-800 hover:text-amber-950 font-bold underline cursor-pointer"
+                >
+                  Perbesar Gambar
+                </button>
+              </div>
+              <div
+                onClick={() => setShowPhotoModal(true)}
+                className="max-h-48 overflow-hidden rounded border border-amber-300 bg-white flex items-center justify-center cursor-zoom-in group"
+              >
+                <img
+                  src={receipt.fotoNota}
+                  alt="Lampiran Nota Fisik"
+                  className="max-h-48 w-auto object-contain group-hover:scale-102 transition-transform"
+                />
+              </div>
+            </div>
+          )}
+
           {/* Signatures */}
           <div className="pt-4 grid grid-cols-2 text-center text-[10px] text-zinc-500 border-t border-dashed border-zinc-300">
             <div>
@@ -171,6 +202,33 @@ export const PrintReceiptModal: React.FC<Props> = ({ receipt, onClose }) => {
             Dicetak otomatis oleh Sistem ERP Wijaya Agro · Sah tanpa stempel basah
           </div>
         </div>
+
+        {/* Full Image Lightbox */}
+        {showPhotoModal && receipt.fotoNota && (
+          <div
+            onClick={() => setShowPhotoModal(false)}
+            className="fixed inset-0 z-60 bg-black/90 flex items-center justify-center p-4 cursor-zoom-out"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-zinc-900 p-3 rounded-2xl max-w-3xl w-full border border-zinc-700 space-y-2 cursor-default"
+            >
+              <div className="flex items-center justify-between text-white text-xs pb-1 border-b border-zinc-800">
+                <span className="font-bold">Foto Nota Fisik: {receipt.nomorTransaksi}</span>
+                <button
+                  type="button"
+                  onClick={() => setShowPhotoModal(false)}
+                  className="text-zinc-400 hover:text-white px-2 py-0.5 rounded cursor-pointer"
+                >
+                  ✕ Tutup
+                </button>
+              </div>
+              <div className="max-h-[80vh] overflow-auto flex items-center justify-center bg-black rounded-lg p-2">
+                <img src={receipt.fotoNota} alt="Foto Nota Penuh" className="max-h-[75vh] w-auto object-contain" />
+              </div>
+            </div>
+          </div>
+        )}
 
         {printError && (
           <div className="px-5 py-2 bg-amber-50 border-t border-amber-200 text-xs text-amber-800 flex items-center space-x-2">

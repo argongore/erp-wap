@@ -241,11 +241,12 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
                 <tr>
                   <th className="py-2.5 px-3">No</th>
                   <th className="py-2.5 px-3 min-w-[180px]">Karyawan</th>
-                  <th className="py-2.5 px-3 min-w-[200px]">Divisi Tugas Hari Ini</th>
-                  <th className="py-2.5 px-3 min-w-[130px]">Upah Harian (Manual)</th>
-                  <th className="py-2.5 px-3 min-w-[100px]">Lembur/Makan</th>
+                  <th className="py-2.5 px-3 min-w-[180px]">Divisi Tugas Hari Ini</th>
+                  <th className="py-2.5 px-3 min-w-[200px]">Hari Ini Kerja Untuk Apa</th>
+                  <th className="py-2.5 px-3 min-w-[120px]">Upah (Manual)</th>
+                  <th className="py-2.5 px-3 min-w-[90px]">Lembur</th>
                   <th className="py-2.5 px-3 min-w-[110px]">Potong Bon</th>
-                  <th className="py-2.5 px-3 min-w-[130px] text-right">Bersih Dibayar</th>
+                  <th className="py-2.5 px-3 min-w-[120px] text-right">Bersih Dibayar</th>
                   <th className="py-2.5 px-2 text-center">Aksi</th>
                 </tr>
               </thead>
@@ -300,6 +301,19 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
                             </option>
                           ))}
                         </select>
+                      </td>
+
+                      {/* Tugas / Hari Ini Kerja Untuk Apa */}
+                      <td className="py-2.5 px-3">
+                        <input
+                          type="text"
+                          value={row.keterangan || ''}
+                          onChange={(e) =>
+                            handleUpdateRow(idx, { keterangan: e.target.value })
+                          }
+                          className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-100 focus:outline-hidden focus:border-amber-400 text-xs"
+                          placeholder="e.g. Sortasi gabah / Dryer"
+                        />
                       </td>
 
                       {/* Upah Manual */}

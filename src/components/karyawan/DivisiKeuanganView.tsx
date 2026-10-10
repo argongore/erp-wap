@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
+  CatatanUpahHarian,
   DAFTAR_DIVISI,
   NamaDivisi,
   PergerakanKeuanganDivisiSummary,
@@ -36,6 +37,8 @@ import {
 } from '../../server/types.ts';
 import { ProsesGajiModal } from './ProsesGajiModal.tsx';
 import { SlipGajiModal } from './SlipGajiModal.tsx';
+import { InputPayrollHarianDivisiModal } from './InputPayrollHarianDivisiModal.tsx';
+import { RekapitulasiPayrollBulananTable } from './RekapitulasiPayrollBulananTable.tsx';
 
 interface DivisiKeuanganViewProps {
   rekeningList: Rekening[];
@@ -56,12 +59,26 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
   const [loading, setLoading] = useState(true);
   const [selectedDivisi, setSelectedDivisi] = useState<PergerakanKeuanganDivisiSummary | null>(null);
 
+  // Sub-navigation inside DivisiKeuanganView
+  const [activeMainTab, setActiveMainTab] = useState<'IKHTISAR_DIVISI' | 'REKAP_BULANAN' | 'LOG_HARIAN'>('IKHTISAR_DIVISI');
+
+  // Input Payroll Harian Modal State
+  const [isPayrollHarianModalOpen, setIsPayrollHarianModalOpen] = useState(false);
+  const [payrollDivisiPreset, setPayrollDivisiPreset] = useState<NamaDivisi | undefined>(undefined);
+  const [payrollKaryawanIdPreset, setPayrollKaryawanIdPreset] = useState<string | undefined>(undefined);
+
   // Karyawan & Gaji internal integration
   const [internalKaryawanList, setInternalKaryawanList] = useState<KaryawanWithBon[]>(karyawanList || []);
   const [isGajiModalOpen, setIsGajiModalOpen] = useState(false);
   const [selectedDivisiForGaji, setSelectedDivisiForGaji] = useState<NamaDivisi | undefined>(undefined);
   const [selectedKaryawanForGaji, setSelectedKaryawanForGaji] = useState<KaryawanWithBon | null>(null);
   const [activeSlip, setActiveSlip] = useState<TransaksiPenggajian | null>(null);
+
+  // Upah Harian Log State
+  const [allUpahHarian, setAllUpahHarian] = useState<CatatanUpahHarian[]>([]);
+  const [loadingUpahHarian, setLoadingUpahHarian] = useState(false);
+  const [logHarianSearch, setLogHarianSearch] = useState('');
+  const [logHarianFilterDivisi, setLogHarianFilterDivisi] = useState('ALL');
 
   useEffect(() => {
     if (karyawanList && karyawanList.length > 0) {
@@ -71,20 +88,43 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
     }
   }, [karyawanList]);
 
-  const handleOpenGaji = (karyawan: KaryawanWithBon | null, divisiPreset?: NamaDivisi) => {
-    if (onOpenGajiModal) {
-      onOpenGajiModal(karyawan, divisiPreset);
-    } else {
-      setSelectedKaryawanForGaji(karyawan || internalKaryawanList.find((k) => k.status === 'AKTIF') || null);
-      setSelectedDivisiForGaji(divisiPreset);
-      setIsGajiModalOpen(true);
+  const loadUpahHarian = async () => {
+    setLoadingUpahHarian(true);
+    try {
+      const list = await api.getUpahHarian();
+      setAllUpahHarian(list);
+    } catch (err) {
+      console.error('Failed to load upah harian:', err);
+    } finally {
+      setLoadingUpahHarian(false);
     }
+  };
+
+  const handleOpenInputPayrollHarian = (idKaryawan?: string, divisiPreset?: NamaDivisi) => {
+    setPayrollKaryawanIdPreset(idKaryawan);
+    setPayrollDivisiPreset(divisiPreset);
+    setIsPayrollHarianModalOpen(true);
+  };
+
+  const handlePayrollHarianSuccess = (slip?: TransaksiPenggajian) => {
+    setIsPayrollHarianModalOpen(false);
+    if (slip) {
+      setActiveSlip(slip);
+    }
+    loadData();
+    loadUpahHarian();
+    onRefreshAll?.();
+  };
+
+  const handleOpenGaji = (karyawan: KaryawanWithBon | null, divisiPreset?: NamaDivisi) => {
+    handleOpenInputPayrollHarian(karyawan?.id, divisiPreset);
   };
 
   const handlePayrollSuccess = (slip: TransaksiPenggajian) => {
     setIsGajiModalOpen(false);
     setActiveSlip(slip);
     loadData();
+    loadUpahHarian();
     onRefreshAll?.();
   };
 
@@ -120,6 +160,7 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
 
   useEffect(() => {
     loadData();
+    loadUpahHarian();
   }, []);
 
   const formatRupiah = (val: number) => {
@@ -252,24 +293,24 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           <button
             onClick={() => handleOpenDroppingModal('REK-GWA')}
-            className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md transition-colors"
+            className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md transition-colors cursor-pointer"
           >
             <ArrowRightLeft className="w-4 h-4" />
             <span>+ Dropping Kas Pusat</span>
           </button>
 
           <button
-            onClick={() => handleOpenGaji(null)}
-            className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold shadow-md transition-colors"
+            onClick={() => handleOpenInputPayrollHarian()}
+            className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold shadow-md transition-colors cursor-pointer"
           >
             <PlusCircle className="w-4 h-4" />
-            <span>+ Input Upah Harian</span>
+            <span>+ Input Payroll Harian</span>
           </button>
 
           {onNavigateToKaryawan && (
             <button
               onClick={onNavigateToKaryawan}
-              className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-xs font-semibold transition-colors"
+              className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
             >
               <Users className="w-4 h-4 text-sky-400" />
               <span>Ke Master Karyawan →</span>
@@ -279,17 +320,20 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
       </div>
 
       {/* Integration Info Banner */}
-      <div className="bg-zinc-900/70 border border-zinc-800 px-4 py-2.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-        <div className="flex items-center space-x-2 text-zinc-300">
-          <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-          <span>
-            <strong>Sistem Terintegrasi:</strong> Pembayaran upah di divisi manapun akan otomatis mengurangi saldo kas rekening divisi ini dan memotong kasbon aktif karyawan terkait.
-          </span>
+      <div className="bg-zinc-900/90 border border-emerald-900/80 px-4 py-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="flex items-start space-x-2.5 text-zinc-300">
+          <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+          <div>
+            <strong className="text-white">Tata Kelola Rekening Operasional Divisi:</strong>
+            <p className="text-[11px] text-zinc-400 mt-0.5">
+              Rekening operasional 6 divisi digunakan untuk <strong>mengetahui alokasi dan pergerakan uang</strong> (dropping, mutasi operasional, dan upah harian karyawan). Penyimpanan fisik uangnya <strong>tetap menggunakan Rekening Perusahaan</strong> (Kas Utama Kasir &amp; Rekening Bank Resmi).
+            </p>
+          </div>
         </div>
         {onNavigateToKaryawan && (
           <button
             onClick={onNavigateToKaryawan}
-            className="text-amber-400 hover:underline font-semibold shrink-0 text-xs flex items-center space-x-1 self-start sm:self-auto"
+            className="text-amber-400 hover:underline font-semibold shrink-0 text-xs flex items-center space-x-1 self-start sm:self-auto cursor-pointer"
           >
             <span>Buka Karyawan & Payroll</span>
             <ChevronRight className="w-3.5 h-3.5" />
@@ -297,7 +341,48 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
         )}
       </div>
 
-      {/* Summary KPI Cards */}
+      {/* Sub-Navigation Tabs */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 pb-3">
+        <button
+          onClick={() => setActiveMainTab('IKHTISAR_DIVISI')}
+          className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeMainTab === 'IKHTISAR_DIVISI'
+              ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/50 shadow-md ring-1 ring-emerald-500/20'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+          }`}
+        >
+          <Building2 className="w-4 h-4" />
+          <span>6 Unit Divisi &amp; Kas Operasional</span>
+        </button>
+
+        <button
+          onClick={() => setActiveMainTab('REKAP_BULANAN')}
+          className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeMainTab === 'REKAP_BULANAN'
+              ? 'bg-zinc-800 text-amber-400 border border-amber-500/50 shadow-md ring-1 ring-amber-500/20'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+          }`}
+        >
+          <FileSpreadsheet className="w-4 h-4 text-amber-400" />
+          <span>Tabel Rekapitulasi Bulanan (Gaji &amp; Bon)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveMainTab('LOG_HARIAN')}
+          className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeMainTab === 'LOG_HARIAN'
+              ? 'bg-zinc-800 text-sky-400 border border-sky-500/50 shadow-md ring-1 ring-sky-500/20'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+          }`}
+        >
+          <History className="w-4 h-4 text-sky-400" />
+          <span>Jurnal Log Payroll Harian ({allUpahHarian.length})</span>
+        </button>
+      </div>
+
+      {activeMainTab === 'IKHTISAR_DIVISI' && (
+        <>
+          {/* Summary KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs">
           <span className="text-xs text-zinc-400 block mb-1">Total Saldo Kas 6 Divisi</span>
@@ -417,6 +502,13 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                   </span>
                 </div>
 
+                <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-zinc-800/60">
+                  <span className="text-zinc-400">Penyimpanan Fisik:</span>
+                  <span className="text-emerald-400 font-semibold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800">
+                    Rekening Perusahaan
+                  </span>
+                </div>
+
                 {d.daftarKaryawanTerakhir && d.daftarKaryawanTerakhir.length > 0 && (
                   <div className="pt-2 border-t border-zinc-800/60">
                     <span className="text-[10px] text-zinc-500 block mb-1">Pekerja Baru-baru Ini:</span>
@@ -450,12 +542,12 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                 </button>
 
                 <button
-                  onClick={() => handleOpenGaji(null, d.divisi)}
-                  className="flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-medium bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-800/80 transition-colors"
-                  title="Input Upah Harian di Divisi Ini"
+                  onClick={() => handleOpenInputPayrollHarian(undefined, d.divisi)}
+                  className="flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-bold bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-800/80 transition-colors cursor-pointer"
+                  title="Input Payroll Harian di Divisi Ini"
                 >
                   <PlusCircle className="w-3.5 h-3.5" />
-                  <span>+ Upah</span>
+                  <span>+ Payroll</span>
                 </button>
 
                 <button
@@ -500,12 +592,12 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
 
             <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
               <button
-                onClick={() => handleOpenGaji(null, selectedDivisi.divisi)}
-                className="flex items-center space-x-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold shadow-xs transition-colors"
-                title="Input upah karyawan di divisi ini"
+                onClick={() => handleOpenInputPayrollHarian(undefined, selectedDivisi.divisi)}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                title="Input payroll harian karyawan di divisi ini"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
-                <span>+ Input Upah Divisi Ini</span>
+                <span>+ Input Payroll Divisi Ini</span>
               </button>
 
               <button
@@ -665,6 +757,162 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
           </div>
         </div>
       )}
+        </>
+      )}
+
+      {/* TAB 2: REKAPITULASI PAYROLL & BON BULANAN */}
+      {activeMainTab === 'REKAP_BULANAN' && (
+        <RekapitulasiPayrollBulananTable
+          rekeningList={rekeningList}
+          onOpenInputPayrollHarian={handleOpenInputPayrollHarian}
+          onRefreshAll={() => {
+            loadData();
+            loadUpahHarian();
+            onRefreshAll?.();
+          }}
+        />
+      )}
+
+      {/* TAB 3: JURNAL LOG PAYROLL HARIAN */}
+      {activeMainTab === 'LOG_HARIAN' && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-xl space-y-3 p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-800">
+            <div>
+              <h3 className="text-sm font-bold text-zinc-100 flex items-center space-x-2">
+                <History className="w-4 h-4 text-sky-400" />
+                <span>Jurnal Log Payroll &amp; Tugas Harian Karyawan</span>
+              </h3>
+              <p className="text-[11px] text-zinc-400">
+                Daftar seluruh input harian penugasan per divisi, uraian pekerjaan, nominal upah, dan status pencairan
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => handleOpenInputPayrollHarian()}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                <span>+ Input Payroll Baru</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-col sm:flex-row items-center gap-2.5 text-xs">
+            <div className="relative flex-1 w-full">
+              <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
+              <input
+                type="text"
+                placeholder="Cari karyawan, uraian tugas, atau divisi..."
+                value={logHarianSearch}
+                onChange={(e) => setLogHarianSearch(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-8 pr-3 py-1.5 text-zinc-200 placeholder-zinc-500 focus:outline-hidden focus:border-sky-500 text-xs"
+              />
+            </div>
+
+            <select
+              value={logHarianFilterDivisi}
+              onChange={(e) => setLogHarianFilterDivisi(e.target.value)}
+              className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-200 text-xs font-semibold focus:outline-hidden focus:border-sky-500 w-full sm:w-auto"
+            >
+              <option value="ALL">Semua Divisi</option>
+              {DAFTAR_DIVISI.map((d) => (
+                <option key={d.id} value={d.nama}>
+                  {d.nama}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Table */}
+          <div className="border border-zinc-800 rounded-lg overflow-hidden">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead className="bg-zinc-950 text-zinc-400 uppercase text-[10px] border-b border-zinc-800 tracking-wider">
+                <tr>
+                  <th className="py-2.5 px-3">Tanggal</th>
+                  <th className="py-2.5 px-3">Karyawan</th>
+                  <th className="py-2.5 px-3">Divisi Penugasan</th>
+                  <th className="py-2.5 px-3">Hari Ini Kerja Untuk Apa</th>
+                  <th className="py-2.5 px-3 text-right">Upah Pokok</th>
+                  <th className="py-2.5 px-3 text-right">Lembur/Makan</th>
+                  <th className="py-2.5 px-3 text-right">Total Upah</th>
+                  <th className="py-2.5 px-3 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/60 font-sans text-xs">
+                {loadingUpahHarian ? (
+                  <tr>
+                    <td colSpan={8} className="py-6 text-center text-zinc-400">
+                      Memuat jurnal upah harian...
+                    </td>
+                  </tr>
+                ) : allUpahHarian.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-6 text-center text-zinc-500 font-sans">
+                      Belum ada catatan upah harian. Klik "+ Input Payroll Baru" untuk memulai.
+                    </td>
+                  </tr>
+                ) : (
+                  allUpahHarian
+                    .filter((u) => {
+                      if (logHarianFilterDivisi !== 'ALL' && u.divisi !== logHarianFilterDivisi) return false;
+                      if (logHarianSearch) {
+                        const q = logHarianSearch.toLowerCase();
+                        return (
+                          u.namaKaryawan.toLowerCase().includes(q) ||
+                          u.nikKaryawan.toLowerCase().includes(q) ||
+                          u.divisi.toLowerCase().includes(q) ||
+                          (u.keterangan && u.keterangan.toLowerCase().includes(q))
+                        );
+                      }
+                      return true;
+                    })
+                    .map((log) => (
+                      <tr key={log.id} className="hover:bg-zinc-800/40">
+                        <td className="py-2.5 px-3 font-mono font-bold text-zinc-300 whitespace-nowrap">
+                          {log.tanggalKerja}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-zinc-100">{log.namaKaryawan}</div>
+                          <span className="text-[10px] text-zinc-400">{log.jabatan}</span>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${getDivisiBadgeColor(log.divisi)}`}>
+                            {log.divisi}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-zinc-200">
+                          {log.keterangan || `Tugas di ${log.divisi}`}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-zinc-400">
+                          {formatRupiah(log.upahHarian)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-zinc-500">
+                          {log.uangMakanLembur > 0 ? `+${formatRupiah(log.uangMakanLembur)}` : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400">
+                          {formatRupiah(log.totalUpahHarian)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                          {log.status === 'SUDAH_DIBAYAR' ? (
+                            <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
+                              SUDAH CAIR
+                            </span>
+                          ) : (
+                            <span className="text-[9px] px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-800 font-bold">
+                              TERCATAT (PENDING)
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Dropping Modal */}
       {isDropModalOpen && (
@@ -703,7 +951,7 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
               {/* Rekening Sumber */}
               <div>
                 <label className="block text-zinc-400 font-medium mb-1">
-                  Rekening Sumber (Penyedia Dana Kas Pusat / Bank):
+                  Rekening Sumber Riil (Rekening Perusahaan):
                 </label>
                 <select
                   value={dropSumberRek}
@@ -711,13 +959,16 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 font-semibold focus:outline-hidden focus:border-emerald-500"
                 >
                   {rekeningList
-                    .filter((r) => !r.isVirtual && !r.kode.startsWith('REK-'))
+                    .filter((r) => r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-')))
                     .map((r) => (
                       <option key={r.kode} value={r.kode}>
-                        {r.nama} ({r.kode}) - Saldo: {formatRupiah(r.saldoSaatIni)}
+                        {r.nama} ({r.kode}) - Saldo Fisik: {formatRupiah(r.saldoSaatIni)}
                       </option>
                     ))}
                 </select>
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  *Dana riil ditarik dari Rekening Perusahaan ini untuk dialokasikan ke buku pergerakan operasional divisi.
+                </p>
               </div>
 
               {/* Rekening Tujuan Divisi */}
@@ -814,6 +1065,18 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Input Payroll Harian Divisi Modal */}
+      {isPayrollHarianModalOpen && (
+        <InputPayrollHarianDivisiModal
+          karyawanList={internalKaryawanList}
+          initialDivisi={payrollDivisiPreset}
+          initialKaryawanId={payrollKaryawanIdPreset}
+          rekeningList={rekeningList}
+          onClose={() => setIsPayrollHarianModalOpen(false)}
+          onSuccess={handlePayrollHarianSuccess}
+        />
       )}
 
       {/* Internal Gaji Modal */}

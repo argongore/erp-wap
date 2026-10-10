@@ -7,6 +7,8 @@ import {
   Receipt,
   ArrowLeftRight,
   Package,
+  PackagePlus,
+  TrendingUp,
   Users,
   Building2,
   Briefcase,
@@ -15,11 +17,15 @@ import {
   FileText,
   History,
   ChevronDown,
+  Tv,
+  Database,
 } from 'lucide-react';
 
 export type ActiveTab =
   | 'dashboard'
+  | 'billboard-monitor'
   | 'kasir-penjualan'
+  | 'kasir-pembelian-barang'
   | 'kasir-pembelian'
   | 'kasir-kasbon-uang'
   | 'kasir-bayar-bon'
@@ -31,9 +37,11 @@ export type ActiveTab =
   | 'menu-divisi'
   | 'stok-barang'
   | 'stok-hasil-bumi'
+  | 'laba-rugi-produk'
   | 'rekening-koran-mitra'
   | 'laporan-transaksi'
-  | 'audit-log';
+  | 'audit-log'
+  | 'google-sheets-sync';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -44,10 +52,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   const isKasirActive = activeTab.startsWith('kasir-');
 
   return (
-    <aside className="w-64 bg-zinc-900 text-zinc-300 flex flex-col shrink-0 border-r border-zinc-800 select-none">
-      <div className="p-3 overflow-y-auto space-y-6 flex-1 text-xs">
-        {/* Section 1: Dashboard */}
-        <div>
+    <aside className="w-64 h-full bg-zinc-900 text-zinc-300 flex flex-col shrink-0 border-r border-zinc-800 select-none overflow-hidden">
+      <div className="p-3 overflow-y-auto space-y-6 flex-1 text-xs overscroll-contain">
+        {/* Section 1: Dashboard & Billboard */}
+        <div className="space-y-1.5">
           <button
             onClick={() => setActiveTab('dashboard')}
             className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-lg font-medium transition-colors ${
@@ -58,6 +66,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           >
             <LayoutDashboard className="w-4 h-4" />
             <span className="text-sm">1. DASHBOARD</span>
+          </button>
+
+          {/* Billboard / Command Center Button */}
+          <button
+            onClick={() => setActiveTab('billboard-monitor')}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg font-bold transition-all ${
+              activeTab === 'billboard-monitor'
+                ? 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-md'
+                : 'bg-zinc-800/90 text-emerald-400 hover:bg-zinc-800 hover:text-emerald-300 border border-emerald-900/60'
+            }`}
+          >
+            <div className="flex items-center space-x-2">
+              <Tv className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs">LAYAR BILLBOARD</span>
+            </div>
+            <span className="flex items-center space-x-1 text-[9px] bg-emerald-950 text-emerald-300 font-mono px-1.5 py-0.2 rounded border border-emerald-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>LIVE TV</span>
+            </span>
           </button>
         </div>
 
@@ -77,7 +104,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
               }`}
             >
               <ShoppingCart className="w-4 h-4 text-emerald-400" />
-              <span>Penjualan Toko</span>
+              <span>Penjualan Toko (Nego)</span>
+            </button>
+
+            {/* Pembelian Barang Dagang / Distributor & Pemasok */}
+            <button
+              onClick={() => setActiveTab('kasir-pembelian-barang')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md transition-colors ${
+                activeTab === 'kasir-pembelian-barang'
+                  ? 'bg-amber-700/80 text-white font-semibold'
+                  : 'text-zinc-400 hover:bg-zinc-800/80 hover:text-zinc-200'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <PackagePlus className="w-4 h-4 text-amber-400" />
+                <span>Distributor &amp; Pemasok (Beli)</span>
+              </div>
+              <span className="text-[9px] bg-amber-950 text-amber-300 font-bold px-1.5 py-0.5 rounded border border-amber-800">
+                PASOK
+              </span>
             </button>
 
             <button
@@ -92,7 +137,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
               <span>Pembelian Hasil Bumi</span>
             </button>
 
-            {/* Fitur Baru C: Kasbon Uang */}
+            {/* Kasbon Uang & Nota Lalu */}
             <button
               onClick={() => setActiveTab('kasir-kasbon-uang')}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-md transition-colors ${
@@ -103,47 +148,37 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             >
               <div className="flex items-center space-x-2">
                 <HandCoins className="w-4 h-4 text-rose-400" />
-                <span>Kasbon Uang</span>
+                <span>Kasbon &amp; Nota Lalu</span>
               </div>
-              <span className="text-[9px] bg-rose-950 text-rose-300 font-bold px-1.5 py-0.2 rounded border border-rose-800">
-                BARU
+              <span className="text-[9px] bg-rose-950 text-rose-300 font-bold px-1.5 py-0.5 rounded border border-rose-800">
+                BON
               </span>
             </button>
 
-            {/* Fitur Baru D: Bayar Bon */}
+            {/* Bayar Bon */}
             <button
               onClick={() => setActiveTab('kasir-bayar-bon')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md transition-colors ${
+              className={`w-full flex items-center space-x-2 px-3 py-2 rounded-md transition-colors ${
                 activeTab === 'kasir-bayar-bon'
                   ? 'bg-emerald-700/80 text-white font-semibold'
                   : 'text-zinc-400 hover:bg-zinc-800/80 hover:text-zinc-200'
               }`}
             >
-              <div className="flex items-center space-x-2">
-                <Receipt className="w-4 h-4 text-emerald-400" />
-                <span>Bayar Bon</span>
-              </div>
-              <span className="text-[9px] bg-emerald-950 text-emerald-300 font-bold px-1.5 py-0.2 rounded border border-emerald-800">
-                BARU
-              </span>
+              <Receipt className="w-4 h-4 text-emerald-400" />
+              <span>Bayar Bon</span>
             </button>
 
-            {/* Fitur Baru E: Transfer Antar Rekening */}
+            {/* Transfer Antar Rekening */}
             <button
               onClick={() => setActiveTab('kasir-transfer')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md transition-colors ${
+              className={`w-full flex items-center space-x-2 px-3 py-2 rounded-md transition-colors ${
                 activeTab === 'kasir-transfer'
                   ? 'bg-emerald-700/80 text-white font-semibold'
                   : 'text-zinc-400 hover:bg-zinc-800/80 hover:text-zinc-200'
               }`}
             >
-              <div className="flex items-center space-x-2">
-                <ArrowLeftRight className="w-4 h-4 text-sky-400" />
-                <span>Transfer Antar Rekening</span>
-              </div>
-              <span className="text-[9px] bg-sky-950 text-sky-300 font-bold px-1.5 py-0.2 rounded border border-sky-800">
-                BARU
-              </span>
+              <ArrowLeftRight className="w-4 h-4 text-sky-400" />
+              <span>Transfer Antar Rekening</span>
             </button>
           </div>
         </div>
@@ -204,23 +239,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             {/* Submenu 1: Karyawan */}
             <button
               onClick={() => setActiveTab('master-karyawan')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all ${
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all ${
                 activeTab === 'master-karyawan'
-                  ? 'bg-zinc-800 text-white font-semibold border-l-2 border-amber-400 shadow-xs'
-                  : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
+                  ? 'bg-amber-600 text-white font-bold shadow-md'
+                  : 'text-zinc-300 hover:bg-zinc-800 hover:text-white bg-zinc-800/40 border border-amber-800/40'
               }`}
             >
               <div className="flex items-center space-x-2.5">
-                <div className={`p-1.5 rounded-md ${activeTab === 'master-karyawan' ? 'bg-amber-950 text-amber-400 border border-amber-800' : 'bg-zinc-800/80 text-zinc-400'}`}>
+                <div className={`p-1.5 rounded-md ${activeTab === 'master-karyawan' ? 'bg-amber-800 text-amber-200' : 'bg-amber-950 text-amber-400 border border-amber-800'}`}>
                   <Briefcase className="w-3.5 h-3.5" />
                 </div>
                 <div className="text-left">
-                  <div className="text-xs font-semibold">Karyawan & Payroll</div>
-                  <div className="text-[10px] text-zinc-400">Upah Harian & Kasbon</div>
+                  <div className="text-xs font-bold">Rekap Karyawan &amp; Upah</div>
+                  <div className="text-[10px] text-zinc-400">Tabel Rekap, Gaji Harian, Bon</div>
                 </div>
               </div>
               <span className="text-[9px] bg-amber-950 text-amber-300 font-bold px-1.5 py-0.5 rounded border border-amber-800">
-                SDM
+                SDM REKAP
               </span>
             </button>
 
@@ -287,6 +322,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             LAPORAN & AUDIT
           </div>
           <div className="space-y-0.5 pl-2">
+            {/* Laba Rugi Produk */}
+            <button
+              onClick={() => setActiveTab('laba-rugi-produk')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md transition-colors ${
+                activeTab === 'laba-rugi-produk'
+                  ? 'bg-emerald-700/80 text-white font-semibold'
+                  : 'text-zinc-400 hover:bg-zinc-800/80 hover:text-zinc-200'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <TrendingUp className="w-4 h-4 text-emerald-400" />
+                <span>8. Laba &amp; Rugi Produk</span>
+              </div>
+              <span className="text-[9px] bg-emerald-950 text-emerald-300 font-bold px-1.5 py-0.2 rounded border border-emerald-800">
+                PROFIT
+              </span>
+            </button>
+
             <button
               onClick={() => setActiveTab('rekening-koran-mitra')}
               className={`w-full flex items-center space-x-2 px-3 py-2 rounded-md transition-colors ${
@@ -296,7 +349,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
               }`}
             >
               <FileSpreadsheet className="w-4 h-4 text-indigo-400" />
-              <span>8. Rekening Koran Mitra</span>
+              <span>9. Rekening Koran Mitra</span>
             </button>
 
             <button
@@ -308,7 +361,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
               }`}
             >
               <FileText className="w-4 h-4 text-cyan-400" />
-              <span>9. Laporan Transaksi</span>
+              <span>10. Laporan Transaksi</span>
             </button>
 
             <button
@@ -320,7 +373,33 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
               }`}
             >
               <History className="w-4 h-4 text-yellow-400" />
-              <span>10. Audit / Log Transaksi</span>
+              <span>11. Audit / Log Transaksi</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Section 6: Studio Database Master & Multi-Spreadsheet */}
+        <div className="space-y-1">
+          <div className="px-3 py-1 text-[11px] font-bold text-emerald-400 tracking-wider uppercase flex items-center justify-between">
+            <span>DATABASE MASTER &amp; SHEETS</span>
+            <span className="text-[9px] bg-emerald-950 text-emerald-300 font-bold px-1.5 py-0.2 rounded border border-emerald-800">
+              10 TABEL
+            </span>
+          </div>
+          <div className="space-y-0.5 pl-2">
+            <button
+              onClick={() => setActiveTab('google-sheets-sync')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md transition-colors ${
+                activeTab === 'google-sheets-sync'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-bold shadow-md'
+                  : 'text-zinc-400 hover:bg-zinc-800/80 hover:text-zinc-200'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <Database className="w-4 h-4 text-emerald-400" />
+                <span>11. Studio Database Master</span>
+              </div>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             </button>
           </div>
         </div>

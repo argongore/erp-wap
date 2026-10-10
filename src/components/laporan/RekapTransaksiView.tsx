@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileText, Search, Filter, ArrowUpRight, ArrowDownLeft, HandCoins, Receipt, ArrowLeftRight } from 'lucide-react';
+import { FileText, Search, Filter, ArrowUpRight, ArrowDownLeft, HandCoins, Receipt, ArrowLeftRight, Image, Eye, X, Download } from 'lucide-react';
 import { formatRupiah } from '../../utils/format.ts';
 
 interface Props {
@@ -14,12 +14,14 @@ interface Props {
     pihakTerkait: string;
     rekening: string;
     status: string;
+    fotoNota?: string;
   }>;
 }
 
 export const RekapTransaksiView: React.FC<Props> = ({ recentTransactions }) => {
   const [filterKategori, setFilterKategori] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
 
   const filtered = recentTransactions.filter((tx) => {
     const matchCategory = filterKategori === 'ALL' || tx.kategori === filterKategori;
@@ -45,7 +47,7 @@ export const RekapTransaksiView: React.FC<Props> = ({ recentTransactions }) => {
             </span>
           </div>
           <p className="text-xs text-zinc-500">
-            Arsip terpadu seluruh transaksi kasir, pembelian hasil bumi, kasbon uang, bayar bon, dan mutasi rekening
+            Arsip terpadu seluruh transaksi kasir, pembelian kulakan supplier, pembelian hasil bumi, kasbon uang, bayar bon, dan mutasi rekening
           </p>
         </div>
 
@@ -66,6 +68,14 @@ export const RekapTransaksiView: React.FC<Props> = ({ recentTransactions }) => {
             }`}
           >
             Semua ({recentTransactions.length})
+          </button>
+          <button
+            onClick={() => setFilterKategori('PEMBELIAN_BARANG')}
+            className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
+              filterKategori === 'PEMBELIAN_BARANG' ? 'bg-indigo-700 text-white' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+            }`}
+          >
+            Kulakan Supplier
           </button>
           <button
             onClick={() => setFilterKategori('PENJUALAN')}
@@ -135,13 +145,14 @@ export const RekapTransaksiView: React.FC<Props> = ({ recentTransactions }) => {
                 <th className="py-3 px-4">PIHAK TERKAIT</th>
                 <th className="py-3 px-4">REKENING TERLIBAT</th>
                 <th className="py-3 px-4 text-right">NOMINAL (RP)</th>
+                <th className="py-3 px-4 text-center">BUKTI NOTA</th>
                 <th className="py-3 px-4 text-center">STATUS</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 text-zinc-800">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-zinc-400">
+                  <td colSpan={9} className="py-8 text-center text-zinc-400">
                     Tidak ada transaksi yang cocok dengan kriteria pencarian
                   </td>
                 </tr>
@@ -159,6 +170,8 @@ export const RekapTransaksiView: React.FC<Props> = ({ recentTransactions }) => {
                             ? 'bg-emerald-100 text-emerald-800'
                             : tx.kategori === 'PEMBELIAN_HASIL_BUMI'
                             ? 'bg-amber-100 text-amber-800'
+                            : tx.kategori === 'PEMBELIAN_BARANG'
+                            ? 'bg-indigo-100 text-indigo-800'
                             : tx.kategori === 'KASBON_UANG'
                             ? 'bg-rose-100 text-rose-800'
                             : tx.kategori === 'BAYAR_BON'
@@ -173,6 +186,21 @@ export const RekapTransaksiView: React.FC<Props> = ({ recentTransactions }) => {
                     <td className="py-3 px-4 text-zinc-600">{tx.pihakTerkait}</td>
                     <td className="py-3 px-4 font-mono text-zinc-600">{tx.rekening}</td>
                     <td className="py-3 px-4 text-right font-bold text-zinc-900">{formatRupiah(tx.nominal)}</td>
+                    <td className="py-3 px-4 text-center">
+                      {tx.fotoNota ? (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewImage({ src: tx.fotoNota!, title: `Bukti Nota Transaksi ${tx.id} (${tx.pihakTerkait})` })}
+                          className="inline-flex items-center space-x-1 px-2 py-0.5 bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded font-semibold text-[10px] cursor-pointer transition-colors"
+                          title="Klik untuk melihat bukti foto nota fisik"
+                        >
+                          <Image className="w-3 h-3 text-purple-600" />
+                          <span>Lihat Nota</span>
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-zinc-400">-</span>
+                      )}
+                    </td>
                     <td className="py-3 px-4 text-center">
                       <span
                         className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
@@ -193,6 +221,44 @@ export const RekapTransaksiView: React.FC<Props> = ({ recentTransactions }) => {
           </table>
         </div>
       </div>
+
+      {/* Lightbox Preview Modal for Foto Nota */}
+      {previewImage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl border border-zinc-200">
+            <div className="p-3 bg-zinc-900 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Image className="w-4 h-4 text-purple-400" />
+                <span className="font-bold text-xs truncate max-w-md">{previewImage.title}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="text-zinc-400 hover:text-white p-1 rounded cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 bg-zinc-950 flex items-center justify-center max-h-[75vh] overflow-auto">
+              <img
+                src={previewImage.src}
+                alt="Foto Nota Bukti Fisik"
+                className="max-h-[70vh] w-auto object-contain rounded-lg border border-zinc-800"
+              />
+            </div>
+            <div className="p-3 bg-zinc-50 border-t border-zinc-200 flex items-center justify-between text-xs text-zinc-600">
+              <span>Bukti fisik nota tersimpan terenkripsi di sistem database.</span>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="px-4 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-semibold"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

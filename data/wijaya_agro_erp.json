@@ -2,25 +2,27 @@
   "rekening": [
     {
       "kode": "KAS01",
-      "nama": "Kas Utama Kasir",
+      "nama": "Kas Utama Kasir (Brankas Fisik)",
       "atasNama": "PT Wijaya Agro",
       "nomorRekening": "KAS-01-OPERASIONAL",
       "saldoAwal": 25000000,
-      "saldoSaatIni": 23460000,
+      "saldoSaatIni": 25000000,
       "status": "AKTIF",
       "isVirtual": false,
-      "keterangan": "Uang kas fisik di laci kasir kantor pusat"
+      "kategori": "PERUSAHAAN",
+      "keterangan": "Penyimpanan utama uang kas fisik di brankas & laci kasir kantor pusat"
     },
     {
       "kode": "BNI01",
-      "nama": "Bank BNI Operasional",
+      "nama": "Bank BNI Operasional Pusat",
       "atasNama": "PT Wijaya Agro",
       "nomorRekening": "1827401928",
       "saldoAwal": 75000000,
-      "saldoSaatIni": 73000000,
+      "saldoSaatIni": 75000000,
       "status": "AKTIF",
       "isVirtual": false,
-      "keterangan": "Rekening giro operasional pembelian & penjualan"
+      "kategori": "PERUSAHAAN",
+      "keterangan": "Rekening bank giro utama penyimpanan dana perusahaan"
     },
     {
       "kode": "BCA01",
@@ -28,10 +30,11 @@
       "atasNama": "PT Wijaya Agro",
       "nomorRekening": "8201948291",
       "saldoAwal": 120000000,
-      "saldoSaatIni": 122000000,
+      "saldoSaatIni": 120000000,
       "status": "AKTIF",
       "isVirtual": false,
-      "keterangan": "Rekening utama penampungan hasil dagang"
+      "kategori": "PERUSAHAAN",
+      "keterangan": "Rekening bank penampungan utama hasil penjualan toko & komoditas"
     },
     {
       "kode": "MAN01",
@@ -42,7 +45,8 @@
       "saldoSaatIni": 50000000,
       "status": "AKTIF",
       "isVirtual": false,
-      "keterangan": "Rekening transaksi grosir dan mitra tani"
+      "kategori": "PERUSAHAAN",
+      "keterangan": "Rekening bank transaksi grosir dan mitra tani"
     },
     {
       "kode": "BRI01",
@@ -53,7 +57,8 @@
       "saldoSaatIni": 35000000,
       "status": "AKTIF",
       "isVirtual": false,
-      "keterangan": "Rekening transaksi mitra petani daerah"
+      "kategori": "PERUSAHAAN",
+      "keterangan": "Rekening bank transaksi kemitraan petani daerah"
     },
     {
       "kode": "BER01",
@@ -64,7 +69,8 @@
       "saldoSaatIni": 15000000,
       "status": "AKTIF",
       "isVirtual": false,
-      "keterangan": "Rekening syariah kemitraan"
+      "kategori": "PERUSAHAAN",
+      "keterangan": "Rekening bank syariah kemitraan"
     },
     {
       "kode": "BON01",
@@ -72,10 +78,11 @@
       "atasNama": "PT Wijaya Agro",
       "nomorRekening": "VIRTUAL-BON-PIUTANG",
       "saldoAwal": 0,
-      "saldoSaatIni": 1920000,
+      "saldoSaatIni": 0,
       "status": "AKTIF",
       "isVirtual": true,
-      "keterangan": "Rekening khusus sistem lama untuk total kasbon barang & kasbon uang mitra"
+      "kategori": "VIRTUAL_SISTEM",
+      "keterangan": "Rekening virtual kliring sistem untuk akumulasi kasbon barang & kasbon uang"
     },
     {
       "kode": "TIT01",
@@ -83,761 +90,727 @@
       "atasNama": "PT Wijaya Agro",
       "nomorRekening": "VIRTUAL-TITIP-HUTANG",
       "saldoAwal": 0,
-      "saldoSaatIni": 9120000,
+      "saldoSaatIni": 0,
       "status": "AKTIF",
       "isVirtual": true,
-      "keterangan": "Rekening khusus sistem lama untuk titip hasil bumi belum diambil"
+      "kategori": "VIRTUAL_SISTEM",
+      "keterangan": "Rekening virtual kliring sistem untuk titip hasil bumi belum diambil"
+    },
+    {
+      "kode": "REK-GWA",
+      "nama": "Buku Operasional Gudang Wijaya Agro",
+      "atasNama": "Divisi Gudang Wijaya Agro",
+      "nomorRekening": "DIV-01-GWA",
+      "saldoAwal": 15000000,
+      "saldoSaatIni": 15000000,
+      "status": "AKTIF",
+      "isVirtual": false,
+      "kategori": "OPERASIONAL_DIVISI",
+      "rekeningIndukPenyimpan": "KAS01",
+      "keterangan": "Buku tracking alokasi kas operasional sortir gabah & upah harian (Dana fisik di Kas Perusahaan)"
+    },
+    {
+      "kode": "REK-WK",
+      "nama": "Buku Operasional Wijaya Karya",
+      "atasNama": "Divisi Wijaya Karya",
+      "nomorRekening": "DIV-02-WK",
+      "saldoAwal": 20000000,
+      "saldoSaatIni": 20000000,
+      "status": "AKTIF",
+      "isVirtual": false,
+      "kategori": "OPERASIONAL_DIVISI",
+      "rekeningIndukPenyimpan": "BNI01",
+      "keterangan": "Buku tracking operasional proyek pabrik & upah teknisi (Dana fisik di Rekening Bank BNI)"
+    },
+    {
+      "kode": "REK-WT",
+      "nama": "Buku Operasional Wijaya Transport",
+      "atasNama": "Divisi Wijaya Transport",
+      "nomorRekening": "DIV-03-WT",
+      "saldoAwal": 25000000,
+      "saldoSaatIni": 25000000,
+      "status": "AKTIF",
+      "isVirtual": false,
+      "kategori": "OPERASIONAL_DIVISI",
+      "rekeningIndukPenyimpan": "BNI01",
+      "keterangan": "Buku tracking armada truk & upah supir (Dana fisik di Rekening Bank BNI)"
+    },
+    {
+      "kode": "REK-CVA",
+      "nama": "Buku Operasional CV Wijaya Agro",
+      "atasNama": "CV Wijaya Agro",
+      "nomorRekening": "DIV-04-CVA",
+      "saldoAwal": 30000000,
+      "saldoSaatIni": 30000000,
+      "status": "AKTIF",
+      "isVirtual": false,
+      "kategori": "OPERASIONAL_DIVISI",
+      "rekeningIndukPenyimpan": "BCA01",
+      "keterangan": "Buku tracking perputaran dagang saprotan lokal & staff (Dana fisik di Bank BCA)"
+    },
+    {
+      "kode": "REK-WAP",
+      "nama": "Buku Operasional PT Wijaya Agro Perkasa",
+      "atasNama": "PT Wijaya Agro Perkasa",
+      "nomorRekening": "DIV-05-WAP",
+      "saldoAwal": 50000000,
+      "saldoSaatIni": 50000000,
+      "status": "AKTIF",
+      "isVirtual": false,
+      "kategori": "OPERASIONAL_DIVISI",
+      "rekeningIndukPenyimpan": "BNI01",
+      "keterangan": "Buku tracking holding pabrik beras & kemitraan nasional (Dana fisik di Bank BNI)"
+    },
+    {
+      "kode": "REK-OKU",
+      "nama": "Buku Operasional Okussa",
+      "atasNama": "Divisi Bisnis Okussa",
+      "nomorRekening": "DIV-06-OKU",
+      "saldoAwal": 15000000,
+      "saldoSaatIni": 15000000,
+      "status": "AKTIF",
+      "isVirtual": false,
+      "kategori": "OPERASIONAL_DIVISI",
+      "rekeningIndukPenyimpan": "KAS01",
+      "keterangan": "Buku tracking distribusi beras kemasan premium Okussa (Dana fisik di Kas Perusahaan)"
     }
   ],
-  "mitra": [
-    {
-      "id": "MTR-001",
-      "kode": "BUDI01",
-      "nama": "Budi Santoso",
-      "role": "ALL",
-      "telepon": "081234567890",
-      "alamat": "Ds. Karanganyar RT 02/RW 03, Kec. Agro Makmur",
-      "status": "AKTIF",
-      "catatan": "Petani jagung binaan & pembeli sarana produksi"
-    },
-    {
-      "id": "MTR-002",
-      "kode": "SUG01",
-      "nama": "Sugeng Riyadi",
-      "role": "MITRA_TANI",
-      "telepon": "081398765432",
-      "alamat": "Ds. Sukomakmur RT 01/RW 01, Kec. Subur Tani",
-      "status": "AKTIF",
-      "catatan": "Pemasok gabah & jagung pipil"
-    },
-    {
-      "id": "MTR-003",
-      "kode": "JOK01",
-      "nama": "Joko Wibowo",
-      "role": "CUSTOMER",
-      "telepon": "082155667788",
-      "alamat": "Jl. Raya Agro No. 45, Sentra Hortikultura",
-      "status": "AKTIF",
-      "catatan": "Konsumen pupuk dan benih horti"
-    },
-    {
-      "id": "MTR-004",
-      "kode": "SYAM01",
-      "nama": "H. Syamsudin",
-      "role": "SUPPLIER",
-      "telepon": "081922334455",
-      "alamat": "Sentra Pertanian Krajan RT 04/RW 02",
-      "status": "AKTIF",
-      "catatan": "Pemasok hasil bumi sawit & kopi"
-    },
-    {
-      "id": "MTR-005",
-      "kode": "CVTS01",
-      "nama": "CV Tani Sejahtera",
-      "role": "ALL",
-      "telepon": "085211223344",
-      "alamat": "Komplek Pergudangan Agro Blok A-12",
-      "status": "AKTIF",
-      "catatan": "Mitra korporasi saprotan & komoditas"
-    },
-    {
-      "id": "MTR-KRY-001",
-      "kode": "KRY-001",
-      "nama": "Agus Supriyadi (Karyawan)",
-      "role": "KARYAWAN",
-      "telepon": "081299881122",
-      "alamat": "Jl. Melati No. 12, Wlingi, Blitar",
-      "status": "AKTIF",
-      "catatan": "Karyawan: Kasir & Admin Toko (Operasional Toko)"
-    },
-    {
-      "id": "MTR-KRY-002",
-      "kode": "KRY-002",
-      "nama": "Bambang Pamungkas (Karyawan)",
-      "role": "KARYAWAN",
-      "telepon": "081388776655",
-      "alamat": "Ds. Talun RT 03/RW 02, Blitar",
-      "status": "AKTIF",
-      "catatan": "Karyawan: Staff Gudang & Timbang (Gudang Hasil Bumi)"
-    },
-    {
-      "id": "MTR-KRY-003",
-      "kode": "KRY-003",
-      "nama": "Hadi Sutrisno (Karyawan)",
-      "role": "KARYAWAN",
-      "telepon": "085711223344",
-      "alamat": "Jl. Raya Gandusari No. 8, Blitar",
-      "status": "AKTIF",
-      "catatan": "Karyawan: Supir Logistik & Pengiriman (Transport & Distribusi)"
-    }
-  ],
-  "karyawan": [
-    {
-      "id": "KRY-001",
-      "nik": "KRY-001",
-      "nama": "Agus Supriyadi",
-      "jabatan": "Kasir & Admin Toko",
-      "departemen": "Operasional Toko",
-      "gajiPokok": 3500000,
-      "tunjanganTetap": 500000,
-      "telepon": "081299881122",
-      "alamat": "Jl. Melati No. 12, Wlingi, Blitar",
-      "tanggalMasuk": "15/01/2024",
-      "status": "AKTIF",
-      "idMitraTerkait": "MTR-KRY-001",
-      "catatan": "Karyawan tetap kasir toko saprotan"
-    },
-    {
-      "id": "KRY-002",
-      "nik": "KRY-002",
-      "nama": "Bambang Pamungkas",
-      "jabatan": "Staff Gudang & Timbang",
-      "departemen": "Gudang Hasil Bumi",
-      "gajiPokok": 3200000,
-      "tunjanganTetap": 400000,
-      "telepon": "081388776655",
-      "alamat": "Ds. Talun RT 03/RW 02, Blitar",
-      "tanggalMasuk": "01/06/2024",
-      "status": "AKTIF",
-      "idMitraTerkait": "MTR-KRY-002",
-      "catatan": "Petugas timbang & sortasi hasil bumi"
-    },
-    {
-      "id": "KRY-003",
-      "nik": "KRY-003",
-      "nama": "Hadi Sutrisno",
-      "jabatan": "Supir Logistik & Pengiriman",
-      "departemen": "Transport & Distribusi",
-      "gajiPokok": 3000000,
-      "tunjanganTetap": 600000,
-      "telepon": "085711223344",
-      "alamat": "Jl. Raya Gandusari No. 8, Blitar",
-      "tanggalMasuk": "10/08/2024",
-      "status": "AKTIF",
-      "idMitraTerkait": "MTR-KRY-003",
-      "catatan": "Supir armada truk pengiriman gabah & pupuk"
-    }
-  ],
-  "penggajian": [
-    {
-      "id": "GAJI2609242998",
-      "slipNomor": "SLIP/WA/24092026/2998",
-      "tanggal": "24/09/2026",
-      "jam": "10:19:13",
-      "idKaryawan": "KRY-001",
-      "nikKaryawan": "KRY-001",
-      "namaKaryawan": "Agus Supriyadi",
-      "jabatan": "Kasir & Admin Toko",
-      "departemen": "Operasional Toko",
-      "periodeBulan": "September 2026",
-      "gajiPokok": 3500000,
-      "tunjangan": 500000,
-      "bonus": 200000,
-      "totalGajiKotor": 4200000,
-      "totalKasbonAwal": 1000000,
-      "persentasePotongKasbon": 50,
-      "potonganKasbon": 500000,
-      "sisaKasbonAkhir": 500000,
-      "gajiBersihDibayar": 3700000,
-      "metodePembayaran": "TUNAI",
-      "rekeningSumber": "KAS01",
-      "keterangan": "Gaji Agus Periode September 2026",
-      "idBayarBonTerkait": "BYB2609247435"
-    }
-  ],
+  "mitra": [],
+  "karyawan": [],
+  "upahHarian": [],
+  "penggajian": [],
   "produk": [
     {
-      "kode": "PRD-NPK16",
+      "kode": "PRD-09",
+      "nama": "BERAS BELITANG",
+      "satuan": "SAK",
+      "kategori": "BERAS",
+      "hargaBeli": 145000,
+      "hargaJual": 155000,
+      "hargaKhususRekanan": 150000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-10",
+      "nama": "BERAS JEMPOL",
+      "satuan": "SAK",
+      "kategori": "BERAS",
+      "hargaBeli": 140000,
+      "hargaJual": 150000,
+      "hargaKhususRekanan": 145000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-11",
+      "nama": "PASIR m2",
+      "satuan": "METER KUBIK",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 180000,
+      "hargaJual": 220000,
+      "hargaKhususRekanan": 200000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-12",
+      "nama": "KORAL M2",
+      "satuan": "METER KUBIK",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 220000,
+      "hargaJual": 260000,
+      "hargaKhususRekanan": 240000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-13",
+      "nama": "BATU UJM",
+      "satuan": "METER KUBIK",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 200000,
+      "hargaJual": 240000,
+      "hargaKhususRekanan": 220000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-14",
+      "nama": "SPLIT",
+      "satuan": "METER KUBIK",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 230000,
+      "hargaJual": 270000,
+      "hargaKhususRekanan": 250000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-15",
+      "nama": "BATA",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 650,
+      "hargaJual": 800,
+      "hargaKhususRekanan": 750,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-16",
+      "nama": "BATA RINGAN",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 8500,
+      "hargaJual": 10000,
+      "hargaKhususRekanan": 9500,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-17",
+      "nama": "PAPAN",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 25000,
+      "hargaJual": 30000,
+      "hargaKhususRekanan": 28000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-18",
+      "nama": "KASAU",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 18000,
+      "hargaJual": 22000,
+      "hargaKhususRekanan": 20000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-19",
+      "nama": "BALOK 7x14",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 55000,
+      "hargaJual": 65000,
+      "hargaKhususRekanan": 60000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-20",
+      "nama": "BALOK 8X12",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 60000,
+      "hargaJual": 72000,
+      "hargaKhususRekanan": 66000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-21",
+      "nama": "SPANEL 4M",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 45000,
+      "hargaJual": 55000,
+      "hargaKhususRekanan": 50000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-22",
+      "nama": "SPANEL 2M",
+      "satuan": "BIJI/BUAH",
+      "kategori": "ALAT_PERTANIAN",
+      "hargaBeli": 25000,
+      "hargaJual": 32000,
+      "hargaKhususRekanan": 28000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-23",
+      "nama": "UREA",
+      "satuan": "SAK",
       "kategori": "PUPUK",
-      "nama": "Pupuk NPK Mutiara 16-16-16 (50kg)",
-      "satuan": "Sak",
-      "hargaBeli": 820000,
-      "hargaJual": 890000,
+      "hargaBeli": 120000,
+      "hargaJual": 135000,
+      "hargaKhususRekanan": 130000,
       "status": "AKTIF"
     },
     {
-      "kode": "PRD-UREA",
+      "kode": "PRD-24",
+      "nama": "NPK",
+      "satuan": "SAK",
       "kategori": "PUPUK",
-      "nama": "Pupuk Urea Non-Subsidi Daun Buah (50kg)",
-      "satuan": "Sak",
-      "hargaBeli": 450000,
-      "hargaJual": 510000,
+      "hargaBeli": 160000,
+      "hargaJual": 180000,
+      "hargaKhususRekanan": 170000,
       "status": "AKTIF"
     },
     {
-      "kode": "PRD-RND1L",
-      "kategori": "PESTISIDA",
-      "nama": "Herbisida Roundup 486 SL (1 Liter)",
-      "satuan": "Botol",
-      "hargaBeli": 95000,
-      "hargaJual": 115000,
+      "kode": "PRD-25",
+      "nama": "SOLAR",
+      "satuan": "DRIGENT",
+      "kategori": "LAINNYA",
+      "hargaBeli": 210000,
+      "hargaJual": 235000,
+      "hargaKhususRekanan": 225000,
       "status": "AKTIF"
     },
     {
-      "kode": "PRD-GRAMOX",
-      "kategori": "PESTISIDA",
-      "nama": "Herbisida Gramoxone 276 SL (1 Liter)",
-      "satuan": "Botol",
+      "kode": "PRD-26",
+      "nama": "DEXLITE",
+      "satuan": "DRIGENT",
+      "kategori": "LAINNYA",
+      "hargaBeli": 275000,
+      "hargaJual": 300000,
+      "hargaKhususRekanan": 290000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-27",
+      "nama": "KOPI ROBUSTA MENTAH",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 45000,
+      "hargaJual": 55000,
+      "hargaKhususRekanan": 50000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-28",
+      "nama": "ROBUSTA PREMIUM MENTAH",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 55000,
+      "hargaJual": 68000,
+      "hargaKhususRekanan": 62000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-29",
+      "nama": "ROBUSTA LANANG MENTAH",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 65000,
+      "hargaJual": 80000,
+      "hargaKhususRekanan": 72000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-30",
+      "nama": "KOPI ROBUSTA ROSTING",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 70000,
+      "hargaJual": 85000,
+      "hargaKhususRekanan": 78000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-31",
+      "nama": "ROBUSTA PREMIUM ROSTING",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
       "hargaBeli": 85000,
       "hargaJual": 105000,
+      "hargaKhususRekanan": 95000,
       "status": "AKTIF"
     },
     {
-      "kode": "PRD-P32",
-      "kategori": "BENIH",
-      "nama": "Benih Jagung Hibrida Pioneer P32 (5kg)",
-      "satuan": "Sak",
-      "hargaBeli": 490000,
-      "hargaJual": 540000,
+      "kode": "PRD-32",
+      "nama": "ROBUSTA LANANG ROSTING",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 95000,
+      "hargaJual": 120000,
+      "hargaKhususRekanan": 110000,
       "status": "AKTIF"
     },
     {
-      "kode": "PRD-NK212",
-      "kategori": "BENIH",
-      "nama": "Benih Jagung Syngenta NK 212 (5kg)",
-      "satuan": "Sak",
-      "hargaBeli": 470000,
-      "hargaJual": 520000,
+      "kode": "PRD-33",
+      "nama": "KOPI ROBUSTA BUBUK",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 75000,
+      "hargaJual": 90000,
+      "hargaKhususRekanan": 82000,
       "status": "AKTIF"
     },
     {
-      "kode": "PRD-SPR16L",
-      "kategori": "ALAT_PERTANIAN",
-      "nama": "Tangki Sprayer Elektrik CBA 16 Liter",
-      "satuan": "Unit",
-      "hargaBeli": 380000,
-      "hargaJual": 440000,
+      "kode": "PRD-34",
+      "nama": "ROBUSTA PREMIUM BUBUK",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 90000,
+      "hargaJual": 110000,
+      "hargaKhususRekanan": 100000,
+      "status": "AKTIF"
+    },
+    {
+      "kode": "PRD-35",
+      "nama": "ROBUSTA LANANG BUBUK",
+      "satuan": "KEMASAN",
+      "kategori": "BERAS",
+      "hargaBeli": 100000,
+      "hargaJual": 125000,
+      "hargaKhususRekanan": 115000,
       "status": "AKTIF"
     }
   ],
   "stokBarang": [
     {
-      "kode": "PRD-NPK16",
-      "namaProduk": "Pupuk NPK Mutiara 16-16-16 (50kg)",
-      "satuan": "Sak",
-      "stok": 116,
-      "minimum": 20,
-      "updateTerakhir": "2026-09-24T02:57:52.564Z"
-    },
-    {
-      "kode": "PRD-UREA",
-      "namaProduk": "Pupuk Urea Non-Subsidi Daun Buah (50kg)",
-      "satuan": "Sak",
-      "stok": 148,
-      "minimum": 25,
-      "updateTerakhir": "2026-09-24T02:57:52.566Z"
-    },
-    {
-      "kode": "PRD-RND1L",
-      "namaProduk": "Herbisida Roundup 486 SL (1 Liter)",
-      "satuan": "Botol",
-      "stok": 85,
-      "minimum": 15,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
-    },
-    {
-      "kode": "PRD-GRAMOX",
-      "namaProduk": "Herbisida Gramoxone 276 SL (1 Liter)",
-      "satuan": "Botol",
-      "stok": 60,
+      "kode": "PRD-09",
+      "namaProduk": "BERAS BELITANG",
+      "satuan": "SAK",
+      "stok": 0,
       "minimum": 10,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
     },
     {
-      "kode": "PRD-P32",
-      "namaProduk": "Benih Jagung Hibrida Pioneer P32 (5kg)",
-      "satuan": "Sak",
-      "stok": 75,
-      "minimum": 15,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
-    },
-    {
-      "kode": "PRD-NK212",
-      "namaProduk": "Benih Jagung Syngenta NK 212 (5kg)",
-      "satuan": "Sak",
-      "stok": 50,
+      "kode": "PRD-10",
+      "namaProduk": "BERAS JEMPOL",
+      "satuan": "SAK",
+      "stok": 0,
       "minimum": 10,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
     },
     {
-      "kode": "PRD-SPR16L",
-      "namaProduk": "Tangki Sprayer Elektrik CBA 16 Liter",
-      "satuan": "Unit",
-      "stok": 25,
-      "minimum": 5,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
+      "kode": "PRD-11",
+      "namaProduk": "PASIR m2",
+      "satuan": "METER KUBIK",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-12",
+      "namaProduk": "KORAL M2",
+      "satuan": "METER KUBIK",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-13",
+      "namaProduk": "BATU UJM",
+      "satuan": "METER KUBIK",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-14",
+      "namaProduk": "SPLIT",
+      "satuan": "METER KUBIK",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-15",
+      "namaProduk": "BATA",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-16",
+      "namaProduk": "BATA RINGAN",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-17",
+      "namaProduk": "PAPAN",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-18",
+      "namaProduk": "KASAU",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-19",
+      "namaProduk": "BALOK 7x14",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-20",
+      "namaProduk": "BALOK 8X12",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-21",
+      "namaProduk": "SPANEL 4M",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-22",
+      "namaProduk": "SPANEL 2M",
+      "satuan": "BIJI/BUAH",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-23",
+      "namaProduk": "UREA",
+      "satuan": "SAK",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-24",
+      "namaProduk": "NPK",
+      "satuan": "SAK",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-25",
+      "namaProduk": "SOLAR",
+      "satuan": "DRIGENT",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-26",
+      "namaProduk": "DEXLITE",
+      "satuan": "DRIGENT",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-27",
+      "namaProduk": "KOPI ROBUSTA MENTAH",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-28",
+      "namaProduk": "ROBUSTA PREMIUM MENTAH",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-29",
+      "namaProduk": "ROBUSTA LANANG MENTAH",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-30",
+      "namaProduk": "KOPI ROBUSTA ROSTING",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-31",
+      "namaProduk": "ROBUSTA PREMIUM ROSTING",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-32",
+      "namaProduk": "ROBUSTA LANANG ROSTING",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-33",
+      "namaProduk": "KOPI ROBUSTA BUBUK",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-34",
+      "namaProduk": "ROBUSTA PREMIUM BUBUK",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "PRD-35",
+      "namaProduk": "ROBUSTA LANANG BUBUK",
+      "satuan": "KEMASAN",
+      "stok": 0,
+      "minimum": 10,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
     }
   ],
   "stokHasilBumi": [
     {
-      "kode": "HB-JAGUNG",
-      "nama": "Jagung Pipil Kering (KA 14%)",
-      "satuan": "Kg",
-      "stok": 16400,
-      "hargaBeliStandar": 4800,
-      "updateTerakhir": "2026-09-24T02:57:52.583Z"
-    },
-    {
-      "kode": "HB-GABAH",
-      "nama": "Gabah Kering Panen (GKP)",
-      "satuan": "Kg",
-      "stok": 8200,
-      "hargaBeliStandar": 6700,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
-    },
-    {
-      "kode": "HB-SAWIT",
-      "nama": "Kelapa Sawit Segar TBS",
-      "satuan": "Kg",
-      "stok": 22000,
-      "hargaBeliStandar": 2450,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
-    },
-    {
-      "kode": "HB-KOPI",
-      "nama": "Kopi Robusta Asalan",
-      "satuan": "Kg",
-      "stok": 3400,
+      "kode": "HB-01",
+      "nama": "KOPI",
+      "satuan": "KG",
+      "stok": 0,
       "hargaBeliStandar": 42000,
-      "updateTerakhir": "2026-09-24T02:50:16.557Z"
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "HB-02",
+      "nama": "KULIT KAYU MANIS STIK",
+      "satuan": "KG",
+      "stok": 0,
+      "hargaBeliStandar": 52000,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "HB-03",
+      "nama": "KULIT KAYU MANIS KA",
+      "satuan": "KG",
+      "stok": 0,
+      "hargaBeliStandar": 38000,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "HB-04",
+      "nama": "KULIT KAYU MANIS KB",
+      "satuan": "KG",
+      "stok": 0,
+      "hargaBeliStandar": 30000,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "HB-05",
+      "nama": "LADA",
+      "satuan": "KG",
+      "stok": 0,
+      "hargaBeliStandar": 68000,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "HB-06",
+      "nama": "CENGKEH",
+      "satuan": "KG",
+      "stok": 0,
+      "hargaBeliStandar": 115000,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "HB-07",
+      "nama": "GG CENGKEH",
+      "satuan": "KG",
+      "stok": 0,
+      "hargaBeliStandar": 35000,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z"
+    },
+    {
+      "kode": "HB-08",
+      "nama": "KOPI TITIP",
+      "satuan": "KG",
+      "stok": 0,
+      "hargaBeliStandar": 0,
+      "updateTerakhir": "2026-10-09T03:10:24.709Z",
+      "isBelumPutusHarga": true,
+      "keterangan": "Pembelian Hasil Bumi dari Petani - Belum Putus Harga (Titip Timbang Panen / Harga Mengambang)"
     }
   ],
-  "penjualan": [
-    {
-      "noPenjualan": "PJ2609243597",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "metode": "KASBON",
-      "rekeningTujuan": "BON01",
-      "items": [
-        {
-          "kodeProduk": "PRD-UREA",
-          "namaProduk": "Pupuk Urea Non-Subsidi Daun Buah (50kg)",
-          "satuan": "Sak",
-          "qty": 1,
-          "harga": 510000,
-          "subtotal": 510000
-        }
-      ],
-      "totalNominal": 510000,
-      "statusPembayaran": "BELUM_BAYAR",
-      "sisaPiutang": 510000,
-      "keterangan": "Penjualan Kasbon Test",
-      "createdAt": "2026-09-24T02:57:52.566Z"
-    },
-    {
-      "noPenjualan": "PJ2609249547",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "metode": "TUNAI",
-      "rekeningTujuan": "KAS01",
-      "items": [
-        {
-          "kodeProduk": "PRD-NPK16",
-          "namaProduk": "Pupuk NPK Mutiara 16-16-16 (50kg)",
-          "satuan": "Sak",
-          "qty": 2,
-          "harga": 890000,
-          "subtotal": 1780000
-        }
-      ],
-      "totalNominal": 1780000,
-      "statusPembayaran": "LUNAS",
-      "sisaPiutang": 0,
-      "keterangan": "Test Penjualan Normal",
-      "createdAt": "2026-09-24T02:57:52.564Z"
-    },
-    {
-      "noPenjualan": "PJ2609249577",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "metode": "KASBON",
-      "rekeningTujuan": "BON01",
-      "items": [
-        {
-          "kodeProduk": "PRD-UREA",
-          "namaProduk": "Pupuk Urea Non-Subsidi Daun Buah (50kg)",
-          "satuan": "Sak",
-          "qty": 1,
-          "harga": 510000,
-          "subtotal": 510000
-        }
-      ],
-      "totalNominal": 510000,
-      "statusPembayaran": "LUNAS",
-      "sisaPiutang": 0,
-      "keterangan": "Penjualan Kasbon Test",
-      "createdAt": "2026-09-24T02:57:30.470Z"
-    },
-    {
-      "noPenjualan": "PJ2609248450",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "metode": "TUNAI",
-      "rekeningTujuan": "KAS01",
-      "items": [
-        {
-          "kodeProduk": "PRD-NPK16",
-          "namaProduk": "Pupuk NPK Mutiara 16-16-16 (50kg)",
-          "satuan": "Sak",
-          "qty": 2,
-          "harga": 890000,
-          "subtotal": 1780000
-        }
-      ],
-      "totalNominal": 1780000,
-      "statusPembayaran": "LUNAS",
-      "sisaPiutang": 0,
-      "keterangan": "Test Penjualan Normal",
-      "createdAt": "2026-09-24T02:57:30.468Z"
-    }
-  ],
-  "pembelianHasilBumi": [
-    {
-      "noPembelian": "PHB2609245174",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "idMitra": "MTR-002",
-      "namaMitra": "Sugeng Riyadi",
-      "komoditasKode": "HB-JAGUNG",
-      "komoditasNama": "Jagung Pipil Kering (KA 14%)",
-      "beratKotor": 2000,
-      "potonganRafaksi": 5,
-      "beratBersih": 1900,
-      "hargaPerKg": 4800,
-      "totalNominal": 9120000,
-      "metodePembayaran": "TITIP",
-      "rekeningSumber": "TIT01",
-      "status": "TITIP",
-      "keterangan": "Hasil panen titip petani Sugeng",
-      "createdAt": "2026-09-24T02:57:52.583Z"
-    }
-  ],
-  "kasbonUang": [
-    {
-      "idTransaksi": "KBU2609246936",
-      "tanggal": "24/09/2026",
-      "jam": "10:19:09",
-      "idMitra": "MTR-KRY-001",
-      "namaMitra": "Agus Supriyadi (Karyawan)",
-      "jenisTransaksi": "KASBON UANG",
-      "metode": "TUNAI",
-      "rekeningSumber": "KAS01",
-      "nominal": 1000000,
-      "sisaKasbon": 500000,
-      "keterangan": "Kasbon berobat anak",
-      "status": "SEBAGIAN",
-      "createdAt": "2026-09-24T03:19:09.480Z"
-    },
-    {
-      "idTransaksi": "KBU2609244768",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "jenisTransaksi": "KASBON UANG",
-      "metode": "TUNAI",
-      "rekeningSumber": "KAS01",
-      "nominal": 500000,
-      "sisaKasbon": 500000,
-      "keterangan": "Kasbon uang modal panen",
-      "status": "BELUM LUNAS",
-      "createdAt": "2026-09-24T02:57:52.568Z"
-    },
-    {
-      "idTransaksi": "KBU2609242300",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "jenisTransaksi": "KASBON UANG",
-      "metode": "TUNAI",
-      "rekeningSumber": "KAS01",
-      "nominal": 500000,
-      "sisaKasbon": 410000,
-      "keterangan": "Kasbon uang modal panen",
-      "status": "SEBAGIAN",
-      "createdAt": "2026-09-24T02:57:30.471Z"
-    }
-  ],
-  "bayarBon": [
-    {
-      "idTransaksi": "BYB2609247435",
-      "tanggal": "24/09/2026",
-      "jam": "10:19:13",
-      "idMitra": "MTR-KRY-001",
-      "namaMitra": "Agus Supriyadi (Karyawan)",
-      "totalBonSebelum": 1000000,
-      "nominalBayar": 500000,
-      "sisaBonSetelah": 500000,
-      "metode": "TUNAI",
-      "rekeningTujuan": "KAS01",
-      "alokasi": [
-        {
-          "jenis": "KASBON_UANG",
-          "refId": "KBU2609246936",
-          "nominalSebelum": 1000000,
-          "nominalDibayar": 500000,
-          "nominalSisa": 500000
-        }
-      ],
-      "keterangan": "Potong Gaji Karyawan Agus Supriyadi Periode September 2026",
-      "createdAt": "2026-09-24T03:19:13.615Z"
-    },
-    {
-      "idTransaksi": "BYB2609245019",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "totalBonSebelum": 1720000,
-      "nominalBayar": 300000,
-      "sisaBonSetelah": 1420000,
-      "metode": "TUNAI",
-      "rekeningTujuan": "KAS01",
-      "alokasi": [
-        {
-          "jenis": "KASBON_BARANG",
-          "refId": "PJ2609249577",
-          "nominalSebelum": 210000,
-          "nominalDibayar": 210000,
-          "nominalSisa": 0
-        },
-        {
-          "jenis": "KASBON_UANG",
-          "refId": "KBU2609242300",
-          "nominalSebelum": 500000,
-          "nominalDibayar": 90000,
-          "nominalSisa": 410000
-        }
-      ],
-      "keterangan": "Cicilan bon tahap 1",
-      "createdAt": "2026-09-24T02:57:52.580Z"
-    },
-    {
-      "idTransaksi": "BYB2609248382",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "idMitra": "MTR-001",
-      "namaMitra": "Budi Santoso",
-      "totalBonSebelum": 1010000,
-      "nominalBayar": 300000,
-      "sisaBonSetelah": 710000,
-      "metode": "TUNAI",
-      "rekeningTujuan": "KAS01",
-      "alokasi": [
-        {
-          "jenis": "KASBON_BARANG",
-          "refId": "PJ2609249577",
-          "nominalSebelum": 510000,
-          "nominalDibayar": 300000,
-          "nominalSisa": 210000
-        }
-      ],
-      "keterangan": "Cicilan bon tahap 1",
-      "createdAt": "2026-09-24T02:57:30.485Z"
-    }
-  ],
-  "transferRekening": [
-    {
-      "noTransfer": "TRF2609244167",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "rekeningSumber": "BNI01",
-      "rekeningTujuan": "BCA01",
-      "nominal": 1000000,
-      "keterangan": "Test mutasi likuiditas internal",
-      "status": "BERHASIL",
-      "createdAt": "2026-09-24T02:57:52.577Z"
-    },
-    {
-      "noTransfer": "TRF2609242042",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "rekeningSumber": "BNI01",
-      "rekeningTujuan": "BCA01",
-      "nominal": 1000000,
-      "keterangan": "Test mutasi likuiditas internal",
-      "status": "BERHASIL",
-      "createdAt": "2026-09-24T02:57:30.482Z"
-    }
-  ],
+  "penjualan": [],
+  "pembelianBarang": [],
+  "pembelianHasilBumi": [],
+  "kasbonUang": [],
+  "bayarBon": [],
+  "transferRekening": [],
   "auditLogs": [
     {
-      "id": "LOG-1790219953616-909",
-      "timestamp": "2026-09-24T03:19:13.616Z",
-      "tanggal": "24/09/2026",
-      "jam": "10:19:13",
+      "id": "LOG-RESET-1791515424710",
+      "timestamp": "2026-10-09T03:10:24.710Z",
+      "tanggal": "09/10/2026",
+      "jam": "10:10:24",
+      "user": "KasirWap",
+      "jenisTransaksi": "VOID",
+      "idTransaksi": "SYS-RESET",
+      "detail": "Pembersihan database: Data mitra dan karyawan dikosongkan bersih untuk input data riil. 35 Master Item (Hasil Bumi 1-8 termasuk Kopi Titip & Produk Dagang 9-35) siap digunakan.",
+      "nominal": 0
+    },
+    {
+      "id": "LOG-1791515411680-959",
+      "timestamp": "2026-10-09T03:10:11.679Z",
+      "tanggal": "09/10/2026",
+      "jam": "10:10:11",
       "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "PAYROLL",
-      "idTransaksi": "GAJI2609242998",
-      "detail": "Penggajian Karyawan Agus Supriyadi (KRY-001) Periode September 2026: Gaji Kotor Rp 4.200.000, Potong Bon Rp 500.000 (Sisa Bon Rp 500.000), Gaji Bersih Rp 3.700.000 via Kas Utama Kasir",
-      "nominal": 3700000,
+      "jenisTransaksi": "CREATE",
+      "idTransaksi": "PJ2610092118",
+      "detail": "Penjualan TUNAI [UMUM] kepada Ibu Rahmawati (Warung Sukses) (1 item) - Omzet: Rp 150.000, Laba: Rp -140.000",
+      "nominal": 150000,
       "rekeningTerkait": "KAS01"
     },
     {
-      "id": "LOG-1790219949486-536",
-      "timestamp": "2026-09-24T03:19:09.486Z",
-      "tanggal": "24/09/2026",
-      "jam": "10:19:09",
+      "id": "LOG-STOK-1791515411661",
+      "timestamp": "2026-10-09T03:10:11.661Z",
+      "tanggal": "09/10/2026",
+      "jam": "10:10:11",
+      "user": "Gudang Kasir",
+      "jenisTransaksi": "UPDATE",
+      "idTransaksi": "ADJ-PRD-09",
+      "detail": "Penyesuaian stok BERAS BELITANG: 0 -> 10 (+10). Alasan: Stok awal toko",
+      "nominal": 0
+    },
+    {
+      "id": "LOG-1791515392574-695",
+      "timestamp": "2026-10-09T03:09:52.574Z",
+      "tanggal": "09/10/2026",
+      "jam": "10:09:52",
       "user": "Kasir Wijaya Agro",
       "jenisTransaksi": "CREATE",
-      "idTransaksi": "KBU2609246936",
-      "detail": "Kasbon Uang diberikan kepada Agus Supriyadi (Karyawan) sebesar Rp 1.000.000 dari Kas Utama Kasir (KAS01) via TUNAI",
-      "nominal": 1000000,
+      "idTransaksi": "PHB2610098094",
+      "detail": "Pembelian Hasil Bumi KOPI (98 kg) dari Bpk. Ahmad (Petani Desa Sidomulyo) - Metode: TUNAI",
+      "nominal": 4410000,
       "rekeningTerkait": "KAS01"
     },
     {
-      "id": "LOG-1790218672584-567",
-      "timestamp": "2026-09-24T02:57:52.584Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "CREATE",
-      "idTransaksi": "PHB2609245174",
-      "detail": "Pembelian Hasil Bumi Jagung Pipil Kering (KA 14%) (1900 kg) dari Sugeng Riyadi - Metode: TITIP",
-      "nominal": 9120000,
-      "rekeningTerkait": "TIT01"
+      "id": "LOG-RESET-1791250804214",
+      "timestamp": "2026-10-06T01:40:04.214Z",
+      "tanggal": "06/10/2026",
+      "jam": "08:40:04",
+      "user": "KasirWap",
+      "jenisTransaksi": "VOID",
+      "idTransaksi": "SYS-RESET",
+      "detail": "Pembersihan database: Data mitra dan karyawan dikosongkan bersih untuk input data riil. 35 Master Item (Hasil Bumi 1-8 termasuk Kopi Titip & Produk Dagang 9-35) siap digunakan.",
+      "nominal": 0
     },
     {
-      "id": "LOG-1790218672581-719",
-      "timestamp": "2026-09-24T02:57:52.581Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "PAYMENT",
-      "idTransaksi": "BYB2609245019",
-      "detail": "Pembayaran Bon oleh Budi Santoso: Rp 300.000 masuk ke Kas Utama Kasir. Sisa kewajiban bon: Rp 1.420.000",
-      "nominal": 300000,
-      "rekeningTerkait": "KAS01"
-    },
-    {
-      "id": "LOG-1790218672577-745",
-      "timestamp": "2026-09-24T02:57:52.577Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "TRANSFER",
-      "idTransaksi": "TRF2609244167",
-      "detail": "Transfer Antar Rekening: Bank BNI Operasional (BNI01) -> Bank BCA Bisnis Agro (BCA01) sebesar Rp 1.000.000. Ket: Test mutasi likuiditas internal",
-      "nominal": 1000000,
-      "rekeningTerkait": "BNI01 -> BCA01"
-    },
-    {
-      "id": "LOG-1790218672574-42",
-      "timestamp": "2026-09-24T02:57:52.573Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "CREATE",
-      "idTransaksi": "KBU2609244768",
-      "detail": "Kasbon Uang diberikan kepada Budi Santoso sebesar Rp 500.000 dari Kas Utama Kasir (KAS01) via TUNAI",
-      "nominal": 500000,
-      "rekeningTerkait": "KAS01"
-    },
-    {
-      "id": "LOG-1790218672567-862",
-      "timestamp": "2026-09-24T02:57:52.567Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "CREATE",
-      "idTransaksi": "PJ2609243597",
-      "detail": "Penjualan KASBON kepada Budi Santoso (1 item) - Status: BELUM_BAYAR",
-      "nominal": 510000,
-      "rekeningTerkait": "BON01"
-    },
-    {
-      "id": "LOG-1790218672565-963",
-      "timestamp": "2026-09-24T02:57:52.565Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:52",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "CREATE",
-      "idTransaksi": "PJ2609249547",
-      "detail": "Penjualan TUNAI kepada Budi Santoso (1 item) - Status: LUNAS",
-      "nominal": 1780000,
-      "rekeningTerkait": "KAS01"
-    },
-    {
-      "id": "LOG-1790218650487-439",
-      "timestamp": "2026-09-24T02:57:30.486Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "PAYMENT",
-      "idTransaksi": "BYB2609248382",
-      "detail": "Pembayaran Bon oleh Budi Santoso: Rp 300.000 masuk ke Kas Utama Kasir. Sisa kewajiban bon: Rp 710.000",
-      "nominal": 300000,
-      "rekeningTerkait": "KAS01"
-    },
-    {
-      "id": "LOG-1790218650483-423",
-      "timestamp": "2026-09-24T02:57:30.483Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "TRANSFER",
-      "idTransaksi": "TRF2609242042",
-      "detail": "Transfer Antar Rekening: Bank BNI Operasional (BNI01) -> Bank BCA Bisnis Agro (BCA01) sebesar Rp 1.000.000. Ket: Test mutasi likuiditas internal",
-      "nominal": 1000000,
-      "rekeningTerkait": "BNI01 -> BCA01"
-    },
-    {
-      "id": "LOG-1790218650479-636",
-      "timestamp": "2026-09-24T02:57:30.479Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "CREATE",
-      "idTransaksi": "KBU2609242300",
-      "detail": "Kasbon Uang diberikan kepada Budi Santoso sebesar Rp 500.000 dari Kas Utama Kasir (KAS01) via TUNAI",
-      "nominal": 500000,
-      "rekeningTerkait": "KAS01"
-    },
-    {
-      "id": "LOG-1790218650471-757",
-      "timestamp": "2026-09-24T02:57:30.470Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "CREATE",
-      "idTransaksi": "PJ2609249577",
-      "detail": "Penjualan KASBON kepada Budi Santoso (1 item) - Status: BELUM_BAYAR",
-      "nominal": 510000,
-      "rekeningTerkait": "BON01"
-    },
-    {
-      "id": "LOG-1790218650469-229",
-      "timestamp": "2026-09-24T02:57:30.468Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:57:30",
-      "user": "Kasir Wijaya Agro",
-      "jenisTransaksi": "CREATE",
-      "idTransaksi": "PJ2609248450",
-      "detail": "Penjualan TUNAI kepada Budi Santoso (1 item) - Status: LUNAS",
-      "nominal": 1780000,
-      "rekeningTerkait": "KAS01"
-    },
-    {
-      "id": "LOG-INIT-001",
-      "timestamp": "2026-09-24T02:50:16.557Z",
-      "tanggal": "24/09/2026",
-      "jam": "09:50:16",
-      "user": "SISTEM",
+      "id": "LOG-INIT",
+      "timestamp": "2026-10-03T03:07:00.000Z",
+      "tanggal": "03/10/2026",
+      "jam": "10:07:00",
+      "user": "KasirWap",
       "jenisTransaksi": "CREATE",
       "idTransaksi": "SYS-INIT",
-      "detail": "Inisialisasi database master rekening, produk, mitra, dan saldo awal ERP Wijaya Agro",
-      "nominal": 315000000,
-      "rekeningTerkait": "ALL"
+      "detail": "Database dikosongkan bersih: Siap untuk input data supplier, karyawan, barang toko, dan komoditas hasil bumi yang asli.",
+      "nominal": 0
     }
   ]
 }

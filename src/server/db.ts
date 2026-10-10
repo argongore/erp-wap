@@ -11,6 +11,7 @@ import {
   StokHasilBumi,
   TransaksiBayarBon,
   TransaksiKasbonUang,
+  TransaksiPembelianBarang,
   TransaksiPembelianHasilBumi,
   TransaksiPenggajian,
   TransaksiPenjualan,
@@ -27,6 +28,7 @@ export interface DatabaseSchema {
   stokBarang: StokBarang[];
   stokHasilBumi: StokHasilBumi[];
   penjualan: TransaksiPenjualan[];
+  pembelianBarang: TransaksiPembelianBarang[];
   pembelianHasilBumi: TransaksiPembelianHasilBumi[];
   kasbonUang: TransaksiKasbonUang[];
   bayarBon: TransaksiBayarBon[];
@@ -40,7 +42,6 @@ const DB_FILE = path.join(DATA_DIR, 'wijaya_agro_erp.json');
 // Indonesian Timezone formatters
 export function getWIBDateTime(): { tanggal: string; jam: string; iso: string } {
   const now = new Date();
-  // Using Intl with Asia/Jakarta
   const dateFormatter = new Intl.DateTimeFormat('id-ID', {
     timeZone: 'Asia/Jakarta',
     day: '2-digit',
@@ -70,32 +71,34 @@ export function getWIBDateTime(): { tanggal: string; jam: string; iso: string } 
   };
 }
 
-// Initial seed data
-function getDefaultDatabase(): DatabaseSchema {
-  const now = getWIBDateTime();
-
-  const rekening: Rekening[] = [
+/**
+ * Standard Company and Operational Bank Accounts
+ */
+export function getDefaultRekeningList(): Rekening[] {
+  return [
     {
       kode: 'KAS01',
-      nama: 'Kas Utama Kasir',
+      nama: 'Kas Utama Kasir (Brankas Fisik)',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: 'KAS-01-OPERASIONAL',
       saldoAwal: 25000000,
       saldoSaatIni: 25000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Uang kas fisik di laci kasir kantor pusat',
+      kategori: 'PERUSAHAAN',
+      keterangan: 'Penyimpanan utama uang kas fisik di brankas & laci kasir kantor pusat',
     },
     {
       kode: 'BNI01',
-      nama: 'Bank BNI Operasional',
+      nama: 'Bank BNI Operasional Pusat',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: '1827401928',
       saldoAwal: 75000000,
       saldoSaatIni: 75000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening giro operasional pembelian & penjualan',
+      kategori: 'PERUSAHAAN',
+      keterangan: 'Rekening bank giro utama penyimpanan dana perusahaan',
     },
     {
       kode: 'BCA01',
@@ -106,7 +109,8 @@ function getDefaultDatabase(): DatabaseSchema {
       saldoSaatIni: 120000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening utama penampungan hasil dagang',
+      kategori: 'PERUSAHAAN',
+      keterangan: 'Rekening bank penampungan utama hasil penjualan toko & komoditas',
     },
     {
       kode: 'MAN01',
@@ -117,7 +121,8 @@ function getDefaultDatabase(): DatabaseSchema {
       saldoSaatIni: 50000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening transaksi grosir dan mitra tani',
+      kategori: 'PERUSAHAAN',
+      keterangan: 'Rekening bank transaksi grosir dan mitra tani',
     },
     {
       kode: 'BRI01',
@@ -128,7 +133,8 @@ function getDefaultDatabase(): DatabaseSchema {
       saldoSaatIni: 35000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening transaksi mitra petani daerah',
+      kategori: 'PERUSAHAAN',
+      keterangan: 'Rekening bank transaksi kemitraan petani daerah',
     },
     {
       kode: 'BER01',
@@ -139,7 +145,8 @@ function getDefaultDatabase(): DatabaseSchema {
       saldoSaatIni: 15000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening syariah kemitraan',
+      kategori: 'PERUSAHAAN',
+      keterangan: 'Rekening bank syariah kemitraan',
     },
     {
       kode: 'BON01',
@@ -150,7 +157,8 @@ function getDefaultDatabase(): DatabaseSchema {
       saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: true,
-      keterangan: 'Rekening khusus sistem lama untuk total kasbon barang & kasbon uang mitra',
+      kategori: 'VIRTUAL_SISTEM',
+      keterangan: 'Rekening virtual kliring sistem untuk akumulasi kasbon barang & kasbon uang',
     },
     {
       kode: 'TIT01',
@@ -161,644 +169,217 @@ function getDefaultDatabase(): DatabaseSchema {
       saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: true,
-      keterangan: 'Rekening khusus sistem lama untuk titip hasil bumi belum diambil',
+      kategori: 'VIRTUAL_SISTEM',
+      keterangan: 'Rekening virtual kliring sistem untuk titip hasil bumi belum diambil',
     },
-    // REKENING KHUSUS DIVISI OPERASIONAL
+    // REKENING OPERASIONAL DIVISI (BUKU ALOKASI TRACKING PERGERAKAN DANA)
     {
       kode: 'REK-GWA',
-      nama: 'Kas Operasional Gudang Wijaya Agro',
+      nama: 'Buku Operasional Gudang Wijaya Agro',
       atasNama: 'Divisi Gudang Wijaya Agro',
       nomorRekening: 'DIV-01-GWA',
       saldoAwal: 15000000,
       saldoSaatIni: 15000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening khusus kas operasional & gaji karyawan harian Gudang Wijaya Agro',
+      kategori: 'OPERASIONAL_DIVISI',
+      rekeningIndukPenyimpan: 'KAS01',
+      keterangan: 'Buku tracking alokasi kas operasional sortir gabah & upah harian (Dana fisik di Kas Perusahaan)',
     },
     {
       kode: 'REK-WK',
-      nama: 'Kas Operasional Wijaya Karya',
+      nama: 'Buku Operasional Wijaya Karya',
       atasNama: 'Divisi Wijaya Karya',
       nomorRekening: 'DIV-02-WK',
       saldoAwal: 20000000,
       saldoSaatIni: 20000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening khusus kas operasional proyek, bengkel & upah teknisi Wijaya Karya',
+      kategori: 'OPERASIONAL_DIVISI',
+      rekeningIndukPenyimpan: 'BNI01',
+      keterangan: 'Buku tracking operasional proyek pabrik & upah teknisi (Dana fisik di Rekening Bank BNI)',
     },
     {
       kode: 'REK-WT',
-      nama: 'Kas Operasional Wijaya Transport',
+      nama: 'Buku Operasional Wijaya Transport',
       atasNama: 'Divisi Wijaya Transport',
       nomorRekening: 'DIV-03-WT',
       saldoAwal: 25000000,
       saldoSaatIni: 25000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening khusus biaya armada truk, logistik & gaji supir Wijaya Transport',
+      kategori: 'OPERASIONAL_DIVISI',
+      rekeningIndukPenyimpan: 'BNI01',
+      keterangan: 'Buku tracking armada truk & upah supir (Dana fisik di Rekening Bank BNI)',
     },
     {
       kode: 'REK-CVA',
-      nama: 'Kas Operasional CV Wijaya Agro',
+      nama: 'Buku Operasional CV Wijaya Agro',
       atasNama: 'CV Wijaya Agro',
       nomorRekening: 'DIV-04-CVA',
       saldoAwal: 30000000,
       saldoSaatIni: 30000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening khusus perputaran dagang saprotan & gaji staff CV Wijaya Agro',
+      kategori: 'OPERASIONAL_DIVISI',
+      rekeningIndukPenyimpan: 'BCA01',
+      keterangan: 'Buku tracking perputaran dagang saprotan lokal & staff (Dana fisik di Bank BCA)',
     },
     {
       kode: 'REK-WAP',
-      nama: 'Kas Operasional PT Wijaya Agro Perkasa',
+      nama: 'Buku Operasional PT Wijaya Agro Perkasa',
       atasNama: 'PT Wijaya Agro Perkasa',
       nomorRekening: 'DIV-05-WAP',
       saldoAwal: 50000000,
       saldoSaatIni: 50000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening khusus operasional pabrik induk & staff PT Wijaya Agro Perkasa',
+      kategori: 'OPERASIONAL_DIVISI',
+      rekeningIndukPenyimpan: 'BNI01',
+      keterangan: 'Buku tracking holding pabrik beras & kemitraan nasional (Dana fisik di Bank BNI)',
     },
     {
       kode: 'REK-OKU',
-      nama: 'Kas Operasional Okussa',
+      nama: 'Buku Operasional Okussa',
       atasNama: 'Divisi Bisnis Okussa',
       nomorRekening: 'DIV-06-OKU',
       saldoAwal: 15000000,
       saldoSaatIni: 15000000,
       status: 'AKTIF',
       isVirtual: false,
-      keterangan: 'Rekening khusus unit bisnis beras kemasan premium & gaji harian Okussa',
+      kategori: 'OPERASIONAL_DIVISI',
+      rekeningIndukPenyimpan: 'KAS01',
+      keterangan: 'Buku tracking distribusi beras kemasan premium Okussa (Dana fisik di Kas Perusahaan)',
     },
   ];
+}
 
-  const mitra: Mitra[] = [
+// ==========================================
+// PONDASI DATABASE ITEM DARI DOKUMEN MASTER (NO 1 S/D 35)
+// No 1 s/d 8: Pembelian Hasil Bumi Dari Petani (Termasuk No 8: Kopi Titip Belum Putus Harga)
+// No 9 s/d 35: Barang yang dibeli dari pemasok untuk dijual
+// ==========================================
+
+export function getDefaultHasilBumiList(): StokHasilBumi[] {
+  const now = getWIBDateTime();
+  return [
+    { kode: 'HB-01', nama: 'KOPI', satuan: 'KG', stok: 0, hargaBeliStandar: 42000, updateTerakhir: now.iso },
+    { kode: 'HB-02', nama: 'KULIT KAYU MANIS STIK', satuan: 'KG', stok: 0, hargaBeliStandar: 52000, updateTerakhir: now.iso },
+    { kode: 'HB-03', nama: 'KULIT KAYU MANIS KA', satuan: 'KG', stok: 0, hargaBeliStandar: 38000, updateTerakhir: now.iso },
+    { kode: 'HB-04', nama: 'KULIT KAYU MANIS KB', satuan: 'KG', stok: 0, hargaBeliStandar: 30000, updateTerakhir: now.iso },
+    { kode: 'HB-05', nama: 'LADA', satuan: 'KG', stok: 0, hargaBeliStandar: 68000, updateTerakhir: now.iso },
+    { kode: 'HB-06', nama: 'CENGKEH', satuan: 'KG', stok: 0, hargaBeliStandar: 115000, updateTerakhir: now.iso },
+    { kode: 'HB-07', nama: 'GG CENGKEH', satuan: 'KG', stok: 0, hargaBeliStandar: 35000, updateTerakhir: now.iso },
     {
-      id: 'MTR-001',
-      kode: 'BUDI01',
-      nama: 'Budi Santoso',
-      role: 'ALL',
-      telepon: '081234567890',
-      alamat: 'Ds. Karanganyar RT 02/RW 03, Kec. Agro Makmur',
-      status: 'AKTIF',
-      catatan: 'Petani jagung binaan & pembeli sarana produksi',
-    },
-    {
-      id: 'MTR-002',
-      kode: 'SUG01',
-      nama: 'Sugeng Riyadi',
-      role: 'MITRA_TANI',
-      telepon: '081398765432',
-      alamat: 'Ds. Sukomakmur RT 01/RW 01, Kec. Subur Tani',
-      status: 'AKTIF',
-      catatan: 'Pemasok gabah & jagung pipil',
-    },
-    {
-      id: 'MTR-003',
-      kode: 'JOK01',
-      nama: 'Joko Wibowo',
-      role: 'CUSTOMER',
-      telepon: '082155667788',
-      alamat: 'Jl. Raya Agro No. 45, Sentra Hortikultura',
-      status: 'AKTIF',
-      catatan: 'Konsumen pupuk dan benih horti',
-    },
-    {
-      id: 'MTR-004',
-      kode: 'SYAM01',
-      nama: 'H. Syamsudin',
-      role: 'SUPPLIER',
-      telepon: '081922334455',
-      alamat: 'Sentra Pertanian Krajan RT 04/RW 02',
-      status: 'AKTIF',
-      catatan: 'Pemasok hasil bumi sawit & kopi',
-    },
-    {
-      id: 'MTR-005',
-      kode: 'CVTS01',
-      nama: 'CV Tani Sejahtera',
-      role: 'ALL',
-      telepon: '085211223344',
-      alamat: 'Komplek Pergudangan Agro Blok A-12',
-      status: 'AKTIF',
-      catatan: 'Mitra korporasi saprotan & komoditas',
-    },
-    {
-      id: 'MTR-KRY-001',
-      kode: 'KRY-001',
-      nama: 'Agus Supriyadi (Karyawan)',
-      role: 'KARYAWAN',
-      telepon: '081299881122',
-      alamat: 'Jl. Melati No. 12, Wlingi, Blitar',
-      status: 'AKTIF',
-      catatan: 'Karyawan: Kasir & Admin Toko (Operasional Toko)',
-    },
-    {
-      id: 'MTR-KRY-002',
-      kode: 'KRY-002',
-      nama: 'Bambang Pamungkas (Karyawan)',
-      role: 'KARYAWAN',
-      telepon: '081388776655',
-      alamat: 'Ds. Talun RT 03/RW 02, Blitar',
-      status: 'AKTIF',
-      catatan: 'Karyawan: Staff Gudang & Timbang (Gudang Hasil Bumi)',
-    },
-    {
-      id: 'MTR-KRY-003',
-      kode: 'KRY-003',
-      nama: 'Hadi Sutrisno (Karyawan)',
-      role: 'KARYAWAN',
-      telepon: '085711223344',
-      alamat: 'Jl. Raya Gandusari No. 8, Blitar',
-      status: 'AKTIF',
-      catatan: 'Karyawan: Supir Logistik & Pengiriman (Transport & Distribusi)',
+      kode: 'HB-08',
+      nama: 'KOPI TITIP',
+      satuan: 'KG',
+      stok: 0,
+      hargaBeliStandar: 0,
+      updateTerakhir: now.iso,
+      isBelumPutusHarga: true,
+      keterangan: 'Pembelian Hasil Bumi dari Petani - Belum Putus Harga (Titip Timbang Panen / Harga Mengambang)',
     },
   ];
+}
 
-  const karyawan: Karyawan[] = [
-    {
-      id: 'KRY-001',
-      nik: 'KRY-001',
-      nama: 'Agus Supriyadi',
-      jabatan: 'Kasir & Admin Toko',
-      departemen: 'Operasional Toko',
-      gajiPokok: 135000, // Standar upah harian
-      tunjanganTetap: 500000,
-      telepon: '081299881122',
-      alamat: 'Jl. Melati No. 12, Wlingi, Blitar',
-      tanggalMasuk: '15/01/2024',
-      status: 'AKTIF',
-      idMitraTerkait: 'MTR-KRY-001',
-      rekeningGajiKode: 'REK-GAJI-KRY001',
-      namaBank: 'BCA',
-      noRekeningBank: '8201293812',
-      atasNamaRekening: 'Agus Supriyadi',
-      catatan: 'Karyawan kasir & admin toko saprotan',
-    },
-    {
-      id: 'KRY-002',
-      nik: 'KRY-002',
-      nama: 'Bambang Pamungkas',
-      jabatan: 'Staff Gudang & Timbang',
-      departemen: 'Gudang Hasil Bumi',
-      gajiPokok: 125000, // Standar upah harian
-      tunjanganTetap: 400000,
-      telepon: '081388776655',
-      alamat: 'Ds. Talun RT 03/RW 02, Blitar',
-      tanggalMasuk: '01/06/2024',
-      status: 'AKTIF',
-      idMitraTerkait: 'MTR-KRY-002',
-      rekeningGajiKode: 'REK-GAJI-KRY002',
-      namaBank: 'BRI',
-      noRekeningBank: '019283741829',
-      atasNamaRekening: 'Bambang Pamungkas',
-      catatan: 'Petugas timbang & sortasi hasil bumi',
-    },
-    {
-      id: 'KRY-003',
-      nik: 'KRY-003',
-      nama: 'Hadi Sutrisno',
-      jabatan: 'Supir Logistik & Pengiriman',
-      departemen: 'Transport & Distribusi',
-      gajiPokok: 140000, // Standar upah harian
-      tunjanganTetap: 600000,
-      telepon: '085711223344',
-      alamat: 'Jl. Raya Gandusari No. 8, Blitar',
-      tanggalMasuk: '10/08/2024',
-      status: 'AKTIF',
-      idMitraTerkait: 'MTR-KRY-003',
-      rekeningGajiKode: 'REK-GAJI-KRY003',
-      namaBank: 'Mandiri',
-      noRekeningBank: '13700982312',
-      atasNamaRekening: 'Hadi Sutrisno',
-      catatan: 'Supir armada truk pengiriman gabah & pupuk',
-    },
+export function getDefaultProdukDagangList(): { produk: Produk[]; stokBarang: StokBarang[] } {
+  const now = getWIBDateTime();
+  const rawItems: Array<{
+    kode: string;
+    nama: string;
+    satuan: string;
+    kategori: Produk['kategori'];
+    hargaBeli: number;
+    hargaJual: number;
+    hargaKhususRekanan: number;
+  }> = [
+    { kode: 'PRD-09', nama: 'BERAS BELITANG', satuan: 'SAK', kategori: 'BERAS', hargaBeli: 145000, hargaJual: 155000, hargaKhususRekanan: 150000 },
+    { kode: 'PRD-10', nama: 'BERAS JEMPOL', satuan: 'SAK', kategori: 'BERAS', hargaBeli: 140000, hargaJual: 150000, hargaKhususRekanan: 145000 },
+    { kode: 'PRD-11', nama: 'PASIR m2', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN', hargaBeli: 180000, hargaJual: 220000, hargaKhususRekanan: 200000 },
+    { kode: 'PRD-12', nama: 'KORAL M2', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN', hargaBeli: 220000, hargaJual: 260000, hargaKhususRekanan: 240000 },
+    { kode: 'PRD-13', nama: 'BATU UJM', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN', hargaBeli: 200000, hargaJual: 240000, hargaKhususRekanan: 220000 },
+    { kode: 'PRD-14', nama: 'SPLIT', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN', hargaBeli: 230000, hargaJual: 270000, hargaKhususRekanan: 250000 },
+    { kode: 'PRD-15', nama: 'BATA', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 650, hargaJual: 800, hargaKhususRekanan: 750 },
+    { kode: 'PRD-16', nama: 'BATA RINGAN', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 8500, hargaJual: 10000, hargaKhususRekanan: 9500 },
+    { kode: 'PRD-17', nama: 'PAPAN', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 25000, hargaJual: 30000, hargaKhususRekanan: 28000 },
+    { kode: 'PRD-18', nama: 'KASAU', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 18000, hargaJual: 22000, hargaKhususRekanan: 20000 },
+    { kode: 'PRD-19', nama: 'BALOK 7x14', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 55000, hargaJual: 65000, hargaKhususRekanan: 60000 },
+    { kode: 'PRD-20', nama: 'BALOK 8X12', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 60000, hargaJual: 72000, hargaKhususRekanan: 66000 },
+    { kode: 'PRD-21', nama: 'SPANEL 4M', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 45000, hargaJual: 55000, hargaKhususRekanan: 50000 },
+    { kode: 'PRD-22', nama: 'SPANEL 2M', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN', hargaBeli: 25000, hargaJual: 32000, hargaKhususRekanan: 28000 },
+    { kode: 'PRD-23', nama: 'UREA', satuan: 'SAK', kategori: 'PUPUK', hargaBeli: 120000, hargaJual: 135000, hargaKhususRekanan: 130000 },
+    { kode: 'PRD-24', nama: 'NPK', satuan: 'SAK', kategori: 'PUPUK', hargaBeli: 160000, hargaJual: 180000, hargaKhususRekanan: 170000 },
+    { kode: 'PRD-25', nama: 'SOLAR', satuan: 'DRIGENT', kategori: 'LAINNYA', hargaBeli: 210000, hargaJual: 235000, hargaKhususRekanan: 225000 },
+    { kode: 'PRD-26', nama: 'DEXLITE', satuan: 'DRIGENT', kategori: 'LAINNYA', hargaBeli: 275000, hargaJual: 300000, hargaKhususRekanan: 290000 },
+    { kode: 'PRD-27', nama: 'KOPI ROBUSTA MENTAH', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 45000, hargaJual: 55000, hargaKhususRekanan: 50000 },
+    { kode: 'PRD-28', nama: 'ROBUSTA PREMIUM MENTAH', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 55000, hargaJual: 68000, hargaKhususRekanan: 62000 },
+    { kode: 'PRD-29', nama: 'ROBUSTA LANANG MENTAH', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 65000, hargaJual: 80000, hargaKhususRekanan: 72000 },
+    { kode: 'PRD-30', nama: 'KOPI ROBUSTA ROSTING', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 70000, hargaJual: 85000, hargaKhususRekanan: 78000 },
+    { kode: 'PRD-31', nama: 'ROBUSTA PREMIUM ROSTING', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 85000, hargaJual: 105000, hargaKhususRekanan: 95000 },
+    { kode: 'PRD-32', nama: 'ROBUSTA LANANG ROSTING', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 95000, hargaJual: 120000, hargaKhususRekanan: 110000 },
+    { kode: 'PRD-33', nama: 'KOPI ROBUSTA BUBUK', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 75000, hargaJual: 90000, hargaKhususRekanan: 82000 },
+    { kode: 'PRD-34', nama: 'ROBUSTA PREMIUM BUBUK', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 90000, hargaJual: 110000, hargaKhususRekanan: 100000 },
+    { kode: 'PRD-35', nama: 'ROBUSTA LANANG BUBUK', satuan: 'KEMASAN', kategori: 'BERAS', hargaBeli: 100000, hargaJual: 125000, hargaKhususRekanan: 115000 },
   ];
 
-  // Seed Catatan Upah Harian untuk September 2026 (siap diakumulasi dan dibayarkan di tgl 1)
-  const upahHarian: CatatanUpahHarian[] = [
-    // Agus Supriyadi (Toko / Gudang)
-    {
-      id: 'UPH-260901-001',
-      tanggalKerja: '01/09/2026',
-      idKaryawan: 'KRY-001',
-      nikKaryawan: 'KRY-001',
-      namaKaryawan: 'Agus Supriyadi',
-      jabatan: 'Kasir & Admin Toko',
-      divisi: 'CV Wijaya Agro',
-      upahHarian: 135000,
-      uangMakanLembur: 15000,
-      totalUpahHarian: 150000,
-      keterangan: 'Jaga kasir toko kios mitra & rekap penjualan',
-      status: 'TERCATAT',
-      createdAt: '2026-09-01T17:00:00.000Z',
-    },
-    {
-      id: 'UPH-260902-001',
-      tanggalKerja: '02/09/2026',
-      idKaryawan: 'KRY-001',
-      nikKaryawan: 'KRY-001',
-      namaKaryawan: 'Agus Supriyadi',
-      jabatan: 'Kasir & Admin Toko',
-      divisi: 'CV Wijaya Agro',
-      upahHarian: 135000,
-      uangMakanLembur: 15000,
-      totalUpahHarian: 150000,
-      keterangan: 'Jaga kasir & input transaksi bon mitra',
-      status: 'TERCATAT',
-      createdAt: '2026-09-02T17:00:00.000Z',
-    },
-    {
-      id: 'UPH-260903-001',
-      tanggalKerja: '03/09/2026',
-      idKaryawan: 'KRY-001',
-      nikKaryawan: 'KRY-001',
-      namaKaryawan: 'Agus Supriyadi',
-      jabatan: 'Kasir & Admin Toko',
-      divisi: 'Gudang Wijaya Agro',
-      upahHarian: 135000,
-      uangMakanLembur: 25000,
-      totalUpahHarian: 160000,
-      keterangan: 'Bantu administrasi penerimaan gabah panen gudang',
-      status: 'TERCATAT',
-      createdAt: '2026-09-03T18:00:00.000Z',
-    },
-    {
-      id: 'UPH-260910-001',
-      tanggalKerja: '10/09/2026',
-      idKaryawan: 'KRY-001',
-      nikKaryawan: 'KRY-001',
-      namaKaryawan: 'Agus Supriyadi',
-      jabatan: 'Kasir & Admin Toko',
-      divisi: 'CV Wijaya Agro',
-      upahHarian: 135000,
-      uangMakanLembur: 15000,
-      totalUpahHarian: 150000,
-      keterangan: 'Operasional harian kasir',
-      status: 'TERCATAT',
-      createdAt: '2026-09-10T17:00:00.000Z',
-    },
-    {
-      id: 'UPH-260915-001',
-      tanggalKerja: '15/09/2026',
-      idKaryawan: 'KRY-001',
-      nikKaryawan: 'KRY-001',
-      namaKaryawan: 'Agus Supriyadi',
-      jabatan: 'Kasir & Admin Toko',
-      divisi: 'Okussa',
-      upahHarian: 135000,
-      uangMakanLembur: 20000,
-      totalUpahHarian: 155000,
-      keterangan: 'Pencatatan distribusi beras kemasan Okussa',
-      status: 'TERCATAT',
-      createdAt: '2026-09-15T17:30:00.000Z',
-    },
-    {
-      id: 'UPH-260920-001',
-      tanggalKerja: '20/09/2026',
-      idKaryawan: 'KRY-001',
-      nikKaryawan: 'KRY-001',
-      namaKaryawan: 'Agus Supriyadi',
-      jabatan: 'Kasir & Admin Toko',
-      divisi: 'CV Wijaya Agro',
-      upahHarian: 135000,
-      uangMakanLembur: 15000,
-      totalUpahHarian: 150000,
-      keterangan: 'Rekap kas harian toko',
-      status: 'TERCATAT',
-      createdAt: '2026-09-20T17:00:00.000Z',
-    },
+  const produk: Produk[] = rawItems.map((it) => ({
+    kode: it.kode,
+    nama: it.nama,
+    satuan: it.satuan,
+    kategori: it.kategori,
+    hargaBeli: it.hargaBeli,
+    hargaJual: it.hargaJual,
+    hargaKhususRekanan: it.hargaKhususRekanan,
+    status: 'AKTIF',
+  }));
 
-    // Bambang Pamungkas (Gudang Wijaya Agro & Wijaya Karya)
-    {
-      id: 'UPH-260901-002',
-      tanggalKerja: '01/09/2026',
-      idKaryawan: 'KRY-002',
-      nikKaryawan: 'KRY-002',
-      namaKaryawan: 'Bambang Pamungkas',
-      jabatan: 'Staff Gudang & Timbang',
-      divisi: 'Gudang Wijaya Agro',
-      upahHarian: 125000,
-      uangMakanLembur: 20000,
-      totalUpahHarian: 145000,
-      keterangan: 'Sortasi dan timbang gabah masuk 15 ton',
-      status: 'TERCATAT',
-      createdAt: '2026-09-01T17:00:00.000Z',
-    },
-    {
-      id: 'UPH-260902-002',
-      tanggalKerja: '02/09/2026',
-      idKaryawan: 'KRY-002',
-      nikKaryawan: 'KRY-002',
-      namaKaryawan: 'Bambang Pamungkas',
-      jabatan: 'Staff Gudang & Timbang',
-      divisi: 'Gudang Wijaya Agro',
-      upahHarian: 125000,
-      uangMakanLembur: 20000,
-      totalUpahHarian: 145000,
-      keterangan: 'Penimbangan jagung pipil dan muat karung',
-      status: 'TERCATAT',
-      createdAt: '2026-09-02T17:00:00.000Z',
-    },
-    {
-      id: 'UPH-260905-002',
-      tanggalKerja: '05/09/2026',
-      idKaryawan: 'KRY-002',
-      nikKaryawan: 'KRY-002',
-      namaKaryawan: 'Bambang Pamungkas',
-      jabatan: 'Staff Gudang & Timbang',
-      divisi: 'Wijaya Karya',
-      upahHarian: 125000,
-      uangMakanLembur: 35000,
-      totalUpahHarian: 160000,
-      keterangan: 'Perbaikan saringan elevator dryer pabrik',
-      status: 'TERCATAT',
-      createdAt: '2026-09-05T18:00:00.000Z',
-    },
-    {
-      id: 'UPH-260912-002',
-      tanggalKerja: '12/09/2026',
-      idKaryawan: 'KRY-002',
-      nikKaryawan: 'KRY-002',
-      namaKaryawan: 'Bambang Pamungkas',
-      jabatan: 'Staff Gudang & Timbang',
-      divisi: 'Gudang Wijaya Agro',
-      upahHarian: 125000,
-      uangMakanLembur: 20000,
-      totalUpahHarian: 145000,
-      keterangan: 'Pengecekan kadar air dan timbang gabah',
-      status: 'TERCATAT',
-      createdAt: '2026-09-12T17:00:00.000Z',
-    },
-    {
-      id: 'UPH-260918-002',
-      tanggalKerja: '18/09/2026',
-      idKaryawan: 'KRY-002',
-      nikKaryawan: 'KRY-002',
-      namaKaryawan: 'Bambang Pamungkas',
-      jabatan: 'Staff Gudang & Timbang',
-      divisi: 'PT Wijaya Agro Perkasa',
-      upahHarian: 125000,
-      uangMakanLembur: 25000,
-      totalUpahHarian: 150000,
-      keterangan: 'Bongkar muat beras pecah kulit di pabrik holding',
-      status: 'TERCATAT',
-      createdAt: '2026-09-18T17:30:00.000Z',
-    },
+  const stokBarang: StokBarang[] = rawItems.map((it) => ({
+    kode: it.kode,
+    namaProduk: it.nama,
+    satuan: it.satuan,
+    stok: 0,
+    minimum: 10,
+    updateTerakhir: now.iso,
+  }));
 
-    // Hadi Sutrisno (Wijaya Transport)
-    {
-      id: 'UPH-260901-003',
-      tanggalKerja: '01/09/2026',
-      idKaryawan: 'KRY-003',
-      nikKaryawan: 'KRY-003',
-      namaKaryawan: 'Hadi Sutrisno',
-      jabatan: 'Supir Logistik & Pengiriman',
-      divisi: 'Wijaya Transport',
-      upahHarian: 140000,
-      uangMakanLembur: 40000,
-      totalUpahHarian: 180000,
-      keterangan: 'Angkut gabah 8 ton dari petani Karanganyar ke Gudang',
-      status: 'TERCATAT',
-      createdAt: '2026-09-01T18:00:00.000Z',
-    },
-    {
-      id: 'UPH-260904-003',
-      tanggalKerja: '04/09/2026',
-      idKaryawan: 'KRY-003',
-      nikKaryawan: 'KRY-003',
-      namaKaryawan: 'Hadi Sutrisno',
-      jabatan: 'Supir Logistik & Pengiriman',
-      divisi: 'Wijaya Transport',
-      upahHarian: 140000,
-      uangMakanLembur: 35000,
-      totalUpahHarian: 175000,
-      keterangan: 'Kirim pupuk NPK 100 sak ke kios mitra Tani Sejahtera',
-      status: 'TERCATAT',
-      createdAt: '2026-09-04T17:00:00.000Z',
-    },
-    {
-      id: 'UPH-260911-003',
-      tanggalKerja: '11/09/2026',
-      idKaryawan: 'KRY-003',
-      nikKaryawan: 'KRY-003',
-      namaKaryawan: 'Hadi Sutrisno',
-      jabatan: 'Supir Logistik & Pengiriman',
-      divisi: 'Wijaya Transport',
-      upahHarian: 140000,
-      uangMakanLembur: 50000,
-      totalUpahHarian: 190000,
-      keterangan: 'Antar muatan jagung pipil ke pabrik pakan Kediri',
-      status: 'TERCATAT',
-      createdAt: '2026-09-11T19:30:00.000Z',
-    },
-    {
-      id: 'UPH-260917-003',
-      tanggalKerja: '17/09/2026',
-      idKaryawan: 'KRY-003',
-      nikKaryawan: 'KRY-003',
-      namaKaryawan: 'Hadi Sutrisno',
-      jabatan: 'Supir Logistik & Pengiriman',
-      divisi: 'Wijaya Transport',
-      upahHarian: 140000,
-      uangMakanLembur: 35000,
-      totalUpahHarian: 175000,
-      keterangan: 'Ekspedisi beras Okussa ke distributor Surabaya',
-      status: 'TERCATAT',
-      createdAt: '2026-09-17T18:00:00.000Z',
-    },
-  ];
+  return { produk, stokBarang };
+}
 
-  const produk: Produk[] = [
-    {
-      kode: 'PRD-NPK16',
-      kategori: 'PUPUK',
-      nama: 'Pupuk NPK Mutiara 16-16-16 (50kg)',
-      satuan: 'Sak',
-      hargaBeli: 820000,
-      hargaJual: 890000,
-      status: 'AKTIF',
-    },
-    {
-      kode: 'PRD-UREA',
-      kategori: 'PUPUK',
-      nama: 'Pupuk Urea Non-Subsidi Daun Buah (50kg)',
-      satuan: 'Sak',
-      hargaBeli: 450000,
-      hargaJual: 510000,
-      status: 'AKTIF',
-    },
-    {
-      kode: 'PRD-RND1L',
-      kategori: 'PESTISIDA',
-      nama: 'Herbisida Roundup 486 SL (1 Liter)',
-      satuan: 'Botol',
-      hargaBeli: 95000,
-      hargaJual: 115000,
-      status: 'AKTIF',
-    },
-    {
-      kode: 'PRD-GRAMOX',
-      kategori: 'PESTISIDA',
-      nama: 'Herbisida Gramoxone 276 SL (1 Liter)',
-      satuan: 'Botol',
-      hargaBeli: 85000,
-      hargaJual: 105000,
-      status: 'AKTIF',
-    },
-    {
-      kode: 'PRD-P32',
-      kategori: 'BENIH',
-      nama: 'Benih Jagung Hibrida Pioneer P32 (5kg)',
-      satuan: 'Sak',
-      hargaBeli: 490000,
-      hargaJual: 540000,
-      status: 'AKTIF',
-    },
-    {
-      kode: 'PRD-NK212',
-      kategori: 'BENIH',
-      nama: 'Benih Jagung Syngenta NK 212 (5kg)',
-      satuan: 'Sak',
-      hargaBeli: 470000,
-      hargaJual: 520000,
-      status: 'AKTIF',
-    },
-    {
-      kode: 'PRD-SPR16L',
-      kategori: 'ALAT_PERTANIAN',
-      nama: 'Tangki Sprayer Elektrik CBA 16 Liter',
-      satuan: 'Unit',
-      hargaBeli: 380000,
-      hargaJual: 440000,
-      status: 'AKTIF',
-    },
-  ];
-
-  const stokBarang: StokBarang[] = [
-    {
-      kode: 'PRD-NPK16',
-      namaProduk: 'Pupuk NPK Mutiara 16-16-16 (50kg)',
-      satuan: 'Sak',
-      stok: 120,
-      minimum: 20,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'PRD-UREA',
-      namaProduk: 'Pupuk Urea Non-Subsidi Daun Buah (50kg)',
-      satuan: 'Sak',
-      stok: 150,
-      minimum: 25,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'PRD-RND1L',
-      namaProduk: 'Herbisida Roundup 486 SL (1 Liter)',
-      satuan: 'Botol',
-      stok: 85,
-      minimum: 15,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'PRD-GRAMOX',
-      namaProduk: 'Herbisida Gramoxone 276 SL (1 Liter)',
-      satuan: 'Botol',
-      stok: 60,
-      minimum: 10,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'PRD-P32',
-      namaProduk: 'Benih Jagung Hibrida Pioneer P32 (5kg)',
-      satuan: 'Sak',
-      stok: 75,
-      minimum: 15,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'PRD-NK212',
-      namaProduk: 'Benih Jagung Syngenta NK 212 (5kg)',
-      satuan: 'Sak',
-      stok: 50,
-      minimum: 10,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'PRD-SPR16L',
-      namaProduk: 'Tangki Sprayer Elektrik CBA 16 Liter',
-      satuan: 'Unit',
-      stok: 25,
-      minimum: 5,
-      updateTerakhir: now.iso,
-    },
-  ];
-
-  const stokHasilBumi: StokHasilBumi[] = [
-    {
-      kode: 'HB-JAGUNG',
-      nama: 'Jagung Pipil Kering (KA 14%)',
-      satuan: 'Kg',
-      stok: 14500,
-      hargaBeliStandar: 4800,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'HB-GABAH',
-      nama: 'Gabah Kering Panen (GKP)',
-      satuan: 'Kg',
-      stok: 8200,
-      hargaBeliStandar: 6700,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'HB-SAWIT',
-      nama: 'Kelapa Sawit Segar TBS',
-      satuan: 'Kg',
-      stok: 22000,
-      hargaBeliStandar: 2450,
-      updateTerakhir: now.iso,
-    },
-    {
-      kode: 'HB-KOPI',
-      nama: 'Kopi Robusta Asalan',
-      satuan: 'Kg',
-      stok: 3400,
-      hargaBeliStandar: 42000,
-      updateTerakhir: now.iso,
-    },
-  ];
-
-  const auditLogs: AuditLog[] = [
-    {
-      id: 'LOG-INIT-001',
-      timestamp: now.iso,
-      tanggal: now.tanggal,
-      jam: now.jam,
-      user: 'SISTEM',
-      jenisTransaksi: 'CREATE',
-      idTransaksi: 'SYS-INIT',
-      detail: 'Inisialisasi database master rekening, produk, mitra, dan saldo awal ERP Wijaya Agro',
-      nominal: 315000000,
-      rekeningTerkait: 'ALL',
-    },
-  ];
+// Clean Initial Seed Data: Filled with 35 Foundation Items
+export function getDefaultDatabase(): DatabaseSchema {
+  const now = getWIBDateTime();
+  const { produk, stokBarang } = getDefaultProdukDagangList();
+  const stokHasilBumi = getDefaultHasilBumiList();
 
   return {
-    rekening,
-    mitra,
-    karyawan,
-    upahHarian,
+    rekening: getDefaultRekeningList(),
+    mitra: [],
+    karyawan: [],
+    upahHarian: [],
     penggajian: [],
     produk,
     stokBarang,
     stokHasilBumi,
     penjualan: [],
+    pembelianBarang: [],
     pembelianHasilBumi: [],
     kasbonUang: [],
     bayarBon: [],
     transferRekening: [],
-    auditLogs,
+    auditLogs: [
+      {
+        id: 'LOG-INIT',
+        timestamp: now.iso,
+        tanggal: now.tanggal,
+        jam: now.jam,
+        user: 'KasirWap',
+        jenisTransaksi: 'CREATE',
+        idTransaksi: 'SYS-INIT',
+        detail: 'Sistem siap: 35 Master Item Pondasi (Hasil Bumi 1-7 & Barang Pemasok 8-35) berhasil diinisialisasi untuk PT Wijaya Agro.',
+        nominal: 0,
+      },
+    ],
   };
 }
 
@@ -823,61 +404,84 @@ class DatabaseManager {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        const defaults = getDefaultDatabase();
+        const defaultRekening = getDefaultRekeningList();
+
         const merged: DatabaseSchema = {
-          ...defaults,
-          ...parsed,
-          karyawan: Array.isArray(parsed.karyawan) && parsed.karyawan.length > 0 ? parsed.karyawan : defaults.karyawan,
-          upahHarian: Array.isArray(parsed.upahHarian) && parsed.upahHarian.length > 0 ? parsed.upahHarian : defaults.upahHarian,
+          rekening: Array.isArray(parsed.rekening) && parsed.rekening.length > 0 ? parsed.rekening : defaultRekening,
+          mitra: Array.isArray(parsed.mitra) ? parsed.mitra : [],
+          karyawan: Array.isArray(parsed.karyawan) ? parsed.karyawan : [],
+          upahHarian: Array.isArray(parsed.upahHarian) ? parsed.upahHarian : [],
           penggajian: Array.isArray(parsed.penggajian) ? parsed.penggajian : [],
+          produk: Array.isArray(parsed.produk) ? parsed.produk : [],
+          stokBarang: Array.isArray(parsed.stokBarang) ? parsed.stokBarang : [],
+          stokHasilBumi: Array.isArray(parsed.stokHasilBumi) ? parsed.stokHasilBumi : [],
+          penjualan: Array.isArray(parsed.penjualan) ? parsed.penjualan : [],
+          pembelianBarang: Array.isArray(parsed.pembelianBarang) ? parsed.pembelianBarang : [],
+          pembelianHasilBumi: Array.isArray(parsed.pembelianHasilBumi) ? parsed.pembelianHasilBumi : [],
+          kasbonUang: Array.isArray(parsed.kasbonUang) ? parsed.kasbonUang : [],
+          bayarBon: Array.isArray(parsed.bayarBon) ? parsed.bayarBon : [],
+          transferRekening: Array.isArray(parsed.transferRekening) ? parsed.transferRekening : [],
+          auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
         };
 
-        // Backfill bank & rekening gaji karyawan if missing
-        for (const kry of merged.karyawan) {
-          if (!kry.rekeningGajiKode) {
-            kry.rekeningGajiKode = `REK-GAJI-${kry.nik.replace(/[^A-Za-z0-9]/g, '')}`;
-          }
-          const defKry = defaults.karyawan.find((d) => d.id === kry.id || d.nik === kry.nik);
-          if (defKry) {
-            if (!kry.namaBank) kry.namaBank = defKry.namaBank;
-            if (!kry.noRekeningBank) kry.noRekeningBank = defKry.noRekeningBank;
-            if (!kry.atasNamaRekening) kry.atasNamaRekening = defKry.atasNamaRekening;
+        const defaultProdukData = getDefaultProdukDagangList();
+        const defaultHasilBumi = getDefaultHasilBumiList();
+
+        // Clean out old PRD-08 (Kopi TTP) from product lists if present
+        merged.produk = merged.produk.filter((p) => p.kode !== 'PRD-08');
+        merged.stokBarang = merged.stokBarang.filter((s) => s.kode !== 'PRD-08');
+        // Clean out KOPI JALAN from stokHasilBumi
+        merged.stokHasilBumi = merged.stokHasilBumi.filter((h) => h.kode !== 'HB-01B' && !h.nama.toUpperCase().includes('KOPI JALAN'));
+
+        // Ensure all 1 to 8 Hasil Bumi items exist as foundational system master (including No 8 Kopi Titip)
+        for (const defHb of defaultHasilBumi) {
+          if (!merged.stokHasilBumi.some((h) => h.kode === defHb.kode || h.nama.toUpperCase() === defHb.nama.toUpperCase())) {
+            merged.stokHasilBumi.push({ ...defHb });
           }
         }
 
-        // Ensure all division accounts exist in merged.rekening
-        for (const defRek of defaults.rekening) {
+        // Ensure all 9 to 35 Produk Dagang exist as foundational system master
+        for (const defPr of defaultProdukData.produk) {
+          if (!merged.produk.some((p) => p.kode === defPr.kode || p.nama.toUpperCase() === defPr.nama.toUpperCase())) {
+            merged.produk.push({ ...defPr });
+          }
+        }
+        for (const defSt of defaultProdukData.stokBarang) {
+          if (!merged.stokBarang.some((s) => s.kode === defSt.kode || s.namaProduk.toUpperCase() === defSt.namaProduk.toUpperCase())) {
+            merged.stokBarang.push({ ...defSt });
+          }
+        }
+
+        // Ensure all default company accounts exist in merged.rekening
+        for (const defRek of defaultRekening) {
           if (!merged.rekening.some((r) => r.kode === defRek.kode)) {
             merged.rekening.push({ ...defRek });
           }
         }
 
-        // Ensure every employee has an active matching Mitra with role 'KARYAWAN'
-        for (const kry of merged.karyawan) {
-          const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
-          kry.idMitraTerkait = mitraId;
-          const found = merged.mitra.find((m) => m.id === mitraId || m.kode === kry.nik);
-          if (!found) {
-            merged.mitra.push({
-              id: mitraId,
-              kode: kry.nik,
-              nama: `${kry.nama} (Karyawan)`,
-              role: 'KARYAWAN',
-              telepon: kry.telepon,
-              alamat: kry.alamat,
-              status: kry.status,
-              catatan: `Karyawan: ${kry.jabatan} (${kry.departemen})`,
-            });
+        // Categorize accounts cleanly
+        for (const rek of merged.rekening) {
+          const defRek = defaultRekening.find((d) => d.kode === rek.kode);
+          if (defRek) {
+            rek.kategori = defRek.kategori;
+            rek.rekeningIndukPenyimpan = defRek.rekeningIndukPenyimpan;
+          } else if (rek.kode === 'BON01' || rek.kode === 'TIT01') {
+            rek.kategori = 'VIRTUAL_SISTEM';
+            rek.isVirtual = true;
+          } else if (rek.kode.startsWith('REK-') || rek.kode.startsWith('DIV-')) {
+            rek.kategori = 'OPERASIONAL_DIVISI';
+            rek.isVirtual = false;
+            rek.rekeningIndukPenyimpan = rek.rekeningIndukPenyimpan || 'KAS01';
           } else {
-            found.role = 'KARYAWAN';
-            found.status = kry.status;
+            rek.kategori = 'PERUSAHAAN';
+            rek.isVirtual = false;
           }
         }
 
         return merged;
       }
     } catch (err) {
-      console.error('Failed to read db file, creating fresh default:', err);
+      console.error('Failed to read db file, creating clean default:', err);
     }
     const fresh = getDefaultDatabase();
     this.saveDirect(fresh);
@@ -901,25 +505,59 @@ class DatabaseManager {
   }
 
   /**
+   * Reset all data clean for supplier, karyawan, produk, stok, and hasil bumi
+   */
+  public resetCleanData() {
+    return this.executeTransaction((db) => {
+      db.mitra = [];
+      db.karyawan = [];
+      db.upahHarian = [];
+      db.penggajian = [];
+      const { produk, stokBarang } = getDefaultProdukDagangList();
+      db.produk = produk;
+      db.stokBarang = stokBarang;
+      db.stokHasilBumi = getDefaultHasilBumiList();
+      db.penjualan = [];
+      db.pembelianBarang = [];
+      db.pembelianHasilBumi = [];
+      db.kasbonUang = [];
+      db.bayarBon = [];
+      db.transferRekening = [];
+      db.rekening = getDefaultRekeningList();
+
+      const now = getWIBDateTime();
+      db.auditLogs.unshift({
+        id: `LOG-RESET-${Date.now()}`,
+        timestamp: now.iso,
+        tanggal: now.tanggal,
+        jam: now.jam,
+        user: 'KasirWap',
+        jenisTransaksi: 'VOID',
+        idTransaksi: 'SYS-RESET',
+        detail: 'Pembersihan database: Data mitra dan karyawan dikosongkan bersih untuk input data riil. 35 Master Item (Hasil Bumi 1-8 termasuk Kopi Titip & Produk Dagang 9-35) siap digunakan.',
+        nominal: 0,
+      });
+
+      this.synchronizeVirtualAccounts();
+      return true;
+    });
+  }
+
+  /**
    * Synchronize Virtual Accounts BON01 (Kasbon/Piutang Customer) and TIT01 (Titip Supplier)
-   * BON01 = Total Sisa Piutang Penjualan Kasbon + Total Sisa Kasbon Uang
-   * TIT01 = Total Sisa Titip Pembelian Hasil Bumi Belum Diambil
    */
   public synchronizeVirtualAccounts() {
-    // Calculate total outstanding kasbon barang
-    const totalKasbonBarang = this.db.penjualan
+    const totalKasbonBarang = (this.db.penjualan || [])
       .filter((p) => p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR')
       .reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
 
-    // Calculate total outstanding kasbon uang
-    const totalKasbonUang = this.db.kasbonUang
+    const totalKasbonUang = (this.db.kasbonUang || [])
       .filter((k) => k.status !== 'LUNAS')
       .reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
 
     const totalBon = totalKasbonBarang + totalKasbonUang;
 
-    // Calculate total outstanding titip
-    const totalTitip = this.db.pembelianHasilBumi
+    const totalTitip = (this.db.pembelianHasilBumi || [])
       .filter((p) => p.metodePembayaran === 'TITIP' && p.status !== 'LUNAS')
       .reduce((sum, p) => sum + (p.totalNominal || 0), 0);
 

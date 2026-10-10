@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Sprout, Clock, ShieldCheck, Wallet, Landmark } from 'lucide-react';
+import { Sprout, Clock, ShieldCheck, Wallet, Landmark, FileSpreadsheet, Tv, ExternalLink } from 'lucide-react';
 import { formatRupiah } from '../../utils/format.ts';
 import { Rekening } from '../../server/types.ts';
 
 interface HeaderProps {
   rekeningList: Rekening[];
   onRefresh: () => void;
+  onOpenSheetsSync?: () => void;
+  onOpenBillboard?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ rekeningList, onRefresh }) => {
+export const Header: React.FC<HeaderProps> = ({
+  rekeningList,
+  onRefresh,
+  onOpenSheetsSync,
+  onOpenBillboard,
+}) => {
   const [timeStr, setTimeStr] = useState<string>('');
 
   useEffect(() => {
@@ -39,7 +46,12 @@ export const Header: React.FC<HeaderProps> = ({ rekeningList, onRefresh }) => {
   const kas01 = rekeningList.find((r) => r.kode === 'KAS01');
   const bon01 = rekeningList.find((r) => r.kode === 'BON01');
   const banksTotal = rekeningList
-    .filter((r) => !r.isVirtual && r.kode !== 'KAS01' && r.status === 'AKTIF')
+    .filter(
+      (r) =>
+        (r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-'))) &&
+        r.kode !== 'KAS01' &&
+        r.status === 'AKTIF'
+    )
     .reduce((sum, r) => sum + r.saldoSaatIni, 0);
 
   return (
@@ -65,12 +77,12 @@ export const Header: React.FC<HeaderProps> = ({ rekeningList, onRefresh }) => {
         <div className="hidden lg:flex items-center space-x-4 bg-emerald-900/60 border border-emerald-800/80 px-4 py-1.5 rounded-lg text-xs">
           <div className="flex items-center space-x-1.5 border-r border-emerald-800 pr-3">
             <Wallet className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="text-emerald-300">KAS01:</span>
+            <span className="text-emerald-300">Kas Kasir (KAS01):</span>
             <span className="font-semibold text-white">{formatRupiah(kas01?.saldoSaatIni || 0)}</span>
           </div>
           <div className="flex items-center space-x-1.5 border-r border-emerald-800 pr-3">
             <Landmark className="w-3.5 h-3.5 text-sky-400" />
-            <span className="text-emerald-300">Total Bank:</span>
+            <span className="text-emerald-300">Bank Perusahaan:</span>
             <span className="font-semibold text-white">{formatRupiah(banksTotal)}</span>
           </div>
           <div className="flex items-center space-x-1.5">
@@ -80,7 +92,41 @@ export const Header: React.FC<HeaderProps> = ({ rekeningList, onRefresh }) => {
         </div>
 
         {/* Time & Cashier Status */}
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-2.5">
+          {onOpenBillboard && (
+            <button
+              onClick={onOpenBillboard}
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-900/90 hover:bg-emerald-800 border border-emerald-600/70 text-emerald-200 text-xs font-bold transition-all shadow-xs cursor-pointer group"
+              title="Buka Layar Monitor Billboard / TV Display"
+            >
+              <Tv className="w-3.5 h-3.5 text-emerald-400 group-hover:animate-pulse" />
+              <span className="hidden sm:inline">Layar Billboard</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            </button>
+          )}
+
+          {onOpenSheetsSync && (
+            <button
+              onClick={onOpenSheetsSync}
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-800/80 hover:bg-emerald-800 border border-emerald-700 text-emerald-200 text-xs font-medium transition-colors cursor-pointer"
+              title="Buka Pusat Database Multi-Spreadsheet"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-300" />
+              <span className="hidden md:inline">Database Spreadsheet</span>
+            </button>
+          )}
+
+          <a
+            href="https://ais-dev-ynez6daz23cz4wbfcoqdvf-293331351835.asia-southeast1.run.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+            title="Buka Layar Penuh Desktop di Tab Baru Browser"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Layar Penuh Desktop</span>
+          </a>
+
           <div className="text-right hidden sm:block">
             <div className="flex items-center justify-end space-x-1.5 text-xs text-emerald-200">
               <Clock className="w-3.5 h-3.5 text-emerald-400" />
