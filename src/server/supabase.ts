@@ -94,6 +94,7 @@ class SupabaseSyncEngine {
   private hasVerifiedCloudState = false;
   private serverlessInitialized = false;
   private lastCloudCheckAt = 0;
+  private activeFreshCheckPromise: Promise<void> | null = null;
 
   constructor() {
     this.loadConfig();
@@ -146,14 +147,76 @@ class SupabaseSyncEngine {
   }
 
   private saveConfig() {
+    const jsonPayload = JSON.stringify(this.config, null, 2);
     try {
       if (!fs.existsSync(RUNTIME_CACHE_DIR)) {
         fs.mkdirSync(RUNTIME_CACHE_DIR, { recursive: true });
       }
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2), 'utf-8');
+      fs.writeFileSync(CONFIG_FILE, jsonPayload, 'utf-8');
     } catch (e) {
       console.warn('Runtime supabase config cache skipped:', e);
     }
+
+    // Mirror to workspace data/supabase_config.json (gitignored) when writable so dev/preview restarts auto-connect
+    if (!IS_SERVERLESS) {
+      try {
+        const legacyDir = path.dirname(LEGACY_CONFIG_FILE);
+        if (!fs.existsSync(legacyDir)) {
+          fs.mkdirSync(legacyDir, { recursive: true });
+        }
+        fs.writeFileSync(LEGACY_CONFIG_FILE, jsonPayload, 'utf-8');
+      } catch {
+        // Ignore on read-only containers
+      }
+    }
+  }
+
+  public reloadConfigIfMissing(): boolean {
+    if (this.client && this.config.url && this.config.key) {
+      return true;
+    }
+    this.loadConfig();
+    this.initClient();
+    return Boolean(this.client && this.config.url && this.config.key);
+  }
+
+  public getReconnectBundle(): string | null {
+    if (!this.config.url || !this.config.key) {
+      this.reloadConfigIfMissing();
+    }
+    if (!this.config.url || !this.config.key) {
+      return null;
+    }
+    try {
+      return Buffer.from(
+        JSON.stringify({
+          u: this.config.url,
+          k: this.config.key,
+          a: this.config.autoSync !== false,
+        }),
+        'utf-8'
+      ).toString('base64');
+    } catch {
+      return null;
+    }
+  }
+
+  public parseReconnectBundle(bundle?: string): { url: string; key: string; autoSync: boolean } | null {
+    if (!bundle || typeof bundle !== 'string') return null;
+    try {
+      const decoded = Buffer.from(bundle.trim(), 'base64').toString('utf-8');
+      const parsed = JSON.parse(decoded);
+      const url = sanitizeSupabaseUrl(String(parsed?.u || parsed?.url || ''), String(parsed?.k || parsed?.key || ''));
+      const key = String(parsed?.k || parsed?.key || '').trim();
+      if (url && key) {
+        return {
+          url,
+          key,
+          autoSync: parsed?.a !== false && parsed?.autoSync !== false,
+        };
+      }
+    } catch {}
+    return null;
   }
 
   private initClient() {
@@ -172,6 +235,9 @@ class SupabaseSyncEngine {
   }
 
   public isConfigured(): boolean {
+    if (!this.client || !this.config.url || !this.config.key) {
+      this.reloadConfigIfMissing();
+    }
     return Boolean(this.client && this.config.url && this.config.key);
   }
 
@@ -583,7 +649,19 @@ class SupabaseSyncEngine {
 
     this.pollTimer = setInterval(async () => {
       try {
-        if (!this.config.autoSync || !this.client || this.isSyncing || this.queuedData) return;
+        if (!this.isConfigured() || !this.config.autoSync || !this.client || this.isSyncing || this.queuedData) {
+          return;
+        }
+
+        // Self-heal if initial hydration had not yet verified cloud state (e.g. boot network blip)
+        if (!this.hasVerifiedCloudState) {
+          const healRes = await this.syncSmartWithCloud(dbManager);
+          if (healRes.direction !== 'SKIPPED') {
+            console.log(`[SupabaseSyncEngine] Auto-reconnected di background: ${healRes.message}`);
+          }
+          return;
+        }
+
         const { data, error } = await this.client
           .from('wijaya_agro_erp_state')
           .select('updated_at')
@@ -605,71 +683,91 @@ class SupabaseSyncEngine {
       } catch {
         // Silent background check
       }
-    }, 15000);
+    }, 12000);
   }
 
   /**
-   * On Serverless platforms (Vercel / Netlify), background setInterval is frozen between requests.
-   * This lightweight check ensures cold starts hydrate from Cloud Supabase AND warm instances
-   * pull fresh snapshots whenever Kasir updates data in Cloud Supabase.
+   * Ensures cold starts hydrate from Cloud Supabase AND warm instances automatically
+   * self-heal / pull fresh snapshots whenever Cloud Supabase changes.
    */
   public async ensureFreshCloudState(dbManager: any, maxAgeMs = 3500): Promise<void> {
     await this.ensureHydrated();
-    if (!this.client || !this.config.url || !this.config.key) {
-      return;
-    }
-
-    if (!this.serverlessInitialized) {
-      await this.initOnServerStart(dbManager);
-      this.serverlessInitialized = true;
-      this.lastCloudCheckAt = Date.now();
+    if (!this.isConfigured() || !this.client) {
       return;
     }
 
     const now = Date.now();
-    if (now - this.lastCloudCheckAt < maxAgeMs || this.isSyncing || this.queuedData) {
+    const needsImmediateRecovery = !this.serverlessInitialized || !this.hasVerifiedCloudState;
+    if (!needsImmediateRecovery && (now - this.lastCloudCheckAt < maxAgeMs || this.isSyncing || this.queuedData)) {
       return;
     }
-    this.lastCloudCheckAt = now;
 
-    try {
-      const { data, error } = await this.client
-        .from('wijaya_agro_erp_state')
-        .select('updated_at')
-        .eq('id', 'MAIN_DATABASE')
-        .maybeSingle();
+    if (this.activeFreshCheckPromise) {
+      await this.activeFreshCheckPromise;
+      return;
+    }
 
-      if (!error && data && data.updated_at) {
-        const remoteTime = new Date(data.updated_at).getTime();
-        const localSyncTime = this.config.lastSyncTime ? new Date(this.config.lastSyncTime).getTime() : 0;
-        if (!this.hasVerifiedCloudState || remoteTime > localSyncTime + 1000) {
-          const pull = await this.pullFromSupabase();
-          if (pull.success && pull.data) {
-            await dbManager.hydrateFromSupabase(pull.data);
+    this.activeFreshCheckPromise = (async () => {
+      try {
+        if (!this.serverlessInitialized) {
+          await this.initOnServerStart(dbManager);
+          return;
+        }
+
+        this.lastCloudCheckAt = Date.now();
+
+        if (!this.hasVerifiedCloudState) {
+          await this.syncSmartWithCloud(dbManager);
+          return;
+        }
+
+        if (!this.client) return;
+        const { data, error } = await this.client
+          .from('wijaya_agro_erp_state')
+          .select('updated_at')
+          .eq('id', 'MAIN_DATABASE')
+          .maybeSingle();
+
+        if (!error && data && data.updated_at) {
+          const remoteTime = new Date(data.updated_at).getTime();
+          const localSyncTime = this.config.lastSyncTime ? new Date(this.config.lastSyncTime).getTime() : 0;
+          if (remoteTime > localSyncTime + 1000) {
+            const pull = await this.pullFromSupabase();
+            if (pull.success && pull.data) {
+              await dbManager.hydrateFromSupabase(pull.data);
+            }
           }
         }
+      } catch {
+        // Non-fatal check on warm request
+      } finally {
+        this.activeFreshCheckPromise = null;
       }
-    } catch {
-      // Non-fatal check on warm serverless request
-    }
+    })();
+
+    await this.activeFreshCheckPromise;
   }
 
   /**
    * Server startup initialization:
    * Hydrates database from Supabase BEFORE serving requests so Supabase is the single source of truth.
+   * Always starts background self-healing polling even if initial network check experiences a transient blip.
    */
   public async initOnServerStart(dbManager: any) {
     const runHydration = async () => {
-      if (!this.client || !this.config.url || !this.config.key) {
+      if (!this.isConfigured() || !this.client) {
         console.log('[SupabaseSyncEngine] Menunggu kredensial Cloud Supabase.');
         return;
       }
+
+      this.serverlessInitialized = true;
+      this.startBackgroundPolling(dbManager);
 
       console.log('[SupabaseSyncEngine] Menghubungkan ke Single Source of Truth Cloud Supabase...');
       try {
         const test = await this.testConnection();
         if (!test.success) {
-          console.warn('[SupabaseSyncEngine] Koneksi Supabase gagal saat startup:', test.message);
+          console.warn('[SupabaseSyncEngine] Koneksi Supabase belum merespons saat startup (akan auto-retry):', test.message);
           return;
         }
 
@@ -678,17 +776,15 @@ class SupabaseSyncEngine {
           console.log(`[SupabaseSyncEngine] [${syncRes.direction}] ${syncRes.message}`);
         }
 
-        this.serverlessInitialized = true;
         this.lastCloudCheckAt = Date.now();
-        this.startBackgroundPolling(dbManager);
       } catch (err) {
-        console.warn('[SupabaseSyncEngine] Error saat inisialisasi startup:', err);
+        console.warn('[SupabaseSyncEngine] Error saat inisialisasi startup (akan auto-retry):', err);
       }
     };
 
     this.hydrationPromise = Promise.race([
       runHydration(),
-      new Promise<void>((resolve) => setTimeout(resolve, IS_SERVERLESS ? 8500 : 15000)),
+      new Promise<void>((resolve) => setTimeout(resolve, IS_SERVERLESS ? 8500 : 12000)),
     ]);
 
     await this.hydrationPromise;

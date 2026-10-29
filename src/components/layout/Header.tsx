@@ -13,6 +13,7 @@ import {
   Check,
   RefreshCw,
   KeyRound,
+  Lock,
 } from 'lucide-react';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { ProfilPerusahaan, Rekening } from '../../server/types.ts';
@@ -44,6 +45,7 @@ interface HeaderProps {
   onToggleMobileSidebar?: () => void;
   onOpenFullLinkModal?: () => void;
   onOpenBosAccessModal?: () => void;
+  onLockScreen?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -59,6 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleMobileSidebar,
   onOpenFullLinkModal,
   onOpenBosAccessModal,
+  onLockScreen,
 }) => {
   const [timeStr, setTimeStr] = useState<string>('');
   const [copiedQuick, setCopiedQuick] = useState(false);
@@ -256,10 +259,22 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               onClick={onOpenBosAccessModal}
               className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer"
-              title="Atur PIN Bos, Lihat Tampilan Khusus Bos, & Panduan Railway/Render"
+              title="Atur Sandi Bos & Sandi Admin atau Pratinjau Tampilan Bos"
             >
               <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Tampilan Bos &amp; PIN</span>
+              <span className="hidden sm:inline">Sandi &amp; Bos</span>
+            </button>
+          )}
+
+          {onLockScreen && (
+            <button
+              type="button"
+              onClick={onLockScreen}
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+              title="Kunci tampilan & kembali ke layar input sandi"
+            >
+              <Lock className="w-3.5 h-3.5 text-slate-600" />
+              <span className="hidden md:inline">Kunci</span>
             </button>
           )}
 

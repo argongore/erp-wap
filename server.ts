@@ -28,6 +28,8 @@ async function startServer() {
   let apiRouterInstance: express.Router | null = null;
   let supabaseConfiguredFlag = false;
 
+  let supabaseEngineRef: { isConfigured: () => boolean } | null = null;
+
   const backendReadyPromise = (async () => {
     const [{ apiRouter }, { dbManager }, { supabaseSyncEngine }] = await Promise.all([
       import('./src/server/routes.ts'),
@@ -35,6 +37,7 @@ async function startServer() {
       import('./src/server/supabase.ts'),
     ]);
     apiRouterInstance = apiRouter;
+    supabaseEngineRef = supabaseSyncEngine;
     supabaseConfiguredFlag = supabaseSyncEngine.isConfigured();
 
     supabaseSyncEngine
@@ -51,20 +54,21 @@ async function startServer() {
 
   // Instant health check (responds immediately during cold start)
   app.get('/api/health', (_req, res) => {
+    const isCloud = supabaseEngineRef ? supabaseEngineRef.isConfigured() : supabaseConfiguredFlag;
     res.json({
       status: 'ok',
       app: 'ERP Wijaya Agro',
       mode: isProduction ? 'production' : 'development',
-      singleSource: supabaseConfiguredFlag ? 'SUPABASE_CLOUD' : 'LOCAL_READY',
+      singleSource: isCloud ? 'SUPABASE_CLOUD' : 'LOCAL_READY',
       timestamp: new Date().toISOString(),
     });
   });
 
-  // Ensure backend modules & any in-flight Supabase hydration settle before serving /api/* routes
+  // Ensure backend modules & fresh Cloud Supabase hydration settle before serving /api/* routes
   app.use('/api', async (req, res, next) => {
     try {
-      const { supabaseSyncEngine } = await backendReadyPromise;
-      await supabaseSyncEngine.ensureHydrated();
+      const { dbManager, supabaseSyncEngine } = await backendReadyPromise;
+      await supabaseSyncEngine.ensureFreshCloudState(dbManager, 4000);
       if (apiRouterInstance) {
         return apiRouterInstance(req, res, next);
       }

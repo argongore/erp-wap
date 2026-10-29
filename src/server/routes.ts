@@ -2311,6 +2311,7 @@ apiRouter.post('/supabase/config', async (req, res) => {
     res.json({
       success: true,
       data: latestStatus,
+      cloudReconnectBundle: supabaseSyncEngine.getReconnectBundle(),
       testResult: {
         ...testResult,
         message: `${testResult.message}${initialSyncMessage}`,
@@ -2318,6 +2319,42 @@ apiRouter.post('/supabase/config', async (req, res) => {
     });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Automatic silent background reconnection for Android / mobile wake-ups after container cold starts
+apiRouter.post('/supabase/auto-connect', async (req, res) => {
+  try {
+    if (!supabaseSyncEngine.isConfigured()) {
+      const { bundle, url, key } = req.body || {};
+      const parsed = supabaseSyncEngine.parseReconnectBundle(bundle);
+      if (parsed) {
+        supabaseSyncEngine.updateConfig({
+          url: parsed.url,
+          key: parsed.key,
+          autoSync: parsed.autoSync,
+        });
+      } else if (url && key) {
+        supabaseSyncEngine.updateConfig({
+          url: String(url),
+          key: String(key),
+          autoSync: true,
+        });
+      }
+    }
+
+    if (supabaseSyncEngine.isConfigured()) {
+      await supabaseSyncEngine.ensureFreshCloudState(dbManager, 0);
+    }
+
+    const latestStatus = supabaseSyncEngine.getStatus();
+    res.json({
+      success: true,
+      configured: latestStatus.configured,
+      data: latestStatus,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message || 'Gagal auto-connect database' });
   }
 });
 
@@ -2621,6 +2658,7 @@ apiRouter.get('/access/status', (_req, res) => {
   try {
     const profil = TransactionService.getProfilPerusahaan();
     const pinBos = (process.env.PIN_BOS || profil?.pinBos || '888888').trim();
+    const sup = supabaseSyncEngine.getStatus();
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       success: true,
@@ -2629,6 +2667,7 @@ apiRouter.get('/access/status', (_req, res) => {
         badanHukum: profil?.badanHukum || 'PT (Perseroan Terbatas)',
         wajibPinPublik: profil?.wajibPinPublik !== false,
         pinLengthHint: pinBos.length,
+        supabaseConfigured: sup.configured,
       },
     });
   } catch (err: any) {
@@ -2636,22 +2675,49 @@ apiRouter.get('/access/status', (_req, res) => {
   }
 });
 
-apiRouter.post('/access/verify-pin', (req, res) => {
+apiRouter.post('/access/verify-pin', async (req, res) => {
   try {
     const inputPin = String(req.body?.pin || '').trim();
     if (!inputPin) {
-      return res.status(400).json({ success: false, message: 'Masukkan kode PIN terlebih dahulu.' });
+      return res.status(400).json({ success: false, message: 'Masukkan sandi terlebih dahulu.' });
     }
+
+    // If Android/client provides cached cloud credentials on a cold-started server, auto-connect & hydrate before checking PIN
+    if (!supabaseSyncEngine.isConfigured()) {
+      const { reconnectBundle, supabaseUrl, supabaseKey } = req.body || {};
+      const parsed = supabaseSyncEngine.parseReconnectBundle(reconnectBundle);
+      if (parsed) {
+        supabaseSyncEngine.updateConfig({
+          url: parsed.url,
+          key: parsed.key,
+          autoSync: parsed.autoSync,
+        });
+      } else if (supabaseUrl && supabaseKey) {
+        supabaseSyncEngine.updateConfig({
+          url: String(supabaseUrl),
+          key: String(supabaseKey),
+          autoSync: true,
+        });
+      }
+    }
+
+    if (supabaseSyncEngine.isConfigured()) {
+      await supabaseSyncEngine.ensureFreshCloudState(dbManager, 1500);
+    }
+
     const profil = TransactionService.getProfilPerusahaan();
     const activePinBos = (process.env.PIN_BOS || profil?.pinBos || '888888').trim();
     const activePinKasir = (process.env.PIN_KASIR || profil?.pinKasir || '123456').trim();
+    const sessionDurationMs = 60 * 60 * 1000; // 1 Jam (3.600.000 ms)
 
     if (inputPin === activePinBos) {
       return res.json({
         success: true,
         data: {
           role: 'BOS' as const,
-          label: 'Portal Eksekutif Pimpinan (Mode Pantau Aman)',
+          label: 'Portal Eksekutif Pimpinan (Tampilan Bos)',
+          sessionDurationMs,
+          cloudReconnectBundle: supabaseSyncEngine.getReconnectBundle(),
         },
       });
     }
@@ -2661,14 +2727,16 @@ apiRouter.post('/access/verify-pin', (req, res) => {
         success: true,
         data: {
           role: 'KASIR' as const,
-          label: 'Operasional Kasir & Admin Penuh',
+          label: 'Operasional Admin & Kasir (Tampilan Admin)',
+          sessionDurationMs,
+          cloudReconnectBundle: supabaseSyncEngine.getReconnectBundle(),
         },
       });
     }
 
     return res.status(401).json({
       success: false,
-      message: 'Kode PIN salah. Gunakan PIN Bos untuk memantau laporan atau PIN Kasir untuk operasional.',
+      message: 'Sandi tidak sesuai. Masukkan Sandi Bos untuk Tampilan Bos atau Sandi Admin untuk Tampilan Admin.',
     });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });

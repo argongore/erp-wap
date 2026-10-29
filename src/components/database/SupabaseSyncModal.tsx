@@ -296,12 +296,12 @@ function cleanSupabaseClientUrl(rawUrl: string): string {
               <div className="flex items-center space-x-2">
                 <span className="text-zinc-400 font-semibold">Status Supabase:</span>
                 {status?.configured ? (
-                  <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-[11px] font-bold">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span>Terkoneksi ke Cloud Supabase</span>
+                  <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-800 text-[11px] font-bold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span>Auto-Connect Aktif ke Cloud Supabase</span>
                   </span>
                 ) : (
-                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-bold">
+                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-bold">
                     <span>Belum Dikonfigurasi</span>
                   </span>
                 )}

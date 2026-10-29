@@ -118,6 +118,7 @@ var SupabaseSyncEngine = class {
     this.hasVerifiedCloudState = false;
     this.serverlessInitialized = false;
     this.lastCloudCheckAt = 0;
+    this.activeFreshCheckPromise = null;
     this.loadConfig();
     this.initClient();
   }
@@ -155,14 +156,71 @@ var SupabaseSyncEngine = class {
     };
   }
   saveConfig() {
+    const jsonPayload = JSON.stringify(this.config, null, 2);
     try {
       if (!fs.existsSync(RUNTIME_CACHE_DIR)) {
         fs.mkdirSync(RUNTIME_CACHE_DIR, { recursive: true });
       }
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2), "utf-8");
+      fs.writeFileSync(CONFIG_FILE, jsonPayload, "utf-8");
     } catch (e) {
       console.warn("Runtime supabase config cache skipped:", e);
     }
+    if (!IS_SERVERLESS) {
+      try {
+        const legacyDir = path.dirname(LEGACY_CONFIG_FILE);
+        if (!fs.existsSync(legacyDir)) {
+          fs.mkdirSync(legacyDir, { recursive: true });
+        }
+        fs.writeFileSync(LEGACY_CONFIG_FILE, jsonPayload, "utf-8");
+      } catch {
+      }
+    }
+  }
+  reloadConfigIfMissing() {
+    if (this.client && this.config.url && this.config.key) {
+      return true;
+    }
+    this.loadConfig();
+    this.initClient();
+    return Boolean(this.client && this.config.url && this.config.key);
+  }
+  getReconnectBundle() {
+    if (!this.config.url || !this.config.key) {
+      this.reloadConfigIfMissing();
+    }
+    if (!this.config.url || !this.config.key) {
+      return null;
+    }
+    try {
+      return Buffer.from(
+        JSON.stringify({
+          u: this.config.url,
+          k: this.config.key,
+          a: this.config.autoSync !== false
+        }),
+        "utf-8"
+      ).toString("base64");
+    } catch {
+      return null;
+    }
+  }
+  parseReconnectBundle(bundle) {
+    if (!bundle || typeof bundle !== "string") return null;
+    try {
+      const decoded = Buffer.from(bundle.trim(), "base64").toString("utf-8");
+      const parsed = JSON.parse(decoded);
+      const url = sanitizeSupabaseUrl(String(parsed?.u || parsed?.url || ""), String(parsed?.k || parsed?.key || ""));
+      const key = String(parsed?.k || parsed?.key || "").trim();
+      if (url && key) {
+        return {
+          url,
+          key,
+          autoSync: parsed?.a !== false && parsed?.autoSync !== false
+        };
+      }
+    } catch {
+    }
+    return null;
   }
   initClient() {
     if (this.config.url && this.config.key) {
@@ -179,6 +237,9 @@ var SupabaseSyncEngine = class {
     }
   }
   isConfigured() {
+    if (!this.client || !this.config.url || !this.config.key) {
+      this.reloadConfigIfMissing();
+    }
     return Boolean(this.client && this.config.url && this.config.key);
   }
   getStatus() {
@@ -505,7 +566,16 @@ var SupabaseSyncEngine = class {
     }
     this.pollTimer = setInterval(async () => {
       try {
-        if (!this.config.autoSync || !this.client || this.isSyncing || this.queuedData) return;
+        if (!this.isConfigured() || !this.config.autoSync || !this.client || this.isSyncing || this.queuedData) {
+          return;
+        }
+        if (!this.hasVerifiedCloudState) {
+          const healRes = await this.syncSmartWithCloud(dbManager2);
+          if (healRes.direction !== "SKIPPED") {
+            console.log(`[SupabaseSyncEngine] Auto-reconnected di background: ${healRes.message}`);
+          }
+          return;
+        }
         const { data, error } = await this.client.from("wijaya_agro_erp_state").select("updated_at").eq("id", "MAIN_DATABASE").maybeSingle();
         if (!error && data && data.updated_at) {
           const remoteTime = new Date(data.updated_at).getTime();
@@ -521,75 +591,88 @@ var SupabaseSyncEngine = class {
         }
       } catch {
       }
-    }, 15e3);
+    }, 12e3);
   }
   /**
-   * On Serverless platforms (Vercel / Netlify), background setInterval is frozen between requests.
-   * This lightweight check ensures cold starts hydrate from Cloud Supabase AND warm instances
-   * pull fresh snapshots whenever Kasir updates data in Cloud Supabase.
+   * Ensures cold starts hydrate from Cloud Supabase AND warm instances automatically
+   * self-heal / pull fresh snapshots whenever Cloud Supabase changes.
    */
   async ensureFreshCloudState(dbManager2, maxAgeMs = 3500) {
     await this.ensureHydrated();
-    if (!this.client || !this.config.url || !this.config.key) {
-      return;
-    }
-    if (!this.serverlessInitialized) {
-      await this.initOnServerStart(dbManager2);
-      this.serverlessInitialized = true;
-      this.lastCloudCheckAt = Date.now();
+    if (!this.isConfigured() || !this.client) {
       return;
     }
     const now = Date.now();
-    if (now - this.lastCloudCheckAt < maxAgeMs || this.isSyncing || this.queuedData) {
+    const needsImmediateRecovery = !this.serverlessInitialized || !this.hasVerifiedCloudState;
+    if (!needsImmediateRecovery && (now - this.lastCloudCheckAt < maxAgeMs || this.isSyncing || this.queuedData)) {
       return;
     }
-    this.lastCloudCheckAt = now;
-    try {
-      const { data, error } = await this.client.from("wijaya_agro_erp_state").select("updated_at").eq("id", "MAIN_DATABASE").maybeSingle();
-      if (!error && data && data.updated_at) {
-        const remoteTime = new Date(data.updated_at).getTime();
-        const localSyncTime = this.config.lastSyncTime ? new Date(this.config.lastSyncTime).getTime() : 0;
-        if (!this.hasVerifiedCloudState || remoteTime > localSyncTime + 1e3) {
-          const pull = await this.pullFromSupabase();
-          if (pull.success && pull.data) {
-            await dbManager2.hydrateFromSupabase(pull.data);
+    if (this.activeFreshCheckPromise) {
+      await this.activeFreshCheckPromise;
+      return;
+    }
+    this.activeFreshCheckPromise = (async () => {
+      try {
+        if (!this.serverlessInitialized) {
+          await this.initOnServerStart(dbManager2);
+          return;
+        }
+        this.lastCloudCheckAt = Date.now();
+        if (!this.hasVerifiedCloudState) {
+          await this.syncSmartWithCloud(dbManager2);
+          return;
+        }
+        if (!this.client) return;
+        const { data, error } = await this.client.from("wijaya_agro_erp_state").select("updated_at").eq("id", "MAIN_DATABASE").maybeSingle();
+        if (!error && data && data.updated_at) {
+          const remoteTime = new Date(data.updated_at).getTime();
+          const localSyncTime = this.config.lastSyncTime ? new Date(this.config.lastSyncTime).getTime() : 0;
+          if (remoteTime > localSyncTime + 1e3) {
+            const pull = await this.pullFromSupabase();
+            if (pull.success && pull.data) {
+              await dbManager2.hydrateFromSupabase(pull.data);
+            }
           }
         }
+      } catch {
+      } finally {
+        this.activeFreshCheckPromise = null;
       }
-    } catch {
-    }
+    })();
+    await this.activeFreshCheckPromise;
   }
   /**
    * Server startup initialization:
    * Hydrates database from Supabase BEFORE serving requests so Supabase is the single source of truth.
+   * Always starts background self-healing polling even if initial network check experiences a transient blip.
    */
   async initOnServerStart(dbManager2) {
     const runHydration = async () => {
-      if (!this.client || !this.config.url || !this.config.key) {
+      if (!this.isConfigured() || !this.client) {
         console.log("[SupabaseSyncEngine] Menunggu kredensial Cloud Supabase.");
         return;
       }
+      this.serverlessInitialized = true;
+      this.startBackgroundPolling(dbManager2);
       console.log("[SupabaseSyncEngine] Menghubungkan ke Single Source of Truth Cloud Supabase...");
       try {
         const test = await this.testConnection();
         if (!test.success) {
-          console.warn("[SupabaseSyncEngine] Koneksi Supabase gagal saat startup:", test.message);
+          console.warn("[SupabaseSyncEngine] Koneksi Supabase belum merespons saat startup (akan auto-retry):", test.message);
           return;
         }
         if (test.tableExists !== false) {
           const syncRes = await this.syncSmartWithCloud(dbManager2);
           console.log(`[SupabaseSyncEngine] [${syncRes.direction}] ${syncRes.message}`);
         }
-        this.serverlessInitialized = true;
         this.lastCloudCheckAt = Date.now();
-        this.startBackgroundPolling(dbManager2);
       } catch (err) {
-        console.warn("[SupabaseSyncEngine] Error saat inisialisasi startup:", err);
+        console.warn("[SupabaseSyncEngine] Error saat inisialisasi startup (akan auto-retry):", err);
       }
     };
     this.hydrationPromise = Promise.race([
       runHydration(),
-      new Promise((resolve) => setTimeout(resolve, IS_SERVERLESS ? 8500 : 15e3))
+      new Promise((resolve) => setTimeout(resolve, IS_SERVERLESS ? 8500 : 12e3))
     ]);
     await this.hydrationPromise;
     this.hydrationPromise = null;
@@ -10831,6 +10914,7 @@ apiRouter.post("/supabase/config", async (req, res) => {
     res.json({
       success: true,
       data: latestStatus,
+      cloudReconnectBundle: supabaseSyncEngine.getReconnectBundle(),
       testResult: {
         ...testResult,
         message: `${testResult.message}${initialSyncMessage}`
@@ -10838,6 +10922,38 @@ apiRouter.post("/supabase/config", async (req, res) => {
     });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
+  }
+});
+apiRouter.post("/supabase/auto-connect", async (req, res) => {
+  try {
+    if (!supabaseSyncEngine.isConfigured()) {
+      const { bundle, url, key } = req.body || {};
+      const parsed = supabaseSyncEngine.parseReconnectBundle(bundle);
+      if (parsed) {
+        supabaseSyncEngine.updateConfig({
+          url: parsed.url,
+          key: parsed.key,
+          autoSync: parsed.autoSync
+        });
+      } else if (url && key) {
+        supabaseSyncEngine.updateConfig({
+          url: String(url),
+          key: String(key),
+          autoSync: true
+        });
+      }
+    }
+    if (supabaseSyncEngine.isConfigured()) {
+      await supabaseSyncEngine.ensureFreshCloudState(dbManager, 0);
+    }
+    const latestStatus = supabaseSyncEngine.getStatus();
+    res.json({
+      success: true,
+      configured: latestStatus.configured,
+      data: latestStatus
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || "Gagal auto-connect database" });
   }
 });
 apiRouter.post("/supabase/test", async (_req, res) => {
@@ -11074,10 +11190,30 @@ apiRouter.post("/upload-bukti", async (req, res) => {
     });
   }
 });
+apiRouter.get("/bos-snapshot", (_req, res) => {
+  try {
+    const db = dbManager.get();
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.json({
+      success: true,
+      data: {
+        profilPerusahaan: TransactionService.getProfilPerusahaan(),
+        rekening: db.rekening || [],
+        stokBarang: db.stokBarang || [],
+        stokHasilBumi: db.stokHasilBumi || [],
+        inventaris: db.inventaris || [],
+        supabaseStatus: supabaseSyncEngine.getStatus()
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 apiRouter.get("/access/status", (_req, res) => {
   try {
     const profil = TransactionService.getProfilPerusahaan();
     const pinBos = (process.env.PIN_BOS || profil?.pinBos || "888888").trim();
+    const sup = supabaseSyncEngine.getStatus();
     res.setHeader("Cache-Control", "no-store");
     res.json({
       success: true,
@@ -11085,28 +11221,52 @@ apiRouter.get("/access/status", (_req, res) => {
         namaPerusahaan: profil?.namaPerusahaan || "PT. WIJAYA AGRO PERKASA",
         badanHukum: profil?.badanHukum || "PT (Perseroan Terbatas)",
         wajibPinPublik: profil?.wajibPinPublik !== false,
-        pinLengthHint: pinBos.length
+        pinLengthHint: pinBos.length,
+        supabaseConfigured: sup.configured
       }
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-apiRouter.post("/access/verify-pin", (req, res) => {
+apiRouter.post("/access/verify-pin", async (req, res) => {
   try {
     const inputPin = String(req.body?.pin || "").trim();
     if (!inputPin) {
-      return res.status(400).json({ success: false, message: "Masukkan kode PIN terlebih dahulu." });
+      return res.status(400).json({ success: false, message: "Masukkan sandi terlebih dahulu." });
+    }
+    if (!supabaseSyncEngine.isConfigured()) {
+      const { reconnectBundle, supabaseUrl, supabaseKey } = req.body || {};
+      const parsed = supabaseSyncEngine.parseReconnectBundle(reconnectBundle);
+      if (parsed) {
+        supabaseSyncEngine.updateConfig({
+          url: parsed.url,
+          key: parsed.key,
+          autoSync: parsed.autoSync
+        });
+      } else if (supabaseUrl && supabaseKey) {
+        supabaseSyncEngine.updateConfig({
+          url: String(supabaseUrl),
+          key: String(supabaseKey),
+          autoSync: true
+        });
+      }
+    }
+    if (supabaseSyncEngine.isConfigured()) {
+      await supabaseSyncEngine.ensureFreshCloudState(dbManager, 1500);
     }
     const profil = TransactionService.getProfilPerusahaan();
     const activePinBos = (process.env.PIN_BOS || profil?.pinBos || "888888").trim();
     const activePinKasir = (process.env.PIN_KASIR || profil?.pinKasir || "123456").trim();
+    const sessionDurationMs = 60 * 60 * 1e3;
     if (inputPin === activePinBos) {
       return res.json({
         success: true,
         data: {
           role: "BOS",
-          label: "Portal Eksekutif Pimpinan (Mode Pantau Aman)"
+          label: "Portal Eksekutif Pimpinan (Tampilan Bos)",
+          sessionDurationMs,
+          cloudReconnectBundle: supabaseSyncEngine.getReconnectBundle()
         }
       });
     }
@@ -11115,13 +11275,15 @@ apiRouter.post("/access/verify-pin", (req, res) => {
         success: true,
         data: {
           role: "KASIR",
-          label: "Operasional Kasir & Admin Penuh"
+          label: "Operasional Admin & Kasir (Tampilan Admin)",
+          sessionDurationMs,
+          cloudReconnectBundle: supabaseSyncEngine.getReconnectBundle()
         }
       });
     }
     return res.status(401).json({
       success: false,
-      message: "Kode PIN salah. Gunakan PIN Bos untuk memantau laporan atau PIN Kasir untuk operasional."
+      message: "Sandi tidak sesuai. Masukkan Sandi Bos untuk Tampilan Bos atau Sandi Admin untuk Tampilan Admin."
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

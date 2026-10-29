@@ -313,7 +313,7 @@ export const ModalAksesBosDanPin: React.FC<ModalAksesBosDanPinProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-slate-900">
-                    PIN Khusus Pimpinan / Bos (4–8 Angka)
+                    Sandi / PIN Pimpinan (Bos) (4–8 Angka)
                   </label>
                   <input
                     type="text"
@@ -325,13 +325,13 @@ export const ModalAksesBosDanPin: React.FC<ModalAksesBosDanPinProps> = ({
                     placeholder="888888"
                   />
                   <p className="text-xs text-slate-500 leading-relaxed">
-                    Saat Bos mengetik PIN ini di HP, otomatis terbuka <strong>Tampilan Khusus Bos (Mode Baca Aman)</strong>—tidak bisa salah pencet hapus data.
+                    Saat input <strong>Sandi Bos</strong> pada layar awal, sistem langsung masuk ke <strong>Tampilan Bos (Mode Pantau Aman)</strong>.
                   </p>
                 </div>
 
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-slate-900">
-                    PIN Operasional Kasir / Admin (4–8 Angka)
+                    Sandi / PIN Admin &amp; Kasir (4–8 Angka)
                   </label>
                   <input
                     type="text"
@@ -343,23 +343,14 @@ export const ModalAksesBosDanPin: React.FC<ModalAksesBosDanPinProps> = ({
                     placeholder="123456"
                   />
                   <p className="text-xs text-slate-500 leading-relaxed">
-                    Membuka seluruh menu input transaksi kasir, pembelian hasil bumi, penggajian, dan pengaturan.
+                    Saat input <strong>Sandi Admin</strong> pada layar awal, sistem langsung masuk ke <strong>Tampilan Admin</strong> (operasional penuh).
                   </p>
                 </div>
               </div>
 
-              <label className="flex items-start gap-2.5 pt-3 border-t border-slate-100 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={wajibPinPublik}
-                  onChange={(e) => setWajibPinPublik(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600"
-                />
-                <span className="text-xs text-slate-700 leading-relaxed">
-                  <strong>Wajibkan Kunci PIN otomatis pada link website publik (Vercel / Domain Luar).</strong>{' '}
-                  Siapa pun yang membuka link publik wajib mengetik PIN Bos atau PIN Kasir terlebih dahulu.
-                </span>
-              </label>
+              <div className="pt-3 border-t border-slate-100 text-xs text-slate-600 leading-relaxed">
+                <strong>Aturan Keamanan Aktif:</strong> Login awal selalu meminta sandi terlebih dahulu, dan apabila sesi akses sudah berjalan <strong>lebih dari 1 jam</strong>, sistem otomatis meminta input sandi ulang.
+              </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
                 <div className="flex flex-wrap items-center gap-2">

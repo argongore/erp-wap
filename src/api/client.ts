@@ -79,14 +79,72 @@ export interface DashboardStatsResponse {
   rekeningList: Rekening[];
 }
 
+const CLOUD_RECONNECT_STORAGE_KEY = 'wap_cloud_reconnect_v1';
+let inFlightAutoConnectPromise: Promise<boolean> | null = null;
+
+function waitForBrowserOnline(maxWaitMs = 2200): Promise<void> {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined' || navigator.onLine !== false) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('online', finish);
+      resolve();
+    };
+    window.addEventListener('online', finish, { once: true });
+    setTimeout(finish, maxWaitMs);
+  });
+}
+
+export function saveCloudReconnectBundle(bundle?: string | null, url?: string, key?: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (bundle && typeof bundle === 'string' && bundle.trim()) {
+      localStorage.setItem(CLOUD_RECONNECT_STORAGE_KEY, bundle.trim());
+    }
+    if (url && url.trim()) {
+      localStorage.setItem('wijaya_agro_supabase_url', url.trim());
+    }
+    if (key && key.trim()) {
+      localStorage.setItem('wijaya_agro_supabase_key', key.trim());
+    }
+  } catch {}
+}
+
+export function readCloudReconnectPayload(): {
+  bundle?: string;
+  url?: string;
+  key?: string;
+} | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const bundle = localStorage.getItem(CLOUD_RECONNECT_STORAGE_KEY) || '';
+    const url = localStorage.getItem('wijaya_agro_supabase_url') || '';
+    const key = localStorage.getItem('wijaya_agro_supabase_key') || '';
+    if (!bundle && !(url && key)) {
+      return null;
+    }
+    return {
+      bundle: bundle || undefined,
+      url: url || undefined,
+      key: key || undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resilient JSON HTTP client for ERP API routes.
- * Automatically retries gateway warmup / container wakeup HTML responses (502/503/504 or <!doctype html>)
- * and guarantees clean Indonesian error messages instead of raw JSON syntax exceptions.
+ * Automatically waits briefly on Android/mobile network wake-up, retries gateway warmup / container wakeup
+ * HTML responses (502/503/504 or <!doctype html>), and guarantees clean Indonesian error messages.
  */
 export async function requestJson<T = any>(url: string, init?: RequestInit): Promise<T> {
   const maxAttempts = 4;
-  const retryDelays = [600, 1200, 2000];
+  const retryDelays = [650, 1300, 2200];
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -98,6 +156,7 @@ export async function requestJson<T = any>(url: string, init?: RequestInit): Pro
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let res: Response;
     try {
+      await waitForBrowserOnline(2000);
       res = await fetch(url, {
         ...init,
         cache: isGet ? 'no-store' : init?.cache,
@@ -105,6 +164,7 @@ export async function requestJson<T = any>(url: string, init?: RequestInit): Pro
       });
     } catch (netErr: any) {
       if (attempt < maxAttempts - 1) {
+        await waitForBrowserOnline(1500);
         await new Promise((r) => setTimeout(r, retryDelays[attempt] || 1500));
         continue;
       }
@@ -754,7 +814,48 @@ export const api = {
       body: JSON.stringify(payload),
     });
     if (!data.success) throw new Error(data.message || 'Gagal menyimpan konfigurasi Supabase');
+    saveCloudReconnectBundle(data.cloudReconnectBundle, payload.url, payload.key);
     return data;
+  },
+
+  autoConnectCloudDatabase: async (): Promise<{
+    reconnected: boolean;
+    configured: boolean;
+    status?: {
+      configured: boolean;
+      url?: string;
+      lastSyncTime?: string | null;
+    };
+  }> => {
+    if (inFlightAutoConnectPromise) {
+      const ok = await inFlightAutoConnectPromise;
+      return { reconnected: ok, configured: ok };
+    }
+
+    let latestStatus: any = undefined;
+    inFlightAutoConnectPromise = (async () => {
+      try {
+        const cached = readCloudReconnectPayload();
+        const res = await requestJson('/api/supabase/auto-connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cached || {}),
+        });
+        latestStatus = res?.data;
+        return Boolean(res?.configured || res?.data?.configured);
+      } catch {
+        return false;
+      } finally {
+        inFlightAutoConnectPromise = null;
+      }
+    })();
+
+    const configured = await inFlightAutoConnectPromise;
+    return {
+      reconnected: configured,
+      configured,
+      status: latestStatus,
+    };
   },
 
   testSupabaseConnection: async () => {
@@ -1554,6 +1655,7 @@ export const api = {
     badanHukum: string;
     wajibPinPublik: boolean;
     pinLengthHint: number;
+    supabaseConfigured?: boolean;
   }> => {
     const data = await requestJson('/api/access/status');
     if (!data.success) throw new Error(data.message || 'Gagal memuat status keamanan');
@@ -1562,13 +1664,22 @@ export const api = {
 
   verifyAccessPin: async (
     pin: string
-  ): Promise<{ role: 'BOS' | 'KASIR'; label: string }> => {
+  ): Promise<{ role: 'BOS' | 'KASIR'; label: string; sessionDurationMs?: number }> => {
+    const cached = readCloudReconnectPayload();
     const data = await requestJson('/api/access/verify-pin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin }),
+      body: JSON.stringify({
+        pin,
+        reconnectBundle: cached?.bundle,
+        supabaseUrl: cached?.url,
+        supabaseKey: cached?.key,
+      }),
     });
-    if (!data.success) throw new Error(data.message || 'PIN tidak valid');
+    if (!data.success) throw new Error(data.message || 'Sandi tidak valid');
+    if (data.data?.cloudReconnectBundle) {
+      saveCloudReconnectBundle(data.data.cloudReconnectBundle);
+    }
     return data.data;
   },
 

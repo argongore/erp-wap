@@ -177,13 +177,6 @@ export default function App() {
     lastSyncTime?: string | null;
   } | null>(null);
 
-  // Detect custom production domain (Railway / Render / VPS) or ?mode=bos URL parameter
-  const isPublicCustomDomain = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    const h = window.location.hostname;
-    return h !== 'localhost' && h !== '127.0.0.1' && !h.startsWith('ais-');
-  }, []);
-
   const isUrlBosMode = useMemo(() => {
     if (typeof window === 'undefined') return false;
     const p = new URLSearchParams(window.location.search);
@@ -191,52 +184,68 @@ export default function App() {
     return m === 'bos' || m === 'pimpinan';
   }, []);
 
-  const [authRole, setAuthRole] = useState<AuthenticatedRole | null>(() => {
-    try {
-      const sessionRole = sessionStorage.getItem('wap_auth_role');
-      if (sessionRole === 'BOS' || sessionRole === 'KASIR') {
-        return sessionRole;
-      }
-      const savedRaw = localStorage.getItem('wap_auth_device_v1');
-      if (savedRaw) {
-        const parsed = JSON.parse(savedRaw);
-        if (
-          parsed &&
-          (parsed.role === 'BOS' || parsed.role === 'KASIR') &&
-          typeof parsed.expiresAt === 'number' &&
-          parsed.expiresAt > Date.now()
-        ) {
-          return parsed.role;
-        }
-        localStorage.removeItem('wap_auth_device_v1');
-      }
-    } catch {}
-    return null;
-  });
+  // Strict 1-Hour Session Window (3.600.000 ms) — requires re-entering Sandi after > 1 hour
+  const SESSION_MAX_AGE_MS = 60 * 60 * 1000;
+  const SESSION_STORAGE_KEY = 'wap_auth_session_v2';
 
+  const initialSessionState = useMemo((): {
+    role: AuthenticatedRole | null;
+    expired: boolean;
+  } => {
+    if (typeof window === 'undefined') return { role: null, expired: false };
+    try {
+      // Remove legacy non-expiring / 7-day keys so 1-hour rule is strictly enforced everywhere
+      sessionStorage.removeItem('wap_auth_role');
+      localStorage.removeItem('wap_auth_device_v1');
+
+      const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) return { role: null, expired: false };
+
+      const parsed = JSON.parse(raw);
+      const now = Date.now();
+      const validRole = parsed?.role === 'BOS' || parsed?.role === 'KASIR';
+      const validTimestamps =
+        typeof parsed?.loginAt === 'number' &&
+        typeof parsed?.expiresAt === 'number' &&
+        now >= parsed.loginAt - 60000;
+
+      if (
+        validRole &&
+        validTimestamps &&
+        now < parsed.expiresAt &&
+        now - parsed.loginAt < SESSION_MAX_AGE_MS
+      ) {
+        return { role: parsed.role, expired: false };
+      }
+
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      return { role: null, expired: true };
+    } catch {
+      return { role: null, expired: false };
+    }
+  }, [SESSION_MAX_AGE_MS]);
+
+  const [authRole, setAuthRole] = useState<AuthenticatedRole | null>(initialSessionState.role);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState<boolean>(initialSessionState.expired);
   const [forcePinGate, setForcePinGate] = useState<boolean>(false);
-  const [previewBosView, setPreviewBosView] = useState<boolean>(false);
+  const [previewBosView, setPreviewBosView] = useState<boolean>(initialSessionState.role === 'BOS');
 
   const checkAndSyncSupabase = useCallback(async (): Promise<boolean> => {
     try {
+      const result = await api.autoConnectCloudDatabase();
+      if (result.status) {
+        setSupabaseStatus(result.status);
+      }
+      if (result.configured) {
+        return true;
+      }
       const status = await api.getSupabaseStatus();
       setSupabaseStatus(status);
-      // Auto reconnect from browser localStorage if backend restarted (Cloud-first smart sync)
-      if (!status.configured) {
-        const localUrl = localStorage.getItem('wijaya_agro_supabase_url');
-        const localKey = localStorage.getItem('wijaya_agro_supabase_key');
-        if (localUrl && localKey) {
-          const res = await api.updateSupabaseConfig({ url: localUrl, key: localKey, autoSync: true });
-          if (res.data) {
-            setSupabaseStatus(res.data);
-            return true;
-          }
-        }
-      }
+      return Boolean(status.configured);
     } catch (e) {
-      console.warn('Supabase status check failed:', e);
+      console.warn('Auto-connect database check warning:', e);
+      return false;
     }
-    return false;
   }, []);
 
   // Check if current URL is a public share link (e.g. ?share=rekening-koran&id=MTR-001)
@@ -262,6 +271,8 @@ export default function App() {
   const refreshInFlightRef = useRef<boolean>(false);
   const refreshQueuedRef = useRef<boolean>(false);
   const lastFocusRefreshRef = useRef<number>(0);
+  const retryTimerRef = useRef<number | null>(null);
+  const lastInteractionCheckRef = useRef<number>(0);
 
   const applySnapshot = useCallback((snap: Awaited<ReturnType<typeof api.getErpSnapshot>>) => {
     if (snap.dashboard) setStats(snap.dashboard);
@@ -319,7 +330,13 @@ export default function App() {
         window.dispatchEvent(new CustomEvent('erp:data-updated'));
       } while (refreshQueuedRef.current);
     } catch (err) {
-      console.error('Error loading ERP snapshot:', err);
+      console.error('Error loading ERP snapshot (auto-retrying):', err);
+      if (retryTimerRef.current === null && typeof window !== 'undefined') {
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          void checkAndSyncSupabase().then(() => loadAllData());
+        }, 2500);
+      }
     } finally {
       refreshInFlightRef.current = false;
       setLoading(false);
@@ -345,6 +362,7 @@ export default function App() {
           if (Array.isArray(hydrated.stokBarang)) setStokList(hydrated.stokBarang);
           if (Array.isArray(hydrated.stokHasilBumi)) setStokHasilBumiList(hydrated.stokHasilBumi);
           if (Array.isArray(hydrated.inventaris)) setInventarisList(hydrated.inventaris);
+          if (hydrated.supabaseStatus) setSupabaseStatus(hydrated.supabaseStatus);
         }
       }
 
@@ -352,30 +370,77 @@ export default function App() {
         window.dispatchEvent(new CustomEvent('erp:data-updated'));
       }
     } catch (err) {
-      console.error('Error loading Bos snapshot:', err);
+      console.error('Error loading Bos snapshot (auto-retrying):', err);
+      if (retryTimerRef.current === null && typeof window !== 'undefined') {
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          void checkAndSyncSupabase().then(() => loadBosData(true));
+        }, 2500);
+      }
     } finally {
       setLoading(false);
     }
   }, [checkAndSyncSupabase]);
 
+  const expireSessionNow = useCallback(() => {
+    setAuthRole(null);
+    setPreviewBosView(false);
+    setSessionExpiredNotice(true);
+    setForcePinGate(true);
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      sessionStorage.removeItem('wap_auth_role');
+      localStorage.removeItem('wap_auth_device_v1');
+    } catch {}
+  }, []);
+
+  const verifySessionStillActive = useCallback((): boolean => {
+    if (authRole === null) return false;
+    try {
+      const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) {
+        expireSessionNow();
+        return false;
+      }
+      const parsed = JSON.parse(raw);
+      const now = Date.now();
+      if (
+        !parsed ||
+        (parsed.role !== 'BOS' && parsed.role !== 'KASIR') ||
+        typeof parsed.loginAt !== 'number' ||
+        typeof parsed.expiresAt !== 'number' ||
+        now >= parsed.expiresAt ||
+        now - parsed.loginAt >= SESSION_MAX_AGE_MS
+      ) {
+        expireSessionNow();
+        return false;
+      }
+      return true;
+    } catch {
+      expireSessionNow();
+      return false;
+    }
+  }, [authRole, expireSessionNow, SESSION_MAX_AGE_MS]);
+
   const handlePinAuthenticated = useCallback(
-    (role: AuthenticatedRole, rememberDevice: boolean) => {
+    (role: AuthenticatedRole, sessionDurationMs?: number) => {
+      const now = Date.now();
+      const duration = Math.min(sessionDurationMs || SESSION_MAX_AGE_MS, SESSION_MAX_AGE_MS);
       setAuthRole(role);
+      setSessionExpiredNotice(false);
       setForcePinGate(false);
       setPreviewBosView(role === 'BOS');
       try {
-        sessionStorage.setItem('wap_auth_role', role);
-        if (rememberDevice) {
-          localStorage.setItem(
-            'wap_auth_device_v1',
-            JSON.stringify({
-              role,
-              expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
-            })
-          );
-        } else {
-          localStorage.removeItem('wap_auth_device_v1');
-        }
+        localStorage.setItem(
+          SESSION_STORAGE_KEY,
+          JSON.stringify({
+            role,
+            loginAt: now,
+            expiresAt: now + duration,
+          })
+        );
+        sessionStorage.removeItem('wap_auth_role');
+        localStorage.removeItem('wap_auth_device_v1');
       } catch {}
       if (role === 'BOS') {
         void loadBosData(false);
@@ -383,22 +448,35 @@ export default function App() {
         void loadAllData();
       }
     },
-    [loadAllData, loadBosData]
+    [loadAllData, loadBosData, SESSION_MAX_AGE_MS]
   );
 
   const handleLockPinScreen = useCallback(() => {
     setAuthRole(null);
     setPreviewBosView(false);
+    setSessionExpiredNotice(false);
     setForcePinGate(true);
     try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
       sessionStorage.removeItem('wap_auth_role');
       localStorage.removeItem('wap_auth_device_v1');
     } catch {}
   }, []);
 
   useEffect(() => {
-    if ((isPublicCustomDomain || isUrlBosMode) && authRole === null) {
+    return () => {
+      if (retryTimerRef.current !== null) {
+        clearTimeout(retryTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authRole === null) {
       setLoading(false);
+      return;
+    }
+    if (!verifySessionStillActive()) {
       return;
     }
     if (authRole === 'BOS') {
@@ -406,31 +484,97 @@ export default function App() {
       return;
     }
     void loadAllData();
-  }, [loadAllData, loadBosData, isPublicCustomDomain, isUrlBosMode, authRole]);
+  }, [loadAllData, loadBosData, authRole, verifySessionStillActive]);
 
+  // Enforce strict 1-hour session timeout continuously + on first interaction after Android sleep
   useEffect(() => {
-    const handleVisibilityOrFocus = () => {
-      if (document.visibilityState === 'hidden') return;
-      if ((isPublicCustomDomain || isUrlBosMode) && authRole === null) return;
+    if (authRole === null) return;
+
+    const timer = window.setInterval(() => {
+      verifySessionStillActive();
+    }, 10000);
+
+    const onUserActivity = () => {
       const now = Date.now();
-      const isBosActive = authRole === 'BOS' || previewBosView;
-      const cooldownMs = isBosActive ? 30000 : 15000;
-      if (now - lastFocusRefreshRef.current > cooldownMs) {
-        lastFocusRefreshRef.current = now;
-        if (isBosActive) {
-          void loadBosData(true);
-        } else {
-          void loadAllData();
-        }
+      if (now - lastInteractionCheckRef.current > 5000) {
+        lastInteractionCheckRef.current = now;
+        verifySessionStillActive();
       }
     };
-    window.addEventListener('focus', handleVisibilityOrFocus);
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    window.addEventListener('pointerdown', onUserActivity, { passive: true });
+    window.addEventListener('keydown', onUserActivity, { passive: true });
     return () => {
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      clearInterval(timer);
+      window.removeEventListener('pointerdown', onUserActivity);
+      window.removeEventListener('keydown', onUserActivity);
     };
-  }, [loadAllData, loadBosData, isPublicCustomDomain, isUrlBosMode, authRole, previewBosView]);
+  }, [authRole, verifySessionStillActive]);
+
+  // Resilient Android wake-up, network recovery ('online', 'pageshow', 'visibilitychange', 'focus') & periodic DB auto-connect
+  useEffect(() => {
+    const syncAndRefreshActiveView = (forceImmediate = false) => {
+      if (document.visibilityState === 'hidden') return;
+      if (authRole === null) return;
+      if (!verifySessionStillActive()) return;
+
+      const now = Date.now();
+      const isBosActive = authRole === 'BOS' || previewBosView;
+      const cooldownMs = forceImmediate ? 1500 : isBosActive ? 8000 : 6000;
+      if (now - lastFocusRefreshRef.current > cooldownMs) {
+        lastFocusRefreshRef.current = now;
+        void (async () => {
+          await checkAndSyncSupabase();
+          if (isBosActive) {
+            await loadBosData(true);
+          } else {
+            await loadAllData();
+          }
+        })();
+      }
+    };
+
+    const handleOnline = () => syncAndRefreshActiveView(true);
+    const handleResume = () => syncAndRefreshActiveView(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('pageshow', handleResume);
+    window.addEventListener('focus', handleResume);
+    document.addEventListener('visibilitychange', handleResume);
+
+    // Background keep-alive auto-connect check every 45s while visible on Android/Desktop
+    const keepAliveTimer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden' || authRole === null) return;
+      if (!verifySessionStillActive()) return;
+      if (!supabaseStatus?.configured) {
+        void checkAndSyncSupabase().then((reconnected) => {
+          if (reconnected) {
+            if (authRole === 'BOS' || previewBosView) {
+              void loadBosData(true);
+            } else {
+              void loadAllData();
+            }
+          }
+        });
+      }
+    }, 45000);
+
+    return () => {
+      clearInterval(keepAliveTimer);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('pageshow', handleResume);
+      window.removeEventListener('focus', handleResume);
+      document.removeEventListener('visibilitychange', handleResume);
+    };
+  }, [
+    loadAllData,
+    loadBosData,
+    checkAndSyncSupabase,
+    verifySessionStillActive,
+    authRole,
+    previewBosView,
+    supabaseStatus?.configured,
+  ]);
 
   const handleOpenMitraStatement = (idMitra: string) => {
     setSelectedMitraForStatement(idMitra);
@@ -528,12 +672,8 @@ export default function App() {
     );
   }
 
-  // Require PIN Gate automatically on Railway / Render / custom domains, on ?mode=bos, or when manually locked
-  const requiresPinNow =
-    forcePinGate ||
-    ((isPublicCustomDomain || isUrlBosMode) &&
-      profilPerusahaan?.wajibPinPublik !== false &&
-      authRole === null);
+  // Always require Sandi login screen initially when no active (< 1 hour) session exists or when locked
+  const requiresPinNow = forcePinGate || authRole === null;
 
   if (requiresPinNow) {
     return (
@@ -541,12 +681,13 @@ export default function App() {
         defaultCompanyName={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
         defaultBadanHukum={profilPerusahaan?.badanHukum || 'PT (Perseroan Terbatas)'}
         preferBosHint={isUrlBosMode}
+        sessionExpiredNotice={sessionExpiredNotice}
         onAuthenticated={handlePinAuthenticated}
       />
     );
   }
 
-  // Render Dedicated Read-Only Executive Boss View when logged in with PIN Bos or previewing Tampilan Bos
+  // Render Dedicated Read-Only Executive Boss View when logged in with Sandi Bos or previewing Tampilan Bos
   if (authRole === 'BOS' || previewBosView) {
     return (
       <PortalEksekutifBosView
@@ -591,6 +732,7 @@ export default function App() {
         onToggleMobileSidebar={() => setMobileSidebarOpen((prev) => !prev)}
         onOpenFullLinkModal={() => setShowFullLinkModal(true)}
         onOpenBosAccessModal={() => setShowBosAccessModal(true)}
+        onLockScreen={handleLockPinScreen}
       />
 
       {/* Main Workspace: Sidebar (Frozen/Collapsible) + Content Area (Independently Scrollable) */}
