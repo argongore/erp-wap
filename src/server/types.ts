@@ -36,6 +36,8 @@ export interface Mitra {
   catatan?: string;
   isAnakPerusahaan?: boolean;   // true jika merupakan Anak Perusahaan PT. Wijaya Agro Perkasa (misal DP Parabot)
   kodeRekeningTerkait?: string; // Relasi 1-ke-1 ke Master Rekening (misal "REK-DPPARABO")
+  isKaryawan?: boolean;         // true jika Mitra ini juga terdaftar sebagai Karyawan PT
+  idKaryawanTerkait?: string;   // Relasi 1-ke-1 ke Master Karyawan (misal "KRY-001")
 }
 
 export interface RekapMitraItem {
@@ -50,11 +52,22 @@ export interface RekapMitraItem {
   isAnakPerusahaan?: boolean;
   kodeRekeningTerkait?: string;
   namaRekeningTerkait?: string;
+  // Integrasi Karyawan <-> Mitra (1 Akun Terpadu: Karyawan juga bisa jadi Mitra)
+  isKaryawan?: boolean;
+  idKaryawanTerkait?: string;
+  nikKaryawan?: string;
+  jabatanKaryawan?: string;
+  divisiKaryawan?: string;
+  hasTransaksiMitraPanen?: boolean;
+  totalTitipPanenMurni?: number;      // Saldo titip hasil panen / pinjaman dana murni belum cair
+  totalUpahBelumDibayar?: number;     // Saldo hak gaji / upah kerja karyawan yang belum cair
+  totalGajiSudahDibayar?: number;     // Akumulasi gaji karyawan yang sudah dibayar via Slip Gaji
+  totalHakMitraGabungan?: number;     // totalTitipPanenMurni + totalUpahBelumDibayar
   // Saldo simpanan/talangan pada Rekening Anak Perusahaan (+ dana PT disimpan di anak perusahaan, - talangan anak perusahaan ke PT)
   saldoRekeningAnakPerusahaan?: number;
   // Posisi bersih gabungan (Titip/Hutang PT - Bon Mitra - Saldo Simpanan Rekening Anak Perusahaan)
   posisiBersihTerpadu?: number;
-  // Hutang kita pada mitra (Titip Hasil Bumi belum diambil uangnya)
+  // Hutang kita pada mitra (Titip Hasil Bumi + Hak Upah Belum Cair)
   totalHutangTitipPanen: number;
   // Bon mitra (Piutang kita pada mitra)
   totalKasbonBarang: number;
@@ -71,10 +84,12 @@ export interface RekapMitraItem {
 
 export interface RekapMasterMitraSummary {
   totalMitra: number;
-  totalHutangPerusahaanKeMitra: number; // Total titipan hasil bumi yang belum diambil uangnya
+  totalHutangPerusahaanKeMitra: number; // Total hak mitra belum cair (Titip Hasil Panen + Upah Kerja Belum Cair)
+  totalTitipPanenMurni?: number;        // Khusus saldo titip panen/pinjaman murni (sinkron ke TIT01)
+  totalUpahKaryawanBelumDibayar?: number; // Khusus saldo hak gaji/upah karyawan belum cair
   totalBonMitra: number;                // Total kasbon barang + uang mitra
-  saldoBersihKemitraan: number;         // Total titip - Total bon
-  mitraDenganHutangTitipCount: number;  // Jumlah mitra yang punya saldo titip belum cair
+  saldoBersihKemitraan: number;         // Total hak mitra - Total bon
+  mitraDenganHutangTitipCount: number;  // Jumlah mitra yang punya saldo hak belum cair
   mitraDenganBonCount: number;          // Jumlah mitra yang memiliki kewajiban bon aktif
   items: RekapMitraItem[];
 }
@@ -99,7 +114,11 @@ export interface RekapKaryawanItem {
   totalKasbonBarang: number;       // Kasbon barang toko dari kasir
   totalKasbonUang: number;         // Kasbon uang dari kasir
   totalBonKaryawan: number;        // Kasbon barang + kasbon uang
+  totalTitipHasilPanen?: number;   // Saldo titip hasil panen sebagai Mitra
+  totalGajiSudahDibayar?: number;  // Total slip gaji yang telah dibayar
+  totalHakGabunganMitraKaryawan?: number; // totalUpahBelumDibayar + totalTitipHasilPanen
   saldoBersih: number;             // totalUpahBelumDibayar - totalBonKaryawan
+  saldoBersihTerpaduMitra?: number; // (totalUpahBelumDibayar + totalTitipHasilPanen) - totalBonKaryawan
   posisiStatus: 'PERUSAHAAN_BERHUTANG_UPAH' | 'KARYAWAN_BERHUTANG_BON' | 'LUNAS_IMPAS';
   pekerjaanHarianTerakhir?: string;
   tanggalKerjaTerakhir?: string;
@@ -192,6 +211,12 @@ export interface ItemRekapPayrollBulanan {
   totalPotonganBon: number;
   totalGajiBersihDibayar: number;
   totalHakUpahPending: number;
+  standarGajiPokok?: number;
+  tunjanganTetap?: number;
+  totalUpahBelumDibayarSemuaPeriode?: number;
+  totalHariBelumDibayarSemuaPeriode?: number;
+  saldoTitipHasilPanenMitra?: number;
+  idMitraTerkait?: string;
   sisaKasbonBarang: number;
   sisaKasbonUang: number;
   totalSisaBonKaryawan: number;
@@ -627,12 +652,15 @@ export type NamaDivisi =
   | 'PT Wijaya Agro Perkasa'
   | 'Okussa';
 
+export const DEFAULT_PT_LOGO_URL = '/assets/aistudio/unnamed_cbf747dc.jpg';
+
 export interface ItemDivisi {
   id: string;
   nama: string;
   kodeRekening: string;
   penanggungJawab?: string;
   deskripsi?: string;
+  logoUrl?: string;
   isCustom?: boolean;
 }
 
@@ -642,6 +670,7 @@ export const DAFTAR_DIVISI: Array<{
   kodeRekening: string;
   penanggungJawab: string;
   deskripsi: string;
+  logoUrl?: string;
 }> = [
   {
     id: 'DIV-GWA',
@@ -677,6 +706,7 @@ export const DAFTAR_DIVISI: Array<{
     kodeRekening: 'REK-WAP',
     penanggungJawab: 'General Manager Holding WAP',
     deskripsi: 'Perusahaan induk pengolahan gabah skala besar & kemitraan nasional.',
+    logoUrl: DEFAULT_PT_LOGO_URL,
   },
   {
     id: 'DIV-OKU',
@@ -805,6 +835,9 @@ export interface PergerakanKeuanganDivisiSummary {
   idDivisi: string;
   kodeRekening: string;
   namaRekening: string;
+  penanggungJawab?: string;
+  deskripsi?: string;
+  logoUrl?: string;
   saldoSaatIni: number;
   totalPenjualanMasuk: number;
   totalPembelianKeluar: number;
@@ -835,6 +868,15 @@ export interface RekeningKoranMitraSummary {
   telepon: string;
   alamat: string;
   status: StatusAktif;
+  isKaryawan?: boolean;
+  idKaryawanTerkait?: string;
+  nikKaryawan?: string;
+  jabatanKaryawan?: string;
+  divisiKaryawan?: string;
+  totalTitipPanenMurni?: number;      // Khusus saldo titip hasil bumi / pinjaman PT belum cair
+  totalUpahBelumDibayar?: number;     // Khusus saldo hak gaji / upah kerja karyawan belum cair
+  totalGajiSudahDibayar?: number;     // Total slip pembayaran gaji yang sudah dicairkan
+  totalHakMitraGabungan?: number;     // totalTitipPanenMurni + totalUpahBelumDibayar
   isAnakPerusahaan?: boolean;
   kodeRekeningTerkait?: string;
   namaRekeningTerkait?: string;
@@ -852,7 +894,7 @@ export interface RekeningKoranMitraSummary {
   };
   totalKasbonBarang: number;     // Total outstanding bon dari penjualan barang
   totalKasbonUang: number;       // Total outstanding kasbon uang
-  totalTitip: number;            // Total hutang perusahaan ke mitra (hasil bumi titip)
+  totalTitip: number;            // Total hak belum cair ke mitra (Titip Hasil Bumi + Upah Kerja Belum Cair)
   totalPembayaranBon: number;    // Total uang pembayaran bon yang sudah disetor mitra
   totalBonKeseluruhan: number;   // totalKasbonBarang + totalKasbonUang (kotor sebelum potong titipan)
   sisaBon: number;               // Sama dengan totalBonKeseluruhan saat ini
@@ -871,6 +913,8 @@ export interface RekeningKoranMitraSummary {
     debet: number;   // Menambah hutang mitra / bon
     kredit: number;  // Mengurangi hutang mitra / bon
     saldoAkumulasi: number;
+    nominalMutasiHak?: number;  // Nominal titipan hasil panen / upah kerja / pencairan gaji
+    kategoriMutasiHak?: 'TITIP_MASUK' | 'TITIP_CAIR' | 'UPAH_TERCATAT' | 'UPAH_SUDAH_CAIR' | 'SLIP_GAJI';
     fotoNota?: string;
     isNotaLalu?: boolean;
     noNotaLalu?: string;
@@ -942,6 +986,7 @@ export interface ProfilPerusahaan {
   penanggungJawab: string;
   rekeningUtama: string;
   catatanHeaderNota: string;
+  logoUrl?: string;
   pinBos?: string;
   pinKasir?: string;
   wajibPinPublik?: boolean;

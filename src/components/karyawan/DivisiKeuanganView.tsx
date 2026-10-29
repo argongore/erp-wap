@@ -25,6 +25,7 @@ import {
   Store,
   Layers,
   Sparkles,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
@@ -40,6 +41,8 @@ import { ProsesGajiModal } from './ProsesGajiModal.tsx';
 import { SlipGajiModal } from './SlipGajiModal.tsx';
 import { InputPayrollHarianDivisiModal } from './InputPayrollHarianDivisiModal.tsx';
 import { RekapitulasiPayrollBulananTable } from './RekapitulasiPayrollBulananTable.tsx';
+import { DivisiLogoAvatar, resolveDivisiLogoUrl } from '../common/DivisiLogoAvatar.tsx';
+import { ModalProfilDivisi } from './ModalProfilDivisi.tsx';
 
 interface DivisiKeuanganViewProps {
   rekeningList: Rekening[];
@@ -59,6 +62,8 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
   const [divisiData, setDivisiData] = useState<PergerakanKeuanganDivisiSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDivisi, setSelectedDivisi] = useState<PergerakanKeuanganDivisiSummary | null>(null);
+  const [profilDivisiModalOpen, setProfilDivisiModalOpen] = useState(false);
+  const [profilDivisiInitialNama, setProfilDivisiInitialNama] = useState<string | undefined>(undefined);
 
   // Sub-navigation inside DivisiKeuanganView
   const [activeMainTab, setActiveMainTab] = useState<'IKHTISAR_DIVISI' | 'REKAP_BULANAN' | 'LOG_HARIAN'>('IKHTISAR_DIVISI');
@@ -320,6 +325,18 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           <button
+            type="button"
+            onClick={() => {
+              setProfilDivisiInitialNama(undefined);
+              setProfilDivisiModalOpen(true);
+            }}
+            className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-emerald-300 border border-emerald-700/70 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+          >
+            <ImageIcon className="w-4 h-4 text-emerald-400" />
+            <span>Logo &amp; Profil Divisi</span>
+          </button>
+
+          <button
             onClick={() => handleOpenDroppingModal('REK-GWA')}
             className="flex-1 md:flex-none flex items-center justify-center space-x-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md transition-colors cursor-pointer"
           >
@@ -500,9 +517,22 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
               <div className="p-4 border-b border-zinc-800/80 min-w-0">
                 <div className="flex items-start justify-between gap-2 min-w-0">
                   <div className="flex items-center space-x-3 min-w-0">
-                    <div className="p-2 rounded-lg bg-zinc-800 border border-zinc-700 shrink-0">
-                      {getDivisiIcon(d.divisi)}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfilDivisiInitialNama(d.divisi);
+                        setProfilDivisiModalOpen(true);
+                      }}
+                      title={`Pasang atau ubah logo & profil divisi ${d.divisi}`}
+                      className="relative group/logo shrink-0 cursor-pointer"
+                    >
+                      <DivisiLogoAvatar
+                        namaDivisi={d.divisi}
+                        logoUrl={d.logoUrl}
+                        size="md"
+                        theme="dark"
+                      />
+                    </button>
                     <div className="min-w-0">
                       <h3 className="font-bold text-sm text-zinc-100 truncate">{d.divisi}</h3>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border inline-block mt-0.5 ${getDivisiBadgeColor(d.divisi)}`}>
@@ -510,17 +540,26 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                       </span>
                     </div>
                   </div>
-                  <span className="text-[10px] bg-emerald-950/60 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800 font-mono shrink-0">
-                    AKTIF
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfilDivisiInitialNama(d.divisi);
+                      setProfilDivisiModalOpen(true);
+                    }}
+                    className="text-[10px] bg-zinc-800 hover:bg-emerald-950 text-zinc-200 hover:text-emerald-300 px-2 py-1 rounded-lg border border-zinc-700 hover:border-emerald-700 font-semibold flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                    title={`Pasang / ubah logo & profil ${d.divisi}`}
+                  >
+                    <ImageIcon className="w-3 h-3 text-emerald-400" />
+                    <span>{d.logoUrl ? 'Ubah Logo' : '+ Logo'}</span>
+                  </button>
                 </div>
 
                 <p className="text-[11px] text-zinc-400 mt-2.5 line-clamp-2">
-                  {info?.deskripsi || 'Unit operasional PT Wijaya Agro'}
+                  {d.deskripsi || info?.deskripsi || 'Unit operasional PT Wijaya Agro'}
                 </p>
                 <div className="text-[10px] text-zinc-500 mt-1 flex items-center space-x-1 truncate">
                   <span className="font-medium text-zinc-400 shrink-0">PJ:</span>
-                  <span className="truncate">{info?.penanggungJawab || '-'}</span>
+                  <span className="truncate">{d.penanggungJawab || info?.penanggungJawab || '-'}</span>
                 </div>
               </div>
 
@@ -650,9 +689,12 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
         <div className="bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden shadow-xl animate-in fade-in duration-200">
           <div className="p-4 bg-zinc-800/90 border-b border-zinc-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="flex items-center space-x-3">
-              <div className="p-2 bg-emerald-950 border border-emerald-700 rounded-lg text-emerald-400">
-                {getDivisiIcon(selectedDivisi.divisi)}
-              </div>
+              <DivisiLogoAvatar
+                namaDivisi={selectedDivisi.divisi}
+                logoUrl={selectedDivisi.logoUrl}
+                size="md"
+                theme="dark"
+              />
               <div>
                 <div className="flex items-center space-x-2">
                   <h3 className="font-bold text-sm text-zinc-100">
@@ -1011,9 +1053,17 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                           <span className="text-[10px] text-zinc-400">{log.jabatan}</span>
                         </td>
                         <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${getDivisiBadgeColor(log.divisi)}`}>
-                            {log.divisi}
-                          </span>
+                          <div className="inline-flex items-center gap-1.5">
+                            <DivisiLogoAvatar
+                              namaDivisi={log.divisi}
+                              logoUrl={resolveDivisiLogoUrl(log.divisi, undefined, divisiData)}
+                              size="xs"
+                              theme="dark"
+                            />
+                            <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${getDivisiBadgeColor(log.divisi)}`}>
+                              {log.divisi}
+                            </span>
+                          </div>
                         </td>
                         <td className="py-2.5 px-3 font-medium text-zinc-200">
                           {log.keterangan || `Tugas di ${log.divisi}`}
@@ -1228,6 +1278,17 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
       {activeSlip && (
         <SlipGajiModal slip={activeSlip} onClose={() => setActiveSlip(null)} />
       )}
+
+      {/* Modal Profil & Logo Masing-Masing Divisi */}
+      <ModalProfilDivisi
+        isOpen={profilDivisiModalOpen}
+        initialDivisiNama={profilDivisiInitialNama}
+        onClose={() => setProfilDivisiModalOpen(false)}
+        onSaved={() => {
+          void loadData(true);
+          onRefreshAll?.();
+        }}
+      />
     </div>
   );
 };

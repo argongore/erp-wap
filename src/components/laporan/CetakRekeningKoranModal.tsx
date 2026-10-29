@@ -202,7 +202,13 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
         { label: 'Kasbon Barang Toko', val: formatRupiah(statement.totalKasbonBarang), bg: [245, 247, 250], border: [210, 215, 220], color: [40, 40, 40] },
         { label: 'Kasbon Pinjaman Uang', val: formatRupiah(statement.totalKasbonUang), bg: [255, 245, 245], border: [255, 200, 200], color: [180, 40, 40] },
         { label: 'TOTAL SISA BON', val: formatRupiah(statement.totalBonKeseluruhan), bg: [254, 249, 235], border: [245, 190, 80], color: [140, 70, 0], isBold: true },
-        { label: 'Titip Hasil Bumi', val: formatRupiah(statement.totalTitip), bg: [250, 245, 255], border: [220, 200, 240], color: [90, 40, 130] },
+        {
+          label: statement.isKaryawan ? 'Hak Titip + Upah' : 'Titip Hasil Bumi',
+          val: formatRupiah(statement.totalTitip),
+          bg: [250, 245, 255],
+          border: [220, 200, 240],
+          color: [90, 40, 130],
+        },
       ];
 
       summaryData.forEach((item, i) => {
@@ -224,7 +230,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
       });
 
       // 4. Tabel Rincian Mutasi (AutoTable)
-      const tableHead = [['Tgl & Jam', 'No. Bukti', 'Jenis & Uraian', 'Qty', 'Harga Satuan', 'Kasbon (+)', 'Bayar (-)', 'Saldo Bon']];
+      const tableHead = [['Tgl & Jam', 'No. Bukti', 'Jenis & Uraian', 'Qty', 'Harga Satuan', 'Kasbon (+)', 'Bayar / Hak', 'Saldo Bon']];
       const tableBody = statement.history.length === 0
         ? [['-', '-', 'Belum ada transaksi', '-', '-', '-', '-', formatRupiah(statement.totalBonKeseluruhan)]]
         : statement.history.map((row) => [
@@ -234,7 +240,11 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
             row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1 Trx' : '-'),
             row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-'),
             row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-',
-            row.kredit > 0 ? `-${formatRupiah(row.kredit)}` : '-',
+            row.kredit > 0
+              ? `-${formatRupiah(row.kredit)}`
+              : row.nominalMutasiHak && row.nominalMutasiHak > 0
+              ? formatRupiah(row.nominalMutasiHak)
+              : '-',
             formatRupiah(row.saldoAkumulasi),
           ]);
 
@@ -446,7 +456,14 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
       `• Kasbon Barang Toko : ${formatRupiah(statement.totalKasbonBarang)}`,
       `• Kasbon Uang Tunai  : ${formatRupiah(statement.totalKasbonUang)}`,
       `• *TOTAL SISA BON*   : *${formatRupiah(statement.totalBonKeseluruhan)}*`,
-      `• Titip Hasil Panen  : ${formatRupiah(statement.totalTitip)}`,
+      ...(statement.isKaryawan
+        ? [
+            `• Titip Hasil Panen  : ${formatRupiah(statement.totalTitipPanenMurni || 0)}`,
+            `• Upah Belum Cair    : ${formatRupiah(statement.totalUpahBelumDibayar || 0)}`,
+            `• Gaji Sudah Cair    : ${formatRupiah(statement.totalGajiSudahDibayar || 0)}`,
+            `• *Total Hak di PT*  : *${formatRupiah(statement.totalTitip)}*`,
+          ]
+        : [`• Titip Hasil Panen  : ${formatRupiah(statement.totalTitip)}`]),
       divider,
       `*HISTORI MUTASI:*`,
     ];
@@ -460,9 +477,11 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
             ? `+Bon: ${formatRupiah(h.debet)}`
             : h.kredit > 0
             ? `-Bayar: ${formatRupiah(h.kredit)}`
+            : h.nominalMutasiHak && h.nominalMutasiHak > 0
+            ? `Nilai: ${formatRupiah(h.nominalMutasiHak)}`
             : 'Rp 0';
         lines.push(
-          `${idx + 1}. [${h.tanggal} ${h.jam}] ${h.jenis}\n   Ket: ${h.keterangan || '-'}\n   Mutasi: ${mutasiStr} | Saldo: ${formatRupiah(h.saldoAkumulasi)}`
+          `${idx + 1}. [${h.tanggal} ${h.jam}] ${h.jenis}\n   Ket: ${h.keterangan || '-'}\n   Mutasi: ${mutasiStr} | Saldo Bon: ${formatRupiah(h.saldoAkumulasi)}`
         );
       });
     }
@@ -764,11 +783,17 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                 </div>
 
                 <div className="p-3 bg-purple-50/50 rounded-lg border border-purple-200">
-                  <span className="text-[10px] font-bold text-purple-900 uppercase">Titip Hasil Bumi</span>
+                  <span className="text-[10px] font-bold text-purple-900 uppercase">
+                    {statement.isKaryawan ? 'Hak Titip + Upah' : 'Titip Hasil Bumi'}
+                  </span>
                   <p className="text-sm font-bold text-purple-950 mt-0.5">
                     {formatRupiah(statement.totalTitip)}
                   </p>
-                  <span className="text-[9px] text-purple-700">Hasil panen belum cair</span>
+                  <span className="text-[9px] text-purple-700">
+                    {statement.isKaryawan
+                      ? `Panen ${formatRupiah(statement.totalTitipPanenMurni || 0)} · Gaji Cair ${formatRupiah(statement.totalGajiSudahDibayar || 0)}`
+                      : 'Hasil panen belum cair'}
+                  </span>
                 </div>
               </div>
 
@@ -839,7 +864,11 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                               {row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-'}
                             </td>
                             <td className="py-2.5 px-2 text-right font-mono text-emerald-700 whitespace-nowrap text-[10px]">
-                              {row.kredit > 0 ? `-${formatRupiah(row.kredit)}` : '-'}
+                              {row.kredit > 0
+                                ? `-${formatRupiah(row.kredit)}`
+                                : row.nominalMutasiHak && row.nominalMutasiHak > 0
+                                ? formatRupiah(row.nominalMutasiHak)
+                                : '-'}
                             </td>
                             <td className="py-2.5 px-2.5 text-right font-mono font-bold text-zinc-900 whitespace-nowrap text-[10px]">
                               {formatRupiah(row.saldoAkumulasi)}

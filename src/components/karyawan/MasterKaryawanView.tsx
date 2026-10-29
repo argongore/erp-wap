@@ -48,12 +48,14 @@ import { DetailHarianKaryawanModal } from './DetailHarianKaryawanModal.tsx';
 import { SlipGajiModal } from './SlipGajiModal.tsx';
 import { ProsesGajiModal } from './ProsesGajiModal.tsx';
 import { BatchGajiHarianModal } from './BatchGajiHarianModal.tsx';
+import { BayarGajiKaryawanModal } from './BayarGajiKaryawanModal.tsx';
 import { FullErpModularDataset } from '../../server/types.ts';
 
 interface MasterKaryawanViewProps {
   rekeningList: Rekening[];
   fullErpData?: FullErpModularDataset;
-  initialTab?: 'rekap' | 'input-harian' | 'karyawan' | 'riwayat-gaji';
+  initialTab?: 'rekap' | 'bayar-gaji' | 'input-harian' | 'karyawan' | 'riwayat-gaji';
+  preselectedKaryawanId?: string;
   onOpenStatement?: (mitraId: string) => void;
   onOpenKasbonUang?: (karyawanMitraId: string) => void;
   onNavigateToDivisi?: () => void;
@@ -101,6 +103,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   rekeningList,
   fullErpData,
   initialTab = 'rekap',
+  preselectedKaryawanId,
   onOpenStatement,
   onOpenKasbonUang,
   onNavigateToDivisi,
@@ -142,7 +145,6 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   };
 
   const handlePullFromSupabase = async () => {
-    if (!window.confirm('Tarik data dari Cloud Supabase ke aplikasi? Data lokal akan diselaraskan dengan cloud.')) return;
     setIsSyncingSupabase(true);
     setSupabaseFeedback(null);
     try {
@@ -165,9 +167,13 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   };
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'rekap' | 'input-harian' | 'karyawan' | 'riwayat-gaji'>(
+  const [activeTab, setActiveTab] = useState<'rekap' | 'bayar-gaji' | 'input-harian' | 'karyawan' | 'riwayat-gaji'>(
     initialTab
   );
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   // Filters for employee profile cards
   const [search, setSearch] = useState('');
@@ -201,8 +207,21 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [selectedKaryawanForGaji, setSelectedKaryawanForGaji] = useState<KaryawanWithBon | null>(null);
   const [selectedDivisiPreset, setSelectedDivisiPreset] = useState<NamaDivisi | undefined>(undefined);
   const [isProsesGajiModalOpen, setIsProsesGajiModalOpen] = useState(false);
+  const [isBayarGajiModalOpen, setIsBayarGajiModalOpen] = useState(false);
+  const [bayarGajiKaryawanId, setBayarGajiKaryawanId] = useState<string | undefined>(preselectedKaryawanId);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [activeSlip, setActiveSlip] = useState<TransaksiPenggajian | null>(null);
+
+  useEffect(() => {
+    if (preselectedKaryawanId) {
+      setBayarGajiKaryawanId(preselectedKaryawanId);
+    }
+  }, [preselectedKaryawanId]);
+
+  const handleOpenBayarGaji = (idKry?: string) => {
+    setBayarGajiKaryawanId(idKry);
+    setIsBayarGajiModalOpen(true);
+  };
 
   // Modal Input Payroll Harian
   const [isInputPayrollModalOpen, setIsInputPayrollModalOpen] = useState(false);
@@ -226,6 +245,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [formNama, setFormNama] = useState('');
   const [formJabatan, setFormJabatan] = useState('');
   const [formDivisi, setFormDivisi] = useState<string>('Gudang Wijaya Agro');
+  const [formGajiPokok, setFormGajiPokok] = useState<number>(0);
   const [formTunjangan, setFormTunjangan] = useState<number>(0);
   const [formTelepon, setFormTelepon] = useState('');
   const [formAlamat, setFormAlamat] = useState('');
@@ -368,6 +388,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     setFormNama('');
     setFormJabatan('');
     setFormDivisi(availableDivisiList[0] || 'Gudang Wijaya Agro');
+    setFormGajiPokok(0);
     setFormTunjangan(0);
     setFormTelepon('');
     setFormAlamat('');
@@ -383,6 +404,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     setFormNama(k.nama);
     setFormJabatan(k.jabatan);
     setFormDivisi(k.divisi || k.departemen || availableDivisiList[0] || 'Gudang Wijaya Agro');
+    setFormGajiPokok(k.gajiPokok || 0);
     setFormTunjangan(k.tunjanganTetap || 0);
     setFormTelepon(k.telepon || '');
     setFormAlamat(k.alamat || '');
@@ -410,12 +432,13 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           jabatan: formJabatan,
           divisi: formDivisi,
           departemen: formDivisi,
+          gajiPokok: formGajiPokok,
           tunjanganTetap: formTunjangan,
           telepon: formTelepon,
           alamat: formAlamat,
           catatan: formCatatan,
         });
-        setSuccessBanner(`✅ Data karyawan "${namaSaved}" berhasil diperbarui di database!`);
+        setSuccessBanner(`Data karyawan "${namaSaved}" berhasil diperbarui dan disinkronkan ke Rekening Mitra.`);
       } else {
         await api.createKaryawan({
           nik: formNik,
@@ -423,13 +446,14 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           jabatan: formJabatan,
           divisi: formDivisi,
           departemen: formDivisi,
+          gajiPokok: formGajiPokok,
           tunjanganTetap: formTunjangan,
           telepon: formTelepon,
           alamat: formAlamat,
           tanggalMasuk: formTanggalMasuk,
           catatan: formCatatan,
         });
-        setSuccessBanner(`✅ Karyawan baru "${namaSaved}" (${nikSaved}) berhasil disimpan ke Divisi ${formDivisi}!`);
+        setSuccessBanner(`Karyawan baru "${namaSaved}" (${nikSaved}) berhasil disimpan dan terhubung ke Rekening Mitra.`);
       }
       setTimeout(() => setSuccessBanner(''), 7000);
       setIsModalOpen(false);
@@ -582,14 +606,22 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             className="flex items-center space-x-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
           >
             <Calculator className="w-4 h-4" />
-            <span>+ Input Gaji Harian</span>
+            <span>+ Input Upah Harian</span>
+          </button>
+
+          <button
+            onClick={() => handleOpenBayarGaji()}
+            className="flex items-center space-x-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-lg text-xs font-extrabold shadow-xs transition-colors cursor-pointer"
+          >
+            <HandCoins className="w-4 h-4" />
+            <span>Bayar Gaji Karyawan</span>
           </button>
 
           <button
             onClick={handleOpenAdd}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+            className="flex items-center space-x-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
           >
-            <UserPlus className="w-4 h-4" />
+            <UserPlus className="w-4 h-4 text-emerald-400" />
             <span>+ Karyawan Baru</span>
           </button>
 
@@ -633,8 +665,20 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         </div>
       )}
 
-      {/* 4 Main Tabs Bar */}
+      {/* Main Tabs Bar */}
       <div className="flex flex-wrap items-center gap-2 bg-zinc-900/90 p-2 rounded-xl border border-zinc-800">
+        <button
+          onClick={() => setActiveTab('bayar-gaji')}
+          className={`flex items-center space-x-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all ${
+            activeTab === 'bayar-gaji'
+              ? 'bg-emerald-500 text-zinc-950 shadow-md'
+              : 'text-emerald-300 bg-emerald-950/40 border border-emerald-800/60 hover:bg-emerald-900/50'
+          }`}
+        >
+          <HandCoins className="w-4 h-4" />
+          <span>Bayar Gaji Karyawan (1 Bulan Penuh)</span>
+        </button>
+
         <button
           onClick={() => setActiveTab('rekap')}
           className={`flex items-center space-x-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all ${
@@ -644,7 +688,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           }`}
         >
           <FileText className="w-4 h-4" />
-          <span>1. List Nama Karyawan &amp; Rekap Gaji (Input Harian &amp; Detail Bon)</span>
+          <span>Rekap Gaji &amp; Absensi Bulanan</span>
         </button>
 
         <button
@@ -656,7 +700,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           }`}
         >
           <Calculator className="w-4 h-4" />
-          <span>2. Input Gaji Manual Fleksibel</span>
+          <span>Input Upah Harian</span>
         </button>
 
         <button
@@ -668,7 +712,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>3. Data &amp; Profil Karyawan ({karyawanList.length})</span>
+          <span>Data Karyawan &amp; Mitra ({karyawanList.length})</span>
         </button>
 
         <button
@@ -680,7 +724,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           }`}
         >
           <History className="w-4 h-4 text-sky-400" />
-          <span>4. Riwayat Slip Penggajian ({penggajianHistory.length})</span>
+          <span>Riwayat Slip Gaji ({penggajianHistory.length})</span>
         </button>
       </div>
 
@@ -752,6 +796,134 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         )}
       </div>
 
+      {/* TAB: BAYAR GAJI KARYAWAN (1 BULAN PENUH / PENCAIRAN AKUMULASI UPAH) */}
+      {activeTab === 'bayar-gaji' && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden p-5 space-y-5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <HandCoins className="w-5 h-5 text-emerald-400" />
+                <span>Menu Pembayaran Gaji Karyawan (Bulanan &amp; Akumulasi Upah)</span>
+              </h3>
+              <p className="text-xs text-zinc-400 leading-relaxed max-w-3xl">
+                Pilih karyawan untuk mencairkan akumulasi upah kerja selama 1 bulan penuh atau membayar gaji bulanan tetap, sekaligus potong kasbon fleksibel. Setiap karyawan terhubung langsung ke satu <strong>Rekening Mitra</strong> yang sama — sehingga jika karyawan juga menitip hasil panen (seperti Kopi/Lada), saldo titip panennya tetap aman &amp; terekap bersama histori gajinya di Rekening Mitra.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleOpenBayarGaji()}
+              className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold rounded-xl text-xs flex items-center gap-2 shrink-0 cursor-pointer shadow-md"
+            >
+              <HandCoins className="w-4 h-4" />
+              <span>Buka Form Bayar Gaji</span>
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-zinc-300">
+              <thead className="bg-zinc-800/80 text-[11px] uppercase tracking-wider text-zinc-400 font-semibold border-b border-zinc-700">
+                <tr>
+                  <th className="py-3 px-3">Karyawan / Mitra</th>
+                  <th className="py-3 px-3">Divisi &amp; Jabatan</th>
+                  <th className="py-3 px-3 text-right">Upah Kerja Belum Cair</th>
+                  <th className="py-3 px-3 text-right">Standar Gaji Bulanan</th>
+                  <th className="py-3 px-3 text-right">Gaji Sudah Cair</th>
+                  <th className="py-3 px-3 text-right">Kasbon Aktif</th>
+                  <th className="py-3 px-3 text-right">Saldo Titip Panen (Mitra)</th>
+                  <th className="py-3 px-3 text-right">Aksi Penggajian</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800">
+                {karyawanList.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-zinc-500">
+                      Belum ada karyawan terdaftar.
+                    </td>
+                  </tr>
+                ) : (
+                  karyawanList.map((k) => {
+                    const unpaid = k.totalUpahBelumDibayar || 0;
+                    const paid = k.totalGajiSudahDibayar || 0;
+                    const titipPanen = k.totalTitipHasilPanen || 0;
+                    const mitraId = k.idMitraTerkait || `MTR-${k.id}`;
+                    return (
+                      <tr key={k.id} className="hover:bg-zinc-800/40 transition-colors">
+                        <td className="py-3.5 px-3">
+                          <div className="font-bold text-zinc-100">{k.nama}</div>
+                          <div className="text-[11px] text-zinc-400 font-mono">{k.nik}</div>
+                        </td>
+                        <td className="py-3.5 px-3">
+                          <div className="text-zinc-200 font-medium">{k.jabatan}</div>
+                          <div className="text-[11px] text-zinc-400">{k.divisi || k.departemen}</div>
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono tabular-nums">
+                          {unpaid > 0 ? (
+                            <div>
+                              <span className="font-bold text-amber-300">{formatRupiah(unpaid)}</span>
+                              <div className="text-[10px] text-zinc-400 font-sans">
+                                {k.totalHariBelumDibayar || 0} hari tercatat
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-zinc-500">Rp 0</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono tabular-nums text-zinc-300">
+                          {k.gajiPokok && k.gajiPokok > 0 ? formatRupiah(k.gajiPokok) : '-'}
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono tabular-nums">
+                          {paid > 0 ? (
+                            <span className="text-emerald-400 font-semibold">{formatRupiah(paid)}</span>
+                          ) : (
+                            <span className="text-zinc-500">Rp 0</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono tabular-nums">
+                          {k.totalKasbonAktif > 0 ? (
+                            <span className="text-rose-400 font-bold">{formatRupiah(k.totalKasbonAktif)}</span>
+                          ) : (
+                            <span className="text-zinc-500">Rp 0</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono tabular-nums">
+                          {titipPanen > 0 ? (
+                            <span className="text-amber-300 font-bold">{formatRupiah(titipPanen)}</span>
+                          ) : (
+                            <span className="text-zinc-500">Rp 0</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {onOpenStatement && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenStatement(mitraId)}
+                                className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-[11px] font-semibold cursor-pointer"
+                                title="Buka Rekening Koran Terpadu (Gaji + Titip Panen + Kasbon)"
+                              >
+                                Rekening Mitra
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenBayarGaji(k.id)}
+                              className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-lg text-xs cursor-pointer flex items-center gap-1"
+                            >
+                              <HandCoins className="w-3.5 h-3.5" />
+                              <span>Bayar Gaji</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* TAB 1: REKAPITULASI PAYROLL BULANAN */}
       {activeTab === 'rekap' && (
         <div className="space-y-4">
@@ -763,6 +935,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
               setModalDivisi(div);
               setIsInputPayrollModalOpen(true);
             }}
+            onOpenBayarGaji={(idKry) => handleOpenBayarGaji(idKry)}
             onOpenStatement={onOpenStatement}
             onOpenKasbonUang={onOpenKasbonUang}
             onOpenDetailKaryawan={(id) => setDetailKaryawanId(id)}
@@ -1400,11 +1573,31 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                           </td>
 
                           <td className="py-3.5 px-4 font-sans">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-300 border border-emerald-800/80 text-[10px] font-semibold">
-                              Upah Harian Penugasan
-                            </span>
-                            <div className="text-[10px] text-zinc-400 font-sans mt-0.5">
-                              Dicatat per aktivitas harian
+                            <div className="space-y-1 text-xs">
+                              {(k.totalUpahBelumDibayar || 0) > 0 && (
+                                <div className="text-amber-300 font-mono tabular-nums font-bold">
+                                  Upah Belum Cair: {formatRupiah(k.totalUpahBelumDibayar || 0)}
+                                </div>
+                              )}
+                              {(k.totalGajiSudahDibayar || 0) > 0 && (
+                                <div className="text-emerald-400 font-mono tabular-nums">
+                                  Gaji Cair: {formatRupiah(k.totalGajiSudahDibayar || 0)}
+                                </div>
+                              )}
+                              {(k.totalTitipHasilPanen || 0) > 0 && (
+                                <div className="text-amber-200 font-mono tabular-nums">
+                                  Titip Panen Mitra: {formatRupiah(k.totalTitipHasilPanen || 0)}
+                                </div>
+                              )}
+                              {(k.totalUpahBelumDibayar || 0) === 0 &&
+                                (k.totalGajiSudahDibayar || 0) === 0 &&
+                                (k.totalTitipHasilPanen || 0) === 0 && (
+                                  <span className="text-zinc-400 text-[11px]">
+                                    {k.gajiPokok && k.gajiPokok > 0
+                                      ? `Gaji Pokok: ${formatRupiah(k.gajiPokok)}`
+                                      : 'Upah Harian / Bulanan Fleksibel'}
+                                  </span>
+                                )}
                             </div>
                           </td>
 
@@ -1451,13 +1644,23 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
 
                           <td className="py-3.5 px-4 text-right font-sans">
                             <div className="flex items-center justify-end space-x-1.5">
+                              {/* Bayar Gaji Bulanan / Cairkan Upah */}
+                              <button
+                                onClick={() => handleOpenBayarGaji(k.id)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold flex items-center space-x-1 transition-colors cursor-pointer"
+                                title="Bayar Gaji Karyawan (1 Bulan Penuh / Cairkan Upah)"
+                              >
+                                <HandCoins className="w-3.5 h-3.5" />
+                                <span>Bayar Gaji</span>
+                              </button>
+
                               {/* Quick daily wage input */}
                               <button
                                 onClick={() => {
                                   setModalKaryawanId(k.id);
                                   setIsInputPayrollModalOpen(true);
                                 }}
-                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-semibold flex items-center space-x-1 transition-colors"
+                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
                                 title="Input Upah Harian untuk Karyawan Ini"
                               >
                                 <Calculator className="w-3.5 h-3.5" />
@@ -1467,7 +1670,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                               {/* Detail logs */}
                               <button
                                 onClick={() => setDetailKaryawanId(k.id)}
-                                className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-sky-400 rounded border border-zinc-700 transition-colors"
+                                className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-sky-400 rounded border border-zinc-700 transition-colors cursor-pointer"
                                 title="Lihat Rekening Buku & Detail Log Kerja"
                               >
                                 <FileText className="w-3.5 h-3.5" />
@@ -1752,17 +1955,36 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                 />
               </div>
 
-              <div className="p-2.5 bg-zinc-800/60 rounded-lg border border-zinc-700/60 text-[11px] text-zinc-400 flex items-start space-x-2">
-                <span className="text-amber-400 font-bold shrink-0">ℹ️</span>
-                <span>
-                  Standar upah harian ditiadakan dari formulir profil. Upah harian karyawan dicatat langsung secara fleksibel sesuai aktivitas penugasan kerja per hari di unit divisi terkait.
-                </span>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-zinc-400 mb-1">Gaji Pokok Bulanan (Opsional)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="50000"
+                    value={formGajiPokok || ''}
+                    onChange={(e) => setFormGajiPokok(Number(e.target.value) || 0)}
+                    placeholder="0 jika harian fleksibel"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1">Tunjangan Tetap Bulanan (Opsional)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="25000"
+                    value={formTunjangan || ''}
+                    onChange={(e) => setFormTunjangan(Number(e.target.value) || 0)}
+                    placeholder="0"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100 font-mono"
+                  />
+                </div>
               </div>
 
               <div className="p-2.5 bg-indigo-950/60 rounded-lg border border-indigo-700/60 text-[11px] text-indigo-200 flex items-start space-x-2">
-                <span className="text-indigo-400 font-bold shrink-0">🔄</span>
                 <span>
-                  <strong>Otomatis Terhubung ke Database Mitra:</strong> Karyawan ini otomatis didaftarkan ke <strong>Database Mitra (Role: KARYAWAN)</strong> sehingga langsung siap digunakan untuk transaksi kasbon uang, kasbon barang toko saprotan, dan potong gaji di kasir.
+                  <strong>Satu Akun Terpadu (Karyawan = Mitra):</strong> Jika nama karyawan sama dengan Mitra Tani yang sudah ada, sistem otomatis menyatukannya ke satu Rekening Mitra terpadu (merekap Gaji, Kasbon, sekaligus Titip Hasil Panen).
                 </span>
               </div>
 
@@ -1785,6 +2007,28 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Modal: Bayar Gaji Karyawan (1 Bulan Penuh / Akumulasi Upah) */}
+      {isBayarGajiModalOpen && (
+        <BayarGajiKaryawanModal
+          initialKaryawanId={bayarGajiKaryawanId}
+          allKaryawan={karyawanList}
+          rekeningList={rekeningList}
+          onClose={() => setIsBayarGajiModalOpen(false)}
+          onNavigateToRekeningMitra={onOpenStatement}
+          onSuccess={(slip) => {
+            setIsBayarGajiModalOpen(false);
+            setSuccessBanner(
+              `Pembayaran gaji ${slip.namaKaryawan} sebesar ${formatRupiah(slip.gajiBersihDibayar)} berhasil dicairkan & tercatat di Rekening Mitra.`
+            );
+            setTimeout(() => setSuccessBanner(''), 7000);
+            loadData();
+            setRefreshTrigger((p) => p + 1);
+            onRefreshAll?.();
+            setActiveSlip(slip);
+          }}
+        />
       )}
 
       {/* Modal: Slip Gaji */}

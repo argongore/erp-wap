@@ -37,6 +37,7 @@ interface Props {
   fullErpData?: FullErpModularDataset;
   onRefresh: () => void;
   onOpenStatement: (idMitra: string) => void;
+  onNavigateToBayarGaji?: (idKaryawan?: string) => void;
   onOpenDuplicateMerger?: () => void;
   onSuccessReceipt?: (receipt: ReceiptData) => void;
 }
@@ -49,6 +50,7 @@ export const MasterMitraView: React.FC<Props> = ({
   fullErpData,
   onRefresh,
   onOpenStatement,
+  onNavigateToBayarGaji,
   onOpenDuplicateMerger,
   onSuccessReceipt,
 }) => {
@@ -242,11 +244,18 @@ export const MasterMitraView: React.FC<Props> = ({
     totalTransaksiCount: 0,
   }));
 
-  // Category Counts
+  // Category Counts (Karyawan yang juga menitip hasil panen ikut terhitung sebagai Mitra Tani & Eksternal)
   const countAnakPerusahaan = items.filter((i) => i.isAnakPerusahaan || i.role === 'ANAK_PERUSAHAAN').length;
-  const countEksternal = items.filter((i) => i.role !== 'KARYAWAN').length;
-  const countKaryawan = items.filter((i) => i.role === 'KARYAWAN').length;
-  const countMitraTani = items.filter((i) => i.role === 'MITRA_TANI' || i.role === 'ALL').length;
+  const countEksternal = items.filter(
+    (i) => i.role !== 'KARYAWAN' || Boolean(i.hasTransaksiMitraPanen || (i.totalTitipPanenMurni || 0) > 0)
+  ).length;
+  const countKaryawan = items.filter((i) => i.isKaryawan || i.role === 'KARYAWAN').length;
+  const countMitraTani = items.filter(
+    (i) =>
+      i.role === 'MITRA_TANI' ||
+      i.role === 'ALL' ||
+      Boolean(i.hasTransaksiMitraPanen || (i.totalTitipPanenMurni || 0) > 0)
+  ).length;
   const countCustomer = items.filter((i) => i.role === 'CUSTOMER' || i.role === 'ALL').length;
   const countSupplier = items.filter((i) => i.role === 'SUPPLIER' || i.role === 'ALL').length;
 
@@ -265,10 +274,13 @@ export const MasterMitraView: React.FC<Props> = ({
       return Boolean(item.isAnakPerusahaan || item.role === 'ANAK_PERUSAHAAN');
     }
     if (activeFilter === 'EKSTERNAL') {
-      return item.role !== 'KARYAWAN';
+      return (
+        item.role !== 'KARYAWAN' ||
+        Boolean(item.hasTransaksiMitraPanen || (item.totalTitipPanenMurni || 0) > 0)
+      );
     }
     if (activeFilter === 'KARYAWAN') {
-      return item.role === 'KARYAWAN';
+      return Boolean(item.isKaryawan || item.role === 'KARYAWAN');
     }
     if (activeFilter === 'HUTANG_TITIP') {
       return item.totalHutangTitipPanen > 0;
@@ -277,7 +289,11 @@ export const MasterMitraView: React.FC<Props> = ({
       return item.totalBonMitra > 0;
     }
     if (activeFilter === 'MITRA_TANI') {
-      return item.role === 'MITRA_TANI' || item.role === 'ALL';
+      return (
+        item.role === 'MITRA_TANI' ||
+        item.role === 'ALL' ||
+        Boolean(item.hasTransaksiMitraPanen || (item.totalTitipPanenMurni || 0) > 0)
+      );
     }
     if (activeFilter === 'CUSTOMER') {
       return item.role === 'CUSTOMER' || item.role === 'ALL';
@@ -780,6 +796,11 @@ export const MasterMitraView: React.FC<Props> = ({
                             <span className="text-teal-900">
                               ANAK PERUSAHAAN &amp; MITRA
                             </span>
+                          ) : (m.isKaryawan || m.role === 'KARYAWAN') &&
+                            (m.hasTransaksiMitraPanen || (m.totalTitipPanenMurni || 0) > 0) ? (
+                            <span className="text-emerald-800">
+                              KARYAWAN &amp; MITRA PANEN
+                            </span>
                           ) : (
                             <span
                               className={
@@ -789,12 +810,12 @@ export const MasterMitraView: React.FC<Props> = ({
                                   ? 'text-sky-800'
                                   : m.role === 'SUPPLIER'
                                   ? 'text-amber-800'
-                                  : m.role === 'KARYAWAN'
+                                  : m.isKaryawan || m.role === 'KARYAWAN'
                                   ? 'text-indigo-900'
                                   : 'text-purple-800'
                               }
                             >
-                              {m.role === 'KARYAWAN' ? 'KARYAWAN (INTERNAL)' : m.role}
+                              {m.isKaryawan || m.role === 'KARYAWAN' ? 'KARYAWAN & MITRA' : m.role}
                             </span>
                           )}
                         </div>
@@ -803,9 +824,11 @@ export const MasterMitraView: React.FC<Props> = ({
                             Anak Perusahaan PT. Wijaya Agro Perkasa
                           </div>
                         )}
-                        {m.role === 'KARYAWAN' && (
+                        {(m.isKaryawan || m.role === 'KARYAWAN') && (
                           <div className="text-[10px] text-indigo-700 font-medium mt-0.5">
-                            Akun Kasbon Karyawan
+                            {m.jabatanKaryawan
+                              ? `${m.jabatanKaryawan} · ${m.divisiKaryawan || 'PT'}`
+                              : 'Terhubung ke Gaji & Kasbon Karyawan'}
                           </div>
                         )}
                         <div className="text-[10px] font-mono text-zinc-600 mt-1">
@@ -813,14 +836,39 @@ export const MasterMitraView: React.FC<Props> = ({
                         </div>
                       </td>
 
-                      {/* Hutang Kita ke Mitra (Titip Hasil Bumi Belum Diambil) */}
+                      {/* Hutang Kita ke Mitra (Titip Hasil Bumi + Hak Upah Belum Cair) */}
                       <td className="py-3 px-4 text-right">
                         {hasTitip ? (
-                          <div>
+                          <div className="space-y-0.5">
                             <div className="font-mono font-black text-purple-700 text-sm tabular-nums">
                               +{formatRupiah(m.totalHutangTitipPanen)}
                             </div>
-                            <div className="text-[10px] text-purple-700">Simpanan panen aktif</div>
+                            {(m.totalTitipPanenMurni || 0) > 0 && (m.totalUpahBelumDibayar || 0) > 0 ? (
+                              <div className="text-[10px] text-zinc-600 font-mono tabular-nums space-y-0.5">
+                                <div>Titip Panen: {formatRupiah(m.totalTitipPanenMurni || 0)}</div>
+                                <div className="text-emerald-700">
+                                  Upah Belum Cair: {formatRupiah(m.totalUpahBelumDibayar || 0)}
+                                </div>
+                              </div>
+                            ) : (m.totalUpahBelumDibayar || 0) > 0 ? (
+                              <div className="text-[10px] text-emerald-700 font-medium">
+                                Hak upah kerja belum cair
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-purple-700">Simpanan panen aktif</div>
+                            )}
+                            {(m.totalGajiSudahDibayar || 0) > 0 && (
+                              <div className="text-[10px] text-emerald-700 font-mono tabular-nums">
+                                Gaji Sudah Cair: {formatRupiah(m.totalGajiSudahDibayar || 0)}
+                              </div>
+                            )}
+                          </div>
+                        ) : (m.totalGajiSudahDibayar || 0) > 0 ? (
+                          <div>
+                            <div className="text-zinc-500 font-mono text-xs">Rp 0 (Tidak ada tunggakan)</div>
+                            <div className="text-[10px] text-emerald-700 font-mono tabular-nums mt-0.5">
+                              Gaji Sudah Cair: {formatRupiah(m.totalGajiSudahDibayar || 0)}
+                            </div>
                           </div>
                         ) : isAnak && saldoRekAnak < 0 ? (
                           <div>
@@ -966,6 +1014,18 @@ export const MasterMitraView: React.FC<Props> = ({
                             <HandCoins className="w-3 h-3 text-emerald-600" />
                             <span>+ Pinjam Uang</span>
                           </button>
+
+                          {(m.isKaryawan || m.role === 'KARYAWAN') && onNavigateToBayarGaji && (
+                            <button
+                              type="button"
+                              onClick={() => onNavigateToBayarGaji(m.idKaryawanTerkait)}
+                              className="flex items-center space-x-1 px-2.5 py-1.5 text-[10px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shadow-2xs cursor-pointer"
+                              title="Buka Menu Bayar Gaji Karyawan Ini"
+                            >
+                              <HandCoins className="w-3 h-3" />
+                              <span>Bayar Gaji</span>
+                            </button>
+                          )}
 
                           <button
                             onClick={() => onOpenStatement(m.id)}

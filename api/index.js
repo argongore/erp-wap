@@ -10,6 +10,7 @@ import os2 from "os";
 import path2 from "path";
 
 // src/server/types.ts
+var DEFAULT_PT_LOGO_URL = "/assets/aistudio/unnamed_cbf747dc.jpg";
 var DAFTAR_DIVISI = [
   {
     id: "DIV-GWA",
@@ -44,7 +45,8 @@ var DAFTAR_DIVISI = [
     nama: "PT Wijaya Agro Perkasa",
     kodeRekening: "REK-WAP",
     penanggungJawab: "General Manager Holding WAP",
-    deskripsi: "Perusahaan induk pengolahan gabah skala besar & kemitraan nasional."
+    deskripsi: "Perusahaan induk pengolahan gabah skala besar & kemitraan nasional.",
+    logoUrl: DEFAULT_PT_LOGO_URL
   },
   {
     id: "DIV-OKU",
@@ -1184,6 +1186,7 @@ function getDefaultProfilPerusahaan() {
     penanggungJawab: "Pimpinan PT. Wijaya Agro Perkasa",
     rekeningUtama: "BNI01",
     catatanHeaderNota: "Terima kasih atas kerja sama Anda dengan PT. WIJAYA AGRO PERKASA",
+    logoUrl: DEFAULT_PT_LOGO_URL,
     updateTerakhir: getWIBDateTime().iso
   };
 }
@@ -1295,21 +1298,29 @@ var DatabaseManager = class {
         }
         for (const kry of merged.karyawan) {
           const mtrId = kry.idMitraTerkait || `MTR-${kry.id}`;
-          const existing = merged.mitra.find((m) => m.id === mtrId || m.kode === kry.nik || m.role === "KARYAWAN" && m.nama.toLowerCase() === kry.nama.toLowerCase());
+          const cleanKryName = String(kry.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim();
+          const existing = merged.mitra.find(
+            (m) => m.id === mtrId || m.idKaryawanTerkait === kry.id || kry.nik && m.kode === kry.nik || !m.isAnakPerusahaan && m.role !== "ANAK_PERUSAHAAN" && String(m.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim().toLowerCase() === cleanKryName.toLowerCase()
+          );
           if (!existing) {
             merged.mitra.push({
               id: mtrId,
               kode: kry.nik || kry.id,
-              nama: kry.nama,
+              nama: cleanKryName,
               role: "KARYAWAN",
               telepon: kry.telepon || "-",
               alamat: kry.alamat || "-",
               status: "AKTIF",
+              isKaryawan: true,
+              idKaryawanTerkait: kry.id,
               catatan: `Karyawan: ${kry.jabatan || "Staff"} (Divisi ${kry.divisi || kry.departemen || "Gudang"})`
             });
           } else {
+            kry.idMitraTerkait = existing.id;
+            existing.isKaryawan = true;
+            existing.idKaryawanTerkait = kry.id;
             if (existing.nama.endsWith(" (Karyawan)")) {
-              existing.nama = kry.nama;
+              existing.nama = cleanKryName;
             }
             if (!existing.catatan) {
               existing.catatan = `Karyawan: ${kry.jabatan || "Staff"} (Divisi ${kry.divisi || kry.departemen || "Gudang"})`;
@@ -1878,14 +1889,55 @@ var DatabaseManager = class {
         }
       }
     }
+    const normIdentity = (val) => String(val || "").replace(/\s*\((karyawan|mitra)\)\s*/gi, " ").replace(/\s+/g, " ").trim().toLowerCase();
     for (const kry of this.db.karyawan) {
       const expectedMitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
-      kry.idMitraTerkait = expectedMitraId;
-      const cleanNama = kry.nama.replace(/\s*\(Karyawan\)$/i, "").trim();
+      const cleanNama = String(kry.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim();
       kry.nama = cleanNama;
-      let mtr = this.db.mitra.find(
-        (m) => m.id === expectedMitraId || kry.nik && m.kode === kry.nik || m.role === "KARYAWAN" && m.nama.replace(/\s*\(Karyawan\)$/i, "").trim().toLowerCase() === cleanNama.toLowerCase()
-      );
+      const targetNorm = normIdentity(cleanNama);
+      const matchingMitras = this.db.mitra.filter((m) => {
+        if (m.isAnakPerusahaan || m.role === "ANAK_PERUSAHAAN") return false;
+        if (m.id === expectedMitraId) return true;
+        if (m.idKaryawanTerkait && m.idKaryawanTerkait === kry.id) return true;
+        if (kry.nik && m.kode === kry.nik) return true;
+        if (targetNorm && normIdentity(m.nama) === targetNorm) return true;
+        return false;
+      });
+      let mtr = matchingMitras[0];
+      if (matchingMitras.length > 1) {
+        const hasTx = (mid) => (this.db.pembelianHasilBumi || []).some((x) => x.idMitra === mid) || (this.db.penjualan || []).some((x) => x.idMitra === mid) || (this.db.kasbonUang || []).some((x) => x.idMitra === mid) || (this.db.bayarBon || []).some((x) => x.idMitra === mid) || (this.db.pencairanTitipan || []).some((x) => x.idMitra === mid);
+        matchingMitras.sort((a, b) => {
+          const scoreA = (hasTx(a.id) ? 10 : 0) + (a.id === expectedMitraId ? 5 : 0);
+          const scoreB = (hasTx(b.id) ? 10 : 0) + (b.id === expectedMitraId ? 5 : 0);
+          return scoreB - scoreA;
+        });
+        mtr = matchingMitras[0];
+        const duplicateIds = new Set(matchingMitras.slice(1).map((d) => d.id));
+        if (duplicateIds.size > 0) {
+          const relinkList = (arr) => {
+            for (const tx of arr || []) {
+              if (tx.idMitra && duplicateIds.has(tx.idMitra)) {
+                tx.idMitra = mtr.id;
+                tx.namaMitra = cleanNama;
+              }
+            }
+          };
+          relinkList(this.db.penjualan);
+          relinkList(this.db.penjualanHasilBumi);
+          relinkList(this.db.pembelianHasilBumi);
+          relinkList(this.db.pembelianBarang);
+          relinkList(this.db.kasbonUang);
+          relinkList(this.db.bayarBon);
+          relinkList(this.db.pencairanTitipan);
+          for (const trf of this.db.transferRekening || []) {
+            if (trf.idMitraTerkait && duplicateIds.has(trf.idMitraTerkait)) {
+              trf.idMitraTerkait = mtr.id;
+              trf.namaMitraTerkait = cleanNama;
+            }
+          }
+          this.db.mitra = this.db.mitra.filter((m) => !duplicateIds.has(m.id));
+        }
+      }
       if (!mtr) {
         mtr = {
           id: expectedMitraId,
@@ -1895,6 +1947,8 @@ var DatabaseManager = class {
           telepon: kry.telepon || "-",
           alamat: kry.alamat || "-",
           status: kry.status || "AKTIF",
+          isKaryawan: true,
+          idKaryawanTerkait: kry.id,
           catatan: `Karyawan: ${kry.jabatan || "Staff"} (Divisi ${kry.divisi || kry.departemen || "Gudang"})`
         };
         this.db.mitra.push(mtr);
@@ -1902,8 +1956,10 @@ var DatabaseManager = class {
         kry.idMitraTerkait = mtr.id;
         mtr.nama = cleanNama;
         mtr.role = "KARYAWAN";
+        mtr.isKaryawan = true;
+        mtr.idKaryawanTerkait = kry.id;
         mtr.status = kry.status || mtr.status || "AKTIF";
-        if (kry.telepon && kry.telepon !== "-") mtr.telepon = kry.telepon;
+        if (kry.telepon && kry.telepon !== "-" && kry.telepon !== "KARYAWAN") mtr.telepon = kry.telepon;
         if (kry.alamat && kry.alamat !== "-") mtr.alamat = kry.alamat;
       }
       for (const u of this.db.upahHarian) {
@@ -2191,29 +2247,46 @@ var DatabaseManager = class {
         kodeRekening: d.kodeRekening,
         penanggungJawab: d.penanggungJawab,
         deskripsi: d.deskripsi,
+        logoUrl: d.logoUrl,
         isCustom: false
       });
     });
     custom.forEach((c) => {
-      map.set(c.nama.toLowerCase(), {
-        id: c.id,
-        nama: c.nama,
-        kodeRekening: c.kodeRekening,
-        penanggungJawab: c.penanggungJawab,
-        deskripsi: c.deskripsi,
-        isCustom: true
-      });
+      const existingDefault = Array.from(map.values()).find(
+        (d) => d.id === c.id || d.nama.toLowerCase() === c.nama.toLowerCase()
+      );
+      if (existingDefault) {
+        map.set(existingDefault.nama.toLowerCase(), {
+          ...existingDefault,
+          penanggungJawab: c.penanggungJawab !== void 0 ? c.penanggungJawab : existingDefault.penanggungJawab,
+          deskripsi: c.deskripsi !== void 0 ? c.deskripsi : existingDefault.deskripsi,
+          logoUrl: c.logoUrl !== void 0 ? c.logoUrl : existingDefault.logoUrl,
+          isCustom: false
+        });
+      } else {
+        map.set(c.nama.toLowerCase(), {
+          id: c.id,
+          nama: c.nama,
+          kodeRekening: c.kodeRekening,
+          penanggungJawab: c.penanggungJawab,
+          deskripsi: c.deskripsi,
+          logoUrl: c.logoUrl,
+          isCustom: true
+        });
+      }
     });
     return Array.from(map.values());
   }
   /**
    * Add a new division dynamically and provision its tracking account
    */
-  async addDivisi(nama, deskripsi, penanggungJawab) {
+  async addDivisi(nama, deskripsi, penanggungJawab, logoUrl) {
     return await this.executeTransaction((db) => {
       if (!db.divisi) db.divisi = [];
       const trimmed = nama.trim();
-      const existing = this.getDivisiList().find((d) => d.nama.toLowerCase() === trimmed.toLowerCase());
+      const existing = this.getDivisiList().find(
+        (d) => d.nama.toLowerCase() === trimmed.toLowerCase()
+      );
       if (existing) {
         return existing;
       }
@@ -2226,6 +2299,7 @@ var DatabaseManager = class {
         kodeRekening,
         penanggungJawab: penanggungJawab || `Koordinator ${trimmed}`,
         deskripsi: deskripsi || `Unit kerja operasional & pengeluaran ${trimmed}`,
+        logoUrl: logoUrl || void 0,
         isCustom: true
       };
       db.divisi.push(newDivisi);
@@ -2245,6 +2319,54 @@ var DatabaseManager = class {
         });
       }
       return newDivisi;
+    });
+  }
+  /**
+   * Update profile & logo for any core or custom division (synced automatically to Cloud Supabase)
+   */
+  async updateDivisiProfil(params) {
+    return await this.executeTransaction((db) => {
+      if (!db.divisi) db.divisi = [];
+      const key = params.idOrNama.trim().toLowerCase();
+      const currentList = this.getDivisiList();
+      const target = currentList.find(
+        (d) => d.id.toLowerCase() === key || d.nama.toLowerCase() === key
+      );
+      if (!target) {
+        throw new Error(`Divisi "${params.idOrNama}" tidak ditemukan.`);
+      }
+      const existingIdx = db.divisi.findIndex(
+        (c) => c.id === target.id || c.nama.toLowerCase() === target.nama.toLowerCase()
+      );
+      const updatedItem = {
+        id: target.id,
+        nama: target.nama,
+        kodeRekening: target.kodeRekening,
+        penanggungJawab: params.penanggungJawab !== void 0 ? params.penanggungJawab.trim() : target.penanggungJawab,
+        deskripsi: params.deskripsi !== void 0 ? params.deskripsi.trim() : target.deskripsi,
+        logoUrl: params.logoUrl !== void 0 ? params.logoUrl : target.logoUrl,
+        isCustom: Boolean(target.isCustom)
+      };
+      if (existingIdx >= 0) {
+        db.divisi[existingIdx] = updatedItem;
+      } else {
+        db.divisi.push(updatedItem);
+      }
+      const now = getWIBDateTime();
+      if (!Array.isArray(db.auditLogs)) db.auditLogs = [];
+      db.auditLogs.unshift({
+        id: `AUD-${Date.now()}`,
+        timestamp: now.iso,
+        tanggal: now.tanggal,
+        jam: now.jam,
+        user: "Admin / Kasir",
+        jenisTransaksi: "UPDATE",
+        idTransaksi: target.id,
+        rekeningTerkait: target.kodeRekening,
+        nominal: 0,
+        detail: `Pembaruan profil & logo Divisi: ${target.nama}`
+      });
+      return updatedItem;
     });
   }
   /**
@@ -4232,7 +4354,7 @@ var TransactionService = class _TransactionService {
       if (kry.status !== "AKTIF") {
         throw new Error(`Karyawan ${kry.nama} berstatus nonaktif`);
       }
-      const divisi = params.divisi || "Gudang Wijaya Agro";
+      const divisi = params.divisi || (kry.divisi || kry.departemen || "Gudang Wijaya Agro");
       const tipeGaji = params.tipeGaji || "HARIAN";
       const targetTanggal = params.tanggalKerja || tanggal;
       let rekKode = params.rekeningSumber;
@@ -4250,11 +4372,11 @@ var TransactionService = class _TransactionService {
         throw new Error(`Rekening ${rekSumber.nama} tidak aktif`);
       }
       const upahManual = params.gajiNominal !== void 0 && params.gajiNominal !== null ? Math.max(0, Number(params.gajiNominal)) : kry.gajiPokok || 0;
-      const tunjangan = tipeGaji === "BULANAN" ? kry.tunjanganTetap || 0 : 0;
+      const tunjangan = params.tunjanganNominal !== void 0 && params.tunjanganNominal !== null ? Math.max(0, Number(params.tunjanganNominal)) : tipeGaji === "BULANAN" ? kry.tunjanganTetap || 0 : 0;
       const bonus = Math.max(0, Number(params.bonus) || 0);
       const totalGajiKotor = upahManual + tunjangan + bonus;
       if (totalGajiKotor <= 0) {
-        throw new Error("Total gaji/upah harian harus lebih dari Rp 0");
+        throw new Error("Total gaji/upah harus lebih dari Rp 0");
       }
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
       const outstandingKasbonBarang = db.penjualan.filter((p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
@@ -4327,7 +4449,7 @@ var TransactionService = class _TransactionService {
           tanggal: targetTanggal,
           jam,
           idMitra: mitraId,
-          namaMitra: `${kry.nama} (Karyawan)`,
+          namaMitra: kry.nama,
           totalBonSebelum: totalKasbonAwal,
           nominalBayar: potonganKasbon,
           sisaBonSetelah: totalKasbonAwal - potonganKasbon,
@@ -4344,6 +4466,19 @@ var TransactionService = class _TransactionService {
       const idPayroll = generateId("GAJI");
       const slipNomor = `SLIP/WA/${targetTanggal.replace(/\//g, "")}/${idPayroll.slice(-4)}`;
       const periodeFormatted = params.periodeBulan || (tipeGaji === "HARIAN" ? `Harian - ${targetTanggal}` : `Bulanan - ${targetTanggal.slice(3)}`);
+      let settledDailyLogs = [];
+      if (params.lunasiUpahHarianPending || params.upahHarianIds && params.upahHarianIds.length > 0) {
+        const idFilter = params.upahHarianIds && params.upahHarianIds.length > 0 ? new Set(params.upahHarianIds) : null;
+        settledDailyLogs = (db.upahHarian || []).filter(
+          (u) => u.idKaryawan === kry.id && u.status === "TERCATAT" && (!idFilter || idFilter.has(u.id))
+        );
+        for (const u of settledDailyLogs) {
+          u.status = "SUDAH_DIBAYAR";
+          u.ket = "LUNAS";
+          u.idPayrollSettlement = idPayroll;
+          u.tanggalDibayar = targetTanggal;
+        }
+      }
       const payrollRecord = {
         id: idPayroll,
         slipNomor,
@@ -4368,6 +4503,10 @@ var TransactionService = class _TransactionService {
         gajiBersihDibayar,
         metodePembayaran: params.metodePembayaran || "TUNAI",
         rekeningSumber: rekSumber.kode,
+        ...settledDailyLogs.length > 0 ? {
+          jumlahHariKerja: settledDailyLogs.length,
+          daftarUpahHarianIds: settledDailyLogs.map((u) => u.id)
+        } : {},
         keterangan: params.keterangan || `Gaji ${tipeGaji === "HARIAN" ? "Harian" : "Bulanan"} Divisi ${divisi} - ${kry.nama}`,
         idBayarBonTerkait
       };
@@ -4641,17 +4780,29 @@ var TransactionService = class _TransactionService {
     let karyawanDenganBonCount = 0;
     const items = (db.karyawan || []).map((kry) => {
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
-      const kasbonBarang = (db.penjualan || []).filter((p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
+      const kasbonBarang = (db.penjualan || []).filter((p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0) + (db.penjualanHasilBumi || []).filter((j) => j.idMitra === mitraId && j.metodePembayaran === "PIUTANG" && j.statusPembayaran === "BELUM_BAYAR").reduce((sum, j) => sum + (j.sisaPiutang || 0), 0);
       const kasbonUang = (db.kasbonUang || []).filter((k) => k.idMitra === mitraId && k.status !== "LUNAS").reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
       const totalBon = kasbonBarang + kasbonUang;
+      const titipPanenKotor = (db.pembelianHasilBumi || []).filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === "TITIP").reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const hutangKulakan = (db.pembelianBarang || []).filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === "HUTANG" && pb.status !== "LUNAS").reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const totalDicairkanMitra = (db.pencairanTitipan || []).filter((pt) => pt.idMitra === mitraId).reduce((sum, pt) => sum + (pt.nominalPencairan || 0), 0);
+      const totalTitipHasilPanen = Math.max(0, titipPanenKotor + hutangKulakan - totalDicairkanMitra);
       const allUpahKry = (db.upahHarian || []).filter((u) => u.idKaryawan === kry.id);
+      const allSlipsKry = (db.penggajian || []).filter((g) => g.idKaryawan === kry.id);
       const totalHariKerja = allUpahKry.length;
       const totalHakUpahHarian = allUpahKry.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
       const upahBelumDibayar = allUpahKry.filter((u) => u.status === "TERCATAT").reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
-      const upahSudahDibayar = allUpahKry.filter((u) => u.status === "SUDAH_DIBAYAR").reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const upahSudahDibayarLog = allUpahKry.filter((u) => u.status === "SUDAH_DIBAYAR").reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const totalGajiSlipDibayar = allSlipsKry.reduce(
+        (sum, g) => sum + (Number(g.totalGajiKotor) || Number(g.gajiBersihDibayar) || 0),
+        0
+      );
+      const upahSudahDibayar = Math.max(upahSudahDibayarLog, totalGajiSlipDibayar);
       const lastJob = allUpahKry[0];
-      const divisiTerakhir = lastJob ? lastJob.divisi : "Gudang Wijaya Agro";
+      const divisiTerakhir = lastJob ? lastJob.divisi : kry.divisi || kry.departemen || "Gudang Wijaya Agro";
       const saldoBersih = upahBelumDibayar - totalBon;
+      const totalHakGabunganMitraKaryawan = upahBelumDibayar + totalTitipHasilPanen;
+      const saldoBersihTerpaduMitra = totalHakGabunganMitraKaryawan - totalBon;
       let posisiStatus = "LUNAS_IMPAS";
       if (saldoBersih > 0) {
         posisiStatus = "PERUSAHAAN_BERHUTANG_UPAH";
@@ -4676,13 +4827,17 @@ var TransactionService = class _TransactionService {
         standarGajiPokok: kry.gajiPokok || 0,
         tunjanganTetap: kry.tunjanganTetap,
         totalHariKerja,
-        totalHakUpahHarian,
+        totalHakUpahHarian: Math.max(totalHakUpahHarian, upahBelumDibayar + upahSudahDibayar),
         totalUpahBelumDibayar: upahBelumDibayar,
         totalUpahSudahDibayar: upahSudahDibayar,
+        totalGajiSudahDibayar: totalGajiSlipDibayar,
         totalKasbonBarang: kasbonBarang,
         totalKasbonUang: kasbonUang,
         totalBonKaryawan: totalBon,
+        totalTitipHasilPanen,
+        totalHakGabunganMitraKaryawan,
         saldoBersih,
+        saldoBersihTerpaduMitra,
         posisiStatus,
         pekerjaanHarianTerakhir: lastJob?.keterangan || `Tugas di ${divisiTerakhir}`,
         tanggalKerjaTerakhir: lastJob?.tanggalKerja || kry.tanggalMasuk,
@@ -4739,28 +4894,37 @@ var TransactionService = class _TransactionService {
         const idSet = new Set(params.upahHarianIds);
         pendingList = pendingList.filter((u) => idSet.has(u.id));
       }
-      if (pendingList.length === 0) {
-        throw new Error("Tidak ada hak upah harian berjalan yang belum dibayar");
+      const nominalUpahHarian = pendingList.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const tambahanPokok = Math.max(0, Number(params.gajiPokokTambahan) || 0);
+      const tunjangan = Math.max(0, Number(params.tunjangan) || 0);
+      const bonus = Math.max(0, Number(params.bonus) || 0);
+      const totalUpahKotor = nominalUpahHarian + tambahanPokok + tunjangan + bonus;
+      if (totalUpahKotor <= 0) {
+        throw new Error("Tidak ada hak upah atau nominal gaji yang akan dibayarkan");
       }
-      const totalUpahKotor = pendingList.reduce((sum, u) => sum + u.totalUpahHarian, 0);
-      const divisi = params.divisi || pendingList[0].divisi || "Gudang Wijaya Agro";
+      const divisi = params.divisi || pendingList[0]?.divisi || (kry.divisi || kry.departemen || "Gudang Wijaya Agro");
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
       const outstandingKasbonBarang = (db.penjualan || []).filter((p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
       const outstandingKasbonUang = (db.kasbonUang || []).filter((k) => k.idMitra === mitraId && k.status !== "LUNAS").reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
       const totalKasbonAwal = outstandingKasbonBarang + outstandingKasbonUang;
       let potonganKasbon = 0;
       const persentase = Number(params.persentasePotongKasbon) || 0;
-      if (params.nominalPotongKustom && params.nominalPotongKustom > 0) {
+      if (params.nominalPotongKustom !== void 0 && params.nominalPotongKustom > 0) {
         potonganKasbon = Math.min(params.nominalPotongKustom, totalKasbonAwal, totalUpahKotor);
       } else if (persentase > 0 && totalKasbonAwal > 0) {
         potonganKasbon = Math.min(Math.round(totalKasbonAwal * persentase / 100), totalKasbonAwal, totalUpahKotor);
       }
       const gajiBersihDibayar = totalUpahKotor - potonganKasbon;
       const rekKode = params.rekeningSumber || _TransactionService.DIVISI_REKENING_MAP[divisi] || "KAS01";
-      let rekSumber = db.rekening.find((r) => r.kode === rekKode) || db.rekening.find((r) => r.kode === "KAS01") || db.rekening[0];
+      if (rekKode === "BON01" || rekKode === "TIT01") {
+        throw new Error("Rekening virtual BON01 / TIT01 tidak dapat digunakan untuk pembayaran gaji");
+      }
+      const rekSumber = db.rekening.find((r) => r.kode === rekKode) || db.rekening.find((r) => r.kode === "KAS01") || db.rekening[0];
       if (!this.isAnakPerusahaanRekening(rekSumber) && rekSumber.kategori !== "OPERASIONAL_DIVISI" && rekSumber.saldoSaatIni < gajiBersihDibayar) {
         throw new Error(
-          `Saldo rekening ${rekSumber.nama} tidak mencukupi untuk pembayaran upah bersih Rp ${gajiBersihDibayar.toLocaleString("id-ID")}`
+          `Saldo rekening ${rekSumber.nama} (Rp ${rekSumber.saldoSaatIni.toLocaleString(
+            "id-ID"
+          )}) tidak mencukupi untuk pembayaran gaji bersih Rp ${gajiBersihDibayar.toLocaleString("id-ID")}`
         );
       }
       let idBayarBonTerkait;
@@ -4810,7 +4974,7 @@ var TransactionService = class _TransactionService {
           tanggal,
           jam,
           idMitra: mitraId,
-          namaMitra: `${kry.nama} (Karyawan)`,
+          namaMitra: kry.nama,
           totalBonSebelum: totalKasbonAwal,
           nominalBayar: potonganKasbon,
           sisaBonSetelah: totalKasbonAwal - potonganKasbon,
@@ -4818,13 +4982,15 @@ var TransactionService = class _TransactionService {
           rekeningTujuan: "POTONG_GAJI",
           isPotongGaji: true,
           alokasi: alokasiList,
-          keterangan: `Potong Hak Upah Berjalan (${pendingList.length} Hari Kerja) [${divisi}] Karyawan ${kry.nama}`,
+          keterangan: `Potong Gaji / Upah (${pendingList.length > 0 ? `${pendingList.length} Hari Kerja` : params.periodeBulan || "Bulanan"}) [${divisi}] Karyawan ${kry.nama}`,
           createdAt: iso
         });
       }
       rekSumber.saldoSaatIni -= gajiBersihDibayar;
       const idPayroll = generateId("GAJI");
       const slipNomor = `SLIP/WA/${tanggal.replace(/\//g, "")}/${idPayroll.slice(-4)}`;
+      const resolvedTipeGaji = params.tipeGaji || (params.periodeBulan ? "BULANAN" : "HARIAN");
+      const resolvedPeriode = params.periodeBulan || (pendingList.length > 0 ? `Settlement ${pendingList.length} Hari Kerja - ${tanggal}` : `Penggajian Bulanan - ${tanggal}`);
       const payrollRecord = {
         id: idPayroll,
         slipNomor,
@@ -4836,11 +5002,11 @@ var TransactionService = class _TransactionService {
         jabatan: kry.jabatan,
         departemen: kry.departemen,
         divisi,
-        tipeGaji: "HARIAN",
-        periodeBulan: `Settlement ${pendingList.length} Hari Kerja - ${tanggal}`,
-        gajiPokok: totalUpahKotor,
-        tunjangan: 0,
-        bonus: 0,
+        tipeGaji: resolvedTipeGaji,
+        periodeBulan: resolvedPeriode,
+        gajiPokok: nominalUpahHarian + tambahanPokok,
+        tunjangan,
+        bonus,
         totalGajiKotor: totalUpahKotor,
         totalKasbonAwal,
         persentasePotongKasbon: persentase,
@@ -4849,12 +5015,17 @@ var TransactionService = class _TransactionService {
         gajiBersihDibayar,
         metodePembayaran: params.metodePembayaran || "TUNAI",
         rekeningSumber: rekSumber.kode,
-        keterangan: params.keterangan || `Pencairan ${pendingList.length} Hari Kerja Karyawan ${kry.nama}`,
+        ...pendingList.length > 0 ? {
+          jumlahHariKerja: pendingList.length,
+          daftarUpahHarianIds: pendingList.map((u) => u.id)
+        } : {},
+        keterangan: params.keterangan || (pendingList.length > 0 ? `Pembayaran Gaji / Upah (${pendingList.length} Hari Kerja) Karyawan ${kry.nama}` : `Pembayaran Gaji Bulanan (${resolvedPeriode}) Karyawan ${kry.nama}`),
         idBayarBonTerkait
       };
       db.penggajian.unshift(payrollRecord);
       for (const u of pendingList) {
         u.status = "SUDAH_DIBAYAR";
+        u.ket = "LUNAS";
         u.idPayrollSettlement = idPayroll;
         u.tanggalDibayar = tanggal;
       }
@@ -4862,7 +5033,7 @@ var TransactionService = class _TransactionService {
         db,
         "PAYROLL",
         idPayroll,
-        `Settlement Upah Karyawan ${kry.nama} (${kry.nik}) sebanyak ${pendingList.length} hari kerja. Total Upah: Rp ${totalUpahKotor.toLocaleString(
+        `Pembayaran Gaji Karyawan ${kry.nama} (${kry.nik}) [${resolvedPeriode}]. Total Gaji Kotor: Rp ${totalUpahKotor.toLocaleString(
           "id-ID"
         )}, Potong Bon: Rp ${potonganKasbon.toLocaleString("id-ID")}, Bersih Dibayar: Rp ${gajiBersihDibayar.toLocaleString("id-ID")}`,
         gajiBersihDibayar,
@@ -4931,10 +5102,37 @@ var TransactionService = class _TransactionService {
       const sisaKasbonBarang = (db.penjualan || []).filter((p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
       const sisaKasbonUang = (db.kasbonUang || []).filter((k) => k.idMitra === mitraId && k.status !== "LUNAS").reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
       const sisaBonKaryawan = sisaKasbonBarang + sisaKasbonUang;
-      const totalUpahPokok = allUpahBulanIni.reduce((sum, u) => sum + (u.upahHarian || 0), 0);
-      const totalUangMakanLembur = allUpahBulanIni.reduce((sum, u) => sum + (u.uangMakanLembur || 0), 0);
-      const gajiKotor = allUpahBulanIni.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const upahPokokHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.upahHarian || 0), 0);
+      const uangMakanLemburHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.uangMakanLembur || 0), 0);
+      const gajiKotorHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const settledSlipIdsFromLogs = new Set(
+        (db.upahHarian || []).filter((u) => u.idKaryawan === kry.id && u.idPayrollSettlement).map((u) => u.idPayrollSettlement)
+      );
+      const standaloneSlipsBulanIni = allGajiBulanIni.filter(
+        (g) => !(g.daftarUpahHarianIds && g.daftarUpahHarianIds.length > 0) && !settledSlipIdsFromLogs.has(g.id)
+      );
+      const gajiPokokStandalone = standaloneSlipsBulanIni.reduce((sum, g) => sum + (g.gajiPokok || 0), 0);
+      const bonusTunjanganStandalone = standaloneSlipsBulanIni.reduce(
+        (sum, g) => sum + (g.tunjangan || 0) + (g.bonus || 0),
+        0
+      );
+      const gajiKotorStandalone = standaloneSlipsBulanIni.reduce((sum, g) => sum + (g.totalGajiKotor || 0), 0);
+      const totalUpahPokok = upahPokokHarian + gajiPokokStandalone;
+      const totalUangMakanLembur = uangMakanLemburHarian + bonusTunjanganStandalone;
+      const gajiKotor = gajiKotorHarian + gajiKotorStandalone;
       const hakPending = allUpahBulanIni.filter((u) => u.status === "TERCATAT").reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const allPendingLintasBulan = (db.upahHarian || []).filter(
+        (u) => u.idKaryawan === kry.id && u.status === "TERCATAT"
+      );
+      const totalUpahBelumDibayarSemuaPeriode = allPendingLintasBulan.reduce(
+        (sum, u) => sum + (u.totalUpahHarian || 0),
+        0
+      );
+      const totalHariBelumDibayarSemuaPeriode = allPendingLintasBulan.length;
+      const titipPanenKotorMtr = (db.pembelianHasilBumi || []).filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === "TITIP").reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const hutangKulakanMtr = (db.pembelianBarang || []).filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === "HUTANG" && pb.status !== "LUNAS").reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const cairTitipanMtr = (db.pencairanTitipan || []).filter((pt) => pt.idMitra === mitraId).reduce((sum, pt) => sum + (pt.nominalPencairan || 0), 0);
+      const saldoTitipHasilPanenMitra = Math.max(0, titipPanenKotorMtr + hutangKulakanMtr - cairTitipanMtr);
       const potongBon = allGajiBulanIni.reduce((sum, g) => sum + (g.potonganKasbon || 0), 0);
       const gajiBersihCair = allGajiBulanIni.reduce((sum, g) => sum + (g.gajiBersihDibayar || 0), 0);
       const divisiCounts = {};
@@ -5048,6 +5246,12 @@ var TransactionService = class _TransactionService {
         totalPotonganBon: potongBon,
         totalGajiBersihDibayar: gajiBersihCair,
         totalHakUpahPending: hakPending,
+        standarGajiPokok: kry.gajiPokok || 0,
+        tunjanganTetap: kry.tunjanganTetap || 0,
+        totalUpahBelumDibayarSemuaPeriode,
+        totalHariBelumDibayarSemuaPeriode,
+        saldoTitipHasilPanenMitra,
+        idMitraTerkait: mitraId,
         sisaKasbonBarang,
         sisaKasbonUang,
         totalSisaBonKaryawan: sisaBonKaryawan,
@@ -5346,6 +5550,9 @@ var TransactionService = class _TransactionService {
         idDivisi: div.id,
         kodeRekening: div.kodeRekening,
         namaRekening: rek.nama,
+        penanggungJawab: div.penanggungJawab,
+        deskripsi: div.deskripsi,
+        logoUrl: div.logoUrl,
         saldoSaatIni: rek.saldoSaatIni,
         totalPenjualanMasuk,
         totalPembelianKeluar,
@@ -5379,7 +5586,18 @@ var TransactionService = class _TransactionService {
     const hutangKulakanKotor = (db.pembelianBarang || []).filter((pb) => pb.idMitra === mitra.id && pb.metodePembayaran === "HUTANG" && pb.status !== "LUNAS").reduce((s, pb) => s + (pb.totalNominal || 0), 0);
     const titipKotor = titipHasilBumiKotor + hutangKulakanKotor;
     const totalPencairanMitra = (db.pencairanTitipan || []).filter((pt) => pt.idMitra === mitra.id).reduce((s, pt) => s + (pt.nominalPencairan || 0), 0);
-    const totalTitip = Math.max(0, titipKotor - totalPencairanMitra);
+    const totalTitipPanenMurni = Math.max(0, titipKotor - totalPencairanMitra);
+    const linkedKaryawan = (db.karyawan || []).find(
+      (k) => mitra.idKaryawanTerkait && k.id === mitra.idKaryawanTerkait || k.idMitraTerkait === mitra.id || k.nik && k.nik === mitra.kode || !mitra.isAnakPerusahaan && mitra.role !== "ANAK_PERUSAHAAN" && String(k.nama || "").trim().toLowerCase() === String(mitra.nama || "").trim().toLowerCase()
+    );
+    const linkedUpahList = linkedKaryawan ? (db.upahHarian || []).filter((u) => u.idKaryawan === linkedKaryawan.id) : [];
+    const linkedPenggajianList = linkedKaryawan ? (db.penggajian || []).filter((g) => g.idKaryawan === linkedKaryawan.id) : [];
+    const totalUpahBelumDibayar = linkedUpahList.filter((u) => u.status === "TERCATAT").reduce((s, u) => s + (u.totalUpahHarian || 0), 0);
+    const totalGajiSudahDibayar = linkedPenggajianList.reduce(
+      (s, g) => s + (Number(g.totalGajiKotor) || Number(g.gajiBersihDibayar) || 0),
+      0
+    );
+    const totalTitip = totalTitipPanenMurni + totalUpahBelumDibayar;
     const bayarBonList = db.bayarBon.filter((b) => b.idMitra === mitra.id);
     const totalPembayaranBon = bayarBonList.reduce((s, b) => s + b.nominalBayar, 0);
     const totalBonKeseluruhan = totalKasbonBarang + totalKasbonUang;
@@ -5542,6 +5760,8 @@ var TransactionService = class _TransactionService {
           ],
           debet: 0,
           kredit: 0,
+          nominalMutasiHak: pb.totalNominal,
+          kategoriMutasiHak: "TITIP_MASUK",
           fotoNota: fotoPb,
           isNotaLalu: isPinjaman ? true : isNotaLalu,
           noNotaLalu: pb.noNotaLalu
@@ -5617,8 +5837,67 @@ var TransactionService = class _TransactionService {
           }
         ],
         debet: 0,
-        kredit: 0
+        kredit: 0,
+        nominalMutasiHak: pt.nominalPencairan,
+        kategoriMutasiHak: "TITIP_CAIR"
       });
+    }
+    if (linkedKaryawan) {
+      for (const u of linkedUpahList) {
+        const jamUpah = u.createdAt && u.createdAt.includes("T") ? new Date(u.createdAt).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour12: false }).replace(/\./g, ":") : "08:00:00";
+        const isPaid = u.status === "SUDAH_DIBAYAR";
+        const uraianTugas = u.item || u.keterangan || `Tugas Harian di ${u.divisi}`;
+        timeline.push({
+          id: u.id,
+          tanggal: u.tanggalKerja,
+          jam: jamUpah,
+          createdAt: u.createdAt || u.tanggalKerja,
+          jenis: isPaid ? "UPAH KERJA (SUDAH CAIR)" : "UPAH KERJA (BELUM CAIR)",
+          keterangan: `[${u.divisi}] ${uraianTugas}${u.catatan ? ` (${u.catatan})` : ""} \u2014 ${isPaid ? `Sudah dibayarkan pada ${u.tanggalDibayar || "-"}${u.idPayrollSettlement ? ` (${u.idPayrollSettlement})` : ""}` : "Hak Gaji / Upah Karyawan Tercatat (Belum Dicairkan)"}`,
+          qtyDisplay: `${u.kuantiti !== void 0 ? u.kuantiti : 1} Hari`,
+          hargaSatuanDisplay: `Rp ${(u.totalUpahHarian || 0).toLocaleString("id-ID")}`,
+          itemsDetail: [
+            {
+              nama: `Upah Kerja [${u.divisi}]: ${uraianTugas}`,
+              qty: u.kuantiti !== void 0 ? u.kuantiti : 1,
+              satuan: "Hari",
+              harga: u.harga !== void 0 ? u.harga : u.upahHarian || u.totalUpahHarian || 0,
+              subtotal: u.totalUpahHarian || 0
+            }
+          ],
+          debet: 0,
+          kredit: 0,
+          nominalMutasiHak: u.totalUpahHarian || 0,
+          kategoriMutasiHak: isPaid ? "UPAH_SUDAH_CAIR" : "UPAH_TERCATAT"
+        });
+      }
+      for (const g of linkedPenggajianList) {
+        timeline.push({
+          id: g.id,
+          tanggal: g.tanggal,
+          jam: g.jam || "16:00:00",
+          createdAt: `${g.tanggal} ${g.jam || "16:00:00"}`,
+          jenis: "PEMBAYARAN GAJI KARYAWAN",
+          keterangan: `Slip Gaji [${g.slipNomor}] (${g.periodeBulan}) via ${g.metodePembayaran} (${g.rekeningSumber}) \u2014 Gaji Kotor Rp ${g.totalGajiKotor.toLocaleString(
+            "id-ID"
+          )}${g.potonganKasbon > 0 ? ` \xB7 Potong Kasbon Rp ${g.potonganKasbon.toLocaleString("id-ID")}` : ""} \xB7 Cair Bersih Rp ${g.gajiBersihDibayar.toLocaleString("id-ID")}`,
+          qtyDisplay: g.jumlahHariKerja ? `${g.jumlahHariKerja} Hari` : "1 Slip",
+          hargaSatuanDisplay: `Rp ${g.totalGajiKotor.toLocaleString("id-ID")}`,
+          itemsDetail: [
+            {
+              nama: `Slip Gaji ${g.slipNomor} (${g.periodeBulan}) \u2014 Cair Bersih via ${g.rekeningSumber}`,
+              qty: 1,
+              satuan: "Slip",
+              harga: g.gajiBersihDibayar,
+              subtotal: g.totalGajiKotor
+            }
+          ],
+          debet: 0,
+          kredit: 0,
+          nominalMutasiHak: g.gajiBersihDibayar,
+          kategoriMutasiHak: "SLIP_GAJI"
+        });
+      }
     }
     const linkedRek = mitra.kodeRekeningTerkait && db.rekening.find((r) => r.kode === mitra.kodeRekeningTerkait) || db.rekening.find((r) => r.idMitraTerkait === mitra.id && this.isAnakPerusahaanRekening(r));
     const isAnakPerusahaan = Boolean(mitra.isAnakPerusahaan || mitra.role === "ANAK_PERUSAHAAN" || linkedRek);
@@ -5955,7 +6234,21 @@ var TransactionService = class _TransactionService {
         }
       }
     }
-    timeline.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const parseTimelineSortMs = (createdAt, tgl, jm) => {
+      if (createdAt && createdAt.includes("T")) {
+        const ms = new Date(createdAt).getTime();
+        if (!Number.isNaN(ms)) return ms;
+      }
+      const [dd, mm, yyyy] = String(tgl || "").split("/").map(Number);
+      const [hh, min, ss] = String(jm || "00:00:00").split(":").map(Number);
+      if (yyyy && mm && dd) {
+        return new Date(yyyy, mm - 1, dd, hh || 0, min || 0, ss || 0).getTime();
+      }
+      return 0;
+    };
+    timeline.sort(
+      (a, b) => parseTimelineSortMs(a.createdAt, a.tanggal, a.jam) - parseTimelineSortMs(b.createdAt, b.tanggal, b.jam)
+    );
     let runningBon = 0;
     const history = timeline.map((item) => {
       runningBon += item.debet - item.kredit;
@@ -5971,6 +6264,8 @@ var TransactionService = class _TransactionService {
         debet: item.debet,
         kredit: item.kredit,
         saldoAkumulasi: runningBon,
+        nominalMutasiHak: item.nominalMutasiHak,
+        kategoriMutasiHak: item.kategoriMutasiHak,
         fotoNota: item.fotoNota,
         isNotaLalu: item.isNotaLalu,
         noNotaLalu: item.noNotaLalu
@@ -5988,6 +6283,17 @@ var TransactionService = class _TransactionService {
       telepon: mitra.telepon,
       alamat: mitra.alamat,
       status: mitra.status,
+      ...linkedKaryawan ? {
+        isKaryawan: true,
+        idKaryawanTerkait: linkedKaryawan.id,
+        nikKaryawan: linkedKaryawan.nik,
+        jabatanKaryawan: linkedKaryawan.jabatan,
+        divisiKaryawan: linkedKaryawan.divisi || linkedKaryawan.departemen
+      } : {},
+      totalTitipPanenMurni,
+      totalUpahBelumDibayar,
+      totalGajiSudahDibayar,
+      totalHakMitraGabungan: totalTitip,
       profilPerusahaan: db.profilPerusahaan,
       ...rekUtama ? {
         rekeningUtamaDetail: {
@@ -6020,11 +6326,13 @@ var TransactionService = class _TransactionService {
     };
   }
   /**
-   * Rekap Master Mitra: Hutang Perusahaan (Titip Panen belum diambil uangnya) & Bon Mitra (Barang + Uang)
+   * Rekap Master Mitra: Hutang Perusahaan (Titip Panen + Hak Upah Belum Cair) & Bon Mitra (Barang + Uang)
    */
   static getRekapMasterMitra() {
     const db = dbManager.get();
     let totalHutangPerusahaanKeMitra = 0;
+    let totalTitipPanenMurniGlobal = 0;
+    let totalUpahKaryawanBelumDibayarGlobal = 0;
     let totalBonMitra = 0;
     let mitraDenganHutangTitipCount = 0;
     let mitraDenganBonCount = 0;
@@ -6032,21 +6340,35 @@ var TransactionService = class _TransactionService {
       const kasbonBarang = db.penjualan.filter((p) => p.idMitra === m.id && p.metode === "KASBON").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0) + (db.penjualanHasilBumi || []).filter((j) => j.idMitra === m.id && j.metodePembayaran === "PIUTANG").reduce((sum, j) => sum + (j.sisaPiutang || 0), 0);
       const kasbonUang = db.kasbonUang.filter((k) => k.idMitra === m.id && k.status !== "LUNAS").reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
       const totalBon = kasbonBarang + kasbonUang;
-      const titipPanenKotor = db.pembelianHasilBumi.filter((pb) => pb.idMitra === m.id && pb.metodePembayaran === "TITIP").reduce((sum, pb) => sum + pb.totalNominal, 0);
+      const mitraHasilBumiList = db.pembelianHasilBumi.filter((pb) => pb.idMitra === m.id);
+      const titipPanenKotor = mitraHasilBumiList.filter((pb) => pb.metodePembayaran === "TITIP").reduce((sum, pb) => sum + pb.totalNominal, 0);
       const hutangKulakan = (db.pembelianBarang || []).filter((pb) => pb.idMitra === m.id && pb.metodePembayaran === "HUTANG" && pb.status !== "LUNAS").reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
       const titipKotor = titipPanenKotor + hutangKulakan;
       const totalPencairanM = (db.pencairanTitipan || []).filter((pt) => pt.idMitra === m.id).reduce((sum, pt) => sum + (pt.nominalPencairan || 0), 0);
-      const titipPanen = Math.max(0, titipKotor - totalPencairanM);
+      const titipPanenMurni = Math.max(0, titipKotor - totalPencairanM);
+      const linkedKry = (db.karyawan || []).find(
+        (k) => m.idKaryawanTerkait && k.id === m.idKaryawanTerkait || k.idMitraTerkait === m.id || k.nik && k.nik === m.kode || !m.isAnakPerusahaan && m.role !== "ANAK_PERUSAHAAN" && String(k.nama || "").trim().toLowerCase() === String(m.nama || "").trim().toLowerCase()
+      );
+      const upahListKry = linkedKry ? (db.upahHarian || []).filter((u) => u.idKaryawan === linkedKry.id) : [];
+      const slipListKry = linkedKry ? (db.penggajian || []).filter((g) => g.idKaryawan === linkedKry.id) : [];
+      const upahBelumDibayarKry = upahListKry.filter((u) => u.status === "TERCATAT").reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const gajiSudahDibayarKry = slipListKry.reduce(
+        (sum, g) => sum + (Number(g.totalGajiKotor) || Number(g.gajiBersihDibayar) || 0),
+        0
+      );
+      const totalHakGabungan = titipPanenMurni + upahBelumDibayarKry;
       const linkedRek = m.kodeRekeningTerkait && db.rekening.find((r) => r.kode === m.kodeRekeningTerkait) || db.rekening.find((r) => r.idMitraTerkait === m.id && this.isAnakPerusahaanRekening(r));
       const isAnakPerusahaan = Boolean(m.isAnakPerusahaan || m.role === "ANAK_PERUSAHAAN" || linkedRek);
       const txIdSet = /* @__PURE__ */ new Set();
       db.penjualan.filter((p) => p.idMitra === m.id).forEach((p) => txIdSet.add(p.noPenjualan));
       (db.penjualanHasilBumi || []).filter((j) => j.idMitra === m.id).forEach((j) => txIdSet.add(j.noPenjualan));
-      db.pembelianHasilBumi.filter((pb) => pb.idMitra === m.id).forEach((pb) => txIdSet.add(pb.noPembelian));
+      mitraHasilBumiList.forEach((pb) => txIdSet.add(pb.noPembelian));
       (db.pembelianBarang || []).filter((pb) => pb.idMitra === m.id).forEach((pb) => txIdSet.add(pb.noPembelian));
       (db.pencairanTitipan || []).filter((pt) => pt.idMitra === m.id).forEach((pt) => txIdSet.add(pt.idPencairan));
       db.kasbonUang.filter((k) => k.idMitra === m.id).forEach((k) => txIdSet.add(k.idTransaksi));
       db.bayarBon.filter((b) => b.idMitra === m.id).forEach((b) => txIdSet.add(b.idTransaksi));
+      upahListKry.forEach((u) => txIdSet.add(u.id));
+      slipListKry.forEach((g) => txIdSet.add(g.id));
       if (isAnakPerusahaan && linkedRek) {
         const rekKode = linkedRek.kode;
         (db.transferRekening || []).filter((t) => (t.rekeningSumber === rekKode || t.rekeningTujuan === rekKode) && t.status === "BERHASIL").forEach((t) => txIdSet.add(t.noTransfer));
@@ -6060,8 +6382,8 @@ var TransactionService = class _TransactionService {
         (db.penggajian || []).filter((g) => g.rekeningSumber === rekKode).forEach((g) => txIdSet.add(g.id));
       }
       const txCount = txIdSet.size;
-      const saldoBersih = titipPanen - totalBon;
-      const posisiBersihTerpadu = isAnakPerusahaan && linkedRek ? titipPanen - totalBon - (linkedRek.saldoSaatIni || 0) : saldoBersih;
+      const saldoBersih = totalHakGabungan - totalBon;
+      const posisiBersihTerpadu = isAnakPerusahaan && linkedRek ? totalHakGabungan - totalBon - (linkedRek.saldoSaatIni || 0) : saldoBersih;
       let posisiStatus = "LUNAS_IMPAS";
       const basisPosisi = isAnakPerusahaan ? posisiBersihTerpadu : saldoBersih;
       if (basisPosisi > 0) {
@@ -6069,9 +6391,11 @@ var TransactionService = class _TransactionService {
       } else if (basisPosisi < 0) {
         posisiStatus = "MITRA_BERHUTANG";
       }
-      totalHutangPerusahaanKeMitra += titipPanen;
+      totalHutangPerusahaanKeMitra += totalHakGabungan;
+      totalTitipPanenMurniGlobal += titipPanenMurni;
+      totalUpahKaryawanBelumDibayarGlobal += upahBelumDibayarKry;
       totalBonMitra += totalBon;
-      if (titipPanen > 0) mitraDenganHutangTitipCount++;
+      if (totalHakGabungan > 0) mitraDenganHutangTitipCount++;
       if (totalBon > 0) mitraDenganBonCount++;
       return {
         id: m.id,
@@ -6082,6 +6406,18 @@ var TransactionService = class _TransactionService {
         alamat: m.alamat,
         status: m.status,
         catatan: m.catatan,
+        ...linkedKry ? {
+          isKaryawan: true,
+          idKaryawanTerkait: linkedKry.id,
+          nikKaryawan: linkedKry.nik,
+          jabatanKaryawan: linkedKry.jabatan,
+          divisiKaryawan: linkedKry.divisi || linkedKry.departemen
+        } : {},
+        hasTransaksiMitraPanen: mitraHasilBumiList.length > 0 || hutangKulakan > 0,
+        totalTitipPanenMurni: titipPanenMurni,
+        totalUpahBelumDibayar: upahBelumDibayarKry,
+        totalGajiSudahDibayar: gajiSudahDibayarKry,
+        totalHakMitraGabungan: totalHakGabungan,
         ...isAnakPerusahaan ? {
           isAnakPerusahaan: true,
           kodeRekeningTerkait: linkedRek?.kode || m.kodeRekeningTerkait,
@@ -6089,13 +6425,13 @@ var TransactionService = class _TransactionService {
           saldoRekeningAnakPerusahaan: linkedRek?.saldoSaatIni || 0,
           posisiBersihTerpadu
         } : {},
-        totalHutangTitipPanen: titipPanen,
+        totalHutangTitipPanen: totalHakGabungan,
         totalKasbonBarang: kasbonBarang,
         totalKasbonUang: kasbonUang,
         totalBonMitra: totalBon,
-        potonganSilangOtomatis: Math.min(titipPanen, totalBon),
-        sisaBonBersih: Math.max(0, totalBon - titipPanen),
-        sisaTitipanBersih: Math.max(0, titipPanen - totalBon),
+        potonganSilangOtomatis: Math.min(totalHakGabungan, totalBon),
+        sisaBonBersih: Math.max(0, totalBon - totalHakGabungan),
+        sisaTitipanBersih: Math.max(0, totalHakGabungan - totalBon),
         saldoBersih,
         posisiStatus,
         totalTransaksiCount: txCount
@@ -6104,6 +6440,8 @@ var TransactionService = class _TransactionService {
     return {
       totalMitra: db.mitra.length,
       totalHutangPerusahaanKeMitra,
+      totalTitipPanenMurni: totalTitipPanenMurniGlobal,
+      totalUpahKaryawanBelumDibayar: totalUpahKaryawanBelumDibayarGlobal,
       totalBonMitra,
       saldoBersihKemitraan: totalHutangPerusahaanKeMitra - totalBonMitra,
       mitraDenganHutangTitipCount,
@@ -6740,7 +7078,10 @@ var TransactionService = class _TransactionService {
   // ==========================================
   static getProfilPerusahaan() {
     const db = dbManager.get();
-    return db.profilPerusahaan;
+    return {
+      ...db.profilPerusahaan,
+      logoUrl: db.profilPerusahaan?.logoUrl || "/assets/aistudio/unnamed_cbf747dc.jpg"
+    };
   }
   static async updateProfilPerusahaan(data) {
     return dbManager.executeTransaction((db) => {
@@ -9246,22 +9587,36 @@ apiRouter.get("/mitra", (_req, res) => {
     let modified = false;
     for (const kry of db.karyawan || []) {
       const idMitra = kry.idMitraTerkait || `MTR-${kry.id}`;
-      const existing = db.mitra.find((m) => m.id === idMitra || m.kode === kry.nik || m.role === "KARYAWAN" && m.nama.toLowerCase() === kry.nama.toLowerCase());
+      const cleanKryName = String(kry.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim();
+      const existing = db.mitra.find(
+        (m) => m.id === idMitra || m.idKaryawanTerkait === kry.id || kry.nik && m.kode === kry.nik || !m.isAnakPerusahaan && m.role !== "ANAK_PERUSAHAAN" && String(m.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim().toLowerCase() === cleanKryName.toLowerCase()
+      );
       if (!existing) {
         db.mitra.push({
           id: idMitra,
           kode: kry.nik || kry.id,
-          nama: kry.nama,
+          nama: cleanKryName,
           role: "KARYAWAN",
           telepon: kry.telepon || "-",
           alamat: kry.alamat || "-",
           status: kry.status || "AKTIF",
+          isKaryawan: true,
+          idKaryawanTerkait: kry.id,
           catatan: `Karyawan: ${kry.jabatan || "Staff"} (Divisi ${kry.divisi || kry.departemen || "Gudang"})`
         });
         modified = true;
       } else {
+        if (kry.idMitraTerkait !== existing.id) {
+          kry.idMitraTerkait = existing.id;
+          modified = true;
+        }
+        if (!existing.isKaryawan || existing.idKaryawanTerkait !== kry.id) {
+          existing.isKaryawan = true;
+          existing.idKaryawanTerkait = kry.id;
+          modified = true;
+        }
         if (existing.nama.endsWith(" (Karyawan)")) {
-          existing.nama = kry.nama;
+          existing.nama = cleanKryName;
           modified = true;
         }
       }
@@ -9289,6 +9644,23 @@ apiRouter.post("/mitra", async (req, res) => {
       return res.status(400).json({ success: false, message: "Nama dan Role mitra wajib diisi" });
     }
     const created = await dbManager.executeTransaction((db) => {
+      const cleanNama = String(nama).replace(/\s*\(Karyawan\)$/i, "").trim();
+      const existingSamePerson = db.mitra.find(
+        (m) => !m.isAnakPerusahaan && m.role !== "ANAK_PERUSAHAAN" && String(m.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim().toLowerCase() === cleanNama.toLowerCase()
+      );
+      if (existingSamePerson) {
+        if (telepon && telepon !== "-" && (!existingSamePerson.telepon || existingSamePerson.telepon === "-")) {
+          existingSamePerson.telepon = telepon;
+        }
+        if (alamat && alamat !== "-" && (!existingSamePerson.alamat || existingSamePerson.alamat === "-")) {
+          existingSamePerson.alamat = alamat;
+        }
+        if (catatan && !existingSamePerson.catatan?.includes(catatan)) {
+          existingSamePerson.catatan = existingSamePerson.catatan ? `${existingSamePerson.catatan} \xB7 ${catatan}` : catatan;
+        }
+        existingSamePerson.status = "AKTIF";
+        return existingSamePerson;
+      }
       const cleanKode = kode ? String(kode).toUpperCase().trim() : `MTR${db.mitra.length + 1}`;
       if (db.mitra.some((m) => m.kode === cleanKode)) {
         throw new Error(`Mitra dengan kode ${cleanKode} sudah ada`);
@@ -9296,7 +9668,7 @@ apiRouter.post("/mitra", async (req, res) => {
       const newMitra = {
         id: `MTR-${Date.now().toString().slice(-4)}`,
         kode: cleanKode,
-        nama: String(nama).trim(),
+        nama: cleanNama,
         role,
         telepon: telepon || "-",
         alamat: alamat || "-",
@@ -10420,13 +10792,35 @@ apiRouter.get("/karyawan", (req, res) => {
     const db = dbManager.get();
     const list = (db.karyawan || []).map((k) => {
       const mitraId = k.idMitraTerkait || `MTR-${k.id}`;
-      const outstandingBarang = db.penjualan.filter((p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
-      const outstandingUang = db.kasbonUang.filter((ku) => ku.idMitra === mitraId && ku.status !== "LUNAS").reduce((sum, ku) => sum + (ku.sisaKasbon || 0), 0);
+      const outstandingBarang = (db.penjualan || []).filter((p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR").reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
+      const outstandingUang = (db.kasbonUang || []).filter((ku) => ku.idMitra === mitraId && ku.status !== "LUNAS").reduce((sum, ku) => sum + (ku.sisaKasbon || 0), 0);
+      const unpaidRows = (db.upahHarian || []).filter(
+        (u) => u.idKaryawan === k.id && u.status === "TERCATAT"
+      );
+      const totalUpahBelumDibayar = unpaidRows.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const totalHariBelumDibayar = unpaidRows.length;
+      const totalGajiSudahDibayar = (db.penggajian || []).filter((g) => g.idKaryawan === k.id).reduce(
+        (sum, g) => sum + (g.totalGajiKotor || (g.gajiPokok || 0) + (g.tunjangan || 0) + (g.bonus || 0)),
+        0
+      );
+      const titipPanenKotor = (db.pembelianHasilBumi || []).filter((b) => b.idMitra === mitraId && b.metodePembayaran === "TITIP").reduce((sum, b) => sum + (b.totalNominal || 0), 0);
+      const hutangKulakan = (db.pembelianBarang || []).filter(
+        (pb) => pb.idMitra === mitraId && pb.metodePembayaran === "HUTANG" && pb.status !== "LUNAS"
+      ).reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const totalSudahDicairkan = (db.pencairanTitipan || []).filter((pt) => pt.idMitra === mitraId).reduce((sum, pt) => sum + (pt.nominalPencairan || 0), 0);
+      const totalTitipHasilPanen = Math.max(0, titipPanenKotor + hutangKulakan - totalSudahDicairkan);
+      const totalKasbonAktif = outstandingBarang + outstandingUang;
       return {
         ...k,
+        idMitraTerkait: mitraId,
         kasbonBarang: outstandingBarang,
         kasbonUang: outstandingUang,
-        totalKasbonAktif: outstandingBarang + outstandingUang
+        totalKasbonAktif,
+        totalUpahBelumDibayar,
+        totalHariBelumDibayar,
+        totalGajiSudahDibayar,
+        totalTitipHasilPanen,
+        saldoBersihTerpaduMitra: totalTitipHasilPanen + totalUpahBelumDibayar - totalKasbonAktif
       };
     });
     res.json({ success: true, data: list });
@@ -10539,12 +10933,21 @@ apiRouter.post("/karyawan", async (req, res) => {
         catatan: catatan || ""
       };
       db.karyawan.push(newKaryawan);
-      const existingMitraIdx = db.mitra.findIndex((m) => m.id === idMitra || m.kode === cleanNik || m.role === "KARYAWAN" && m.nama.toLowerCase() === newKaryawan.nama.toLowerCase());
+      const existingMitraIdx = db.mitra.findIndex(
+        (m) => m.id === idMitra || m.kode === cleanNik || !m.isAnakPerusahaan && m.role !== "ANAK_PERUSAHAAN" && String(m.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim().toLowerCase() === newKaryawan.nama.toLowerCase()
+      );
       if (existingMitraIdx >= 0) {
+        newKaryawan.idMitraTerkait = db.mitra[existingMitraIdx].id;
         db.mitra[existingMitraIdx].nama = newKaryawan.nama;
         db.mitra[existingMitraIdx].role = "KARYAWAN";
-        db.mitra[existingMitraIdx].telepon = newKaryawan.telepon;
-        db.mitra[existingMitraIdx].alamat = newKaryawan.alamat;
+        db.mitra[existingMitraIdx].isKaryawan = true;
+        db.mitra[existingMitraIdx].idKaryawanTerkait = newKaryawan.id;
+        if (newKaryawan.telepon && newKaryawan.telepon !== "-") {
+          db.mitra[existingMitraIdx].telepon = newKaryawan.telepon;
+        }
+        if (newKaryawan.alamat && newKaryawan.alamat !== "-") {
+          db.mitra[existingMitraIdx].alamat = newKaryawan.alamat;
+        }
         db.mitra[existingMitraIdx].status = "AKTIF";
         db.mitra[existingMitraIdx].catatan = `Karyawan: ${newKaryawan.jabatan} (Divisi ${newKaryawan.divisi})`;
       } else {
@@ -10556,6 +10959,8 @@ apiRouter.post("/karyawan", async (req, res) => {
           telepon: newKaryawan.telepon,
           alamat: newKaryawan.alamat,
           status: "AKTIF",
+          isKaryawan: true,
+          idKaryawanTerkait: newKaryawan.id,
           catatan: `Karyawan: ${newKaryawan.jabatan} (Divisi ${newKaryawan.divisi})`
         });
       }
@@ -10589,12 +10994,17 @@ apiRouter.put("/karyawan/:id", async (req, res) => {
       if (status) kry.status = status;
       if (catatan !== void 0) kry.catatan = catatan;
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
-      const mtr = db.mitra.find((m) => m.id === mitraId || m.kode === kry.nik || m.role === "KARYAWAN" && m.nama.toLowerCase() === kry.nama.toLowerCase());
+      const mtr = db.mitra.find(
+        (m) => m.id === mitraId || m.idKaryawanTerkait === kry.id || m.kode === kry.nik || !m.isAnakPerusahaan && m.role !== "ANAK_PERUSAHAAN" && String(m.nama || "").replace(/\s*\(Karyawan\)$/i, "").trim().toLowerCase() === kry.nama.toLowerCase()
+      );
       if (mtr) {
+        kry.idMitraTerkait = mtr.id;
         mtr.nama = kry.nama;
         mtr.role = "KARYAWAN";
-        mtr.telepon = kry.telepon;
-        mtr.alamat = kry.alamat;
+        mtr.isKaryawan = true;
+        mtr.idKaryawanTerkait = kry.id;
+        if (kry.telepon && kry.telepon !== "-") mtr.telepon = kry.telepon;
+        if (kry.alamat && kry.alamat !== "-") mtr.alamat = kry.alamat;
         mtr.status = kry.status;
         mtr.catatan = `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`;
       } else {
@@ -10606,6 +11016,8 @@ apiRouter.put("/karyawan/:id", async (req, res) => {
           telepon: kry.telepon || "-",
           alamat: kry.alamat || "-",
           status: kry.status || "AKTIF",
+          isKaryawan: true,
+          idKaryawanTerkait: kry.id,
           catatan: `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`
         });
       }
@@ -10648,7 +11060,15 @@ apiRouter.delete("/karyawan/:id/permanent", async (req, res) => {
       if (Array.isArray(db.mitra)) {
         const mIdx = db.mitra.findIndex((m) => m.id === mitraId || m.kode === kry.nik);
         if (mIdx !== -1) {
-          db.mitra.splice(mIdx, 1);
+          const targetMid = db.mitra[mIdx].id;
+          const hasMitraTransactions = (db.pembelianHasilBumi || []).some((x) => x.idMitra === targetMid) || (db.penjualan || []).some((x) => x.idMitra === targetMid) || (db.kasbonUang || []).some((x) => x.idMitra === targetMid) || (db.bayarBon || []).some((x) => x.idMitra === targetMid) || (db.pencairanTitipan || []).some((x) => x.idMitra === targetMid);
+          if (hasMitraTransactions) {
+            db.mitra[mIdx].role = "MITRA_TANI";
+            db.mitra[mIdx].isKaryawan = false;
+            db.mitra[mIdx].idKaryawanTerkait = void 0;
+          } else {
+            db.mitra.splice(mIdx, 1);
+          }
         }
       }
       if (Array.isArray(db.upahHarian)) {
@@ -10730,16 +11150,35 @@ apiRouter.get("/divisi", (_req, res) => {
 });
 apiRouter.post("/divisi", async (req, res) => {
   try {
-    const { nama, deskripsi, penanggungJawab } = req.body;
+    const { nama, deskripsi, penanggungJawab, logoUrl } = req.body;
     if (!nama || !nama.trim()) {
       return res.status(400).json({ success: false, message: "Nama divisi wajib diisi" });
     }
-    const created = await dbManager.addDivisi(nama, deskripsi, penanggungJawab);
+    const created = await dbManager.addDivisi(nama, deskripsi, penanggungJawab, logoUrl);
     res.json({ success: true, data: created });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+var handleUpdateDivisiProfil = async (req, res) => {
+  try {
+    const { idOrNama, penanggungJawab, deskripsi, logoUrl } = req.body || {};
+    if (!idOrNama || !String(idOrNama).trim()) {
+      return res.status(400).json({ success: false, message: "Identitas divisi wajib dikirim" });
+    }
+    const updated = await dbManager.updateDivisiProfil({
+      idOrNama: String(idOrNama).trim(),
+      penanggungJawab,
+      deskripsi,
+      logoUrl
+    });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+apiRouter.put("/divisi/profil", handleUpdateDivisiProfil);
+apiRouter.post("/divisi/profil", handleUpdateDivisiProfil);
 apiRouter.get("/divisi/keuangan", (_req, res) => {
   try {
     const data = TransactionService.getPergerakanKeuanganDivisi();
@@ -11153,6 +11592,7 @@ apiRouter.get("/erp-snapshot", (_req, res) => {
         auditLogs: db.auditLogs || [],
         profilPerusahaan: TransactionService.getProfilPerusahaan(),
         inventaris: db.inventaris || [],
+        divisiList: dbManager.getDivisiList(),
         supabaseStatus: supabaseSyncEngine.getStatus()
       }
     });
@@ -11202,6 +11642,7 @@ apiRouter.get("/bos-snapshot", (_req, res) => {
         stokBarang: db.stokBarang || [],
         stokHasilBumi: db.stokHasilBumi || [],
         inventaris: db.inventaris || [],
+        divisiList: dbManager.getDivisiList(),
         supabaseStatus: supabaseSyncEngine.getStatus()
       }
     });
@@ -11220,6 +11661,7 @@ apiRouter.get("/access/status", (_req, res) => {
       data: {
         namaPerusahaan: profil?.namaPerusahaan || "PT. WIJAYA AGRO PERKASA",
         badanHukum: profil?.badanHukum || "PT (Perseroan Terbatas)",
+        logoUrl: profil?.logoUrl || "/assets/aistudio/unnamed_cbf747dc.jpg",
         wajibPinPublik: profil?.wajibPinPublik !== false,
         pinLengthHint: pinBos.length,
         supabaseConfigured: sup.configured

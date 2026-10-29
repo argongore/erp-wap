@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Sprout, Lock, Delete, ArrowRight, Eye, EyeOff, ShieldCheck, Clock } from 'lucide-react';
+import { Lock, Delete, ArrowRight, Eye, EyeOff, ShieldCheck, Clock } from 'lucide-react';
 import { api } from '../../api/client.ts';
+import { DEFAULT_PT_LOGO_URL } from '../../server/types.ts';
+import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 
 export type AuthenticatedRole = 'BOS' | 'KASIR';
 
 interface PinAccessGateProps {
   defaultCompanyName?: string;
   defaultBadanHukum?: string;
+  defaultLogoUrl?: string;
   preferBosHint?: boolean;
   sessionExpiredNotice?: boolean;
   onAuthenticated: (role: AuthenticatedRole, sessionDurationMs?: number) => void;
@@ -15,12 +18,14 @@ interface PinAccessGateProps {
 export const PinAccessGate: React.FC<PinAccessGateProps> = ({
   defaultCompanyName = 'PT. WIJAYA AGRO PERKASA',
   defaultBadanHukum = 'PT (Perseroan Terbatas)',
+  defaultLogoUrl = DEFAULT_PT_LOGO_URL,
   preferBosHint = false,
   sessionExpiredNotice = false,
   onAuthenticated,
 }) => {
   const [companyName, setCompanyName] = useState(defaultCompanyName);
   const [badanHukum, setBadanHukum] = useState(defaultBadanHukum);
+  const [logoUrl, setLogoUrl] = useState(defaultLogoUrl);
   const [pin, setPin] = useState('');
   const [showDigits, setShowDigits] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -33,6 +38,7 @@ export const PinAccessGate: React.FC<PinAccessGateProps> = ({
       const res = await api.getAccessStatus();
       if (res.namaPerusahaan) setCompanyName(res.namaPerusahaan);
       if (res.badanHukum) setBadanHukum(res.badanHukum);
+      if (res.logoUrl) setLogoUrl(res.logoUrl);
 
       if (res.supabaseConfigured) {
         setDbConnected(true);
@@ -47,6 +53,7 @@ export const PinAccessGate: React.FC<PinAccessGateProps> = ({
         const refreshed = await api.getAccessStatus().catch(() => null);
         if (refreshed?.namaPerusahaan) setCompanyName(refreshed.namaPerusahaan);
         if (refreshed?.badanHukum) setBadanHukum(refreshed.badanHukum);
+        if (refreshed?.logoUrl) setLogoUrl(refreshed.logoUrl);
       }
     } catch {
       // Retry automatically when online/visible
@@ -147,9 +154,11 @@ export const PinAccessGate: React.FC<PinAccessGateProps> = ({
         <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-7 shadow-xs">
           {/* Brand Identity */}
           <div className="flex items-center space-x-3 pb-4 border-b border-slate-100">
-            <div className="w-11 h-11 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
-              <Sprout className="w-6 h-6" />
-            </div>
+            <img
+              src={logoUrl || DEFAULT_PT_LOGO_URL}
+              alt={companyName}
+              className="w-12 h-12 rounded-xl bg-black object-contain border border-slate-200 shrink-0"
+            />
             <div className="min-w-0">
               <h1 className="text-base sm:text-lg font-bold tracking-tight text-slate-900 truncate">
                 {companyName}
@@ -283,6 +292,12 @@ export const PinAccessGate: React.FC<PinAccessGateProps> = ({
               <span>{submitting ? 'Memverifikasi Sandi...' : 'Masuk ke Sistem'}</span>
               {!submitting && <ArrowRight className="w-4 h-4" />}
             </button>
+
+            <PWAInstallButton
+              variant="gate"
+              companyName={companyName}
+              logoUrl={logoUrl || DEFAULT_PT_LOGO_URL}
+            />
 
             <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 text-center">
               <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />

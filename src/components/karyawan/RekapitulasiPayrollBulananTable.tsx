@@ -48,6 +48,7 @@ import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 interface RekapitulasiPayrollBulananTableProps {
   rekeningList: Rekening[];
   onOpenInputPayrollHarian: (idKaryawan?: string, divisiPreset?: NamaDivisi) => void;
+  onOpenBayarGaji?: (idKaryawan: string) => void;
   onOpenStatement?: (mitraId: string) => void;
   onOpenKasbonUang?: (karyawanMitraId: string) => void;
   onOpenDetailKaryawan?: (idKaryawan: string) => void;
@@ -84,6 +85,7 @@ const DIVISI_BADGES: Record<string, string> = {
 export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulananTableProps> = ({
   rekeningList,
   onOpenInputPayrollHarian,
+  onOpenBayarGaji,
   onOpenStatement,
   onOpenKasbonUang,
   onOpenDetailKaryawan,
@@ -547,6 +549,21 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                               <span className="text-[10px] text-zinc-400 block">
                                 {item.jabatan} · {item.departemen}
                               </span>
+                              {(item.saldoTitipHasilPanenMitra || 0) > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (onOpenStatement && item.idMitraTerkait) {
+                                      onOpenStatement(item.idMitraTerkait);
+                                    }
+                                  }}
+                                  className="mt-1 text-[10px] font-mono tabular-nums text-amber-300 hover:text-amber-200 underline underline-offset-2 text-left block cursor-pointer"
+                                  title="Karyawan ini juga memiliki Saldo Titip Hasil Panen di Rekening Mitra"
+                                >
+                                  Titip Panen Mitra: {formatRupiah(item.saldoTitipHasilPanenMitra || 0)} →
+                                </button>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -643,15 +660,19 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                               <PlusCircle className="w-3.5 h-3.5" />
                             </button>
 
-                            {item.totalHakUpahPending > 0 && (
-                              <button
-                                onClick={() => setSettleKaryawan(item)}
-                                className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[10px] font-bold transition-colors cursor-pointer shadow-xs"
-                                title="Cairkan upah berjalan & potong bon"
-                              >
-                                Cairkan
-                              </button>
-                            )}
+                            <button
+                              onClick={() => {
+                                if (onOpenBayarGaji) {
+                                  onOpenBayarGaji(item.idKaryawan);
+                                } else {
+                                  setSettleKaryawan(item);
+                                }
+                              }}
+                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-bold transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+                              title="Bayar gaji bulanan penuh / cairkan akumulasi upah kerja & potong kasbon"
+                            >
+                              Bayar Gaji
+                            </button>
                           </div>
                         </td>
                       </tr>

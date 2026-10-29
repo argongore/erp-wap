@@ -312,7 +312,11 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
             row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1 Trx' : '-'),
             row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-'),
             row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-',
-            row.kredit > 0 ? `-${formatRupiah(row.kredit)}` : '-',
+            row.kredit > 0
+              ? `-${formatRupiah(row.kredit)}`
+              : row.nominalMutasiHak && row.nominalMutasiHak > 0
+              ? formatRupiah(row.nominalMutasiHak)
+              : '-',
             formatRupiah(row.saldoAkumulasi),
           ]);
 
@@ -599,7 +603,9 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
 
                 <div className="p-3.5 bg-purple-50/70 rounded-xl border border-purple-200 min-w-0 overflow-hidden">
                   <div className="text-[11px] text-purple-900 font-semibold mb-0.5 flex items-center justify-between gap-1.5 min-w-0">
-                    <span className="truncate">Titip Panen / Pinjam PT</span>
+                    <span className="truncate">
+                      {statement.isKaryawan ? 'Titip Panen + Hak Upah' : 'Titip Panen / Pinjam PT'}
+                    </span>
                     <span className="text-[9px] bg-purple-200 text-purple-900 px-1 rounded font-mono font-bold shrink-0">HAK MITRA</span>
                   </div>
                   <div
@@ -608,7 +614,11 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                   >
                     {formatRupiahSingkat(statement.totalTitip)}
                   </div>
-                  <div className="text-[10px] text-purple-800 mt-1 truncate">Saldo uang titipan di PT</div>
+                  <div className="text-[10px] text-purple-800 mt-1 truncate">
+                    {statement.isKaryawan
+                      ? `Panen ${formatRupiahSingkat(statement.totalTitipPanenMurni || 0)} · Gaji Cair ${formatRupiahSingkat(statement.totalGajiSudahDibayar || 0)}`
+                      : 'Saldo uang titipan di PT'}
+                  </div>
                 </div>
               </div>
             </div>

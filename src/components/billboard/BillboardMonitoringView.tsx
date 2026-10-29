@@ -27,7 +27,9 @@ import {
   Radio,
 } from 'lucide-react';
 import { api, BillboardData } from '../../api/client.ts';
+import { DEFAULT_PT_LOGO_URL } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
+import { DivisiLogoAvatar } from '../common/DivisiLogoAvatar.tsx';
 
 interface BillboardMonitoringViewProps {
   onClose?: () => void;
@@ -158,9 +160,11 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
       {/* Top Billboard Header Bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-800/80 gap-4 shrink-0">
         <div className="flex items-center space-x-3.5">
-          <div className="w-11 h-11 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-            <Radio className="w-6 h-6 animate-pulse" />
-          </div>
+          <img
+            src={DEFAULT_PT_LOGO_URL}
+            alt="PT. Wijaya Agro Perkasa"
+            className="w-11 h-11 rounded-xl bg-black object-contain border border-emerald-500/40 shrink-0"
+          />
           <div>
             <div className="flex items-center space-x-2.5">
               <span className="font-black text-lg tracking-wider text-white uppercase font-mono">
@@ -380,10 +384,13 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
                   className="min-w-0 overflow-hidden p-3 bg-slate-950/70 border border-slate-800 hover:border-slate-700 rounded-xl space-y-1.5 transition-colors"
                 >
                   <div className="flex items-center justify-between gap-2 min-w-0">
-                    <div className="flex items-center space-x-2 min-w-0">
-                      <div className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 shrink-0">
-                        {getDivisiIcon(d.divisi)}
-                      </div>
+                    <div className="flex items-center space-x-2.5 min-w-0">
+                      <DivisiLogoAvatar
+                        namaDivisi={d.divisi}
+                        logoUrl={d.logoUrl}
+                        size="sm"
+                        theme="dark"
+                      />
                       <div className="min-w-0">
                         <div className="font-bold text-xs text-white truncate">{d.divisi}</div>
                         <span className="text-[9px] font-mono text-slate-400 block truncate">

@@ -60,6 +60,7 @@ interface Props {
   rekeningList?: Rekening[];
   profilPerusahaan?: ProfilPerusahaan | null;
   onOpenProfilPerusahaan?: () => void;
+  onNavigateToBayarGaji?: (idKaryawan?: string) => void;
   selectedMitraId?: string;
   onSelectMitra: (id: string) => void;
   onRefreshParent?: () => void;
@@ -71,6 +72,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   rekeningList = [],
   profilPerusahaan,
   onOpenProfilPerusahaan,
+  onNavigateToBayarGaji,
   selectedMitraId,
   onSelectMitra,
   onRefreshParent,
@@ -141,10 +143,18 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
       const jenisUpper = (item.jenis || '').toUpperCase();
       const isTitipMasuk =
         (jenisUpper.includes('TITIP') && !jenisUpper.includes('PENCAIRAN')) ||
-        jenisUpper.includes('PINJAMAN UANG PT KE MITRA');
-      const isTitipKeluar = jenisUpper.includes('PENCAIRAN') && jenisUpper.includes('TITIP');
+        jenisUpper.includes('PINJAMAN UANG PT KE MITRA') ||
+        jenisUpper.includes('UPAH KERJA');
+      const isTitipKeluar =
+        (jenisUpper.includes('PENCAIRAN') && jenisUpper.includes('TITIP')) ||
+        jenisUpper.includes('PEMBAYARAN GAJI KARYAWAN');
 
-      const nominalItem = (item.itemsDetail && item.itemsDetail[0]?.subtotal) || item.kredit || item.debet || 0;
+      const nominalItem =
+        item.nominalMutasiHak ||
+        (item.itemsDetail && item.itemsDetail[0]?.subtotal) ||
+        item.kredit ||
+        item.debet ||
+        0;
 
       let deltaTitip = 0;
       if (isTitipMasuk) {
@@ -704,14 +714,94 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
               <div className="text-[11px] text-purple-800 font-medium mt-1 truncate">
                 {(statement.potonganTitipanOtomatis ??
                   Math.min(statement.totalBonKeseluruhan, statement.totalTitip)) > 0
-                  ? `Titipan awal ${formatRupiahSingkat(statement.totalTitip)} - Bon ${formatRupiahSingkat(
+                  ? `Hak awal ${formatRupiahSingkat(statement.totalTitip)} - Bon ${formatRupiahSingkat(
                       statement.potonganTitipanOtomatis ??
                         Math.min(statement.totalBonKeseluruhan, statement.totalTitip)
                     )}`
+                  : statement.isKaryawan
+                  ? 'Gabungan titip panen + upah kerja belum cair'
                   : 'Hasil bumi titipan belum diambil uangnya'}
               </div>
             </div>
           </div>
+
+          {/* PANEL REKAP TERPADU: KARYAWAN SEKALIGUS MITRA (GAJI + TITIP PANEN + KASBON) */}
+          {(statement.isKaryawan || statement.role === 'KARYAWAN') && (
+            <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 sm:p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-bold text-slate-900">
+                    Rekening Terpadu Karyawan &amp; Mitra: {statement.namaMitra}
+                    {statement.nikKaryawan ? ` (${statement.nikKaryawan})` : ''}
+                  </div>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    {statement.jabatanKaryawan ? `${statement.jabatanKaryawan} · Divisi ${statement.divisiKaryawan || '-'} · ` : ''}
+                    Seluruh hak gaji/upah kerja, riwayat pencairan slip gaji, kasbon, serta uang titip hasil panen terekap utuh dalam satu rekening ini.
+                  </p>
+                </div>
+
+                {onNavigateToBayarGaji && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateToBayarGaji(statement.idKaryawanTerkait)}
+                    className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+                  >
+                    Bayar Gaji Karyawan →
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                <div className="p-3.5 bg-white rounded-lg border border-slate-200 space-y-1">
+                  <div className="text-[10px] font-bold text-purple-900 uppercase tracking-wider">
+                    Saldo Titip Hasil Panen
+                  </div>
+                  <div className="text-base font-black text-purple-900 font-mono tabular-nums">
+                    {formatRupiah(statement.totalTitipPanenMurni ?? 0)}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Hasil panen titip belum cair
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-white rounded-lg border border-slate-200 space-y-1">
+                  <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">
+                    Hak Gaji / Upah Belum Cair
+                  </div>
+                  <div className="text-base font-black text-amber-800 font-mono tabular-nums">
+                    {formatRupiah(statement.totalUpahBelumDibayar ?? 0)}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Akumulasi kerja tercatat belum dibayar
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-white rounded-lg border border-slate-200 space-y-1">
+                  <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">
+                    Riwayat Gaji Sudah Cair
+                  </div>
+                  <div className="text-base font-black text-emerald-700 font-mono tabular-nums">
+                    {formatRupiah(statement.totalGajiSudahDibayar ?? 0)}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Total gaji lunas yang sudah dibayarkan
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-white rounded-lg border border-emerald-300 space-y-1">
+                  <div className="text-[10px] font-bold text-slate-800 uppercase tracking-wider">
+                    Total Hak Belum Cair (Titip + Upah)
+                  </div>
+                  <div className="text-base font-black text-slate-900 font-mono tabular-nums">
+                    {formatRupiah(statement.totalTitip)}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Sebelum dikurangi bon {formatRupiah(statement.totalBonKeseluruhan)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* PANEL INTEGRASI 1 TRANSAKSI TERPADU: ANAK PERUSAHAAN & REKENING (DP PARABOT <-> REK-DPPARABO) */}
           {(statement.isAnakPerusahaan || statement.role === 'ANAK_PERUSAHAAN') && (
@@ -1098,7 +1188,13 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                       : row.jenis === 'BAYAR_BON'
                                       ? 'text-emerald-800'
                                       : row.jenis === 'PEMBELIAN_TITIP'
-                                      ? 'text-purple-800'
+                                      ? 'text-purple-800 font-bold'
+                                      : row.jenis.includes('UPAH KERJA (BELUM CAIR)')
+                                      ? 'text-amber-700 font-bold'
+                                      : row.jenis.includes('PEMBAYARAN GAJI')
+                                      ? 'text-emerald-700 font-bold'
+                                      : row.jenis.includes('UPAH KERJA')
+                                      ? 'text-slate-600'
                                       : row.jenis.includes('ANAK_PERUSAHAAN')
                                       ? 'text-teal-800 font-bold'
                                       : 'text-zinc-700'
@@ -1113,10 +1209,15 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                     <div className="flex items-center space-x-1.5 flex-wrap">
                                       {row.isNotaLalu && (
                                         <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-200 text-amber-900 border border-amber-300">
-                                          📑 NOTA LALU {row.noNotaLalu ? `(${row.noNotaLalu})` : ''}
+                                          NOTA LALU {row.noNotaLalu ? `(${row.noNotaLalu})` : ''}
                                         </span>
                                       )}
                                       <span className="font-medium text-zinc-900">{row.keterangan || '-'}</span>
+                                      {row.nominalMutasiHak && row.nominalMutasiHak > 0 ? (
+                                        <span className="font-mono tabular-nums font-bold text-[11px] text-purple-800">
+                                          · Nilai: {formatRupiah(row.nominalMutasiHak)}
+                                        </span>
+                                      ) : null}
                                     </div>
 
                                     <div className="flex items-center space-x-1.5 shrink-0">
@@ -1133,7 +1234,9 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                               nominalText:
                                                 row.debet > 0
                                                   ? `+${formatRupiah(row.debet)}`
-                                                  : `-${formatRupiah(row.kredit)}`,
+                                                  : row.kredit > 0
+                                                  ? `-${formatRupiah(row.kredit)}`
+                                                  : formatRupiah(row.nominalMutasiHak || 0),
                                               keterangan: row.keterangan,
                                             })
                                           }
@@ -1179,7 +1282,29 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
                               {/* Bayar Bon (-) */}
                               <td className="py-3 px-3 text-right font-mono text-emerald-700 whitespace-nowrap font-medium text-[11px]">
-                                {row.kredit > 0 ? `-${formatRupiah(row.kredit)}` : '-'}
+                                {row.kredit > 0
+                                  ? `-${formatRupiah(row.kredit)}`
+                                  : row.nominalMutasiHak && row.nominalMutasiHak > 0
+                                  ? (
+                                    <span
+                                      className={
+                                        row.kategoriMutasiHak === 'SLIP_GAJI' || row.kategoriMutasiHak === 'TITIP_CAIR'
+                                          ? 'text-emerald-700'
+                                          : 'text-purple-700'
+                                      }
+                                    >
+                                      {row.kategoriMutasiHak === 'SLIP_GAJI'
+                                        ? `Cair ${formatRupiah(row.nominalMutasiHak)}`
+                                        : row.kategoriMutasiHak === 'UPAH_TERCATAT'
+                                        ? `+Upah ${formatRupiah(row.nominalMutasiHak)}`
+                                        : row.kategoriMutasiHak === 'UPAH_SUDAH_CAIR'
+                                        ? `Upah ${formatRupiah(row.nominalMutasiHak)}`
+                                        : row.kategoriMutasiHak === 'TITIP_MASUK'
+                                        ? `+Titip ${formatRupiah(row.nominalMutasiHak)}`
+                                        : formatRupiah(row.nominalMutasiHak)}
+                                    </span>
+                                  )
+                                  : '-'}
                               </td>
 
                               {/* Saldo Bon Mitra */}
@@ -1472,7 +1597,11 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                 {row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-'}
                               </td>
                               <td className="py-2 px-2 text-right font-mono text-emerald-700 whitespace-nowrap text-[10px]">
-                                {row.kredit > 0 ? `-${formatRupiah(row.kredit)}` : '-'}
+                                {row.kredit > 0
+                                  ? `-${formatRupiah(row.kredit)}`
+                                  : row.nominalMutasiHak && row.nominalMutasiHak > 0
+                                  ? formatRupiah(row.nominalMutasiHak)
+                                  : '-'}
                               </td>
                               <td className="py-2 px-2.5 text-right font-mono font-bold text-zinc-900 whitespace-nowrap text-[10px]">
                                 {formatRupiah(row.saldoAkumulasi)}

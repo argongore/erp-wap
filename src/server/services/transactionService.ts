@@ -2631,7 +2631,10 @@ export class TransactionService {
     tanggalKerja?: string;
     periodeBulan?: string;
     gajiNominal?: number; // Manual input nominal upah harian / gaji pokok
+    tunjanganNominal?: number; // Tunjangan opsional (override tunjanganTetap jika diisi)
     bonus?: number;       // Lembur, insentif, uang makan
+    lunasiUpahHarianPending?: boolean; // Jika true, tandai catatan upah harian TERCATAT jadi SUDAH_DIBAYAR
+    upahHarianIds?: string[]; // Daftar ID upah harian spesifik yang ikut dilunasi
     persentasePotongKasbon?: number; // e.g. 100, 50, 25, 0 atau custom
     nominalPotongKustom?: number;
     metodePembayaran?: 'TUNAI' | 'TRANSFER';
@@ -2650,7 +2653,9 @@ export class TransactionService {
       }
 
       // Validasi Divisi yang ditugaskan hari ini
-      const divisi: NamaDivisi = params.divisi || 'Gudang Wijaya Agro';
+      const divisi: NamaDivisi =
+        params.divisi ||
+        ((kry.divisi || kry.departemen || 'Gudang Wijaya Agro') as NamaDivisi);
       const tipeGaji: 'HARIAN' | 'BULANAN' = params.tipeGaji || 'HARIAN';
       const targetTanggal = params.tanggalKerja || tanggal;
 
@@ -2679,12 +2684,17 @@ export class TransactionService {
           ? Math.max(0, Number(params.gajiNominal))
           : (kry.gajiPokok || 0);
 
-      const tunjangan = tipeGaji === 'BULANAN' ? (kry.tunjanganTetap || 0) : 0;
+      const tunjangan =
+        params.tunjanganNominal !== undefined && params.tunjanganNominal !== null
+          ? Math.max(0, Number(params.tunjanganNominal))
+          : tipeGaji === 'BULANAN'
+          ? (kry.tunjanganTetap || 0)
+          : 0;
       const bonus = Math.max(0, Number(params.bonus) || 0);
       const totalGajiKotor = upahManual + tunjangan + bonus;
 
       if (totalGajiKotor <= 0) {
-        throw new Error('Total gaji/upah harian harus lebih dari Rp 0');
+        throw new Error('Total gaji/upah harus lebih dari Rp 0');
       }
 
       // Find linked mitra to calculate current total outstanding bon
@@ -2782,7 +2792,7 @@ export class TransactionService {
           tanggal: targetTanggal,
           jam,
           idMitra: mitraId,
-          namaMitra: `${kry.nama} (Karyawan)`,
+          namaMitra: kry.nama,
           totalBonSebelum: totalKasbonAwal,
           nominalBayar: potonganKasbon,
           sisaBonSetelah: totalKasbonAwal - potonganKasbon,
@@ -2805,6 +2815,27 @@ export class TransactionService {
       const periodeFormatted =
         params.periodeBulan ||
         (tipeGaji === 'HARIAN' ? `Harian - ${targetTanggal}` : `Bulanan - ${targetTanggal.slice(3)}`);
+
+      // Jika diminta melunasi catatan upah harian yang masih TERCATAT (misal saat gajian 1 bulan penuh)
+      let settledDailyLogs: CatatanUpahHarian[] = [];
+      if (params.lunasiUpahHarianPending || (params.upahHarianIds && params.upahHarianIds.length > 0)) {
+        const idFilter =
+          params.upahHarianIds && params.upahHarianIds.length > 0
+            ? new Set(params.upahHarianIds)
+            : null;
+        settledDailyLogs = (db.upahHarian || []).filter(
+          (u) =>
+            u.idKaryawan === kry.id &&
+            u.status === 'TERCATAT' &&
+            (!idFilter || idFilter.has(u.id))
+        );
+        for (const u of settledDailyLogs) {
+          u.status = 'SUDAH_DIBAYAR';
+          u.ket = 'LUNAS';
+          u.idPayrollSettlement = idPayroll;
+          u.tanggalDibayar = targetTanggal;
+        }
+      }
 
       const payrollRecord: TransaksiPenggajian = {
         id: idPayroll,
@@ -2830,6 +2861,12 @@ export class TransactionService {
         gajiBersihDibayar,
         metodePembayaran: params.metodePembayaran || 'TUNAI',
         rekeningSumber: rekSumber.kode,
+        ...(settledDailyLogs.length > 0
+          ? {
+              jumlahHariKerja: settledDailyLogs.length,
+              daftarUpahHarianIds: settledDailyLogs.map((u) => u.id),
+            }
+          : {}),
         keterangan: params.keterangan || `Gaji ${tipeGaji === 'HARIAN' ? 'Harian' : 'Bulanan'} Divisi ${divisi} - ${kry.nama}`,
         idBayarBonTerkait,
       };
@@ -3181,10 +3218,14 @@ export class TransactionService {
     const items: RekapKaryawanItem[] = (db.karyawan || []).map((kry) => {
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
 
-      // 1. Kasbon barang dari penjualan toko
-      const kasbonBarang = (db.penjualan || [])
-        .filter((p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR')
-        .reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
+      // 1. Kasbon barang dari penjualan toko + piutang hasil bumi
+      const kasbonBarang =
+        (db.penjualan || [])
+          .filter((p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR')
+          .reduce((sum, p) => sum + (p.sisaPiutang || 0), 0) +
+        (db.penjualanHasilBumi || [])
+          .filter((j) => j.idMitra === mitraId && j.metodePembayaran === 'PIUTANG' && j.statusPembayaran === 'BELUM_BAYAR')
+          .reduce((sum, j) => sum + (j.sisaPiutang || 0), 0);
 
       // 2. Kasbon uang dari kasir kasbon uang
       const kasbonUang = (db.kasbonUang || [])
@@ -3193,8 +3234,21 @@ export class TransactionService {
 
       const totalBon = kasbonBarang + kasbonUang;
 
-      // 3. Hak Upah Harian dari db.upahHarian
+      // 2b. Saldo Titip Hasil Panen / Pinjaman Dana sebagai Mitra (Karyawan juga bisa jadi Mitra)
+      const titipPanenKotor = (db.pembelianHasilBumi || [])
+        .filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === 'TITIP')
+        .reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const hutangKulakan = (db.pembelianBarang || [])
+        .filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === 'HUTANG' && pb.status !== 'LUNAS')
+        .reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const totalDicairkanMitra = (db.pencairanTitipan || [])
+        .filter((pt) => pt.idMitra === mitraId)
+        .reduce((sum, pt) => sum + (pt.nominalPencairan || 0), 0);
+      const totalTitipHasilPanen = Math.max(0, titipPanenKotor + hutangKulakan - totalDicairkanMitra);
+
+      // 3. Hak Upah Harian dari db.upahHarian & Slip Penggajian
       const allUpahKry = (db.upahHarian || []).filter((u) => u.idKaryawan === kry.id);
+      const allSlipsKry = (db.penggajian || []).filter((g) => g.idKaryawan === kry.id);
       const totalHariKerja = allUpahKry.length;
       const totalHakUpahHarian = allUpahKry.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
 
@@ -3202,15 +3256,26 @@ export class TransactionService {
         .filter((u) => u.status === 'TERCATAT')
         .reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
 
-      const upahSudahDibayar = allUpahKry
+      const upahSudahDibayarLog = allUpahKry
         .filter((u) => u.status === 'SUDAH_DIBAYAR')
         .reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
 
-      const lastJob = allUpahKry[0];
-      const divisiTerakhir = lastJob ? lastJob.divisi : ('Gudang Wijaya Agro' as NamaDivisi);
+      const totalGajiSlipDibayar = allSlipsKry.reduce(
+        (sum, g) => sum + (Number(g.totalGajiKotor) || Number(g.gajiBersihDibayar) || 0),
+        0
+      );
+      const upahSudahDibayar = Math.max(upahSudahDibayarLog, totalGajiSlipDibayar);
 
-      // Posisi Bersih: Hak Upah Belum Dibayar - Total Bon
+      const lastJob = allUpahKry[0];
+      const divisiTerakhir = lastJob
+        ? lastJob.divisi
+        : ((kry.divisi || kry.departemen || 'Gudang Wijaya Agro') as NamaDivisi);
+
+      // Posisi Bersih Gaji: Hak Upah Belum Dibayar - Total Bon
       const saldoBersih = upahBelumDibayar - totalBon;
+      const totalHakGabunganMitraKaryawan = upahBelumDibayar + totalTitipHasilPanen;
+      const saldoBersihTerpaduMitra = totalHakGabunganMitraKaryawan - totalBon;
+
       let posisiStatus: 'PERUSAHAAN_BERHUTANG_UPAH' | 'KARYAWAN_BERHUTANG_BON' | 'LUNAS_IMPAS' = 'LUNAS_IMPAS';
       if (saldoBersih > 0) {
         posisiStatus = 'PERUSAHAAN_BERHUTANG_UPAH';
@@ -3237,13 +3302,17 @@ export class TransactionService {
         standarGajiPokok: kry.gajiPokok || 0,
         tunjanganTetap: kry.tunjanganTetap,
         totalHariKerja,
-        totalHakUpahHarian,
+        totalHakUpahHarian: Math.max(totalHakUpahHarian, upahBelumDibayar + upahSudahDibayar),
         totalUpahBelumDibayar: upahBelumDibayar,
         totalUpahSudahDibayar: upahSudahDibayar,
+        totalGajiSudahDibayar: totalGajiSlipDibayar,
         totalKasbonBarang: kasbonBarang,
         totalKasbonUang: kasbonUang,
         totalBonKaryawan: totalBon,
+        totalTitipHasilPanen,
+        totalHakGabunganMitraKaryawan,
         saldoBersih,
+        saldoBersihTerpaduMitra,
         posisiStatus,
         pekerjaanHarianTerakhir: lastJob?.keterangan || `Tugas di ${divisiTerakhir}`,
         tanggalKerjaTerakhir: lastJob?.tanggalKerja || kry.tanggalMasuk,
@@ -3298,6 +3367,11 @@ export class TransactionService {
     idKaryawan: string;
     divisi?: NamaDivisi;
     upahHarianIds?: string[];
+    tipeGaji?: 'HARIAN' | 'BULANAN';
+    periodeBulan?: string;
+    gajiPokokTambahan?: number;
+    tunjangan?: number;
+    bonus?: number;
     rekeningSumber?: string;
     persentasePotongKasbon?: number;
     nominalPotongKustom?: number;
@@ -3317,12 +3391,20 @@ export class TransactionService {
         pendingList = pendingList.filter((u) => idSet.has(u.id));
       }
 
-      if (pendingList.length === 0) {
-        throw new Error('Tidak ada hak upah harian berjalan yang belum dibayar');
+      const nominalUpahHarian = pendingList.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const tambahanPokok = Math.max(0, Number(params.gajiPokokTambahan) || 0);
+      const tunjangan = Math.max(0, Number(params.tunjangan) || 0);
+      const bonus = Math.max(0, Number(params.bonus) || 0);
+      const totalUpahKotor = nominalUpahHarian + tambahanPokok + tunjangan + bonus;
+
+      if (totalUpahKotor <= 0) {
+        throw new Error('Tidak ada hak upah atau nominal gaji yang akan dibayarkan');
       }
 
-      const totalUpahKotor = pendingList.reduce((sum, u) => sum + u.totalUpahHarian, 0);
-      const divisi: NamaDivisi = params.divisi || pendingList[0].divisi || 'Gudang Wijaya Agro';
+      const divisi: NamaDivisi =
+        params.divisi ||
+        pendingList[0]?.divisi ||
+        ((kry.divisi || kry.departemen || 'Gudang Wijaya Agro') as NamaDivisi);
 
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
       const outstandingKasbonBarang = (db.penjualan || [])
@@ -3335,7 +3417,7 @@ export class TransactionService {
 
       let potonganKasbon = 0;
       const persentase = Number(params.persentasePotongKasbon) || 0;
-      if (params.nominalPotongKustom && params.nominalPotongKustom > 0) {
+      if (params.nominalPotongKustom !== undefined && params.nominalPotongKustom > 0) {
         potonganKasbon = Math.min(params.nominalPotongKustom, totalKasbonAwal, totalUpahKotor);
       } else if (persentase > 0 && totalKasbonAwal > 0) {
         potonganKasbon = Math.min(Math.round((totalKasbonAwal * persentase) / 100), totalKasbonAwal, totalUpahKotor);
@@ -3343,7 +3425,13 @@ export class TransactionService {
 
       const gajiBersihDibayar = totalUpahKotor - potonganKasbon;
       const rekKode = params.rekeningSumber || TransactionService.DIVISI_REKENING_MAP[divisi] || 'KAS01';
-      let rekSumber = db.rekening.find((r) => r.kode === rekKode) || db.rekening.find((r) => r.kode === 'KAS01') || db.rekening[0];
+      if (rekKode === 'BON01' || rekKode === 'TIT01') {
+        throw new Error('Rekening virtual BON01 / TIT01 tidak dapat digunakan untuk pembayaran gaji');
+      }
+      const rekSumber =
+        db.rekening.find((r) => r.kode === rekKode) ||
+        db.rekening.find((r) => r.kode === 'KAS01') ||
+        db.rekening[0];
 
       if (
         !this.isAnakPerusahaanRekening(rekSumber) &&
@@ -3351,7 +3439,9 @@ export class TransactionService {
         rekSumber.saldoSaatIni < gajiBersihDibayar
       ) {
         throw new Error(
-          `Saldo rekening ${rekSumber.nama} tidak mencukupi untuk pembayaran upah bersih Rp ${gajiBersihDibayar.toLocaleString('id-ID')}`
+          `Saldo rekening ${rekSumber.nama} (Rp ${rekSumber.saldoSaatIni.toLocaleString(
+            'id-ID'
+          )}) tidak mencukupi untuk pembayaran gaji bersih Rp ${gajiBersihDibayar.toLocaleString('id-ID')}`
         );
       }
 
@@ -3404,7 +3494,7 @@ export class TransactionService {
           tanggal,
           jam,
           idMitra: mitraId,
-          namaMitra: `${kry.nama} (Karyawan)`,
+          namaMitra: kry.nama,
           totalBonSebelum: totalKasbonAwal,
           nominalBayar: potonganKasbon,
           sisaBonSetelah: totalKasbonAwal - potonganKasbon,
@@ -3412,7 +3502,7 @@ export class TransactionService {
           rekeningTujuan: 'POTONG_GAJI',
           isPotongGaji: true,
           alokasi: alokasiList,
-          keterangan: `Potong Hak Upah Berjalan (${pendingList.length} Hari Kerja) [${divisi}] Karyawan ${kry.nama}`,
+          keterangan: `Potong Gaji / Upah (${pendingList.length > 0 ? `${pendingList.length} Hari Kerja` : params.periodeBulan || 'Bulanan'}) [${divisi}] Karyawan ${kry.nama}`,
           createdAt: iso,
         });
       }
@@ -3420,6 +3510,14 @@ export class TransactionService {
       rekSumber.saldoSaatIni -= gajiBersihDibayar;
       const idPayroll = generateId('GAJI');
       const slipNomor = `SLIP/WA/${tanggal.replace(/\//g, '')}/${idPayroll.slice(-4)}`;
+
+      const resolvedTipeGaji: 'HARIAN' | 'BULANAN' =
+        params.tipeGaji || (params.periodeBulan ? 'BULANAN' : 'HARIAN');
+      const resolvedPeriode =
+        params.periodeBulan ||
+        (pendingList.length > 0
+          ? `Settlement ${pendingList.length} Hari Kerja - ${tanggal}`
+          : `Penggajian Bulanan - ${tanggal}`);
 
       const payrollRecord: TransaksiPenggajian = {
         id: idPayroll,
@@ -3432,11 +3530,11 @@ export class TransactionService {
         jabatan: kry.jabatan,
         departemen: kry.departemen,
         divisi,
-        tipeGaji: 'HARIAN',
-        periodeBulan: `Settlement ${pendingList.length} Hari Kerja - ${tanggal}`,
-        gajiPokok: totalUpahKotor,
-        tunjangan: 0,
-        bonus: 0,
+        tipeGaji: resolvedTipeGaji,
+        periodeBulan: resolvedPeriode,
+        gajiPokok: nominalUpahHarian + tambahanPokok,
+        tunjangan,
+        bonus,
         totalGajiKotor: totalUpahKotor,
         totalKasbonAwal,
         persentasePotongKasbon: persentase,
@@ -3445,7 +3543,17 @@ export class TransactionService {
         gajiBersihDibayar,
         metodePembayaran: params.metodePembayaran || 'TUNAI',
         rekeningSumber: rekSumber.kode,
-        keterangan: params.keterangan || `Pencairan ${pendingList.length} Hari Kerja Karyawan ${kry.nama}`,
+        ...(pendingList.length > 0
+          ? {
+              jumlahHariKerja: pendingList.length,
+              daftarUpahHarianIds: pendingList.map((u) => u.id),
+            }
+          : {}),
+        keterangan:
+          params.keterangan ||
+          (pendingList.length > 0
+            ? `Pembayaran Gaji / Upah (${pendingList.length} Hari Kerja) Karyawan ${kry.nama}`
+            : `Pembayaran Gaji Bulanan (${resolvedPeriode}) Karyawan ${kry.nama}`),
         idBayarBonTerkait,
       };
 
@@ -3453,6 +3561,7 @@ export class TransactionService {
 
       for (const u of pendingList) {
         u.status = 'SUDAH_DIBAYAR';
+        u.ket = 'LUNAS';
         u.idPayrollSettlement = idPayroll;
         u.tanggalDibayar = tanggal;
       }
@@ -3461,7 +3570,7 @@ export class TransactionService {
         db,
         'PAYROLL',
         idPayroll,
-        `Settlement Upah Karyawan ${kry.nama} (${kry.nik}) sebanyak ${pendingList.length} hari kerja. Total Upah: Rp ${totalUpahKotor.toLocaleString(
+        `Pembayaran Gaji Karyawan ${kry.nama} (${kry.nik}) [${resolvedPeriode}]. Total Gaji Kotor: Rp ${totalUpahKotor.toLocaleString(
           'id-ID'
         )}, Potong Bon: Rp ${potonganKasbon.toLocaleString('id-ID')}, Bersih Dibayar: Rp ${gajiBersihDibayar.toLocaleString('id-ID')}`,
         gajiBersihDibayar,
@@ -3544,13 +3653,55 @@ export class TransactionService {
       const sisaBonKaryawan = sisaKasbonBarang + sisaKasbonUang;
 
       // Accumulate daily stats
-      const totalUpahPokok = allUpahBulanIni.reduce((sum, u) => sum + (u.upahHarian || 0), 0);
-      const totalUangMakanLembur = allUpahBulanIni.reduce((sum, u) => sum + (u.uangMakanLembur || 0), 0);
-      const gajiKotor = allUpahBulanIni.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const upahPokokHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.upahHarian || 0), 0);
+      const uangMakanLemburHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.uangMakanLembur || 0), 0);
+      const gajiKotorHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+
+      // Sertakan slip gaji bulanan/manual di bulan ini yang tidak berasal dari pencairan catatan harian (agar tidak dobel hitung)
+      const settledSlipIdsFromLogs = new Set(
+        (db.upahHarian || [])
+          .filter((u) => u.idKaryawan === kry.id && u.idPayrollSettlement)
+          .map((u) => u.idPayrollSettlement!)
+      );
+      const standaloneSlipsBulanIni = allGajiBulanIni.filter(
+        (g) => !(g.daftarUpahHarianIds && g.daftarUpahHarianIds.length > 0) && !settledSlipIdsFromLogs.has(g.id)
+      );
+      const gajiPokokStandalone = standaloneSlipsBulanIni.reduce((sum, g) => sum + (g.gajiPokok || 0), 0);
+      const bonusTunjanganStandalone = standaloneSlipsBulanIni.reduce(
+        (sum, g) => sum + (g.tunjangan || 0) + (g.bonus || 0),
+        0
+      );
+      const gajiKotorStandalone = standaloneSlipsBulanIni.reduce((sum, g) => sum + (g.totalGajiKotor || 0), 0);
+
+      const totalUpahPokok = upahPokokHarian + gajiPokokStandalone;
+      const totalUangMakanLembur = uangMakanLemburHarian + bonusTunjanganStandalone;
+      const gajiKotor = gajiKotorHarian + gajiKotorStandalone;
 
       const hakPending = allUpahBulanIni
         .filter((u) => u.status === 'TERCATAT')
         .reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+
+      // Seluruh upah belum dibayar lintas bulan (penting untuk penggajian akhir bulan / tunggakan bulan sebelumnya)
+      const allPendingLintasBulan = (db.upahHarian || []).filter(
+        (u) => u.idKaryawan === kry.id && u.status === 'TERCATAT'
+      );
+      const totalUpahBelumDibayarSemuaPeriode = allPendingLintasBulan.reduce(
+        (sum, u) => sum + (u.totalUpahHarian || 0),
+        0
+      );
+      const totalHariBelumDibayarSemuaPeriode = allPendingLintasBulan.length;
+
+      // Saldo Titip Hasil Panen karyawan sebagai Mitra
+      const titipPanenKotorMtr = (db.pembelianHasilBumi || [])
+        .filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === 'TITIP')
+        .reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const hutangKulakanMtr = (db.pembelianBarang || [])
+        .filter((pb) => pb.idMitra === mitraId && pb.metodePembayaran === 'HUTANG' && pb.status !== 'LUNAS')
+        .reduce((sum, pb) => sum + (pb.totalNominal || 0), 0);
+      const cairTitipanMtr = (db.pencairanTitipan || [])
+        .filter((pt) => pt.idMitra === mitraId)
+        .reduce((sum, pt) => sum + (pt.nominalPencairan || 0), 0);
+      const saldoTitipHasilPanenMitra = Math.max(0, titipPanenKotorMtr + hutangKulakanMtr - cairTitipanMtr);
 
       const potongBon = allGajiBulanIni.reduce((sum, g) => sum + (g.potonganKasbon || 0), 0);
       const gajiBersihCair = allGajiBulanIni.reduce((sum, g) => sum + (g.gajiBersihDibayar || 0), 0);
@@ -3681,6 +3832,12 @@ export class TransactionService {
         totalPotonganBon: potongBon,
         totalGajiBersihDibayar: gajiBersihCair,
         totalHakUpahPending: hakPending,
+        standarGajiPokok: kry.gajiPokok || 0,
+        tunjanganTetap: kry.tunjanganTetap || 0,
+        totalUpahBelumDibayarSemuaPeriode,
+        totalHariBelumDibayarSemuaPeriode,
+        saldoTitipHasilPanenMitra,
+        idMitraTerkait: mitraId,
         sisaKasbonBarang,
         sisaKasbonUang,
         totalSisaBonKaryawan: sisaBonKaryawan,
@@ -4068,6 +4225,9 @@ export class TransactionService {
         idDivisi: div.id,
         kodeRekening: div.kodeRekening,
         namaRekening: rek.nama,
+        penanggungJawab: div.penanggungJawab,
+        deskripsi: div.deskripsi,
+        logoUrl: div.logoUrl,
         saldoSaatIni: rek.saldoSaatIni,
         totalPenjualanMasuk,
         totalPembelianKeluar,
@@ -4116,7 +4276,34 @@ export class TransactionService {
     const totalPencairanMitra = (db.pencairanTitipan || [])
       .filter((pt) => pt.idMitra === mitra.id)
       .reduce((s, pt) => s + (pt.nominalPencairan || 0), 0);
-    const totalTitip = Math.max(0, titipKotor - totalPencairanMitra);
+    const totalTitipPanenMurni = Math.max(0, titipKotor - totalPencairanMitra);
+
+    // 3b. Integrasi Karyawan <-> Mitra (Karyawan juga bisa jadi Mitra: rekap Hak Gaji & Slip Gaji di Rekening Mitra)
+    const linkedKaryawan = (db.karyawan || []).find(
+      (k) =>
+        (mitra.idKaryawanTerkait && k.id === mitra.idKaryawanTerkait) ||
+        k.idMitraTerkait === mitra.id ||
+        (k.nik && k.nik === mitra.kode) ||
+        (!mitra.isAnakPerusahaan &&
+          mitra.role !== 'ANAK_PERUSAHAAN' &&
+          String(k.nama || '').trim().toLowerCase() === String(mitra.nama || '').trim().toLowerCase())
+    );
+    const linkedUpahList = linkedKaryawan
+      ? (db.upahHarian || []).filter((u) => u.idKaryawan === linkedKaryawan.id)
+      : [];
+    const linkedPenggajianList = linkedKaryawan
+      ? (db.penggajian || []).filter((g) => g.idKaryawan === linkedKaryawan.id)
+      : [];
+    const totalUpahBelumDibayar = linkedUpahList
+      .filter((u) => u.status === 'TERCATAT')
+      .reduce((s, u) => s + (u.totalUpahHarian || 0), 0);
+    const totalGajiSudahDibayar = linkedPenggajianList.reduce(
+      (s, g) => s + (Number(g.totalGajiKotor) || Number(g.gajiBersihDibayar) || 0),
+      0
+    );
+
+    // Total hak mitra keseluruhan yang masih tersimpan di PT = Titip Hasil Panen + Upah Kerja Belum Cair
+    const totalTitip = totalTitipPanenMurni + totalUpahBelumDibayar;
 
     // 4. Pembayaran Bon
     const bayarBonList = db.bayarBon.filter((b) => b.idMitra === mitra.id);
@@ -4138,6 +4325,8 @@ export class TransactionService {
       itemsDetail?: Array<{ nama: string; qty: number; satuan: string; harga: number; subtotal: number }>;
       debet: number; // Bon bertambah
       kredit: number; // Bon berkurang
+      nominalMutasiHak?: number;
+      kategoriMutasiHak?: 'TITIP_MASUK' | 'TITIP_CAIR' | 'UPAH_TERCATAT' | 'UPAH_SUDAH_CAIR' | 'SLIP_GAJI';
       fotoNota?: string;
       isNotaLalu?: boolean;
       noNotaLalu?: string;
@@ -4344,6 +4533,8 @@ export class TransactionService {
           ],
           debet: 0,
           kredit: 0,
+          nominalMutasiHak: pb.totalNominal,
+          kategoriMutasiHak: 'TITIP_MASUK',
           fotoNota: fotoPb,
           isNotaLalu: isPinjaman ? true : isNotaLalu,
           noNotaLalu: pb.noNotaLalu,
@@ -4436,7 +4627,82 @@ export class TransactionService {
         ],
         debet: 0,
         kredit: 0,
+        nominalMutasiHak: pt.nominalPencairan,
+        kategoriMutasiHak: 'TITIP_CAIR',
       });
+    }
+
+    // Mutasi Hak Upah Kerja & Slip Pembayaran Gaji (Apabila Mitra ini juga terdaftar sebagai Karyawan PT)
+    if (linkedKaryawan) {
+      for (const u of linkedUpahList) {
+        const jamUpah =
+          u.createdAt && u.createdAt.includes('T')
+            ? new Date(u.createdAt)
+                .toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false })
+                .replace(/\./g, ':')
+            : '08:00:00';
+        const isPaid = u.status === 'SUDAH_DIBAYAR';
+        const uraianTugas = u.item || u.keterangan || `Tugas Harian di ${u.divisi}`;
+        timeline.push({
+          id: u.id,
+          tanggal: u.tanggalKerja,
+          jam: jamUpah,
+          createdAt: u.createdAt || u.tanggalKerja,
+          jenis: isPaid ? 'UPAH KERJA (SUDAH CAIR)' : 'UPAH KERJA (BELUM CAIR)',
+          keterangan: `[${u.divisi}] ${uraianTugas}${u.catatan ? ` (${u.catatan})` : ''} — ${
+            isPaid
+              ? `Sudah dibayarkan pada ${u.tanggalDibayar || '-'}${u.idPayrollSettlement ? ` (${u.idPayrollSettlement})` : ''}`
+              : 'Hak Gaji / Upah Karyawan Tercatat (Belum Dicairkan)'
+          }`,
+          qtyDisplay: `${u.kuantiti !== undefined ? u.kuantiti : 1} Hari`,
+          hargaSatuanDisplay: `Rp ${(u.totalUpahHarian || 0).toLocaleString('id-ID')}`,
+          itemsDetail: [
+            {
+              nama: `Upah Kerja [${u.divisi}]: ${uraianTugas}`,
+              qty: u.kuantiti !== undefined ? u.kuantiti : 1,
+              satuan: 'Hari',
+              harga: u.harga !== undefined ? u.harga : u.upahHarian || u.totalUpahHarian || 0,
+              subtotal: u.totalUpahHarian || 0,
+            },
+          ],
+          debet: 0,
+          kredit: 0,
+          nominalMutasiHak: u.totalUpahHarian || 0,
+          kategoriMutasiHak: isPaid ? 'UPAH_SUDAH_CAIR' : 'UPAH_TERCATAT',
+        });
+      }
+
+      for (const g of linkedPenggajianList) {
+        timeline.push({
+          id: g.id,
+          tanggal: g.tanggal,
+          jam: g.jam || '16:00:00',
+          createdAt: `${g.tanggal} ${g.jam || '16:00:00'}`,
+          jenis: 'PEMBAYARAN GAJI KARYAWAN',
+          keterangan: `Slip Gaji [${g.slipNomor}] (${g.periodeBulan}) via ${g.metodePembayaran} (${g.rekeningSumber}) — Gaji Kotor Rp ${g.totalGajiKotor.toLocaleString(
+            'id-ID'
+          )}${
+            g.potonganKasbon > 0
+              ? ` · Potong Kasbon Rp ${g.potonganKasbon.toLocaleString('id-ID')}`
+              : ''
+          } · Cair Bersih Rp ${g.gajiBersihDibayar.toLocaleString('id-ID')}`,
+          qtyDisplay: g.jumlahHariKerja ? `${g.jumlahHariKerja} Hari` : '1 Slip',
+          hargaSatuanDisplay: `Rp ${g.totalGajiKotor.toLocaleString('id-ID')}`,
+          itemsDetail: [
+            {
+              nama: `Slip Gaji ${g.slipNomor} (${g.periodeBulan}) — Cair Bersih via ${g.rekeningSumber}`,
+              qty: 1,
+              satuan: 'Slip',
+              harga: g.gajiBersihDibayar,
+              subtotal: g.totalGajiKotor,
+            },
+          ],
+          debet: 0,
+          kredit: 0,
+          nominalMutasiHak: g.gajiBersihDibayar,
+          kategoriMutasiHak: 'SLIP_GAJI',
+        });
+      }
     }
 
     // ====================================================================
@@ -4808,8 +5074,25 @@ export class TransactionService {
       }
     }
 
-    // Sort by createdAt ascending to calculate running balance
-    timeline.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const parseTimelineSortMs = (createdAt?: string, tgl?: string, jm?: string) => {
+      if (createdAt && createdAt.includes('T')) {
+        const ms = new Date(createdAt).getTime();
+        if (!Number.isNaN(ms)) return ms;
+      }
+      const [dd, mm, yyyy] = String(tgl || '').split('/').map(Number);
+      const [hh, min, ss] = String(jm || '00:00:00').split(':').map(Number);
+      if (yyyy && mm && dd) {
+        return new Date(yyyy, mm - 1, dd, hh || 0, min || 0, ss || 0).getTime();
+      }
+      return 0;
+    };
+
+    // Sort chronologically ascending to calculate running balance accurately
+    timeline.sort(
+      (a, b) =>
+        parseTimelineSortMs(a.createdAt, a.tanggal, a.jam) -
+        parseTimelineSortMs(b.createdAt, b.tanggal, b.jam)
+    );
 
     let runningBon = 0;
     const history = timeline.map((item) => {
@@ -4826,6 +5109,8 @@ export class TransactionService {
         debet: item.debet,
         kredit: item.kredit,
         saldoAkumulasi: runningBon,
+        nominalMutasiHak: item.nominalMutasiHak,
+        kategoriMutasiHak: item.kategoriMutasiHak,
         fotoNota: item.fotoNota,
         isNotaLalu: item.isNotaLalu,
         noNotaLalu: item.noNotaLalu,
@@ -4849,6 +5134,19 @@ export class TransactionService {
       telepon: mitra.telepon,
       alamat: mitra.alamat,
       status: mitra.status,
+      ...(linkedKaryawan
+        ? {
+            isKaryawan: true,
+            idKaryawanTerkait: linkedKaryawan.id,
+            nikKaryawan: linkedKaryawan.nik,
+            jabatanKaryawan: linkedKaryawan.jabatan,
+            divisiKaryawan: linkedKaryawan.divisi || linkedKaryawan.departemen,
+          }
+        : {}),
+      totalTitipPanenMurni,
+      totalUpahBelumDibayar,
+      totalGajiSudahDibayar,
+      totalHakMitraGabungan: totalTitip,
       profilPerusahaan: db.profilPerusahaan,
       ...(rekUtama
         ? {
@@ -4886,12 +5184,14 @@ export class TransactionService {
   }
 
   /**
-   * Rekap Master Mitra: Hutang Perusahaan (Titip Panen belum diambil uangnya) & Bon Mitra (Barang + Uang)
+   * Rekap Master Mitra: Hutang Perusahaan (Titip Panen + Hak Upah Belum Cair) & Bon Mitra (Barang + Uang)
    */
   public static getRekapMasterMitra(): RekapMasterMitraSummary {
     const db = dbManager.get();
 
     let totalHutangPerusahaanKeMitra = 0;
+    let totalTitipPanenMurniGlobal = 0;
+    let totalUpahKaryawanBelumDibayarGlobal = 0;
     let totalBonMitra = 0;
     let mitraDenganHutangTitipCount = 0;
     let mitraDenganBonCount = 0;
@@ -4914,8 +5214,9 @@ export class TransactionService {
       const totalBon = kasbonBarang + kasbonUang;
 
       // 3. Titip hasil bumi, pinjaman dana, & hutang kulakan supplier belum dibayar (hutang kita ke mitra)
-      const titipPanenKotor = db.pembelianHasilBumi
-        .filter((pb) => pb.idMitra === m.id && pb.metodePembayaran === 'TITIP')
+      const mitraHasilBumiList = db.pembelianHasilBumi.filter((pb) => pb.idMitra === m.id);
+      const titipPanenKotor = mitraHasilBumiList
+        .filter((pb) => pb.metodePembayaran === 'TITIP')
         .reduce((sum, pb) => sum + pb.totalNominal, 0);
       const hutangKulakan = (db.pembelianBarang || [])
         .filter((pb) => pb.idMitra === m.id && pb.metodePembayaran === 'HUTANG' && pb.status !== 'LUNAS')
@@ -4924,7 +5225,34 @@ export class TransactionService {
       const totalPencairanM = (db.pencairanTitipan || [])
         .filter((pt) => pt.idMitra === m.id)
         .reduce((sum, pt) => sum + (pt.nominalPencairan || 0), 0);
-      const titipPanen = Math.max(0, titipKotor - totalPencairanM);
+      const titipPanenMurni = Math.max(0, titipKotor - totalPencairanM);
+
+      // 3b. Integrasi Karyawan <-> Mitra (Karyawan juga bisa jadi Mitra)
+      const linkedKry = (db.karyawan || []).find(
+        (k) =>
+          (m.idKaryawanTerkait && k.id === m.idKaryawanTerkait) ||
+          k.idMitraTerkait === m.id ||
+          (k.nik && k.nik === m.kode) ||
+          (!m.isAnakPerusahaan &&
+            m.role !== 'ANAK_PERUSAHAAN' &&
+            String(k.nama || '').trim().toLowerCase() === String(m.nama || '').trim().toLowerCase())
+      );
+      const upahListKry = linkedKry
+        ? (db.upahHarian || []).filter((u) => u.idKaryawan === linkedKry.id)
+        : [];
+      const slipListKry = linkedKry
+        ? (db.penggajian || []).filter((g) => g.idKaryawan === linkedKry.id)
+        : [];
+      const upahBelumDibayarKry = upahListKry
+        .filter((u) => u.status === 'TERCATAT')
+        .reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
+      const gajiSudahDibayarKry = slipListKry.reduce(
+        (sum, g) => sum + (Number(g.totalGajiKotor) || Number(g.gajiBersihDibayar) || 0),
+        0
+      );
+
+      // Total hak mitra keseluruhan yang belum cair di PT = Titip Hasil Panen + Upah Kerja Belum Cair
+      const totalHakGabungan = titipPanenMurni + upahBelumDibayarKry;
 
       // Check linked Anak Perusahaan account (e.g. DP Parabot <-> REK-DPPARABO)
       const linkedRek =
@@ -4932,15 +5260,17 @@ export class TransactionService {
         db.rekening.find((r) => r.idMitraTerkait === m.id && this.isAnakPerusahaanRekening(r));
       const isAnakPerusahaan = Boolean(m.isAnakPerusahaan || m.role === 'ANAK_PERUSAHAAN' || linkedRek);
 
-      // Count unique transactions across all linked partner ledgers (+ Rekening Anak Perusahaan if applicable)
+      // Count unique transactions across all linked partner ledgers (+ Karyawan Upah/Slip + Rekening Anak Perusahaan)
       const txIdSet = new Set<string>();
       db.penjualan.filter((p) => p.idMitra === m.id).forEach((p) => txIdSet.add(p.noPenjualan));
       (db.penjualanHasilBumi || []).filter((j) => j.idMitra === m.id).forEach((j) => txIdSet.add(j.noPenjualan));
-      db.pembelianHasilBumi.filter((pb) => pb.idMitra === m.id).forEach((pb) => txIdSet.add(pb.noPembelian));
+      mitraHasilBumiList.forEach((pb) => txIdSet.add(pb.noPembelian));
       (db.pembelianBarang || []).filter((pb) => pb.idMitra === m.id).forEach((pb) => txIdSet.add(pb.noPembelian));
       (db.pencairanTitipan || []).filter((pt) => pt.idMitra === m.id).forEach((pt) => txIdSet.add(pt.idPencairan));
       db.kasbonUang.filter((k) => k.idMitra === m.id).forEach((k) => txIdSet.add(k.idTransaksi));
       db.bayarBon.filter((b) => b.idMitra === m.id).forEach((b) => txIdSet.add(b.idTransaksi));
+      upahListKry.forEach((u) => txIdSet.add(u.id));
+      slipListKry.forEach((g) => txIdSet.add(g.id));
 
       if (isAnakPerusahaan && linkedRek) {
         const rekKode = linkedRek.kode;
@@ -4959,11 +5289,11 @@ export class TransactionService {
 
       const txCount = txIdSet.size;
 
-      // Net balance: Titip (Hutang kita ke mitra) - Bon (Hutang mitra ke kita)
-      const saldoBersih = titipPanen - totalBon;
+      // Net balance: Total Hak Gabungan (Titip Panen + Upah Belum Cair) - Bon (Hutang mitra ke PT)
+      const saldoBersih = totalHakGabungan - totalBon;
       const posisiBersihTerpadu =
         isAnakPerusahaan && linkedRek
-          ? titipPanen - totalBon - (linkedRek.saldoSaatIni || 0)
+          ? totalHakGabungan - totalBon - (linkedRek.saldoSaatIni || 0)
           : saldoBersih;
 
       let posisiStatus: 'KITA_BERHUTANG' | 'MITRA_BERHUTANG' | 'LUNAS_IMPAS' = 'LUNAS_IMPAS';
@@ -4974,9 +5304,11 @@ export class TransactionService {
         posisiStatus = 'MITRA_BERHUTANG';
       }
 
-      totalHutangPerusahaanKeMitra += titipPanen;
+      totalHutangPerusahaanKeMitra += totalHakGabungan;
+      totalTitipPanenMurniGlobal += titipPanenMurni;
+      totalUpahKaryawanBelumDibayarGlobal += upahBelumDibayarKry;
       totalBonMitra += totalBon;
-      if (titipPanen > 0) mitraDenganHutangTitipCount++;
+      if (totalHakGabungan > 0) mitraDenganHutangTitipCount++;
       if (totalBon > 0) mitraDenganBonCount++;
 
       return {
@@ -4988,6 +5320,20 @@ export class TransactionService {
         alamat: m.alamat,
         status: m.status,
         catatan: m.catatan,
+        ...(linkedKry
+          ? {
+              isKaryawan: true,
+              idKaryawanTerkait: linkedKry.id,
+              nikKaryawan: linkedKry.nik,
+              jabatanKaryawan: linkedKry.jabatan,
+              divisiKaryawan: linkedKry.divisi || linkedKry.departemen,
+            }
+          : {}),
+        hasTransaksiMitraPanen: mitraHasilBumiList.length > 0 || hutangKulakan > 0,
+        totalTitipPanenMurni: titipPanenMurni,
+        totalUpahBelumDibayar: upahBelumDibayarKry,
+        totalGajiSudahDibayar: gajiSudahDibayarKry,
+        totalHakMitraGabungan: totalHakGabungan,
         ...(isAnakPerusahaan
           ? {
               isAnakPerusahaan: true,
@@ -4997,13 +5343,13 @@ export class TransactionService {
               posisiBersihTerpadu,
             }
           : {}),
-        totalHutangTitipPanen: titipPanen,
+        totalHutangTitipPanen: totalHakGabungan,
         totalKasbonBarang: kasbonBarang,
         totalKasbonUang: kasbonUang,
         totalBonMitra: totalBon,
-        potonganSilangOtomatis: Math.min(titipPanen, totalBon),
-        sisaBonBersih: Math.max(0, totalBon - titipPanen),
-        sisaTitipanBersih: Math.max(0, titipPanen - totalBon),
+        potonganSilangOtomatis: Math.min(totalHakGabungan, totalBon),
+        sisaBonBersih: Math.max(0, totalBon - totalHakGabungan),
+        sisaTitipanBersih: Math.max(0, totalHakGabungan - totalBon),
         saldoBersih,
         posisiStatus,
         totalTransaksiCount: txCount,
@@ -5013,6 +5359,8 @@ export class TransactionService {
     return {
       totalMitra: db.mitra.length,
       totalHutangPerusahaanKeMitra,
+      totalTitipPanenMurni: totalTitipPanenMurniGlobal,
+      totalUpahKaryawanBelumDibayar: totalUpahKaryawanBelumDibayarGlobal,
       totalBonMitra,
       saldoBersihKemitraan: totalHutangPerusahaanKeMitra - totalBonMitra,
       mitraDenganHutangTitipCount,
@@ -5874,7 +6222,10 @@ export class TransactionService {
   // ==========================================
   public static getProfilPerusahaan(): ProfilPerusahaan {
     const db = dbManager.get();
-    return db.profilPerusahaan;
+    return {
+      ...db.profilPerusahaan,
+      logoUrl: db.profilPerusahaan?.logoUrl || '/assets/aistudio/unnamed_cbf747dc.jpg',
+    };
   }
 
   public static async updateProfilPerusahaan(data: Partial<ProfilPerusahaan>): Promise<ProfilPerusahaan> {

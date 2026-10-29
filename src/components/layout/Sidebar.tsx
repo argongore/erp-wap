@@ -41,6 +41,7 @@ export type ActiveTab =
   | 'kasir-pembelian-barang'
   | 'kasir-pembelian'
   | 'kasir-cairkan-titipan'
+  | 'kasir-bayar-gaji'
   | 'kasir-kasbon-uang'
   | 'kasir-bayar-bon'
   | 'kasir-pengeluaran'
@@ -71,6 +72,7 @@ export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   'kasir-pembelian-barang': 'Pembelian Stok Pemasok',
   'kasir-pembelian': 'Pembelian Hasil Bumi',
   'kasir-cairkan-titipan': 'Pembayaran PT ke Mitra (Titipan)',
+  'kasir-bayar-gaji': 'Bayar Gaji Karyawan',
   'kasir-kasbon-uang': 'Kasbon Uang & Nota Lalu',
   'kasir-bayar-bon': 'Pelunasan Bon Mitra',
   'kasir-pengeluaran': 'Pengeluaran & Biaya Divisi',
@@ -101,6 +103,7 @@ export const ACTIVE_TAB_CASH_FLOW: Record<ActiveTab, CashFlowDirection> = {
   'kasir-pembelian-barang': 'KELUAR',
   'kasir-pembelian': 'KELUAR',
   'kasir-cairkan-titipan': 'KELUAR',
+  'kasir-bayar-gaji': 'KELUAR',
   'kasir-kasbon-uang': 'KELUAR',
   'kasir-pengeluaran': 'KELUAR',
   'kasir-transfer': 'MUTASI',
@@ -286,6 +289,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             tab: 'kasir-cairkan-titipan',
           },
           {
+            id: 'kasir-bayar-gaji',
+            label: 'Bayar Gaji Karyawan',
+            sublabel: 'Gaji bulanan, upah & potong bon',
+            keywords: 'bayar gaji karyawan bulanan harian slip upah potong kasbon sdm uang keluar kas out',
+            icon: Briefcase,
+            flow: 'KELUAR',
+            tab: 'kasir-bayar-gaji',
+          },
+          {
             id: 'kasir-kasbon-uang',
             label: 'Kasbon & Nota Lalu',
             sublabel: 'Pinjaman tunai ke mitra',
@@ -361,8 +373,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {
             id: 'master-karyawan',
             label: 'Karyawan & Upah',
-            sublabel: 'Absensi, gaji harian & bon',
-            keywords: 'karyawan sdm gaji upah harian bon pekerja',
+            sublabel: 'Absensi, bayar gaji & bon',
+            keywords: 'karyawan sdm gaji upah bulanan harian bon pekerja mitra',
             icon: Briefcase,
             tab: 'master-karyawan',
           },

@@ -21,11 +21,13 @@ import {
 import { api } from '../../api/client.ts';
 import {
   DAFTAR_DIVISI,
+  DEFAULT_PT_LOGO_URL,
   ProfilPerusahaan,
   Rekening,
   StokBarang,
   StokHasilBumi,
   ItemInventaris,
+  ItemDivisi,
   PergerakanKeuanganDivisiSummary,
   RekapMasterMitraSummary,
   RekeningKoranMitraSummary,
@@ -39,6 +41,8 @@ import { RekapSemuaTransaksiHarianView } from '../laporan/RekapSemuaTransaksiHar
 import { LabaRugiProdukView } from '../laporan/LabaRugiProdukView.tsx';
 import { CetakRekeningKoranModal } from '../laporan/CetakRekeningKoranModal.tsx';
 import { SlipGajiModal } from '../karyawan/SlipGajiModal.tsx';
+import { DivisiLogoAvatar, resolveDivisiLogoUrl } from '../common/DivisiLogoAvatar.tsx';
+import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 
 type BosTab = 'kas' | 'divisi' | 'karyawan' | 'mitra' | 'jurnal' | 'stok';
 type KaryawanSubView = 'BULANAN' | 'SALDO_TOTAL' | 'SLIP_GAJI';
@@ -95,6 +99,7 @@ interface PortalEksekutifBosViewProps {
   stokBarangList: StokBarang[];
   stokHasilBumiList: StokHasilBumi[];
   inventarisList: ItemInventaris[];
+  divisiMasterList?: ItemDivisi[];
   onRefreshAll: () => void;
   onLockScreen: () => void;
   canSwitchToKasir?: boolean;
@@ -107,6 +112,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   stokBarangList,
   stokHasilBumiList,
   inventarisList,
+  divisiMasterList = [],
   onRefreshAll,
   onLockScreen,
   canSwitchToKasir = false,
@@ -422,9 +428,11 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shrink-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center space-x-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
-              <Sprout className="w-5 h-5" />
-            </div>
+            <img
+              src={profilPerusahaan?.logoUrl || DEFAULT_PT_LOGO_URL}
+              alt={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+              className="w-9 h-9 rounded-xl bg-black object-contain border border-slate-200 shrink-0"
+            />
             <div className="min-w-0">
               <div className="flex items-center gap-2 min-w-0">
                 <h1 className="font-bold text-sm sm:text-base tracking-tight text-slate-900 truncate">
@@ -442,6 +450,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton
+              variant="bos"
+              companyName={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+              logoUrl={profilPerusahaan?.logoUrl || DEFAULT_PT_LOGO_URL}
+            />
+
             {canSwitchToKasir && onSwitchToKasir && (
               <button
                 type="button"
@@ -663,6 +677,16 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                 <div className="divide-y divide-slate-100">
                   {divisiData.map((d) => {
                     const isOpen = expandedDivisi === d.idDivisi;
+                    const divMaster = divisiMasterList.find(
+                      (m) => m.id === d.idDivisi || m.nama.toLowerCase() === d.divisi.toLowerCase()
+                    );
+                    const divLogo = resolveDivisiLogoUrl(
+                      d.divisi,
+                      d.logoUrl || divMaster?.logoUrl,
+                      divisiMasterList
+                    );
+                    const pjLabel = d.penanggungJawab || divMaster?.penanggungJawab;
+                    const descLabel = d.deskripsi || divMaster?.deskripsi;
                     return (
                       <div key={d.idDivisi}>
                         <button
@@ -670,18 +694,34 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           onClick={() => setExpandedDivisi(isOpen ? null : d.idDivisi)}
                           className="w-full px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/70 transition-colors text-left cursor-pointer"
                         >
-                          <div className="min-w-0">
-                            <div className="font-bold text-sm text-slate-900">{d.divisi}</div>
-                            <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono tabular-nums">
-                              <span>Kode {d.kodeRekening}</span>
-                              <span>·</span>
-                              <span className="text-emerald-700">
-                                Masuk +{formatRupiahSingkat(d.totalArusMasuk)}
-                              </span>
-                              <span>·</span>
-                              <span className="text-rose-700">
-                                Keluar −{formatRupiahSingkat(d.totalArusKeluar)}
-                              </span>
+                          <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                            <DivisiLogoAvatar
+                              namaDivisi={d.divisi}
+                              logoUrl={divLogo}
+                              size="md"
+                              theme="light"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                <span className="font-bold text-sm text-slate-900">{d.divisi}</span>
+                                {pjLabel && (
+                                  <span className="text-xs text-slate-500">· PJ: {pjLabel}</span>
+                                )}
+                              </div>
+                              {descLabel && (
+                                <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{descLabel}</p>
+                              )}
+                              <div className="text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono tabular-nums">
+                                <span>Kode {d.kodeRekening}</span>
+                                <span>·</span>
+                                <span className="text-emerald-700">
+                                  Masuk +{formatRupiahSingkat(d.totalArusMasuk)}
+                                </span>
+                                <span>·</span>
+                                <span className="text-rose-700">
+                                  Keluar −{formatRupiahSingkat(d.totalArusKeluar)}
+                                </span>
+                              </div>
                             </div>
                           </div>
 
@@ -810,9 +850,25 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           </td>
                           <td className="py-3 px-4">
                             <div className="font-semibold text-slate-900">{inv.namaItem}</div>
-                            <div className="text-xs text-slate-500">
-                              {inv.tahunKeluaran ? `Tahun ${inv.tahunKeluaran}` : inv.kategori}
-                              {inv.divisi ? ` · ${inv.divisi}` : ''}
+                            <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
+                              <span>{inv.tahunKeluaran ? `Tahun ${inv.tahunKeluaran}` : inv.kategori}</span>
+                              {inv.divisi && (
+                                <>
+                                  <span>·</span>
+                                  <span className="inline-flex items-center gap-1">
+                                    <DivisiLogoAvatar
+                                      namaDivisi={inv.divisi}
+                                      logoUrl={resolveDivisiLogoUrl(
+                                        inv.divisi,
+                                        undefined,
+                                        divisiData.length > 0 ? divisiData : divisiMasterList
+                                      )}
+                                      size="xs"
+                                    />
+                                    <span>{inv.divisi}</span>
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </td>
                           <td className="py-3 px-4 text-slate-700">
@@ -964,7 +1020,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                       className="px-3 py-2 border border-slate-200 rounded-xl bg-white text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-600"
                     >
                       <option value="ALL">Semua Divisi</option>
-                      {DAFTAR_DIVISI.map((d) => (
+                      {(divisiMasterList.length > 0 ? divisiMasterList : DAFTAR_DIVISI).map((d) => (
                         <option key={d.id} value={d.nama}>
                           {d.nama}
                         </option>
@@ -1038,16 +1094,34 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                 className="hover:bg-slate-50/80 transition-colors cursor-pointer"
                               >
                                 <td className="py-3.5 px-5">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-slate-900">{item.nama}</span>
-                                    {isExpanded ? (
-                                      <ChevronUp className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                    ) : (
-                                      <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                    )}
-                                  </div>
-                                  <div className="text-xs text-slate-500">
-                                    {item.nik} · {item.jabatan} · {item.divisiUtama}
+                                  <div className="flex items-center gap-2.5">
+                                    <DivisiLogoAvatar
+                                      namaDivisi={item.divisiUtama}
+                                      logoUrl={resolveDivisiLogoUrl(
+                                        item.divisiUtama,
+                                        undefined,
+                                        divisiData.length > 0 ? divisiData : divisiMasterList
+                                      )}
+                                      size="sm"
+                                    />
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-semibold text-slate-900">{item.nama}</span>
+                                        {isExpanded ? (
+                                          <ChevronUp className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                        ) : (
+                                          <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-slate-500">
+                                        {item.nik} · {item.jabatan} · {item.divisiUtama}
+                                        {(item.saldoTitipHasilPanenMitra || 0) > 0 && (
+                                          <span className="text-amber-700 font-semibold font-mono tabular-nums">
+                                            {' '}· Titip Panen: {formatRupiah(item.saldoTitipHasilPanenMitra || 0)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
                                   </div>
                                 </td>
                                 <td className="py-3.5 px-3 text-right font-mono font-semibold text-slate-800 tabular-nums whitespace-nowrap">
@@ -1305,6 +1379,13 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                 <div className="text-xs text-slate-500">
                                   {k.nik} · {k.jabatan} · {k.divisi || k.divisiTerakhir}
                                 </div>
+                                {((k.totalTitipHasilPanen || 0) > 0 || (k.totalGajiSudahDibayar || 0) > 0) && (
+                                  <div className="text-[11px] text-slate-600 font-mono tabular-nums mt-0.5">
+                                    {(k.totalGajiSudahDibayar || 0) > 0 ? `Gaji Cair: ${formatRupiah(k.totalGajiSudahDibayar || 0)}` : ''}
+                                    {(k.totalGajiSudahDibayar || 0) > 0 && (k.totalTitipHasilPanen || 0) > 0 ? ' · ' : ''}
+                                    {(k.totalTitipHasilPanen || 0) > 0 ? `Titip Panen Mitra: ${formatRupiah(k.totalTitipHasilPanen || 0)}` : ''}
+                                  </div>
+                                )}
                                 {k.tanggalKerjaTerakhir && (
                                   <div className="text-[11px] text-slate-400 mt-0.5">
                                     Terakhir kerja: {k.tanggalKerjaTerakhir}
@@ -1560,15 +1641,43 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                               <td className="py-3.5 px-5">
                                 <div className="font-semibold text-slate-900">{m.nama}</div>
                                 <div className="text-xs text-slate-500">
-                                  {m.kode} · {m.role.replace(/_/g, ' ')}
+                                  {m.kode} ·{' '}
+                                  {(m.isKaryawan || m.role === 'KARYAWAN') &&
+                                  (m.hasTransaksiMitraPanen || (m.totalTitipPanenMurni || 0) > 0)
+                                    ? 'KARYAWAN & MITRA PANEN'
+                                    : m.role.replace(/_/g, ' ')}
                                   {m.alamat && m.alamat !== '-' ? ` · ${m.alamat}` : ''}
                                 </div>
+                                {((m.totalGajiSudahDibayar || 0) > 0 || (m.totalUpahBelumDibayar || 0) > 0) && (
+                                  <div className="text-[11px] text-emerald-700 font-mono tabular-nums mt-0.5">
+                                    {(m.totalUpahBelumDibayar || 0) > 0
+                                      ? `Upah Belum Cair: ${formatRupiah(m.totalUpahBelumDibayar || 0)}`
+                                      : ''}
+                                    {(m.totalUpahBelumDibayar || 0) > 0 && (m.totalGajiSudahDibayar || 0) > 0
+                                      ? ' · '
+                                      : ''}
+                                    {(m.totalGajiSudahDibayar || 0) > 0
+                                      ? `Gaji Cair: ${formatRupiah(m.totalGajiSudahDibayar || 0)}`
+                                      : ''}
+                                  </div>
+                                )}
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-amber-700 whitespace-nowrap">
                                 {bonBersih > 0 ? formatRupiah(bonBersih) : '-'}
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-rose-700 whitespace-nowrap">
-                                {titipBersih > 0 ? formatRupiah(titipBersih) : '-'}
+                                {titipBersih > 0 ? (
+                                  <div>
+                                    <div>{formatRupiah(titipBersih)}</div>
+                                    {(m.totalTitipPanenMurni || 0) > 0 && (m.totalUpahBelumDibayar || 0) > 0 && (
+                                      <div className="text-[10px] font-normal text-slate-500">
+                                        Panen {formatRupiah(m.totalTitipPanenMurni || 0)} + Upah {formatRupiah(m.totalUpahBelumDibayar || 0)}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  '-'
+                                )}
                               </td>
                               <td className="py-3.5 px-5 text-right whitespace-nowrap">
                                 <button

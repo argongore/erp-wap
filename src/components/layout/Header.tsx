@@ -16,8 +16,9 @@ import {
   Lock,
 } from 'lucide-react';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
-import { ProfilPerusahaan, Rekening } from '../../server/types.ts';
+import { DEFAULT_PT_LOGO_URL, ProfilPerusahaan, Rekening } from '../../server/types.ts';
 import { CashFlowDirection } from './Sidebar.tsx';
+import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 
 const isAiStudioOrLocal =
   typeof window === 'undefined' ||
@@ -138,9 +139,11 @@ export const Header: React.FC<HeaderProps> = ({
             className="flex items-center space-x-2.5 cursor-pointer group min-w-0"
             title={`Klik untuk membuka atau mengedit Profil Perusahaan (${profilPerusahaan?.namaPerusahaan || 'PT. Wijaya Agro Perkasa'})`}
           >
-            <div className="w-9 h-9 rounded-xl bg-emerald-600 group-hover:bg-emerald-700 flex items-center justify-center shadow-2xs transition-colors shrink-0">
-              <Sprout className="w-5 h-5 text-white" />
-            </div>
+            <img
+              src={profilPerusahaan?.logoUrl || DEFAULT_PT_LOGO_URL}
+              alt={profilPerusahaan?.namaPerusahaan || 'PT. Wijaya Agro Perkasa'}
+              className="w-9 h-9 rounded-xl bg-black object-contain border border-slate-200 shadow-2xs shrink-0"
+            />
             <div className="min-w-0">
               <div className="flex items-center space-x-2 min-w-0">
                 <span className="font-bold text-sm sm:text-base tracking-tight text-slate-900 group-hover:text-emerald-700 transition-colors truncate">
@@ -265,6 +268,13 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline">Sandi &amp; Bos</span>
             </button>
           )}
+
+          <PWAInstallButton
+            variant="header"
+            companyName={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+            logoUrl={profilPerusahaan?.logoUrl || DEFAULT_PT_LOGO_URL}
+            fullViewUrl={directFullScreenHref}
+          />
 
           {onLockScreen && (
             <button

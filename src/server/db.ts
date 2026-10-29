@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { DAFTAR_DIVISI } from './types.ts';
+import { DAFTAR_DIVISI, DEFAULT_PT_LOGO_URL } from './types.ts';
 import type {
   AuditLog,
   CatatanUpahHarian,
@@ -456,6 +456,7 @@ export function getDefaultProfilPerusahaan(): ProfilPerusahaan {
     penanggungJawab: 'Pimpinan PT. Wijaya Agro Perkasa',
     rekeningUtama: 'BNI01',
     catatanHeaderNota: 'Terima kasih atas kerja sama Anda dengan PT. WIJAYA AGRO PERKASA',
+    logoUrl: DEFAULT_PT_LOGO_URL,
     updateTerakhir: getWIBDateTime().iso,
   };
 }
@@ -583,24 +584,39 @@ class DatabaseManager {
           merged.mitra = [];
         }
 
-        // Ensure every employee has a corresponding account in Mitra (role: KARYAWAN)
+        // Ensure every employee has a single unified account in Mitra (Karyawan juga bisa jadi Mitra)
         for (const kry of merged.karyawan) {
           const mtrId = kry.idMitraTerkait || `MTR-${kry.id}`;
-          const existing = merged.mitra.find((m) => m.id === mtrId || m.kode === kry.nik || (m.role === 'KARYAWAN' && m.nama.toLowerCase() === kry.nama.toLowerCase()));
+          const cleanKryName = String(kry.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim();
+          const existing = merged.mitra.find(
+            (m) =>
+              m.id === mtrId ||
+              m.idKaryawanTerkait === kry.id ||
+              (kry.nik && m.kode === kry.nik) ||
+              (!m.isAnakPerusahaan &&
+                m.role !== 'ANAK_PERUSAHAAN' &&
+                String(m.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim().toLowerCase() ===
+                  cleanKryName.toLowerCase())
+          );
           if (!existing) {
             merged.mitra.push({
               id: mtrId,
               kode: kry.nik || kry.id,
-              nama: kry.nama,
+              nama: cleanKryName,
               role: 'KARYAWAN',
               telepon: kry.telepon || '-',
               alamat: kry.alamat || '-',
               status: 'AKTIF',
+              isKaryawan: true,
+              idKaryawanTerkait: kry.id,
               catatan: `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang'})`,
             });
           } else {
+            kry.idMitraTerkait = existing.id;
+            existing.isKaryawan = true;
+            existing.idKaryawanTerkait = kry.id;
             if (existing.nama.endsWith(' (Karyawan)')) {
-              existing.nama = kry.nama;
+              existing.nama = cleanKryName;
             }
             if (!existing.catatan) {
               existing.catatan = `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang'})`;
@@ -1281,20 +1297,76 @@ class DatabaseManager {
       }
     }
 
-    // 2. Karyawan <-> Mitra (role: KARYAWAN) <-> UpahHarian & Penggajian
+    // 2. Karyawan <-> Mitra (1 Akun Terpadu: Karyawan juga bisa jadi Mitra) <-> UpahHarian & Penggajian
+    const normIdentity = (val?: string) =>
+      String(val || '')
+        .replace(/\s*\((karyawan|mitra)\)\s*/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
     for (const kry of this.db.karyawan) {
       const expectedMitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
-      kry.idMitraTerkait = expectedMitraId;
-
-      const cleanNama = kry.nama.replace(/\s*\(Karyawan\)$/i, '').trim();
+      const cleanNama = String(kry.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim();
       kry.nama = cleanNama;
+      const targetNorm = normIdentity(cleanNama);
 
-      let mtr = this.db.mitra.find(
-        (m) =>
-          m.id === expectedMitraId ||
-          (kry.nik && m.kode === kry.nik) ||
-          (m.role === 'KARYAWAN' && m.nama.replace(/\s*\(Karyawan\)$/i, '').trim().toLowerCase() === cleanNama.toLowerCase())
-      );
+      // Cari seluruh kandidat Mitra yang merujuk ke orang yang sama (baik yang dibuat sbg KARYAWAN maupun MITRA_TANI/CUSTOMER/ALL)
+      const matchingMitras = this.db.mitra.filter((m) => {
+        if (m.isAnakPerusahaan || m.role === 'ANAK_PERUSAHAAN') return false;
+        if (m.id === expectedMitraId) return true;
+        if (m.idKaryawanTerkait && m.idKaryawanTerkait === kry.id) return true;
+        if (kry.nik && m.kode === kry.nik) return true;
+        if (targetNorm && normIdentity(m.nama) === targetNorm) return true;
+        return false;
+      });
+
+      let mtr = matchingMitras[0];
+
+      // Jika pernah terbuat lebih dari 1 akun Mitra untuk karyawan yang sama (misal 1 sbg Petani & 1 sbg Karyawan), satukan otomatis!
+      if (matchingMitras.length > 1) {
+        // Prioritaskan Mitra yang sudah punya transaksi panen/bon atau yang ditunjuk idMitraTerkait
+        const hasTx = (mid: string) =>
+          (this.db.pembelianHasilBumi || []).some((x) => x.idMitra === mid) ||
+          (this.db.penjualan || []).some((x) => x.idMitra === mid) ||
+          (this.db.kasbonUang || []).some((x) => x.idMitra === mid) ||
+          (this.db.bayarBon || []).some((x) => x.idMitra === mid) ||
+          (this.db.pencairanTitipan || []).some((x) => x.idMitra === mid);
+
+        matchingMitras.sort((a, b) => {
+          const scoreA = (hasTx(a.id) ? 10 : 0) + (a.id === expectedMitraId ? 5 : 0);
+          const scoreB = (hasTx(b.id) ? 10 : 0) + (b.id === expectedMitraId ? 5 : 0);
+          return scoreB - scoreA;
+        });
+
+        mtr = matchingMitras[0];
+        const duplicateIds = new Set(matchingMitras.slice(1).map((d) => d.id));
+
+        if (duplicateIds.size > 0) {
+          const relinkList = (arr?: Array<{ idMitra?: string; namaMitra?: string }>) => {
+            for (const tx of arr || []) {
+              if (tx.idMitra && duplicateIds.has(tx.idMitra)) {
+                tx.idMitra = mtr!.id;
+                tx.namaMitra = cleanNama;
+              }
+            }
+          };
+          relinkList(this.db.penjualan);
+          relinkList(this.db.penjualanHasilBumi);
+          relinkList(this.db.pembelianHasilBumi);
+          relinkList(this.db.pembelianBarang);
+          relinkList(this.db.kasbonUang);
+          relinkList(this.db.bayarBon);
+          relinkList(this.db.pencairanTitipan);
+          for (const trf of this.db.transferRekening || []) {
+            if (trf.idMitraTerkait && duplicateIds.has(trf.idMitraTerkait)) {
+              trf.idMitraTerkait = mtr.id;
+              trf.namaMitraTerkait = cleanNama;
+            }
+          }
+          this.db.mitra = this.db.mitra.filter((m) => !duplicateIds.has(m.id));
+        }
+      }
 
       if (!mtr) {
         mtr = {
@@ -1305,6 +1377,8 @@ class DatabaseManager {
           telepon: kry.telepon || '-',
           alamat: kry.alamat || '-',
           status: kry.status || 'AKTIF',
+          isKaryawan: true,
+          idKaryawanTerkait: kry.id,
           catatan: `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang'})`,
         };
         this.db.mitra.push(mtr);
@@ -1312,8 +1386,10 @@ class DatabaseManager {
         kry.idMitraTerkait = mtr.id;
         mtr.nama = cleanNama;
         mtr.role = 'KARYAWAN';
+        mtr.isKaryawan = true;
+        mtr.idKaryawanTerkait = kry.id;
         mtr.status = kry.status || mtr.status || 'AKTIF';
-        if (kry.telepon && kry.telepon !== '-') mtr.telepon = kry.telepon;
+        if (kry.telepon && kry.telepon !== '-' && kry.telepon !== 'KARYAWAN') mtr.telepon = kry.telepon;
         if (kry.alamat && kry.alamat !== '-') mtr.alamat = kry.alamat;
       }
 
@@ -1781,20 +1857,36 @@ class DatabaseManager {
         kodeRekening: d.kodeRekening,
         penanggungJawab: d.penanggungJawab,
         deskripsi: d.deskripsi,
+        logoUrl: d.logoUrl,
         isCustom: false,
       });
     });
 
-    // 2. Custom additions
+    // 2. Saved profile overrides & custom divisions
     custom.forEach((c) => {
-      map.set(c.nama.toLowerCase(), {
-        id: c.id,
-        nama: c.nama,
-        kodeRekening: c.kodeRekening,
-        penanggungJawab: c.penanggungJawab,
-        deskripsi: c.deskripsi,
-        isCustom: true,
-      });
+      const existingDefault = Array.from(map.values()).find(
+        (d) => d.id === c.id || d.nama.toLowerCase() === c.nama.toLowerCase()
+      );
+      if (existingDefault) {
+        map.set(existingDefault.nama.toLowerCase(), {
+          ...existingDefault,
+          penanggungJawab:
+            c.penanggungJawab !== undefined ? c.penanggungJawab : existingDefault.penanggungJawab,
+          deskripsi: c.deskripsi !== undefined ? c.deskripsi : existingDefault.deskripsi,
+          logoUrl: c.logoUrl !== undefined ? c.logoUrl : existingDefault.logoUrl,
+          isCustom: false,
+        });
+      } else {
+        map.set(c.nama.toLowerCase(), {
+          id: c.id,
+          nama: c.nama,
+          kodeRekening: c.kodeRekening,
+          penanggungJawab: c.penanggungJawab,
+          deskripsi: c.deskripsi,
+          logoUrl: c.logoUrl,
+          isCustom: true,
+        });
+      }
     });
 
     return Array.from(map.values());
@@ -1803,11 +1895,18 @@ class DatabaseManager {
   /**
    * Add a new division dynamically and provision its tracking account
    */
-  public async addDivisi(nama: string, deskripsi?: string, penanggungJawab?: string): Promise<ItemDivisi> {
+  public async addDivisi(
+    nama: string,
+    deskripsi?: string,
+    penanggungJawab?: string,
+    logoUrl?: string
+  ): Promise<ItemDivisi> {
     return await this.executeTransaction((db) => {
       if (!db.divisi) db.divisi = [];
       const trimmed = nama.trim();
-      const existing = this.getDivisiList().find((d) => d.nama.toLowerCase() === trimmed.toLowerCase());
+      const existing = this.getDivisiList().find(
+        (d) => d.nama.toLowerCase() === trimmed.toLowerCase()
+      );
       if (existing) {
         return existing;
       }
@@ -1822,6 +1921,7 @@ class DatabaseManager {
         kodeRekening,
         penanggungJawab: penanggungJawab || `Koordinator ${trimmed}`,
         deskripsi: deskripsi || `Unit kerja operasional & pengeluaran ${trimmed}`,
+        logoUrl: logoUrl || undefined,
         isCustom: true,
       };
 
@@ -1845,6 +1945,69 @@ class DatabaseManager {
       }
 
       return newDivisi;
+    });
+  }
+
+  /**
+   * Update profile & logo for any core or custom division (synced automatically to Cloud Supabase)
+   */
+  public async updateDivisiProfil(params: {
+    idOrNama: string;
+    penanggungJawab?: string;
+    deskripsi?: string;
+    logoUrl?: string;
+  }): Promise<ItemDivisi> {
+    return await this.executeTransaction((db) => {
+      if (!db.divisi) db.divisi = [];
+      const key = params.idOrNama.trim().toLowerCase();
+      const currentList = this.getDivisiList();
+      const target = currentList.find(
+        (d) => d.id.toLowerCase() === key || d.nama.toLowerCase() === key
+      );
+      if (!target) {
+        throw new Error(`Divisi "${params.idOrNama}" tidak ditemukan.`);
+      }
+
+      const existingIdx = db.divisi.findIndex(
+        (c) => c.id === target.id || c.nama.toLowerCase() === target.nama.toLowerCase()
+      );
+
+      const updatedItem: ItemDivisi = {
+        id: target.id,
+        nama: target.nama,
+        kodeRekening: target.kodeRekening,
+        penanggungJawab:
+          params.penanggungJawab !== undefined
+            ? params.penanggungJawab.trim()
+            : target.penanggungJawab,
+        deskripsi:
+          params.deskripsi !== undefined ? params.deskripsi.trim() : target.deskripsi,
+        logoUrl: params.logoUrl !== undefined ? params.logoUrl : target.logoUrl,
+        isCustom: Boolean(target.isCustom),
+      };
+
+      if (existingIdx >= 0) {
+        db.divisi[existingIdx] = updatedItem;
+      } else {
+        db.divisi.push(updatedItem);
+      }
+
+      const now = getWIBDateTime();
+      if (!Array.isArray(db.auditLogs)) db.auditLogs = [];
+      db.auditLogs.unshift({
+        id: `AUD-${Date.now()}`,
+        timestamp: now.iso,
+        tanggal: now.tanggal,
+        jam: now.jam,
+        user: 'Admin / Kasir',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: target.id,
+        rekeningTerkait: target.kodeRekening,
+        nominal: 0,
+        detail: `Pembaruan profil & logo Divisi: ${target.nama}`,
+      });
+
+      return updatedItem;
     });
   }
 

@@ -39,6 +39,7 @@ import {
   CatatanCashOpname,
   DatabaseIntegrityStatus,
   ItemInventaris,
+  ItemDivisi,
   KategoriInventaris,
   KondisiInventaris,
 } from '../server/types.ts';
@@ -47,6 +48,11 @@ export interface KaryawanWithBon extends Karyawan {
   kasbonBarang: number;
   kasbonUang: number;
   totalKasbonAktif: number;
+  totalUpahBelumDibayar?: number;
+  totalHariBelumDibayar?: number;
+  totalGajiSudahDibayar?: number;
+  totalTitipHasilPanen?: number;
+  saldoBersihTerpaduMitra?: number;
 }
 
 export interface DashboardStatsResponse {
@@ -1053,7 +1059,12 @@ export const api = {
     id: string,
     payload: {
       divisi?: NamaDivisi;
+      tipeGaji?: 'HARIAN' | 'BULANAN';
+      periodeBulan?: string;
       upahHarianIds?: string[];
+      gajiPokokTambahan?: number;
+      tunjangan?: number;
+      bonus?: number;
       rekeningSumber?: string;
       persentasePotongKasbon?: number;
       nominalPotongKustom?: number;
@@ -1114,7 +1125,10 @@ export const api = {
     tanggalKerja?: string;
     periodeBulan?: string;
     gajiNominal?: number;
+    tunjanganNominal?: number;
     bonus?: number;
+    lunasiUpahHarianPending?: boolean;
+    upahHarianIds?: string[];
     persentasePotongKasbon: number;
     nominalPotongKustom?: number;
     metodePembayaran?: 'TUNAI' | 'TRANSFER';
@@ -1191,28 +1205,39 @@ export const api = {
   },
 
   // Divisi & Keuangan
-  getDivisi: async (): Promise<
-    Array<{
-      id: string;
-      nama: string;
-      kodeRekening: string;
-      penanggungJawab?: string;
-      deskripsi?: string;
-      isCustom?: boolean;
-    }>
-  > => {
+  getDivisi: async (): Promise<ItemDivisi[]> => {
     const data = await requestJson('/api/divisi');
     if (!data.success) throw new Error(data.message || 'Gagal memuat daftar divisi');
     return data.data;
   },
 
-  createDivisi: async (payload: { nama: string; deskripsi?: string; penanggungJawab?: string }): Promise<any> => {
+  createDivisi: async (payload: {
+    nama: string;
+    deskripsi?: string;
+    penanggungJawab?: string;
+    logoUrl?: string;
+  }): Promise<ItemDivisi> => {
     const data = await requestJson('/api/divisi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     if (!data.success) throw new Error(data.message || 'Gagal menambahkan divisi baru');
+    return data.data;
+  },
+
+  updateDivisiProfil: async (payload: {
+    idOrNama: string;
+    penanggungJawab?: string;
+    deskripsi?: string;
+    logoUrl?: string;
+  }): Promise<ItemDivisi> => {
+    const data = await requestJson('/api/divisi/profil', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui profil & logo divisi');
     return data.data;
   },
 
@@ -1600,6 +1625,7 @@ export const api = {
     auditLogs: AuditLog[];
     profilPerusahaan: ProfilPerusahaan;
     inventaris: ItemInventaris[];
+    divisiList?: ItemDivisi[];
     supabaseStatus: {
       configured: boolean;
       url?: string;
@@ -1636,6 +1662,7 @@ export const api = {
     stokBarang: StokBarang[];
     stokHasilBumi: StokHasilBumi[];
     inventaris: ItemInventaris[];
+    divisiList?: ItemDivisi[];
     supabaseStatus: {
       configured: boolean;
       url?: string;
@@ -1653,6 +1680,7 @@ export const api = {
   getAccessStatus: async (): Promise<{
     namaPerusahaan: string;
     badanHukum: string;
+    logoUrl?: string;
     wajibPinPublik: boolean;
     pinLengthHint: number;
     supabaseConfigured?: boolean;

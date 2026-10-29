@@ -73,7 +73,11 @@ import {
   FullErpModularDataset,
   ProfilPerusahaan,
   ItemInventaris,
+  ItemDivisi,
+  DEFAULT_PT_LOGO_URL,
 } from './server/types.ts';
+import { DivisiLogoAvatar } from './components/common/DivisiLogoAvatar.tsx';
+import { ModalProfilDivisi } from './components/karyawan/ModalProfilDivisi.tsx';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode; resetKey?: string; onRecover?: () => void },
@@ -150,19 +154,28 @@ export default function App() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
   const [inventarisList, setInventarisList] = useState<ItemInventaris[]>([]);
+  const [divisiMasterList, setDivisiMasterList] = useState<ItemDivisi[]>([]);
   const [preselectedInventarisForPengeluaran, setPreselectedInventarisForPengeluaran] = useState<string | null>(null);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedMitraForStatement, setSelectedMitraForStatement] = useState<string>('');
   const [selectedMitraForBayarTitipan, setSelectedMitraForBayarTitipan] = useState<string>('');
   const [selectedMitraForBayarBon, setSelectedMitraForBayarBon] = useState<string>('');
+  const [selectedKaryawanForBayarGaji, setSelectedKaryawanForBayarGaji] = useState<string | undefined>(undefined);
   const [kontrolKasirTarget, setKontrolKasirTarget] = useState<{
     subTab: 'kliring' | 'duplikat' | 'opname';
     mitraId?: string;
   }>({ subTab: 'kliring' });
   const [activeReceipt, setActiveReceipt] = useState<ReceiptData | null>(null);
 
+  const handleNavigateToBayarGaji = useCallback((idKaryawan?: string) => {
+    setSelectedKaryawanForBayarGaji(idKaryawan);
+    setActiveTab('kasir-bayar-gaji');
+  }, []);
+
   const [showProfilModal, setShowProfilModal] = useState<boolean>(false);
+  const [showProfilDivisiModal, setShowProfilDivisiModal] = useState<boolean>(false);
+  const [profilDivisiPresetNama, setProfilDivisiPresetNama] = useState<string | undefined>(undefined);
   const [showPinjamUangModal, setShowPinjamUangModal] = useState<boolean>(false);
   const [showSupabaseModal, setShowSupabaseModal] = useState<boolean>(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
@@ -302,6 +315,7 @@ export default function App() {
     if (Array.isArray(snap.auditLogs)) setAuditLogs(snap.auditLogs);
     if (snap.profilPerusahaan) setProfilPerusahaan(snap.profilPerusahaan);
     if (Array.isArray(snap.inventaris)) setInventarisList(snap.inventaris);
+    if (Array.isArray(snap.divisiList)) setDivisiMasterList(snap.divisiList);
     if (snap.supabaseStatus) setSupabaseStatus(snap.supabaseStatus);
   }, []);
 
@@ -351,6 +365,7 @@ export default function App() {
       if (Array.isArray(snap.stokBarang)) setStokList(snap.stokBarang);
       if (Array.isArray(snap.stokHasilBumi)) setStokHasilBumiList(snap.stokHasilBumi);
       if (Array.isArray(snap.inventaris)) setInventarisList(snap.inventaris);
+      if (Array.isArray(snap.divisiList)) setDivisiMasterList(snap.divisiList);
       if (snap.supabaseStatus) setSupabaseStatus(snap.supabaseStatus);
 
       if (snap.supabaseStatus && !snap.supabaseStatus.configured) {
@@ -362,6 +377,7 @@ export default function App() {
           if (Array.isArray(hydrated.stokBarang)) setStokList(hydrated.stokBarang);
           if (Array.isArray(hydrated.stokHasilBumi)) setStokHasilBumiList(hydrated.stokHasilBumi);
           if (Array.isArray(hydrated.inventaris)) setInventarisList(hydrated.inventaris);
+          if (Array.isArray(hydrated.divisiList)) setDivisiMasterList(hydrated.divisiList);
           if (hydrated.supabaseStatus) setSupabaseStatus(hydrated.supabaseStatus);
         }
       }
@@ -680,6 +696,7 @@ export default function App() {
       <PinAccessGate
         defaultCompanyName={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
         defaultBadanHukum={profilPerusahaan?.badanHukum || 'PT (Perseroan Terbatas)'}
+        defaultLogoUrl={profilPerusahaan?.logoUrl || DEFAULT_PT_LOGO_URL}
         preferBosHint={isUrlBosMode}
         sessionExpiredNotice={sessionExpiredNotice}
         onAuthenticated={handlePinAuthenticated}
@@ -696,6 +713,7 @@ export default function App() {
         stokBarangList={stokList}
         stokHasilBumiList={stokHasilBumiList}
         inventarisList={inventarisList}
+        divisiMasterList={divisiMasterList}
         onRefreshAll={() => void loadBosData(true)}
         onLockScreen={handleLockPinScreen}
         canSwitchToKasir={authRole !== 'BOS'}
@@ -1026,6 +1044,7 @@ export default function App() {
                   fullErpData={fullErpData}
                   onRefresh={loadAllData}
                   onOpenStatement={handleOpenMitraStatement}
+                  onNavigateToBayarGaji={handleNavigateToBayarGaji}
                   onOpenDuplicateMerger={() => handleOpenKontrolKasir('duplikat')}
                   onSuccessReceipt={handleTransactionSuccess}
                 />
@@ -1055,29 +1074,32 @@ export default function App() {
               )}
 
               {activeTab === 'master-profil' && (
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-6 sm:p-8 max-w-2xl mx-auto my-6 space-y-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
-                    <div className="flex items-center space-x-3.5">
-                      <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
-                        <Building2 className="w-6 h-6" />
+                <div className="space-y-6 max-w-3xl mx-auto my-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-6 sm:p-8 space-y-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+                      <div className="flex items-center space-x-3.5">
+                        <img
+                          src={profilPerusahaan?.logoUrl || DEFAULT_PT_LOGO_URL}
+                          alt={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+                          className="w-14 h-14 rounded-2xl bg-black object-contain border border-slate-200 shrink-0"
+                        />
+                        <div>
+                          <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+                            {profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+                          </h2>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {profilPerusahaan?.badanHukum || 'PT (Perseroan Terbatas)'} · Tersinkron otomatis ke Kop Surat, Tampilan Bos &amp; Pintasan App
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
-                          {profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
-                        </h2>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {profilPerusahaan?.badanHukum || 'PT (Perseroan Terbatas)'} · Tersinkron otomatis ke Kop Surat Rekening Koran Mitra &amp; PDF
-                        </p>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowProfilModal(true)}
+                        className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-2xs transition-colors shrink-0 self-start sm:self-center"
+                      >
+                        Edit Profil &amp; Logo PT
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowProfilModal(true)}
-                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-2xs transition-colors shrink-0 self-start sm:self-center"
-                    >
-                      Edit Profil Perusahaan
-                    </button>
-                  </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1 sm:col-span-2">
@@ -1112,26 +1134,79 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs text-slate-500">
-                    <span>
-                      Setiap perubahan profil langsung menyesuaikan Kop Surat, Tanda Tangan, PDF, &amp; Link Rekening Koran Mitra.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('rekening-koran-mitra')}
-                      className="text-emerald-700 hover:text-emerald-900 font-semibold cursor-pointer underline underline-offset-4"
-                    >
-                      Lihat di Rekening Koran Mitra →
-                    </button>
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs text-slate-500">
+                      <span>
+                        Setiap perubahan profil langsung menyesuaikan Kop Surat, Tanda Tangan, PDF, &amp; Link Rekening Koran Mitra.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('rekening-koran-mitra')}
+                        className="text-emerald-700 hover:text-emerald-900 font-semibold cursor-pointer underline underline-offset-4"
+                      >
+                        Lihat di Rekening Koran Mitra →
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Profil & Logo Masing-Masing Divisi Section */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-6 sm:p-8 space-y-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                      <div>
+                        <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                          Profil &amp; Logo Masing-Masing Divisi ({divisiMasterList.length} Unit)
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Klik salah satu divisi di bawah untuk memasang atau mengganti logo khusus divisi tersebut (terkoneksi ke Admin &amp; Bos)
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProfilDivisiPresetNama(undefined);
+                          setShowProfilDivisiModal(true);
+                        }}
+                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold cursor-pointer shrink-0 self-start sm:self-center"
+                      >
+                        Kelola Semua Logo Divisi
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+                      {divisiMasterList.map((d) => (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => {
+                            setProfilDivisiPresetNama(d.nama);
+                            setShowProfilDivisiModal(true);
+                          }}
+                          className="p-3.5 rounded-xl bg-slate-50 hover:bg-emerald-50/50 border border-slate-200 hover:border-emerald-300 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <DivisiLogoAvatar namaDivisi={d.nama} logoUrl={d.logoUrl} size="md" />
+                            <div className="min-w-0">
+                              <div className="font-bold text-slate-900 truncate">{d.nama}</div>
+                              <div className="text-[11px] text-slate-500 truncate">
+                                PJ: {d.penanggungJawab || '-'} · {d.kodeRekening}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[11px] font-semibold text-emerald-700 shrink-0">
+                            {d.logoUrl ? 'Ubah Logo' : '+ Logo'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
 
-              {activeTab === 'master-karyawan' && (
+              {(activeTab === 'master-karyawan' || activeTab === 'kasir-bayar-gaji') && (
                 <MasterKaryawanView
                   rekeningList={rekeningList}
                   fullErpData={fullErpData}
-                  initialTab="rekap"
+                  initialTab={activeTab === 'kasir-bayar-gaji' ? 'bayar-gaji' : 'rekap'}
+                  preselectedKaryawanId={activeTab === 'kasir-bayar-gaji' ? selectedKaryawanForBayarGaji : undefined}
                   onOpenStatement={(mitraId) => {
                     setSelectedMitraForStatement(mitraId);
                     setActiveTab('rekening-koran-mitra');
@@ -1185,6 +1260,7 @@ export default function App() {
                   rekeningList={rekeningList}
                   profilPerusahaan={profilPerusahaan}
                   onOpenProfilPerusahaan={() => setShowProfilModal(true)}
+                  onNavigateToBayarGaji={handleNavigateToBayarGaji}
                   selectedMitraId={selectedMitraForStatement}
                   onSelectMitra={setSelectedMitraForStatement}
                   onRefreshParent={loadAllData}
@@ -1220,6 +1296,16 @@ export default function App() {
         onSaved={(updated) => {
           setProfilPerusahaan(updated);
           loadAllData();
+        }}
+      />
+
+      {/* Profil & Logo Masing-Masing Divisi Modal */}
+      <ModalProfilDivisi
+        isOpen={showProfilDivisiModal}
+        initialDivisiNama={profilDivisiPresetNama}
+        onClose={() => setShowProfilDivisiModal(false)}
+        onSaved={() => {
+          void loadAllData();
         }}
       />
 
