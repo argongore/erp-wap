@@ -78,9 +78,13 @@ function fromIsoInputDate(ymd: string): string {
 
 interface Props {
   onRefreshParent?: () => void;
+  readOnly?: boolean;
 }
 
-export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent }) => {
+export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
+  onRefreshParent,
+  readOnly = false,
+}) => {
   const nowInit = new Date();
   const defaultMonth = String(nowInit.getMonth() + 1).padStart(2, '0');
   const defaultYear = String(nowInit.getFullYear());
@@ -111,11 +115,12 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
   const [rekapData, setRekapData] = useState<RekapSemuaTransaksiResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // 3. Lightbox Preview, Share Modal, Export PDF Modal & Edit Transaksi Modal
+  // 3. Lightbox Preview, Share Modal, Export PDF Modal, Edit Transaksi Modal & Progressive Row Limit
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
   const [shareModalOpen, setShareModalOpen] = useState<boolean>(false);
   const [pdfModalOpen, setPdfModalOpen] = useState<boolean>(false);
   const [editModalTarget, setEditModalTarget] = useState<{ id: string; jenis?: string } | null>(null);
+  const [visibleLimit, setVisibleLimit] = useState<number>(80);
 
   // Determine active query date for API ('ALL' is fetched for BULANAN & SEMUA)
   const activeTanggalParam = useMemo(() => {
@@ -247,6 +252,25 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
     searchQueryNama,
     searchTransaksi,
   ]);
+
+  useEffect(() => {
+    setVisibleLimit(80);
+  }, [
+    selectedDateMode,
+    customDate,
+    selectedMonth,
+    selectedYear,
+    filterArusUang,
+    filterJenis,
+    filterNama,
+    searchQueryNama,
+    searchTransaksi,
+  ]);
+
+  const displayedTransactions = useMemo(
+    () => filteredTransactions.slice(0, visibleLimit),
+    [filteredTransactions, visibleLimit]
+  );
 
   // Computed Totals for filtered view
   const computedSummary = useMemo(() => {
@@ -1009,13 +1033,15 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
                 <th className="py-3 px-3.5 text-right whitespace-nowrap">NOMINAL (RP)</th>
                 <th className="py-3 px-3.5 text-center whitespace-nowrap">BUKTI NOTA</th>
                 <th className="py-3 px-3.5 text-center whitespace-nowrap">STATUS</th>
-                <th className="py-3 px-3.5 text-center whitespace-nowrap">AKSI</th>
+                {!readOnly && (
+                  <th className="py-3 px-3.5 text-center whitespace-nowrap">AKSI</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200 text-zinc-800">
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-zinc-500">
+                  <td colSpan={readOnly ? 10 : 11} className="py-12 text-center text-zinc-500">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <RefreshCw className="w-6 h-6 animate-spin text-cyan-600" />
                       <span className="text-xs font-semibold">Memuat jurnal transaksi...</span>
@@ -1024,7 +1050,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
                 </tr>
               ) : filteredTransactions.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-zinc-400">
+                  <td colSpan={readOnly ? 10 : 11} className="py-12 text-center text-zinc-400">
                     <div className="flex flex-col items-center justify-center space-y-2 max-w-sm mx-auto">
                       <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-400">
                         <Search className="w-5 h-5" />
@@ -1037,7 +1063,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
                   </td>
                 </tr>
               ) : (
-                filteredTransactions.map((tx, idx) => {
+                displayedTransactions.map((tx, idx) => {
                   return (
                     <tr
                       key={`${tx.id}-${idx}`}
@@ -1200,18 +1226,20 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
                         </span>
                       </td>
 
-                      {/* Aksi Edit Detail */}
-                      <td className="py-3 px-3.5 text-center whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => setEditModalTarget({ id: tx.id, jenis: tx.jenis })}
-                          className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 hover:border-zinc-900 rounded-md font-semibold text-[11px] transition-colors cursor-pointer"
-                          title="Edit detail nominal, tonase, qty, harga, rekening, atau tanggal transaksi"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span>Edit Detail</span>
-                        </button>
-                      </td>
+                      {/* Aksi Edit Detail (Hanya Kasir) */}
+                      {!readOnly && (
+                        <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => setEditModalTarget({ id: tx.id, jenis: tx.jenis })}
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 hover:border-zinc-900 rounded-md font-semibold text-[11px] transition-colors cursor-pointer"
+                            title="Edit detail nominal, tonase, qty, harga, rekening, atau tanggal transaksi"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Edit Detail</span>
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })
@@ -1236,12 +1264,37 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
                     Net: {computedSummary.netCashflow >= 0 ? '+' : ''}
                     {formatRupiah(computedSummary.netCashflow)}
                   </td>
-                  <td colSpan={3}></td>
+                  <td colSpan={readOnly ? 2 : 3}></td>
                 </tr>
               </tfoot>
             )}
           </table>
         </div>
+
+        {filteredTransactions.length > visibleLimit && (
+          <div className="px-4 py-3 bg-zinc-50 border-t border-zinc-200 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600">
+            <span>
+              Menampilkan <strong>{displayedTransactions.length}</strong> dari{' '}
+              <strong>{filteredTransactions.length}</strong> transaksi
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setVisibleLimit((prev) => prev + 100)}
+                className="px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-300 font-semibold text-zinc-800 cursor-pointer"
+              >
+                Tampilkan +100 Baris
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisibleLimit(filteredTransactions.length)}
+                className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white font-semibold cursor-pointer"
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 5. LIGHTBOX PREVIEW MODAL FOR FOTO BUKTI NOTA */}
@@ -1305,17 +1358,19 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({ onRefreshParent
         availableYears={availableYears}
       />
 
-      {/* Modal Universal Edit Detail Setiap Transaksi */}
-      <ModalEditTransaksiUniversal
-        isOpen={Boolean(editModalTarget)}
-        transactionId={editModalTarget?.id || null}
-        jenisHint={editModalTarget?.jenis}
-        onClose={() => setEditModalTarget(null)}
-        onSuccess={() => {
-          loadData();
-          onRefreshParent?.();
-        }}
-      />
+      {/* Modal Universal Edit Detail Setiap Transaksi (Hanya Kasir) */}
+      {!readOnly && (
+        <ModalEditTransaksiUniversal
+          isOpen={Boolean(editModalTarget)}
+          transactionId={editModalTarget?.id || null}
+          jenisHint={editModalTarget?.jenis}
+          onClose={() => setEditModalTarget(null)}
+          onSuccess={() => {
+            loadData();
+            onRefreshParent?.();
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -326,6 +326,38 @@ export default function App() {
     }
   }, [applySnapshot, checkAndSyncSupabase]);
 
+  const loadBosData = useCallback(async (dispatchUpdate = false) => {
+    try {
+      const snap = await api.getBosSnapshot();
+      if (snap.profilPerusahaan) setProfilPerusahaan(snap.profilPerusahaan);
+      if (Array.isArray(snap.rekening)) setRekeningList(snap.rekening);
+      if (Array.isArray(snap.stokBarang)) setStokList(snap.stokBarang);
+      if (Array.isArray(snap.stokHasilBumi)) setStokHasilBumiList(snap.stokHasilBumi);
+      if (Array.isArray(snap.inventaris)) setInventarisList(snap.inventaris);
+      if (snap.supabaseStatus) setSupabaseStatus(snap.supabaseStatus);
+
+      if (snap.supabaseStatus && !snap.supabaseStatus.configured) {
+        const reconnected = await checkAndSyncSupabase();
+        if (reconnected) {
+          const hydrated = await api.getBosSnapshot();
+          if (hydrated.profilPerusahaan) setProfilPerusahaan(hydrated.profilPerusahaan);
+          if (Array.isArray(hydrated.rekening)) setRekeningList(hydrated.rekening);
+          if (Array.isArray(hydrated.stokBarang)) setStokList(hydrated.stokBarang);
+          if (Array.isArray(hydrated.stokHasilBumi)) setStokHasilBumiList(hydrated.stokHasilBumi);
+          if (Array.isArray(hydrated.inventaris)) setInventarisList(hydrated.inventaris);
+        }
+      }
+
+      if (dispatchUpdate) {
+        window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      }
+    } catch (err) {
+      console.error('Error loading Bos snapshot:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [checkAndSyncSupabase]);
+
   const handlePinAuthenticated = useCallback(
     (role: AuthenticatedRole, rememberDevice: boolean) => {
       setAuthRole(role);
@@ -345,9 +377,13 @@ export default function App() {
           localStorage.removeItem('wap_auth_device_v1');
         }
       } catch {}
-      void loadAllData();
+      if (role === 'BOS') {
+        void loadBosData(false);
+      } else {
+        void loadAllData();
+      }
     },
-    [loadAllData]
+    [loadAllData, loadBosData]
   );
 
   const handleLockPinScreen = useCallback(() => {
@@ -365,17 +401,27 @@ export default function App() {
       setLoading(false);
       return;
     }
+    if (authRole === 'BOS') {
+      void loadBosData(false);
+      return;
+    }
     void loadAllData();
-  }, [loadAllData, isPublicCustomDomain, isUrlBosMode, authRole]);
+  }, [loadAllData, loadBosData, isPublicCustomDomain, isUrlBosMode, authRole]);
 
   useEffect(() => {
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'hidden') return;
       if ((isPublicCustomDomain || isUrlBosMode) && authRole === null) return;
       const now = Date.now();
-      if (now - lastFocusRefreshRef.current > 15000) {
+      const isBosActive = authRole === 'BOS' || previewBosView;
+      const cooldownMs = isBosActive ? 30000 : 15000;
+      if (now - lastFocusRefreshRef.current > cooldownMs) {
         lastFocusRefreshRef.current = now;
-        void loadAllData();
+        if (isBosActive) {
+          void loadBosData(true);
+        } else {
+          void loadAllData();
+        }
       }
     };
     window.addEventListener('focus', handleVisibilityOrFocus);
@@ -384,7 +430,7 @@ export default function App() {
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, [loadAllData, isPublicCustomDomain, isUrlBosMode, authRole]);
+  }, [loadAllData, loadBosData, isPublicCustomDomain, isUrlBosMode, authRole, previewBosView]);
 
   const handleOpenMitraStatement = (idMitra: string) => {
     setSelectedMitraForStatement(idMitra);
@@ -509,10 +555,13 @@ export default function App() {
         stokBarangList={stokList}
         stokHasilBumiList={stokHasilBumiList}
         inventarisList={inventarisList}
-        onRefreshAll={loadAllData}
+        onRefreshAll={() => void loadBosData(true)}
         onLockScreen={handleLockPinScreen}
         canSwitchToKasir={authRole !== 'BOS'}
-        onSwitchToKasir={() => setPreviewBosView(false)}
+        onSwitchToKasir={() => {
+          setPreviewBosView(false);
+          void loadAllData();
+        }}
       />
     );
   }

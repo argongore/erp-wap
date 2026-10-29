@@ -1528,7 +1528,27 @@ export const api = {
     return data.data;
   },
 
-  // Akses PIN Bos & Kasir
+  // Akses PIN Bos & Kasir + Lightweight Snapshot Bos
+  getBosSnapshot: async (): Promise<{
+    profilPerusahaan: ProfilPerusahaan;
+    rekening: Rekening[];
+    stokBarang: StokBarang[];
+    stokHasilBumi: StokHasilBumi[];
+    inventaris: ItemInventaris[];
+    supabaseStatus: {
+      configured: boolean;
+      url?: string;
+      autoSync?: boolean;
+      lastSyncTime?: string | null;
+      lastSyncStatus?: 'SUCCESS' | 'ERROR';
+      lastSyncMessage?: string;
+    };
+  }> => {
+    const data = await requestJson('/api/bos-snapshot');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat ringkasan data pimpinan');
+    return data.data;
+  },
+
   getAccessStatus: async (): Promise<{
     namaPerusahaan: string;
     badanHukum: string;

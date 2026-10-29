@@ -107,7 +107,7 @@ export const PinAccessGate: React.FC<PinAccessGateProps> = ({
   const keypadDigits = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
   return (
-    <div className="min-h-screen w-full bg-slate-50 flex flex-col justify-between px-4 py-8 sm:py-12 font-sans text-slate-900">
+    <div className="bos-scroll-root h-dvh w-full overflow-y-auto overflow-x-hidden bg-slate-50 flex flex-col justify-between px-4 py-8 sm:py-12 font-sans text-slate-900">
       <div className="w-full max-w-md mx-auto my-auto">
         <div className="bg-white border border-slate-200/90 rounded-2xl p-6 sm:p-8 shadow-xs">
           {/* Brand Identity */}

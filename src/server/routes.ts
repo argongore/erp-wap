@@ -2597,6 +2597,26 @@ apiRouter.post('/upload-bukti', async (req, res) => {
 // ==========================================
 // PORTAL EKSEKUTIF BOS & KUNCI PIN 2-PERAN (BOS vs KASIR)
 // ==========================================
+apiRouter.get('/bos-snapshot', (_req, res) => {
+  try {
+    const db = dbManager.get();
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.json({
+      success: true,
+      data: {
+        profilPerusahaan: TransactionService.getProfilPerusahaan(),
+        rekening: db.rekening || [],
+        stokBarang: db.stokBarang || [],
+        stokHasilBumi: db.stokHasilBumi || [],
+        inventaris: db.inventaris || [],
+        supabaseStatus: supabaseSyncEngine.getStatus(),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.get('/access/status', (_req, res) => {
   try {
     const profil = TransactionService.getProfilPerusahaan();

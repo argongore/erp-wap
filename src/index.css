@@ -8,10 +8,10 @@
 html,
 body,
 #root {
-  height: 100%;
+  min-height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden;
+  overflow-x: hidden;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
@@ -46,7 +46,8 @@ body,
 @media print {
   html,
   body,
-  #root {
+  #root,
+  .bos-scroll-root {
     height: auto !important;
     min-height: 100% !important;
     overflow: visible !important;
@@ -69,7 +70,8 @@ body,
 
   /* Specific handling for printable targets */
   #printable-rekening-koran,
-  #printable-receipt {
+  #printable-receipt,
+  #printable-slip-gaji {
     position: static !important;
     width: 100% !important;
     max-width: 100% !important;
