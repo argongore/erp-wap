@@ -1,4 +1,4 @@
-import { CatatanUpahHarian, Karyawan, Mitra } from './types.ts';
+import type { CatatanUpahHarian, Karyawan, Mitra } from './types.ts';
 
 export const additionalMitraKaryawan: Mitra[] = [
   {

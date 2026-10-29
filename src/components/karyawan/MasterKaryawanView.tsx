@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Receipt,
-  FileSpreadsheet,
+  FileText,
   HandCoins,
   Edit,
   History,
@@ -28,6 +28,8 @@ import {
   Wrench,
   Store,
   Filter,
+  Zap,
+  ArrowDownToLine,
   ExternalLink,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
@@ -39,16 +41,14 @@ import {
   Rekening,
   TransaksiPenggajian,
 } from '../../server/types.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { RekapitulasiPayrollBulananTable } from './RekapitulasiPayrollBulananTable.tsx';
 import { InputPayrollHarianDivisiModal } from './InputPayrollHarianDivisiModal.tsx';
 import { DetailHarianKaryawanModal } from './DetailHarianKaryawanModal.tsx';
 import { SlipGajiModal } from './SlipGajiModal.tsx';
 import { ProsesGajiModal } from './ProsesGajiModal.tsx';
 import { BatchGajiHarianModal } from './BatchGajiHarianModal.tsx';
-import { ModalContohPatokanExcel } from './ModalContohPatokanExcel.tsx';
-import { FullErpModularDataset, buildModularSpreadsheets } from '../../utils/modularSpreadsheets.ts';
-import { syncModularFileDirectly, getAccessToken, googleSignIn } from '../../services/googleSheetsService.ts';
+import { FullErpModularDataset } from '../../server/types.ts';
 
 interface MasterKaryawanViewProps {
   rekeningList: Rekening[];
@@ -113,59 +113,54 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [successBanner, setSuccessBanner] = useState('');
 
-  // Spreadsheet direct sync state
-  const [isSyncingSheet, setIsSyncingSheet] = useState(false);
-  const [sheetSyncFeedback, setSheetSyncFeedback] = useState<{
+  // Supabase direct sync state
+  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
+  const [supabaseFeedback, setSupabaseFeedback] = useState<{
     success: boolean;
     message: string;
-    webViewLink?: string;
   } | null>(null);
 
-  const handleSyncToSpreadsheet = async () => {
-    setIsSyncingSheet(true);
-    setSheetSyncFeedback(null);
+  const handleSyncToSupabase = async () => {
+    setIsSyncingSupabase(true);
+    setSupabaseFeedback(null);
     try {
-      let token = await getAccessToken();
-      if (!token) {
-        const signRes = await googleSignIn();
-        if (!signRes) throw new Error('Akses Google belum terhubung.');
-      }
-
-      const currentErpData: FullErpModularDataset = fullErpData || {
-        rekeningList,
-        mitraList: [],
-        karyawanList: karyawanList as any,
-        upahHarianList: logHarianList,
-        penggajianList: penggajianHistory,
-        produkList: [],
-        stokList: [],
-        stokHasilBumiList: [],
-        pembelianList: [],
-        pembelianBarangList: [],
-        penjualanList: [],
-        kasbonUangList: [],
-        bayarBonList: [],
-        transferList: [],
-        auditLogs: [],
-      };
-
-      const modularFiles = buildModularSpreadsheets(currentErpData);
-      const fileKaryawan = modularFiles.find((f) => f.id === 'file-karyawan');
-      if (!fileKaryawan) throw new Error('Definisi file karyawan tidak ditemukan');
-
-      const res = await syncModularFileDirectly(fileKaryawan);
-      setSheetSyncFeedback({
+      const res = await api.pushToSupabase();
+      setSupabaseFeedback({
         success: true,
-        message: `Database Karyawan berhasil disinkronkan ke Spreadsheet (${karyawanList.length} Karyawan Riil)!`,
-        webViewLink: res.webViewLink,
+        message: `Database Karyawan & Payroll berhasil disimpan ke Cloud Supabase (${res.message || `${karyawanList.length} Karyawan`})!`,
       });
+      await loadData();
+      onRefreshAll?.();
     } catch (err: any) {
-      setSheetSyncFeedback({
+      setSupabaseFeedback({
         success: false,
-        message: `Gagal sinkronisasi ke Spreadsheet: ${err.message}`,
+        message: `Gagal sinkronisasi ke Supabase: ${err.message}`,
       });
     } finally {
-      setIsSyncingSheet(false);
+      setIsSyncingSupabase(false);
+    }
+  };
+
+  const handlePullFromSupabase = async () => {
+    if (!window.confirm('Tarik data dari Cloud Supabase ke aplikasi? Data lokal akan diselaraskan dengan cloud.')) return;
+    setIsSyncingSupabase(true);
+    setSupabaseFeedback(null);
+    try {
+      const res = await api.pullFromSupabase();
+      await loadData();
+      setRefreshTrigger((p) => p + 1);
+      onRefreshAll?.();
+      setSupabaseFeedback({
+        success: true,
+        message: `Berhasil menarik data terbaru dari Cloud Supabase! ${res.message || ''}`,
+      });
+    } catch (err: any) {
+      setSupabaseFeedback({
+        success: false,
+        message: `Gagal menarik data dari Supabase: ${err.message}`,
+      });
+    } finally {
+      setIsSyncingSupabase(false);
     }
   };
 
@@ -176,7 +171,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
 
   // Filters for employee profile cards
   const [search, setSearch] = useState('');
-  const [filterDepartemen, setFilterDepartemen] = useState('ALL');
+  const [filterDivisi, setFilterDivisi] = useState('ALL');
   const [filterKasbon, setFilterKasbon] = useState<'ALL' | 'HANYA_BON' | 'BEBAS_BON'>('ALL');
 
   // History filters
@@ -214,19 +209,24 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [modalKaryawanId, setModalKaryawanId] = useState<string | undefined>(undefined);
   const [modalDivisi, setModalDivisi] = useState<NamaDivisi | undefined>(undefined);
 
+  // In-app Delete Confirmation state
+  const [karyawanToDelete, setKaryawanToDelete] = useState<Karyawan | null>(null);
+  const [isDeletingKaryawan, setIsDeletingKaryawan] = useState(false);
+
   // Detail Modal
   const [detailKaryawanId, setDetailKaryawanId] = useState<string | null>(null);
 
-  // Modal Contoh Patokan Excel
-  const [isContohModalOpen, setIsContohModalOpen] = useState(false);
+  // List of registered ERP divisions
+  const [availableDivisiList, setAvailableDivisiList] = useState<string[]>(() =>
+    DAFTAR_DIVISI.map((d) => d.nama)
+  );
 
   // Form add/edit employee state
   const [formNik, setFormNik] = useState('');
   const [formNama, setFormNama] = useState('');
   const [formJabatan, setFormJabatan] = useState('');
-  const [formDepartemen, setFormDepartemen] = useState('Operasional Toko');
-  const [formGajiPokok, setFormGajiPokok] = useState<number>(135000);
-  const [formTunjangan, setFormTunjangan] = useState<number>(500000);
+  const [formDivisi, setFormDivisi] = useState<string>('Gudang Wijaya Agro');
+  const [formTunjangan, setFormTunjangan] = useState<number>(0);
   const [formTelepon, setFormTelepon] = useState('');
   const [formAlamat, setFormAlamat] = useState('');
   const [formTanggalMasuk, setFormTanggalMasuk] = useState('');
@@ -234,17 +234,30 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (silent = false) => {
+    if (!silent && karyawanList.length === 0) setLoading(true);
     try {
-      const [kRes, gRes] = await Promise.all([api.getKaryawan(), api.getPenggajian()]);
+      const [kRes, gRes, divRes] = await Promise.all([
+        api.getKaryawan(),
+        api.getPenggajian(),
+        api.getDivisi().catch(() => []),
+      ]);
       setKaryawanList(kRes);
       setPenggajianHistory(gRes);
+
+      if (Array.isArray(divRes) && divRes.length > 0) {
+        setAvailableDivisiList(divRes.map((d: any) => d.nama));
+      }
 
       if (!inputKryId && kRes.length > 0) {
         const firstActive = kRes.find((k) => k.status === 'AKTIF') || kRes[0];
         setInputKryId(firstActive.id);
         setInputUpahHarian(firstActive.gajiPokok || 135000);
+        if (firstActive.divisi) {
+          setInputDivisi(firstActive.divisi as NamaDivisi);
+        } else if (firstActive.departemen) {
+          setInputDivisi(firstActive.departemen as NamaDivisi);
+        }
       }
     } catch (err) {
       console.error('Error fetching karyawan:', err);
@@ -254,15 +267,26 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   };
 
   useEffect(() => {
-    loadData();
+    loadData(karyawanList.length > 0);
+  }, [fullErpData, refreshTrigger]);
+
+  useEffect(() => {
+    const onErpUpdated = () => loadData(true);
+    window.addEventListener('erp:data-updated', onErpUpdated);
+    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
   }, []);
 
-  // Update default wage whenever selected employee changes in Tab 2
+  // Update default wage & division whenever selected employee changes in Tab 2
   const handleSelectEmployeeForInput = (id: string) => {
     setInputKryId(id);
     const k = karyawanList.find((item) => item.id === id);
     if (k) {
       setInputUpahHarian(k.gajiPokok || 135000);
+      if (k.divisi) {
+        setInputDivisi(k.divisi as NamaDivisi);
+      } else if (k.departemen) {
+        setInputDivisi(k.departemen as NamaDivisi);
+      }
     }
   };
 
@@ -343,9 +367,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     setFormNik(`KRY-${String(karyawanList.length + 1).padStart(3, '0')}`);
     setFormNama('');
     setFormJabatan('');
-    setFormDepartemen('Operasional Toko');
-    setFormGajiPokok(135000);
-    setFormTunjangan(500000);
+    setFormDivisi(availableDivisiList[0] || 'Gudang Wijaya Agro');
+    setFormTunjangan(0);
     setFormTelepon('');
     setFormAlamat('');
     setFormTanggalMasuk(new Date().toLocaleDateString('id-ID'));
@@ -359,9 +382,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     setFormNik(k.nik);
     setFormNama(k.nama);
     setFormJabatan(k.jabatan);
-    setFormDepartemen(k.departemen);
-    setFormGajiPokok(k.gajiPokok);
-    setFormTunjangan(k.tunjanganTetap);
+    setFormDivisi(k.divisi || k.departemen || availableDivisiList[0] || 'Gudang Wijaya Agro');
+    setFormTunjangan(k.tunjanganTetap || 0);
     setFormTelepon(k.telepon || '');
     setFormAlamat(k.alamat || '');
     setFormTanggalMasuk(k.tanggalMasuk || '');
@@ -386,8 +408,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         await api.updateKaryawan(editingKaryawan.id, {
           nama: formNama,
           jabatan: formJabatan,
-          departemen: formDepartemen,
-          gajiPokok: formGajiPokok,
+          divisi: formDivisi,
+          departemen: formDivisi,
           tunjanganTetap: formTunjangan,
           telepon: formTelepon,
           alamat: formAlamat,
@@ -399,15 +421,15 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           nik: formNik,
           nama: formNama,
           jabatan: formJabatan,
-          departemen: formDepartemen,
-          gajiPokok: formGajiPokok,
+          divisi: formDivisi,
+          departemen: formDivisi,
           tunjanganTetap: formTunjangan,
           telepon: formTelepon,
           alamat: formAlamat,
           tanggalMasuk: formTanggalMasuk,
           catatan: formCatatan,
         });
-        setSuccessBanner(`✅ Karyawan baru "${namaSaved}" (${nikSaved}) berhasil disimpan permanen ke database!`);
+        setSuccessBanner(`✅ Karyawan baru "${namaSaved}" (${nikSaved}) berhasil disimpan ke Divisi ${formDivisi}!`);
       }
       setTimeout(() => setSuccessBanner(''), 7000);
       setIsModalOpen(false);
@@ -421,31 +443,38 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     }
   };
 
-  const handleDeletePermanent = async (k: Karyawan) => {
-    if (!window.confirm(`Hapus permanen karyawan "${k.nama}" (${k.nik}) dari database?\nTindakan ini akan menghapus data dari master karyawan dan catatan buku kas terkait.`)) {
-      return;
-    }
+  const handleDeletePermanent = (k: Karyawan) => {
+    setKaryawanToDelete(k);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!karyawanToDelete) return;
+    setIsDeletingKaryawan(true);
     try {
-      await api.deleteKaryawanPermanent(k.id);
-      setSuccessBanner(`Karyawan "${k.nama}" telah dihapus permanen dari database.`);
+      await api.deleteKaryawanPermanent(karyawanToDelete.id);
+      setSuccessBanner(`Karyawan "${karyawanToDelete.nama}" telah dihapus permanen dari database.`);
       setTimeout(() => setSuccessBanner(''), 6000);
       setRefreshTrigger((prev) => prev + 1);
       await loadData();
       onRefreshAll?.();
+      setKaryawanToDelete(null);
     } catch (err: any) {
-      alert(`Gagal menghapus karyawan: ${err.message}`);
+      setSuccessBanner(`Gagal menghapus karyawan: ${err.message}`);
+    } finally {
+      setIsDeletingKaryawan(false);
     }
   };
 
   // Filtered employees for Tab 3
   const filteredKaryawan = karyawanList.filter((k) => {
+    const kDiv = k.divisi || k.departemen || '';
     const matchSearch =
       k.nama.toLowerCase().includes(search.toLowerCase()) ||
       k.nik.toLowerCase().includes(search.toLowerCase()) ||
       k.jabatan.toLowerCase().includes(search.toLowerCase()) ||
-      k.departemen.toLowerCase().includes(search.toLowerCase());
+      kDiv.toLowerCase().includes(search.toLowerCase());
 
-    const matchDept = filterDepartemen === 'ALL' || k.departemen === filterDepartemen;
+    const matchDiv = filterDivisi === 'ALL' || kDiv === filterDivisi;
 
     let matchBon = true;
     if (filterKasbon === 'HANYA_BON') {
@@ -454,10 +483,23 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
       matchBon = (k.totalKasbonAktif || 0) === 0;
     }
 
-    return matchSearch && matchDept && matchBon;
+    return matchSearch && matchDiv && matchBon;
   });
 
-  const uniqueDepartments = Array.from(new Set(karyawanList.map((k) => k.departemen)));
+  const uniqueDivisions = Array.from(
+    new Set([...availableDivisiList, ...karyawanList.map((k) => k.divisi || k.departemen).filter(Boolean)])
+  );
+
+  const getDivisiBadgeColor = (nama?: string) => {
+    const d = (nama || '').toLowerCase();
+    if (d.includes('gudang')) return 'bg-amber-950/60 text-amber-300 border-amber-800';
+    if (d.includes('karya')) return 'bg-blue-950/60 text-blue-300 border-blue-800';
+    if (d.includes('trans')) return 'bg-indigo-950/60 text-indigo-300 border-indigo-800';
+    if (d.includes('cv')) return 'bg-emerald-950/60 text-emerald-300 border-emerald-800';
+    if (d.includes('pt')) return 'bg-purple-950/60 text-purple-300 border-purple-800';
+    if (d.includes('okussa')) return 'bg-rose-950/60 text-rose-300 border-rose-800';
+    return 'bg-zinc-800 text-zinc-300 border-zinc-700';
+  };
 
   return (
     <div className="space-y-6">
@@ -506,25 +548,28 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Tombol Sinkronisasi Langsung ke Google Spreadsheet */}
+          {/* Tombol Tarik Data dari Supabase */}
           <button
             type="button"
-            onClick={handleSyncToSpreadsheet}
-            disabled={isSyncingSheet}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-            title="Sinkronkan database karyawan riil ke Google Spreadsheet di Drive"
+            onClick={handlePullFromSupabase}
+            disabled={isSyncingSupabase}
+            className="flex items-center space-x-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-teal-300 rounded-lg text-xs font-bold border border-teal-500/40 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+            title="Tarik data karyawan dan payroll terbaru dari Cloud Supabase ke aplikasi"
           >
-            <FileSpreadsheet className={`w-4 h-4 ${isSyncingSheet ? 'animate-spin text-indigo-300' : 'text-emerald-300'}`} />
-            <span>{isSyncingSheet ? 'Menyinkronkan...' : '⚡ Sinkronkan ke Spreadsheet'}</span>
+            <ArrowDownToLine className={`w-4 h-4 ${isSyncingSupabase ? 'animate-bounce text-teal-400' : 'text-teal-400'}`} />
+            <span>{isSyncingSupabase ? 'Menarik...' : '⬇️ Tarik dari Supabase'}</span>
           </button>
 
-          {/* Button Contoh Format Patokan Excel User */}
+          {/* Tombol Kirim Data ke Supabase */}
           <button
-            onClick={() => setIsContohModalOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
+            type="button"
+            onClick={handleSyncToSupabase}
+            disabled={isSyncingSupabase}
+            className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+            title="Kirim dan simpan data karyawan ke Cloud Supabase"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-            <span>Format Patokan Excel</span>
+            <Zap className={`w-4 h-4 ${isSyncingSupabase ? 'animate-spin text-amber-300' : 'text-amber-300'}`} />
+            <span>{isSyncingSupabase ? 'Menyimpan...' : '⚡ Kirim ke Supabase'}</span>
           </button>
 
           {/* Quick Action: Button Input Upah Harian Fleksibel */}
@@ -560,44 +605,31 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         </div>
       </div>
 
-      {/* Feedback Sinkronisasi Spreadsheet Karyawan */}
-      {sheetSyncFeedback && (
+      {/* Feedback Sinkronisasi Supabase Karyawan */}
+      {supabaseFeedback && (
         <div
           className={`p-3 rounded-xl border text-xs flex items-center justify-between gap-3 animate-in fade-in ${
-            sheetSyncFeedback.success
+            supabaseFeedback.success
               ? 'bg-emerald-950/80 border-emerald-700 text-emerald-200'
               : 'bg-rose-950/80 border-rose-700 text-rose-200'
           }`}
         >
           <div className="flex items-center space-x-2">
-            {sheetSyncFeedback.success ? (
+            {supabaseFeedback.success ? (
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             ) : (
               <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
             )}
-            <span className="font-semibold">{sheetSyncFeedback.message}</span>
+            <span className="font-semibold">{supabaseFeedback.message}</span>
           </div>
 
-          <div className="flex items-center space-x-2 shrink-0">
-            {sheetSyncFeedback.webViewLink && (
-              <a
-                href={sheetSyncFeedback.webViewLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors"
-              >
-                <span>Buka di Google Drive</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={() => setSheetSyncFeedback(null)}
-              className="text-zinc-400 hover:text-zinc-200 cursor-pointer text-xs p-1"
-            >
-              ✕
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setSupabaseFeedback(null)}
+            className="text-zinc-400 hover:text-zinc-200 cursor-pointer text-xs p-1"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -611,7 +643,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
               : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
           }`}
         >
-          <FileSpreadsheet className="w-4 h-4" />
+          <FileText className="w-4 h-4" />
           <span>1. List Nama Karyawan &amp; Rekap Gaji (Input Harian &amp; Detail Bon)</span>
         </button>
 
@@ -650,6 +682,74 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           <History className="w-4 h-4 text-sky-400" />
           <span>4. Riwayat Slip Penggajian ({penggajianHistory.length})</span>
         </button>
+      </div>
+
+      {/* Google Sheets-Style Horizontal Tab Strip (Page per Karyawan) */}
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-1.5 flex items-center overflow-x-auto shadow-inner space-x-1.5 scrollbar-thin">
+        <button
+          type="button"
+          onClick={() => {
+            setEditingKaryawan(null);
+            setFormNik(`KRY-${String(karyawanList.length + 1).padStart(3, '0')}`);
+            setFormNama('');
+            setFormJabatan('');
+            setFormDivisi(availableDivisiList[0] || 'Gudang Wijaya Agro');
+            setFormTelepon('');
+            setFormTanggalMasuk(new Date().toLocaleDateString('id-ID'));
+            setFormAlamat('');
+            setFormCatatan('');
+            setIsModalOpen(true);
+          }}
+          className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/80 transition-colors shrink-0 cursor-pointer"
+          title="Tambah Karyawan Baru"
+        >
+          <UserPlus className="w-4 h-4 text-emerald-400" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('rekap');
+            setDetailKaryawanId(null);
+          }}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer border ${
+            activeTab === 'rekap' && !detailKaryawanId
+              ? 'bg-blue-600/90 text-white border-blue-400 shadow-sm'
+              : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:bg-zinc-800/80'
+          }`}
+        >
+          <FileText className="w-3.5 h-3.5 text-blue-300" />
+          <span>REKAP_TOTAL_KARYAWAN</span>
+        </button>
+
+        {karyawanList.map((kry) => {
+          const isSelected = detailKaryawanId === kry.id;
+          return (
+            <button
+              key={kry.id}
+              type="button"
+              onClick={() => {
+                setDetailKaryawanId(kry.id);
+              }}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer border ${
+                isSelected
+                  ? 'bg-emerald-600/90 text-white border-emerald-400 shadow-sm'
+                  : 'bg-zinc-900 text-zinc-300 hover:text-white border-zinc-800 hover:bg-zinc-800/80'
+              }`}
+              title={`Buka Halaman Buku & Slip Gaji Mandiri ${kry.nama}`}
+            >
+              <Users className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{kry.nama.toUpperCase()}</span>
+            </button>
+          );
+        })}
+
+        {karyawanList.length === 0 && (
+          <span className="text-[11px] text-zinc-400 italic px-2.5 py-1 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            Database Bersih (0 Data Dummy). Klik [+ Karyawan Baru] atau [Tarik dari Spreadsheet] di atas.
+          </span>
+        )}
       </div>
 
       {/* TAB 1: REKAPITULASI PAYROLL BULANAN */}
@@ -846,11 +946,11 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
               <div className="bg-zinc-800/80 p-3.5 rounded-xl border border-amber-800/60 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-amber-300 flex items-center space-x-1.5">
-                    <FileSpreadsheet className="w-4 h-4 text-amber-400" />
-                    <span>Format Patokan Catatan Keuangan Gaji Harian</span>
+                    <FileText className="w-4 h-4 text-amber-400" />
+                    <span>Rincian Pekerjaan &amp; Catatan Gaji Harian</span>
                   </span>
                   <span className="text-[10px] text-amber-300 bg-amber-950 px-2 py-0.5 rounded border border-amber-700">
-                    PT Wijaya Agro Perkasa
+                    Input Riil Pekerjaan
                   </span>
                 </div>
 
@@ -889,10 +989,6 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                         onClick={() => {
                           setInputItem(it);
                           if (!inputTugas) setInputTugas(it);
-                          if (it === 'JALAN') setInputUpahHarian(800000);
-                          else if (it === 'SURJAL') setInputUpahHarian(100000);
-                          else if (it === 'JAJAN') setInputUpahHarian(50000);
-                          else if (it === 'NGEBAL') setInputUpahHarian(70000);
                         }}
                         className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
                           inputItem === it
@@ -1056,46 +1152,60 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
               const activeKry = karyawanList.find((k) => k.id === inputKryId);
               if (!activeKry) return null;
               return (
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-                  <div className="flex items-center space-x-3 pb-3 border-b border-zinc-800">
-                    <div className="w-10 h-10 rounded-full bg-amber-950 text-amber-300 border border-amber-800 flex items-center justify-center font-bold text-sm">
+                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3 min-w-0 overflow-hidden">
+                  <div className="flex items-center space-x-3 pb-3 border-b border-zinc-800 min-w-0">
+                    <div className="w-10 h-10 rounded-full bg-amber-950 text-amber-300 border border-amber-800 flex items-center justify-center font-bold text-sm shrink-0">
                       {activeKry.nama.slice(0, 2).toUpperCase()}
                     </div>
-                    <div>
-                      <h3 className="font-bold text-zinc-100 text-sm">{activeKry.nama}</h3>
-                      <div className="text-[11px] text-zinc-400">
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-zinc-100 text-sm truncate">{activeKry.nama}</h3>
+                      <div className="text-[11px] text-zinc-400 truncate">
                         {activeKry.nik} • {activeKry.jabatan}
                       </div>
                     </div>
                   </div>
 
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Departemen:</span>
-                      <span className="font-semibold text-zinc-200">{activeKry.departemen}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Standar Harian Pokok:</span>
-                      <span className="font-mono text-zinc-200">
-                        {formatRupiah(activeKry.gajiPokok || 0)}
+                  <div className="space-y-2 text-xs min-w-0">
+                    <div className="flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-zinc-400 shrink-0">Divisi Unit:</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold truncate ${getDivisiBadgeColor(activeKry.divisi || activeKry.departemen)}`}>
+                        {activeKry.divisi || activeKry.departemen}
                       </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Kasbon Uang Berjalan:</span>
-                      <span className="font-mono text-rose-400 font-semibold">
-                        {formatRupiah(activeKry.kasbonUang || 0)}
+                    <div className="flex justify-between gap-2 min-w-0">
+                      <span className="text-zinc-400 shrink-0">Sistem Upah:</span>
+                      <span
+                        className="text-zinc-200 font-mono tabular-nums truncate whitespace-nowrap"
+                        title={activeKry.gajiPokok ? formatRupiah(activeKry.gajiPokok) : undefined}
+                      >
+                        {activeKry.gajiPokok ? formatRupiahSingkat(activeKry.gajiPokok) : 'Fleksibel per Penugasan'}
                       </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Kasbon Barang Toko:</span>
-                      <span className="font-mono text-rose-400 font-semibold">
-                        {formatRupiah(activeKry.kasbonBarang || 0)}
+                    <div className="flex justify-between gap-2 min-w-0">
+                      <span className="text-zinc-400 shrink-0">Kasbon Uang Berjalan:</span>
+                      <span
+                        className="font-mono tabular-nums text-rose-400 font-semibold truncate whitespace-nowrap"
+                        title={formatRupiah(activeKry.kasbonUang || 0)}
+                      >
+                        {formatRupiahSingkat(activeKry.kasbonUang || 0)}
                       </span>
                     </div>
-                    <div className="flex justify-between pt-2 border-t border-zinc-800 font-bold">
-                      <span className="text-zinc-300">Total Kasbon Aktif:</span>
-                      <span className="font-mono text-rose-400">
-                        {formatRupiah(activeKry.totalKasbonAktif || 0)}
+                    <div className="flex justify-between gap-2 min-w-0">
+                      <span className="text-zinc-400 shrink-0">Kasbon Barang Toko:</span>
+                      <span
+                        className="font-mono tabular-nums text-rose-400 font-semibold truncate whitespace-nowrap"
+                        title={formatRupiah(activeKry.kasbonBarang || 0)}
+                      >
+                        {formatRupiahSingkat(activeKry.kasbonBarang || 0)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2 pt-2 border-t border-zinc-800 font-bold min-w-0">
+                      <span className="text-zinc-300 shrink-0">Total Kasbon Aktif:</span>
+                      <span
+                        className="font-mono tabular-nums text-rose-400 truncate whitespace-nowrap"
+                        title={formatRupiah(activeKry.totalKasbonAktif || 0)}
+                      >
+                        {formatRupiahSingkat(activeKry.totalKasbonAktif || 0)}
                       </span>
                     </div>
                   </div>
@@ -1106,8 +1216,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                       onClick={() => setDetailKaryawanId(activeKry.id)}
                       className="w-full py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1.5 transition-colors"
                     >
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Buka Riwayat Rincian Kerja {activeKry.nama}</span>
+                      <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span className="truncate">Buka Riwayat Rincian Kerja {activeKry.nama}</span>
                     </button>
                   </div>
                 </div>
@@ -1115,24 +1225,27 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             })()}
 
             {/* Division Cash Balance Card */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-              <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center space-x-2">
-                <Building2 className="w-4 h-4 text-emerald-400" />
-                <span>Saldo Kas Divisi Terkait ({inputDivisi})</span>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3 min-w-0 overflow-hidden">
+              <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center space-x-2 min-w-0">
+                <Building2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="truncate">Saldo Kas Divisi Terkait ({inputDivisi})</span>
               </h3>
               {(() => {
                 const divRekKode = DAFTAR_DIVISI.find((d) => d.nama === inputDivisi)?.kodeRekening;
                 const rek = rekeningList.find((r) => r.kode === divRekKode);
                 return (
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-zinc-400">Buku Rekening:</span>
-                      <span className="font-mono text-zinc-200">{rek?.nama || divRekKode}</span>
+                  <div className="space-y-2 min-w-0">
+                    <div className="flex justify-between items-center gap-2 text-xs min-w-0">
+                      <span className="text-zinc-400 shrink-0">Buku Rekening:</span>
+                      <span className="font-mono text-zinc-200 truncate">{rek?.nama || divRekKode}</span>
                     </div>
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-zinc-400">Saldo Operasional:</span>
-                      <span className="text-base font-bold text-emerald-400 font-mono">
-                        {formatRupiah(rek?.saldoSaatIni || 0)}
+                    <div className="flex justify-between items-center gap-2 text-xs min-w-0">
+                      <span className="text-zinc-400 shrink-0">Saldo Operasional:</span>
+                      <span
+                        className="text-base font-bold text-emerald-400 font-mono tabular-nums truncate whitespace-nowrap"
+                        title={formatRupiah(rek?.saldoSaatIni || 0)}
+                      >
+                        {formatRupiahSingkat(rek?.saldoSaatIni || 0)}
                       </span>
                     </div>
                   </div>
@@ -1161,14 +1274,14 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
               </div>
 
               <select
-                value={filterDepartemen}
-                onChange={(e) => setFilterDepartemen(e.target.value)}
-                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-hidden focus:border-emerald-500"
+                value={filterDivisi}
+                onChange={(e) => setFilterDivisi(e.target.value)}
+                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-hidden focus:border-emerald-500 font-medium"
               >
-                <option value="ALL">Semua Departemen</option>
-                {uniqueDepartments.map((dept) => (
-                  <option key={dept} value={dept}>
-                    {dept}
+                <option value="ALL">Semua Divisi ({uniqueDivisions.length})</option>
+                {uniqueDivisions.map((div) => (
+                  <option key={div} value={div}>
+                    {div}
                   </option>
                 ))}
               </select>
@@ -1202,8 +1315,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                 <thead>
                   <tr className="bg-zinc-800/80 text-zinc-400 border-b border-zinc-700 font-semibold">
                     <th className="py-3 px-4">KARYAWAN</th>
-                    <th className="py-3 px-4">JABATAN &amp; DEPT</th>
-                    <th className="py-3 px-4">STANDAR UPAH HARIAN</th>
+                    <th className="py-3 px-4">JABATAN &amp; DIVISI</th>
+                    <th className="py-3 px-4">SISTEM UPAH</th>
                     <th className="py-3 px-4">STATUS KASBON</th>
                     <th className="py-3 px-4">KONTAK &amp; ALAMAT</th>
                     <th className="py-3 px-4 text-center">STATUS</th>
@@ -1233,7 +1346,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                             <p className="text-xs text-zinc-400 mt-1">
                               {karyawanList.length === 0
                                 ? 'Data karyawan telah dikosongkan. Silakan masukkan data tenaga kerja, staf divisi, dan supir armada Anda.'
-                                : 'Coba ubah kata kunci pencarian atau reset filter departemen.'}
+                                : 'Coba ubah kata kunci pencarian atau reset filter divisi.'}
                             </p>
                           </div>
                           {karyawanList.length === 0 && (
@@ -1253,6 +1366,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                     filteredKaryawan.map((k) => {
                       const hasBon = (k.totalKasbonAktif || 0) > 0;
                       const linkedMitraId = k.idMitraTerkait || `MTR-${k.id}`;
+                      const empDivisi = k.divisi || k.departemen || 'Gudang Wijaya Agro';
 
                       return (
                         <tr key={k.id} className="hover:bg-zinc-800/40 transition-colors">
@@ -1263,22 +1377,34 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                               </div>
                               <div>
                                 <div className="font-bold text-zinc-100">{k.nama}</div>
-                                <span className="font-mono text-[10px] text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
-                                  {k.nik}
-                                </span>
+                                <div className="flex items-center space-x-1.5 mt-0.5">
+                                  <span className="font-mono text-[10px] text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
+                                    {k.nik}
+                                  </span>
+                                  <span
+                                    className="text-[9px] text-indigo-300 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-700/60 font-sans"
+                                    title="Tersinkron otomatis ke Database Mitra untuk kasbon & transaksi kasir"
+                                  >
+                                    ⚡ Mitra Kasbon Terhubung
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           </td>
 
                           <td className="py-3.5 px-4 font-sans">
                             <div className="font-medium text-zinc-200">{k.jabatan}</div>
-                            <div className="text-[11px] text-zinc-400">{k.departemen}</div>
+                            <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full border mt-1 font-semibold ${getDivisiBadgeColor(empDivisi)}`}>
+                              {empDivisi}
+                            </span>
                           </td>
 
-                          <td className="py-3.5 px-4">
-                            <div className="text-zinc-200 font-semibold">{formatRupiah(k.gajiPokok)}</div>
-                            <div className="text-[10px] text-zinc-400 font-sans">
-                              + Tunjangan: {formatRupiah(k.tunjanganTetap)}
+                          <td className="py-3.5 px-4 font-sans">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-300 border border-emerald-800/80 text-[10px] font-semibold">
+                              Upah Harian Penugasan
+                            </span>
+                            <div className="text-[10px] text-zinc-400 font-sans mt-0.5">
+                              Dicatat per aktivitas harian
                             </div>
                           </td>
 
@@ -1344,7 +1470,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                                 className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-sky-400 rounded border border-zinc-700 transition-colors"
                                 title="Lihat Rekening Buku & Detail Log Kerja"
                               >
-                                <FileSpreadsheet className="w-3.5 h-3.5" />
+                                <FileText className="w-3.5 h-3.5" />
                               </button>
 
                               {/* Edit Profile */}
@@ -1566,50 +1692,51 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-zinc-400 mb-1">Jabatan</label>
+                  <label className="block text-zinc-400 mb-1">Jabatan / Posisi Kerja <span className="text-rose-400">*</span></label>
                   <input
                     type="text"
                     value={formJabatan}
                     onChange={(e) => setFormJabatan(e.target.value)}
                     required
-                    placeholder="Contoh: Staff Gudang"
+                    placeholder="Contoh: Staff Gudang, Supir, Kasir"
                     className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-zinc-400 mb-1">Departemen</label>
+                  <label className="block text-zinc-400 mb-1">Divisi (Unit ERP Wijaya Agro) <span className="text-rose-400">*</span></label>
                   <select
-                    value={formDepartemen}
-                    onChange={(e) => setFormDepartemen(e.target.value)}
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100"
+                    value={formDivisi}
+                    onChange={(e) => setFormDivisi(e.target.value)}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100 font-semibold"
                   >
-                    <option value="Operasional Toko">Operasional Toko</option>
-                    <option value="Gudang Hasil Bumi">Gudang Hasil Bumi</option>
-                    <option value="Transport &amp; Logistik">Transport &amp; Logistik</option>
-                    <option value="Pabrik &amp; Dryer">Pabrik &amp; Dryer</option>
-                    <option value="Administrasi &amp; Keuangan">Administrasi &amp; Keuangan</option>
+                    {availableDivisiList.map((div) => (
+                      <option key={div} value={div}>
+                        {div}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-zinc-400 mb-1">Standar Upah Harian (Rp)</label>
-                  <input
-                    type="number"
-                    value={formGajiPokok}
-                    onChange={(e) => setFormGajiPokok(Number(e.target.value))}
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100 font-mono font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-zinc-400 mb-1">No. Telepon / WA</label>
+                  <label className="block text-zinc-400 mb-1">No. Telepon / WhatsApp</label>
                   <input
                     type="text"
                     value={formTelepon}
                     onChange={(e) => setFormTelepon(e.target.value)}
                     placeholder="0812..."
                     className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1">Tanggal Mulai Masuk</label>
+                  <input
+                    type="text"
+                    value={formTanggalMasuk}
+                    onChange={(e) => setFormTanggalMasuk(e.target.value)}
+                    placeholder="DD/MM/YYYY"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100 font-mono"
                   />
                 </div>
               </div>
@@ -1623,6 +1750,20 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                   placeholder="Desa / Kecamatan..."
                   className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100"
                 />
+              </div>
+
+              <div className="p-2.5 bg-zinc-800/60 rounded-lg border border-zinc-700/60 text-[11px] text-zinc-400 flex items-start space-x-2">
+                <span className="text-amber-400 font-bold shrink-0">ℹ️</span>
+                <span>
+                  Standar upah harian ditiadakan dari formulir profil. Upah harian karyawan dicatat langsung secara fleksibel sesuai aktivitas penugasan kerja per hari di unit divisi terkait.
+                </span>
+              </div>
+
+              <div className="p-2.5 bg-indigo-950/60 rounded-lg border border-indigo-700/60 text-[11px] text-indigo-200 flex items-start space-x-2">
+                <span className="text-indigo-400 font-bold shrink-0">🔄</span>
+                <span>
+                  <strong>Otomatis Terhubung ke Database Mitra:</strong> Karyawan ini otomatis didaftarkan ke <strong>Database Mitra (Role: KARYAWAN)</strong> sehingga langsung siap digunakan untuk transaksi kasbon uang, kasbon barang toko saprotan, dan potong gaji di kasir.
+                </span>
               </div>
 
               <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-800">
@@ -1651,14 +1792,47 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         <SlipGajiModal slip={activeSlip} onClose={() => setActiveSlip(null)} />
       )}
 
-      {/* Modal: Contoh Patokan Excel Penggajian Karyawan */}
-      <ModalContohPatokanExcel
-        isOpen={isContohModalOpen}
-        onClose={() => setIsContohModalOpen(false)}
-        onSelectKaryawan={() => {
-          setActiveTab('rekap');
-        }}
-      />
+      {/* Confirmation Modal for Permanent Employee Delete */}
+      {karyawanToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/30">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-zinc-100">
+                Hapus Permanen Karyawan?
+              </h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Yakin ingin menghapus <strong className="text-zinc-200">{karyawanToDelete.nama}</strong> ({karyawanToDelete.nik})?
+                Tindakan ini akan menghapus data karyawan dari database.
+              </p>
+            </div>
+            <div className="flex items-center space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setKaryawanToDelete(null)}
+                disabled={isDeletingKaryawan}
+                className="flex-1 py-2 px-3 rounded-xl border border-zinc-700 text-zinc-300 font-semibold text-xs hover:bg-zinc-800 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeletingKaryawan}
+                className="flex-1 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs transition-colors flex items-center justify-center space-x-2"
+              >
+                {isDeletingKaryawan ? (
+                  <span>Menghapus...</span>
+                ) : (
+                  <span>Ya, Hapus</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

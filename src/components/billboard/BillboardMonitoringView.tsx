@@ -27,7 +27,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { api, BillboardData } from '../../api/client.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 
 interface BillboardMonitoringViewProps {
   onClose?: () => void;
@@ -243,18 +243,21 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
             </span>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
             {/* Uang Masuk Hari Ini */}
-            <div className="bg-slate-900/90 border border-emerald-500/40 rounded-xl p-3.5 shadow-lg relative overflow-hidden">
+            <div className="min-w-0 overflow-hidden bg-slate-900/90 border border-emerald-500/40 rounded-xl p-3.5 shadow-lg relative">
               <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/10 rounded-full blur-xl pointer-events-none"></div>
-              <div className="flex items-center justify-between text-slate-400 mb-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center space-x-1">
-                  <ArrowDownLeft className="w-3.5 h-3.5" />
-                  <span>UANG MASUK HARI INI</span>
+              <div className="flex items-center justify-between text-slate-400 mb-1 min-w-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center space-x-1 min-w-0 truncate">
+                  <ArrowDownLeft className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">UANG MASUK HARI INI</span>
                 </span>
               </div>
-              <div className="text-lg lg:text-xl font-black font-mono text-emerald-300">
-                +{formatRupiah(data?.cashflow.masuk || 0)}
+              <div
+                className="text-base sm:text-lg font-black font-mono tabular-nums text-emerald-300 truncate whitespace-nowrap"
+                title={`+${formatRupiah(data?.cashflow.masuk || 0)}`}
+              >
+                +{formatRupiahSingkat(Math.abs(data?.cashflow.masuk || 0))}
               </div>
               <p className="text-[10px] text-slate-400 mt-1 truncate">
                 Penjualan toko + Pelunasan bon mitra
@@ -262,16 +265,19 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
             </div>
 
             {/* Uang Keluar Hari Ini */}
-            <div className="bg-slate-900/90 border border-rose-500/40 rounded-xl p-3.5 shadow-lg relative overflow-hidden">
+            <div className="min-w-0 overflow-hidden bg-slate-900/90 border border-rose-500/40 rounded-xl p-3.5 shadow-lg relative">
               <div className="absolute top-0 right-0 w-16 h-16 bg-rose-500/10 rounded-full blur-xl pointer-events-none"></div>
-              <div className="flex items-center justify-between text-slate-400 mb-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 flex items-center space-x-1">
-                  <ArrowUpRight className="w-3.5 h-3.5" />
-                  <span>UANG KELUAR HARI INI</span>
+              <div className="flex items-center justify-between text-slate-400 mb-1 min-w-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 flex items-center space-x-1 min-w-0 truncate">
+                  <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">UANG KELUAR HARI INI</span>
                 </span>
               </div>
-              <div className="text-lg lg:text-xl font-black font-mono text-rose-300">
-                -{formatRupiah(data?.cashflow.keluar || 0)}
+              <div
+                className="text-base sm:text-lg font-black font-mono tabular-nums text-rose-300 truncate whitespace-nowrap"
+                title={`-${formatRupiah(data?.cashflow.keluar || 0)}`}
+              >
+                -{formatRupiahSingkat(Math.abs(data?.cashflow.keluar || 0))}
               </div>
               <p className="text-[10px] text-slate-400 mt-1 truncate">
                 Beli panen + Kasbon uang + Upah harian
@@ -279,17 +285,18 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
             </div>
 
             {/* Net Cashflow Hari Ini */}
-            <div className="bg-slate-900/90 border border-slate-700 rounded-xl p-3.5 shadow-lg">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+            <div className="min-w-0 overflow-hidden bg-slate-900/90 border border-slate-700 rounded-xl p-3.5 shadow-lg">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1 truncate">
                 NET CASHFLOW
               </div>
               <div
-                className={`text-lg lg:text-xl font-black font-mono ${
+                className={`text-base sm:text-lg font-black font-mono tabular-nums truncate whitespace-nowrap ${
                   (data?.cashflow.net || 0) >= 0 ? 'text-emerald-400' : 'text-amber-400'
                 }`}
+                title={`${(data?.cashflow.net || 0) >= 0 ? '+' : ''}${formatRupiah(data?.cashflow.net || 0)}`}
               >
                 {(data?.cashflow.net || 0) >= 0 ? '+' : ''}
-                {formatRupiah(data?.cashflow.net || 0)}
+                {formatRupiahSingkat(data?.cashflow.net || 0)}
               </div>
               <p className="text-[10px] text-slate-400 mt-1 truncate">
                 Surplus / Defisit Kas Harian
@@ -297,15 +304,18 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
             </div>
 
             {/* Kas Fisik Kasir KAS01 */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow-lg">
-              <div className="flex items-center justify-between text-slate-400 mb-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center space-x-1">
-                  <Wallet className="w-3.5 h-3.5" />
-                  <span>KAS KASIR (KAS01)</span>
+            <div className="min-w-0 overflow-hidden bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow-lg">
+              <div className="flex items-center justify-between text-slate-400 mb-1 min-w-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center space-x-1 min-w-0 truncate">
+                  <Wallet className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">KAS KASIR (KAS01)</span>
                 </span>
               </div>
-              <div className="text-lg lg:text-xl font-black font-mono text-white">
-                {formatRupiah(data?.cashflow.kasKasir || 0)}
+              <div
+                className="text-base sm:text-lg font-black font-mono tabular-nums text-white truncate whitespace-nowrap"
+                title={formatRupiah(data?.cashflow.kasKasir || 0)}
+              >
+                {formatRupiahSingkat(data?.cashflow.kasKasir || 0)}
               </div>
               <p className="text-[10px] text-emerald-400/80 mt-1 truncate">
                 Fisik Laci Kasir Toko Pusat
@@ -313,15 +323,18 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
             </div>
 
             {/* Total Bank Perusahaan */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow-lg">
-              <div className="flex items-center justify-between text-slate-400 mb-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400 flex items-center space-x-1">
-                  <Landmark className="w-3.5 h-3.5" />
-                  <span>BANK PERUSAHAAN</span>
+            <div className="min-w-0 overflow-hidden bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow-lg">
+              <div className="flex items-center justify-between text-slate-400 mb-1 min-w-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-400 flex items-center space-x-1 min-w-0 truncate">
+                  <Landmark className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">BANK PERUSAHAAN</span>
                 </span>
               </div>
-              <div className="text-lg lg:text-xl font-black font-mono text-white">
-                {formatRupiah(data?.cashflow.totalBank || 0)}
+              <div
+                className="text-base sm:text-lg font-black font-mono tabular-nums text-white truncate whitespace-nowrap"
+                title={formatRupiah(data?.cashflow.totalBank || 0)}
+              >
+                {formatRupiahSingkat(data?.cashflow.totalBank || 0)}
               </div>
               <p className="text-[10px] text-sky-400/80 mt-1 truncate">
                 BNI, BCA, Mandiri, BRI, BSI
@@ -329,12 +342,15 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
             </div>
 
             {/* Piutang Bon Aktif (BON01) */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow-lg">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400 mb-1">
+            <div className="min-w-0 overflow-hidden bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 shadow-lg">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400 mb-1 truncate">
                 PIUTANG BON (BON01)
               </div>
-              <div className="text-lg lg:text-xl font-black font-mono text-amber-300">
-                {formatRupiah(data?.cashflow.piutangBon || 0)}
+              <div
+                className="text-base sm:text-lg font-black font-mono tabular-nums text-amber-300 truncate whitespace-nowrap"
+                title={formatRupiah(data?.cashflow.piutangBon || 0)}
+              >
+                {formatRupiahSingkat(data?.cashflow.piutangBon || 0)}
               </div>
               <p className="text-[10px] text-slate-400 mt-1 truncate">
                 Kasbon barang &amp; pinjaman uang aktif
@@ -361,40 +377,49 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
               {(data?.divisiList || []).map((d) => (
                 <div
                   key={d.idDivisi}
-                  className="p-3 bg-slate-950/70 border border-slate-800 hover:border-slate-700 rounded-xl space-y-1.5 transition-colors"
+                  className="min-w-0 overflow-hidden p-3 bg-slate-950/70 border border-slate-800 hover:border-slate-700 rounded-xl space-y-1.5 transition-colors"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <div className="p-1.5 rounded-lg bg-slate-900 border border-slate-800">
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <div className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 shrink-0">
                         {getDivisiIcon(d.divisi)}
                       </div>
-                      <div>
-                        <div className="font-bold text-xs text-white">{d.divisi}</div>
-                        <span className="text-[9px] font-mono text-slate-400">
+                      <div className="min-w-0">
+                        <div className="font-bold text-xs text-white truncate">{d.divisi}</div>
+                        <span className="text-[9px] font-mono text-slate-400 block truncate">
                           {d.kodeRekening}
                         </span>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0 max-w-[48%]">
                       <div className="text-[10px] text-slate-400">Buku Operasional:</div>
-                      <div className="font-mono font-bold text-emerald-400 text-xs">
-                        {formatRupiah(d.saldoSaatIni)}
+                      <div
+                        className="font-mono tabular-nums font-bold text-emerald-400 text-xs truncate whitespace-nowrap"
+                        title={formatRupiah(d.saldoSaatIni)}
+                      >
+                        {formatRupiahSingkat(d.saldoSaatIni)}
                       </div>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 text-[10px] pt-1.5 border-t border-slate-800/60 text-slate-400">
-                    <div>
-                      Dropping: <span className="text-cyan-400 font-semibold font-mono">+{formatRupiah(d.totalDroppingMasuk)}</span>
+                    <div className="min-w-0 truncate" title={`Dropping: +${formatRupiah(d.totalDroppingMasuk)}`}>
+                      Dropping:{' '}
+                      <span className="text-cyan-400 font-semibold font-mono tabular-nums whitespace-nowrap">
+                        +{formatRupiahSingkat(Math.abs(d.totalDroppingMasuk))}
+                      </span>
                     </div>
-                    <div className="text-right">
-                      Beban Upah: <span className="text-rose-400 font-semibold font-mono">-{formatRupiah(d.totalGajiKeluar)}</span>
+                    <div className="min-w-0 text-right truncate" title={`Beban Upah: -${formatRupiah(d.totalGajiKeluar)}`}>
+                      Beban Upah:{' '}
+                      <span className="text-rose-400 font-semibold font-mono tabular-nums whitespace-nowrap">
+                        -{formatRupiahSingkat(Math.abs(d.totalGajiKeluar))}
+                      </span>
                     </div>
                   </div>
 
-                  <div className="text-[9px] text-slate-500 flex items-center justify-between pt-0.5">
-                    <span>Penyimpanan Fisik: <strong className="text-slate-400">Rekening Perusahaan</strong></span>
-                    <span className="text-emerald-400 font-semibold">● Beroperasi</span>
+                  <div className="text-[9px] text-slate-500 flex items-center justify-between pt-0.5 gap-2">
+                    <span className="truncate">Penyimpanan Fisik: <strong className="text-slate-400">Rekening Perusahaan</strong></span>
+                    <span className="text-emerald-400 font-semibold shrink-0">● Beroperasi</span>
                   </div>
                 </div>
               ))}
@@ -450,10 +475,13 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
                       {job.tugasPekerjaan}
                     </div>
 
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
-                      <span>Tgl: {job.tanggalKerja}</span>
-                      <span className="font-mono text-emerald-400 font-bold">
-                        Hak Upah: {formatRupiah(job.totalUpah)}
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400 pt-0.5 min-w-0">
+                      <span className="truncate">Tgl: {job.tanggalKerja}</span>
+                      <span
+                        className="font-mono tabular-nums text-emerald-400 font-bold whitespace-nowrap shrink-0"
+                        title={formatRupiah(job.totalUpah)}
+                      >
+                        Hak Upah: {formatRupiahSingkat(job.totalUpah)}
                       </span>
                     </div>
                   </div>
@@ -524,11 +552,14 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
                     {feed.detail}
                   </p>
 
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400 pt-0.5 min-w-0">
                     <span className="truncate">Rek: {feed.rekeningTerkait}</span>
                     {feed.nominal > 0 && (
-                      <span className="font-mono font-bold text-emerald-400">
-                        {formatRupiah(feed.nominal)}
+                      <span
+                        className="font-mono tabular-nums font-bold text-emerald-400 whitespace-nowrap shrink-0"
+                        title={formatRupiah(feed.nominal)}
+                      >
+                        {formatRupiahSingkat(feed.nominal)}
                       </span>
                     )}
                   </div>

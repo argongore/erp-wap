@@ -14,17 +14,14 @@ import {
   FolderSync,
   ExternalLink,
   RefreshCw,
-  HardDrive,
+  Database,
 } from 'lucide-react';
 import { Mitra } from '../../server/types.ts';
 import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ImageUploadZone } from './ImageUploadZone.tsx';
-import {
-  getAccessToken,
-  uploadNotaProofToDrive,
-  googleSignIn,
-} from '../../services/googleSheetsService.ts';
+import { findSimilarMitra, useFuzzyMitraMatches } from '../../utils/nameSimilarity.ts';
+import { FuzzyNameWarningCard } from './FuzzyNameWarningCard.tsx';
 
 interface InputNotaLaluModalProps {
   isOpen: boolean;
@@ -41,7 +38,10 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
   preselectedMitraId,
   onSuccess,
 }) => {
-  const activeMitras = mitraList.filter((m) => m.status === 'AKTIF');
+  const activeMitras = React.useMemo(
+    () => mitraList.filter((m) => m.status === 'AKTIF'),
+    [mitraList]
+  );
 
   const [tipe, setTipe] = useState<'PIUTANG_BARANG_NOTA_LALU' | 'TITIP_UANG_NOTA_LALU'>(
     'PIUTANG_BARANG_NOTA_LALU'
@@ -64,25 +64,18 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
   const [keterangan, setKeterangan] = useState<string>('');
   const [fotoNota, setFotoNota] = useState<string>('');
 
-  const [isDriveConnected, setIsDriveConnected] = useState<boolean>(false);
-  const [connectingDrive, setConnectingDrive] = useState<boolean>(false);
-
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitStep, setSubmitStep] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
 
-  // Smart suggestion for manual name vs registered contacts (Customer / Supplier / Mitra Tani)
-  const queryMitra = namaUmumManual.trim().toLowerCase();
-  const matchingMitras =
-    queryMitra.length >= 1
-      ? mitraList.filter(
-          (m) =>
-            m.status === 'AKTIF' &&
-            (m.nama.toLowerCase().includes(queryMitra) ||
-              m.kode.toLowerCase().includes(queryMitra) ||
-              (m.telepon && m.telepon.includes(queryMitra)))
-        )
-      : [];
+  const [dismissedNotaLaluWarning, setDismissedNotaLaluWarning] = useState<string>('');
+
+  // Non-blocking fuzzy name matching & duplicate prevention (lag-free typing)
+  const similarMitras = useFuzzyMitraMatches(namaUmumManual, activeMitras);
+
+  const isCurrentNotaLaluWarningDismissed =
+    dismissedNotaLaluWarning.length > 0 &&
+    dismissedNotaLaluWarning.toLowerCase() === namaUmumManual.trim().toLowerCase();
 
   useEffect(() => {
     if (preselectedMitraId) {
@@ -93,45 +86,32 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
     }
   }, [preselectedMitraId, activeMitras, selectedMitraId]);
 
-  // Check Drive connection status
+  // Reset clean form state whenever modal opens so previous Mitra's photo/notes never carry over
   useEffect(() => {
     if (isOpen) {
-      getAccessToken().then((token) => {
-        setIsDriveConnected(!!token);
-      });
+      const prefix = tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'NL-BRG' : 'NL-TTP';
+      setNoNotaLalu(`${prefix}-${Date.now().toString().slice(-4)}`);
+      setFotoNota('');
+      setRincianBarang('');
+      setKeterangan('');
+      setNamaUmumManual('');
+      setTeleponUmumManual('');
+      setErrorMsg('');
     }
   }, [isOpen]);
 
-  // Set default no nota if empty
+  // Update prefix when tipe changes if user hasn't typed custom note number
   useEffect(() => {
-    if (!noNotaLalu && isOpen) {
+    if (isOpen && (!noNotaLalu || noNotaLalu.startsWith('NL-BRG-') || noNotaLalu.startsWith('NL-TTP-'))) {
       const prefix = tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'NL-BRG' : 'NL-TTP';
       setNoNotaLalu(`${prefix}-${Date.now().toString().slice(-4)}`);
     }
-  }, [isOpen, tipe, noNotaLalu]);
+  }, [tipe]);
 
   if (!isOpen) return null;
 
   const nominal = Number(nominalInput) || 0;
   const selectedMitra = activeMitras.find((m) => m.id === selectedMitraId);
-  const driveFolderName =
-    tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'PIUTANG NOTA LAMA' : 'HUTANG NOTA LAMA';
-
-  const handleConnectDrive = async () => {
-    setConnectingDrive(true);
-    setErrorMsg('');
-    try {
-      const res = await googleSignIn();
-      if (res) {
-        setIsDriveConnected(true);
-      }
-    } catch (err: any) {
-      console.warn('Google sign-in error:', err);
-      setErrorMsg('Gagal menghubungkan Google Drive. Transaksi tetap bisa disimpan di database.');
-    } finally {
-      setConnectingDrive(false);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,14 +138,26 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
           return;
         }
 
-        // Check if matching registered exists
+        // Check if exact matching registered exists
         const matchedExisting = mitraList.find(
           (m) => m.nama.toLowerCase() === trimmedNama.toLowerCase()
+        );
+
+        // Check if dangerous fuzzy duplicate exists synchronously on submit
+        const latestMatches = trimmedNama.length >= 2 ? findSimilarMitra(trimmedNama, activeMitras) : [];
+        const highRiskMatch = latestMatches.find(
+          (s) => s.isHighRiskDuplicate || s.matchType === 'PHONETIC' || s.similarity >= 80
         );
 
         if (matchedExisting) {
           finalMitraId = matchedExisting.id;
           finalMitraNama = matchedExisting.nama;
+        } else if (highRiskMatch && !isCurrentNotaLaluWarningDismissed) {
+          setErrorMsg(
+            `⚠️ BAHAYA DUPLIKASI: Anda mengetik "${trimmedNama}", tetapi di database sudah ada Mitra: "${highRiskMatch.mitra.nama}" (${highRiskMatch.mitra.kode}). Jika orang ini sama, silakan klik tombol "Pakai Akun Resmi" di kotak sugesti agar piutang/titipan tidak terpecah dua! Jika yakin orang berbeda, klik "Bukan, Ini Orang Berbeda" lalu simpan ulang.`
+          );
+          setSubmitting(false);
+          return;
         } else {
           setSubmitStep(`Mendaftarkan ${trimmedNama} ke Master Mitra...`);
           const createdMitra = await api.createMitra({
@@ -188,36 +180,9 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
 
       let driveFileUrl = '';
       let driveFileId = '';
-      let driveFolderPath = `NOTA LALU - PT WIJAYA AGRO / ${driveFolderName}`;
+      let driveFolderPath = 'Database ERP & Cloud Supabase';
 
-      // Step 1: Upload proof photo to Google Drive with non-blocking 5s safety timeout
-      if (fotoNota && fotoNota.startsWith('data:image/')) {
-        const token = await getAccessToken();
-        if (token) {
-          setSubmitStep(`Mengunggah foto bukti ke Google Drive (${driveFolderName})...`);
-          try {
-            const fileName = `NOTA_${(finalMitraNama || 'UMUM').replace(/[^a-zA-Z0-9]/g, '_')}_${noNotaLalu || Date.now()}.jpg`;
-            const driveUpload = await Promise.race([
-              uploadNotaProofToDrive({
-                imageBase64: fotoNota,
-                fileName,
-                folderType:
-                  tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'PIUTANG_NOTA_LAMA' : 'HUTANG_NOTA_LAMA',
-              }),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Drive upload timeout')), 5000)
-              ),
-            ]);
-            driveFileUrl = driveUpload.webViewLink;
-            driveFileId = driveUpload.fileId;
-            driveFolderPath = driveUpload.folderPath;
-          } catch (uploadErr: any) {
-            console.warn('Upload Drive dilewati (timeout/gagal), menyimpan langsung di database lokal:', uploadErr);
-          }
-        }
-      }
-
-      // Step 2: Store transaction into ERP database
+      // Store transaction into ERP database
       setSubmitStep('Mencatat transaksi ke rekening koran & buku pembukuan...');
       const defaultKet =
         tipe === 'PIUTANG_BARANG_NOTA_LALU'
@@ -239,7 +204,17 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
       });
 
       setSubmitStep('Selesai!');
-      onSuccess(result);
+      setFotoNota('');
+      setRincianBarang('');
+      setKeterangan('');
+      setNamaUmumManual('');
+      setTeleponUmumManual('');
+      setNoNotaLalu('');
+      try {
+        onSuccess(result);
+      } catch (e) {
+        console.warn('onSuccess callback error:', e);
+      }
       onClose();
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal menyimpan transaksi nota lalu');
@@ -250,10 +225,10 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-zinc-200 animate-in fade-in my-8">
+    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto overflow-x-auto">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl my-auto max-h-[92vh] flex flex-col border border-zinc-200">
         {/* Header */}
-        <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-700 via-amber-800 to-zinc-900 text-white flex items-center justify-between">
+        <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-700 via-amber-800 to-zinc-900 text-white flex items-center justify-between rounded-t-2xl shrink-0">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center border border-white/20">
               <FileText className="w-5 h-5 text-amber-300" />
@@ -268,21 +243,21 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-amber-100/90 mt-0.5">
-                Konversi bon bertahun-tahun lalu &amp; simpan bukti foto fisik langsung ke Google Drive
+                Konversi bon masa lalu &amp; simpan bukti foto fisik otomatis ke Cloud Supabase
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 text-xs max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 text-xs flex-1 overflow-y-auto overflow-x-auto overscroll-contain">
           {errorMsg && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -480,34 +455,31 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
                   </div>
                 </div>
 
-                {/* Smart Suggestion if name matches existing supplier/customer */}
-                {matchingMitras.length > 0 && (
-                  <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg space-y-1.5 text-xs animate-in fade-in">
-                    <div className="flex items-center space-x-1.5 text-sky-900 font-bold text-[11px]">
-                      <span>💡</span>
-                      <span>Sugesti: Nama ini sudah mirip dengan kontak terdaftar! Apakah pihak ini?</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {matchingMitras.slice(0, 3).map((match) => (
-                        <button
-                          key={match.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedMitraId(match.id);
-                            setMitraInputMode('TERDAFTAR');
-                            setNamaUmumManual('');
-                          }}
-                          className="px-2 py-1 bg-white hover:bg-sky-100 border border-sky-300 rounded-lg text-[10px] font-bold text-sky-950 flex items-center space-x-1 shadow-2xs cursor-pointer transition-colors"
-                          title="Klik untuk memilih kontak terdaftar ini"
-                        >
-                          <span>{match.nama}</span>
-                          <span className="px-1 py-0.2 bg-sky-200 text-sky-900 rounded font-semibold text-[9px]">
-                            {match.role}
-                          </span>
-                          <span className="text-emerald-700 font-bold">✓ Pilih</span>
-                        </button>
-                      ))}
-                    </div>
+                {/* Advanced Fuzzy Name Suggestion & Anti-Duplicate Warning */}
+                <FuzzyNameWarningCard
+                  inputName={namaUmumManual}
+                  matches={similarMitras}
+                  contextLabel="Pihak Nota Lalu"
+                  theme="light"
+                  isDismissed={isCurrentNotaLaluWarningDismissed}
+                  onDismissDifferentPerson={() => setDismissedNotaLaluWarning(namaUmumManual.trim())}
+                  onSelectRegistered={(m) => {
+                    setSelectedMitraId(m.id);
+                    setMitraInputMode('TERDAFTAR');
+                    setNamaUmumManual('');
+                  }}
+                  onApplyCorrectedName={(corrected) => {
+                    setNamaUmumManual(corrected);
+                  }}
+                />
+
+                {/* Unregistered notification badge when truly no similar names exist */}
+                {namaUmumManual.trim().length >= 2 && similarMitras.length === 0 && (
+                  <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-[11px] text-emerald-900 flex items-center space-x-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>
+                      Nama <strong>"{namaUmumManual}"</strong> belum ada di database. Saat disimpan, sistem akan otomatis mendaftarkannya sebagai akun Mitra baru.
+                    </span>
                   </div>
                 )}
               </div>
@@ -593,42 +565,16 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
             />
           </div>
 
-          {/* GOOGLE DRIVE STORAGE STRUCTURE BANNER (User suggestion) */}
-          <div className="p-3 bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-200 rounded-xl space-y-1.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-xs font-bold text-sky-950">
-                <HardDrive className="w-4 h-4 text-sky-600" />
-                <span>Penyimpanan Bukti Nota ke Google Drive:</span>
-              </div>
-              {isDriveConnected ? (
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center space-x-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                  <span>Drive Terhubung</span>
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleConnectDrive}
-                  disabled={connectingDrive}
-                  className="text-[10px] bg-sky-600 hover:bg-sky-700 text-white font-bold px-2.5 py-0.5 rounded-lg flex items-center space-x-1 cursor-pointer transition-colors"
-                >
-                  <FolderSync className="w-3 h-3" />
-                  <span>{connectingDrive ? 'Menghubungkan...' : 'Hubungkan Drive'}</span>
-                </button>
-              )}
+          {/* Cloud Database Status Bar */}
+          <div className="flex items-center justify-between px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs">
+            <div className="flex items-center space-x-2 text-emerald-950 font-medium text-[11px]">
+              <Database className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Penyimpanan: Database ERP &amp; Cloud Supabase PostgreSQL</span>
             </div>
-
-            <div className="text-[11px] text-zinc-700 font-mono bg-white/80 p-2 rounded-lg border border-sky-200/80">
-              <span className="text-zinc-500 font-sans">Folder Tujuan: </span>
-              <strong>NOTA LALU - PT WIJAYA AGRO / </strong>
-              <span className={tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'text-rose-700 font-bold' : 'text-purple-700 font-bold'}>
-                {driveFolderName}
-              </span>
-            </div>
-
-            <p className="text-[10px] text-zinc-500">
-              Foto bukti nota lama otomatis diunggah ke subfolder terpisah (Piutang Nota Lama / Hutang Nota Lama) di dalam satu Folder Nota Lalu di Drive Anda.
-            </p>
+            <span className="text-[10px] text-emerald-700 font-bold flex items-center space-x-1">
+              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+              <span>Tersinkron Otomatis</span>
+            </span>
           </div>
 
           {/* Capture Foto Fisik Nota Manual (Dasar Penguat) */}
@@ -643,9 +589,10 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
               </p>
               <ImageUploadZone
                 label="Foto Nota Kertas Manual"
-                sublabel="Kamera HP atau Galeri Gambar"
+                sublabel="Kamera HP atau Galeri Gambar (Bisa Lampirkan Lebih Dari 1 Foto Nota)"
                 value={fotoNota}
                 onChange={setFotoNota}
+                multiple={true}
               />
             </div>
           </div>

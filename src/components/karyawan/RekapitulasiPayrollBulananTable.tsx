@@ -43,7 +43,7 @@ import {
   RekapPayrollBulananSummary,
   Rekening,
 } from '../../server/types.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 
 interface RekapitulasiPayrollBulananTableProps {
   rekeningList: Rekening[];
@@ -105,8 +105,6 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
 
   // Sub-tabs for expanded row: 'HARIAN' (Rekap Gaji Per Hari) | 'BON' (Detail Bon Uang & Produk Barang) | 'NERACA' (Neraca & Settlement)
   const [activeSubTabs, setActiveSubTabs] = useState<Record<string, 'HARIAN' | 'BON' | 'NERACA'>>({});
-  // View mode for HARIAN: 'EXCEL_PATOKAN' (Format Excel PT Wijaya Agro) | 'SISTEM' (Tabel Sistem)
-  const [harianViewModes, setHarianViewModes] = useState<Record<string, 'EXCEL_PATOKAN' | 'SISTEM'>>({});
 
   // Settlement inline modal
   const [settleKaryawan, setSettleKaryawan] = useState<ItemRekapPayrollBulanan | null>(null);
@@ -117,8 +115,8 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
   const [settleSubmitting, setSettleSubmitting] = useState<boolean>(false);
   const [settleError, setSettleError] = useState<string>('');
 
-  const loadRekap = async () => {
-    setLoading(true);
+  const loadRekap = async (silent = false) => {
+    if (!silent && !rekapData) setLoading(true);
     try {
       const data = await api.getRekapPayrollBulanan({
         bulan: selectedBulan,
@@ -134,8 +132,14 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
   };
 
   useEffect(() => {
-    loadRekap();
+    loadRekap(Boolean(rekapData));
   }, [selectedBulan, selectedTahun, selectedDivisi, refreshTrigger]);
+
+  useEffect(() => {
+    const onErpUpdated = () => loadRekap(true);
+    window.addEventListener('erp:data-updated', onErpUpdated);
+    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
+  }, [selectedBulan, selectedTahun, selectedDivisi]);
 
   const handleToggleExpand = (idKaryawan: string) => {
     setExpandedKaryawanId((prev) => {
@@ -395,44 +399,53 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
       {/* Summary KPI Cards */}
       {rekapData && (
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs">
-            <span className="text-[10px] text-zinc-400 block uppercase font-medium">Total Karyawan</span>
-            <div className="text-xl font-bold font-mono text-zinc-100 mt-0.5">
+          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs min-w-0 overflow-hidden">
+            <span className="text-[10px] text-zinc-400 block uppercase font-medium truncate">Total Karyawan</span>
+            <div className="text-xl font-bold font-mono tabular-nums text-zinc-100 mt-0.5 truncate whitespace-nowrap">
               {filteredItems.length} <span className="text-xs font-normal text-zinc-400">Orang</span>
             </div>
-            <span className="text-[10px] text-emerald-400">Periode {rekapData.periodeBulan}</span>
+            <span className="text-[10px] text-emerald-400 block truncate">Periode {rekapData.periodeBulan}</span>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs">
-            <span className="text-[10px] text-zinc-400 block uppercase font-medium">Total Hari Kerja</span>
-            <div className="text-xl font-bold font-mono text-cyan-400 mt-0.5">
+          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs min-w-0 overflow-hidden">
+            <span className="text-[10px] text-zinc-400 block uppercase font-medium truncate">Total Hari Kerja</span>
+            <div className="text-xl font-bold font-mono tabular-nums text-cyan-400 mt-0.5 truncate whitespace-nowrap">
               {rekapData.totalHariKerja} <span className="text-xs font-normal text-zinc-400">Hari</span>
             </div>
-            <span className="text-[10px] text-zinc-400">Di-input akumulasi harian</span>
+            <span className="text-[10px] text-zinc-400 block truncate">Di-input akumulasi harian</span>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs">
-            <span className="text-[10px] text-zinc-400 block uppercase font-medium">Total Gaji Kotor Bulan Ini</span>
-            <div className="text-lg font-bold font-mono text-emerald-400 mt-0.5">
-              {formatRupiah(rekapData.totalGajiKotor)}
+          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs min-w-0 overflow-hidden">
+            <span className="text-[10px] text-zinc-400 block uppercase font-medium truncate">Total Gaji Kotor Bulan Ini</span>
+            <div
+              className="text-lg font-bold font-mono tabular-nums text-emerald-400 mt-0.5 truncate whitespace-nowrap"
+              title={formatRupiah(rekapData.totalGajiKotor)}
+            >
+              {formatRupiahSingkat(rekapData.totalGajiKotor)}
             </div>
-            <span className="text-[10px] text-zinc-400">Pokok + Uang Makan/Lembur</span>
+            <span className="text-[10px] text-zinc-400 block truncate">Pokok + Uang Makan/Lembur</span>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs">
-            <span className="text-[10px] text-zinc-400 block uppercase font-medium">Total Sisa Bon Aktif</span>
-            <div className="text-lg font-bold font-mono text-rose-300 mt-0.5">
-              {formatRupiah(rekapData.totalSisaBonKaryawan)}
+          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs min-w-0 overflow-hidden">
+            <span className="text-[10px] text-zinc-400 block uppercase font-medium truncate">Total Sisa Bon Aktif</span>
+            <div
+              className="text-lg font-bold font-mono tabular-nums text-rose-300 mt-0.5 truncate whitespace-nowrap"
+              title={formatRupiah(rekapData.totalSisaBonKaryawan)}
+            >
+              {formatRupiahSingkat(rekapData.totalSisaBonKaryawan)}
             </div>
-            <span className="text-[10px] text-rose-400">Bon Uang + Produk Barang</span>
+            <span className="text-[10px] text-rose-400 block truncate">Bon Uang + Produk Barang</span>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs col-span-2 lg:col-span-1">
-            <span className="text-[10px] text-zinc-400 block uppercase font-medium">Hak Upah Belum Dicairkan</span>
-            <div className="text-lg font-bold font-mono text-amber-400 mt-0.5">
-              {formatRupiah(rekapData.totalHakUpahPending)}
+          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl shadow-xs col-span-2 lg:col-span-1 min-w-0 overflow-hidden">
+            <span className="text-[10px] text-zinc-400 block uppercase font-medium truncate">Hak Upah Belum Dicairkan</span>
+            <div
+              className="text-lg font-bold font-mono tabular-nums text-amber-400 mt-0.5 truncate whitespace-nowrap"
+              title={formatRupiah(rekapData.totalHakUpahPending)}
+            >
+              {formatRupiahSingkat(rekapData.totalHakUpahPending)}
             </div>
-            <span className="text-[10px] text-zinc-400">Status tercatat berjalan</span>
+            <span className="text-[10px] text-zinc-400 block truncate">Status tercatat berjalan</span>
           </div>
         </div>
       )}
@@ -734,44 +747,6 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                   </div>
 
                                   <div className="flex items-center space-x-2 shrink-0">
-                                    {/* View Mode Switcher */}
-                                    <div className="flex items-center bg-zinc-800 p-1 rounded-lg border border-zinc-700 text-[11px]">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setHarianViewModes((prev) => ({
-                                            ...prev,
-                                            [item.idKaryawan]: 'EXCEL_PATOKAN',
-                                          }))
-                                        }
-                                        className={`px-2.5 py-1 rounded font-semibold flex items-center space-x-1.5 transition-all ${
-                                          (harianViewModes[item.idKaryawan] || 'EXCEL_PATOKAN') === 'EXCEL_PATOKAN'
-                                            ? 'bg-emerald-700 text-white shadow-xs'
-                                            : 'text-zinc-400 hover:text-zinc-200'
-                                        }`}
-                                      >
-                                        <FileSpreadsheet className="w-3.5 h-3.5" />
-                                        <span>Format Excel Patokan</span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setHarianViewModes((prev) => ({
-                                            ...prev,
-                                            [item.idKaryawan]: 'SISTEM',
-                                          }))
-                                        }
-                                        className={`px-2.5 py-1 rounded font-semibold flex items-center space-x-1.5 transition-all ${
-                                          harianViewModes[item.idKaryawan] === 'SISTEM'
-                                            ? 'bg-zinc-700 text-white shadow-xs'
-                                            : 'text-zinc-400 hover:text-zinc-200'
-                                        }`}
-                                      >
-                                        <Layers className="w-3.5 h-3.5" />
-                                        <span>Tabel Sistem</span>
-                                      </button>
-                                    </div>
-
                                     <button
                                       onClick={() => onOpenInputPayrollHarian(item.idKaryawan, item.divisiUtama)}
                                       className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-lg flex items-center space-x-1.5 shadow-2xs transition-colors cursor-pointer shrink-0"
@@ -786,161 +761,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                   <div className="p-6 bg-zinc-900/60 rounded-lg border border-zinc-800 text-center text-zinc-500 text-xs">
                                     Belum ada catatan hari kerja harian yang di-input untuk {item.nama} pada periode {rekapData?.periodeBulan}.
                                   </div>
-                                ) : (harianViewModes[item.idKaryawan] || 'EXCEL_PATOKAN') === 'EXCEL_PATOKAN' ? (
-                                  /* AUTHENTIC EXCEL SPREADSHEET VIEW (MATCHING USER SCREENSHOTS) */
-                                  <div className="bg-zinc-950 border-2 border-emerald-900/80 rounded-xl overflow-hidden shadow-2xl">
-                                    {/* Excel Green Header */}
-                                    <div className="bg-gradient-to-r from-emerald-950 via-zinc-900 to-emerald-950 p-4 border-b border-emerald-800/80">
-                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                        <div>
-                                          <div className="text-[10px] text-emerald-400 font-mono tracking-widest uppercase font-bold">
-                                            CATATAN KEUANGAN
-                                          </div>
-                                          <h3 className="text-base font-black text-white tracking-wide">
-                                            PT WIJAYA AGRO PERKASA
-                                          </h3>
-                                          <p className="text-xs text-zinc-300 font-medium mt-0.5">
-                                            Buku Catatan Gaji &amp; Upah Harian Karyawan:{' '}
-                                            <span className="text-amber-400 font-bold uppercase">{item.nama}</span>{' '}
-                                            ({item.nik})
-                                          </p>
-                                        </div>
-                                        <div className="text-right sm:border-l sm:border-emerald-800/60 sm:pl-4">
-                                          <span className="text-[10px] text-zinc-400 block uppercase">Periode Penggajian</span>
-                                          <span className="text-xs font-mono font-bold text-emerald-300 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
-                                            {rekapData?.periodeBulan || 'September 2026'}
-                                          </span>
-                                          <span className="text-[10px] text-zinc-400 block mt-1">
-                                            Total Baris: {item.rincianHarian.length} Catatan Harian
-                                          </span>
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* Authentic Spreadsheet Table */}
-                                    <div className="overflow-x-auto">
-                                      <table className="w-full text-left text-xs border-collapse">
-                                        <thead className="bg-zinc-900 text-zinc-200 uppercase text-[10px] tracking-wider border-b-2 border-emerald-800">
-                                          <tr>
-                                            <th className="py-2.5 px-2 text-center border-r border-zinc-800 w-10">NO</th>
-                                            <th className="py-2.5 px-3 border-r border-zinc-800">TANGGAL / HARI</th>
-                                            <th className="py-2.5 px-3 border-r border-zinc-800">DIVISI</th>
-                                            <th className="py-2.5 px-3 border-r border-zinc-800">KARYAWAN</th>
-                                            <th className="py-2.5 px-3 border-r border-zinc-800">ITEM (PEKERJAAN)</th>
-                                            <th className="py-2.5 px-2 text-center border-r border-zinc-800 w-16">KUANTITI</th>
-                                            <th className="py-2.5 px-3 text-right border-r border-zinc-800">HARGA</th>
-                                            <th className="py-2.5 px-3 text-right border-r border-zinc-800">JUMLAH</th>
-                                            <th className="py-2.5 px-2 text-center border-r border-zinc-800 w-20">KET</th>
-                                            <th className="py-2.5 px-3">CATATAN / KETERANGAN</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-zinc-800/80 font-mono text-[11px]">
-                                          {item.rincianHarian.map((log, idx) => {
-                                            const isBon = log.ket === 'BON' || log.status === 'TERCATAT';
-                                            const qty = log.kuantiti !== undefined ? log.kuantiti : (log.totalUpah > 0 ? 1 : 0);
-                                            const harga = log.harga !== undefined ? log.harga : log.upahHarian;
-                                            const jumlah = log.jumlah !== undefined ? log.jumlah : log.totalUpah;
-                                            const isNihil = qty === 0 || jumlah === 0;
-
-                                            return (
-                                              <tr
-                                                key={log.id || idx}
-                                                className={`hover:bg-zinc-900/80 transition-colors ${
-                                                  isNihil ? 'bg-zinc-950 text-zinc-500' : 'text-zinc-100'
-                                                }`}
-                                              >
-                                                {/* NO */}
-                                                <td className="py-2 px-2 text-center border-r border-zinc-800/80 text-zinc-500 text-[10px]">
-                                                  {idx + 1}
-                                                </td>
-
-                                                {/* TANGGAL */}
-                                                <td className="py-2 px-3 border-r border-zinc-800/80 whitespace-nowrap font-bold">
-                                                  {log.hariTanggal || log.tanggal}
-                                                </td>
-
-                                                {/* DIVISI */}
-                                                <td className="py-2 px-3 border-r border-zinc-800/80 whitespace-nowrap">
-                                                  <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-zinc-800 text-zinc-300 border border-zinc-700">
-                                                    {log.divisiKode || (log.divisi === 'Gudang Wijaya Agro' ? 'GWA' : log.divisi === 'CV Wijaya Agro' ? 'CV WA' : log.divisi === 'Wijaya Transport' ? 'WIJAYA TRANS' : log.divisi === 'PT Wijaya Agro Perkasa' ? 'PTWAP' : 'OKUSSA')}
-                                                  </span>
-                                                </td>
-
-                                                {/* KARYAWAN */}
-                                                <td className="py-2 px-3 border-r border-zinc-800/80 font-sans font-bold uppercase text-zinc-300 whitespace-nowrap">
-                                                  {item.nama}
-                                                </td>
-
-                                                {/* ITEM */}
-                                                <td className="py-2 px-3 border-r border-zinc-800/80 font-sans font-semibold uppercase text-zinc-100 whitespace-nowrap">
-                                                  {log.item || log.tugas || '-'}
-                                                </td>
-
-                                                {/* KUANTITI */}
-                                                <td className="py-2 px-2 text-center border-r border-zinc-800/80 font-bold">
-                                                  {qty}
-                                                </td>
-
-                                                {/* HARGA */}
-                                                <td className="py-2 px-3 text-right border-r border-zinc-800/80 text-zinc-300">
-                                                  {harga > 0 ? formatRupiah(harga) : '-'}
-                                                </td>
-
-                                                {/* JUMLAH */}
-                                                <td className="py-2 px-3 text-right border-r border-zinc-800/80 font-bold text-emerald-400">
-                                                  {jumlah > 0 ? formatRupiah(jumlah) : '-'}
-                                                </td>
-
-                                                {/* KET (BON oranye / LUNAS biru) */}
-                                                <td className="py-2 px-2 text-center border-r border-zinc-800/80 whitespace-nowrap">
-                                                  {isBon ? (
-                                                    <span className="px-2 py-0.5 rounded text-[9px] font-black bg-amber-500 text-zinc-950 shadow-xs">
-                                                      BON
-                                                    </span>
-                                                  ) : (
-                                                    <span className="px-2 py-0.5 rounded text-[9px] font-black bg-sky-500 text-white shadow-xs">
-                                                      LUNAS
-                                                    </span>
-                                                  )}
-                                                </td>
-
-                                                {/* CATATAN */}
-                                                <td className="py-2 px-3 font-sans text-xs text-zinc-300">
-                                                  {log.catatan ? (
-                                                    <span className="font-semibold text-amber-300">
-                                                      {log.catatan}
-                                                    </span>
-                                                  ) : log.uangMakanLembur > 0 ? (
-                                                    <span className="text-zinc-400 text-[10px]">
-                                                      Lembur/Makan +{formatRupiah(log.uangMakanLembur)}
-                                                    </span>
-                                                  ) : (
-                                                    <span className="text-zinc-600">-</span>
-                                                  )}
-                                                </td>
-                                              </tr>
-                                            );
-                                          })}
-                                        </tbody>
-                                        <tfoot className="bg-zinc-900 border-t-2 border-emerald-800 font-bold text-xs">
-                                          <tr>
-                                            <td colSpan={7} className="py-2.5 px-3 text-right uppercase text-zinc-300 border-r border-zinc-800">
-                                              TOTAL JUMLAH GAJI HARIAN KARYAWAN ({item.nama}):
-                                            </td>
-                                            <td className="py-2.5 px-3 text-right font-mono text-sm text-emerald-400 border-r border-zinc-800">
-                                              {formatRupiah(item.totalGajiKotor)}
-                                            </td>
-                                            <td colSpan={2} className="py-2.5 px-3 text-xs text-zinc-400 font-sans">
-                                              {item.totalSisaBonKaryawan > 0
-                                                ? `Kewajiban Bon: -${formatRupiah(item.totalSisaBonKaryawan)} · Sisa Bersih: ${formatRupiah(item.saldoBersih)}`
-                                                : 'Tidak Ada Potongan Bon'}
-                                            </td>
-                                          </tr>
-                                        </tfoot>
-                                      </table>
-                                    </div>
-                                  </div>
-                                ) : (
+) : (
                                   /* STANDARD MODERN APP VIEW */
                                   <div className="border border-zinc-800 rounded-lg overflow-hidden shadow-sm">
                                     <table className="w-full text-left text-xs">
@@ -1016,34 +837,49 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                             {/* SUB-TAB 2: DETAIL BON SELAMA SATU BULAN BERJALAN (UANG & PRODUK BARANG) */}
                             {currentSubTab === 'BON' && (
                               <div className="space-y-4 animate-in fade-in duration-150">
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-zinc-900 p-3 rounded-lg border border-zinc-800 text-xs">
-                                  <div className="flex items-center space-x-3">
-                                    <div className="p-2 bg-rose-950 text-rose-400 rounded-lg border border-rose-800">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-zinc-900 p-3 rounded-lg border border-zinc-800 text-xs min-w-0 overflow-hidden">
+                                  <div className="flex items-center space-x-3 min-w-0">
+                                    <div className="p-2 bg-rose-950 text-rose-400 rounded-lg border border-rose-800 shrink-0">
                                       <ShoppingBag className="w-5 h-5" />
                                     </div>
-                                    <div>
-                                      <span className="text-[10px] text-zinc-400 block uppercase">Bon Produk Barang Toko</span>
-                                      <strong className="text-rose-400 font-mono text-base">{formatRupiah(item.sisaKasbonBarang)}</strong>
+                                    <div className="min-w-0">
+                                      <span className="text-[10px] text-zinc-400 block uppercase truncate">Bon Produk Barang Toko</span>
+                                      <strong
+                                        className="text-rose-400 font-mono tabular-nums text-base block truncate whitespace-nowrap"
+                                        title={formatRupiah(item.sisaKasbonBarang)}
+                                      >
+                                        {formatRupiahSingkat(item.sisaKasbonBarang)}
+                                      </strong>
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center space-x-3 border-t md:border-t-0 md:border-l border-zinc-800 pt-2 md:pt-0 md:pl-4">
-                                    <div className="p-2 bg-amber-950 text-amber-400 rounded-lg border border-amber-800">
+                                  <div className="flex items-center space-x-3 border-t md:border-t-0 md:border-l border-zinc-800 pt-2 md:pt-0 md:pl-4 min-w-0">
+                                    <div className="p-2 bg-amber-950 text-amber-400 rounded-lg border border-amber-800 shrink-0">
                                       <HandCoins className="w-5 h-5" />
                                     </div>
-                                    <div>
-                                      <span className="text-[10px] text-zinc-400 block uppercase">Bon Uang Tunai Kasir</span>
-                                      <strong className="text-amber-400 font-mono text-base">{formatRupiah(item.sisaKasbonUang)}</strong>
+                                    <div className="min-w-0">
+                                      <span className="text-[10px] text-zinc-400 block uppercase truncate">Bon Uang Tunai Kasir</span>
+                                      <strong
+                                        className="text-amber-400 font-mono tabular-nums text-base block truncate whitespace-nowrap"
+                                        title={formatRupiah(item.sisaKasbonUang)}
+                                      >
+                                        {formatRupiahSingkat(item.sisaKasbonUang)}
+                                      </strong>
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center space-x-3 border-t md:border-t-0 md:border-l border-zinc-800 pt-2 md:pt-0 md:pl-4">
-                                    <div className="p-2 bg-red-950 text-red-300 rounded-lg border border-red-800">
+                                  <div className="flex items-center space-x-3 border-t md:border-t-0 md:border-l border-zinc-800 pt-2 md:pt-0 md:pl-4 min-w-0">
+                                    <div className="p-2 bg-red-950 text-red-300 rounded-lg border border-red-800 shrink-0">
                                       <Receipt className="w-5 h-5" />
                                     </div>
-                                    <div>
-                                      <span className="text-[10px] text-zinc-400 block uppercase">Total Bon Seluruhnya</span>
-                                      <strong className="text-red-400 font-mono text-base">{formatRupiah(item.totalSisaBonKaryawan)}</strong>
+                                    <div className="min-w-0">
+                                      <span className="text-[10px] text-zinc-400 block uppercase truncate">Total Bon Seluruhnya</span>
+                                      <strong
+                                        className="text-red-400 font-mono tabular-nums text-base block truncate whitespace-nowrap"
+                                        title={formatRupiah(item.totalSisaBonKaryawan)}
+                                      >
+                                        {formatRupiahSingkat(item.totalSisaBonKaryawan)}
+                                      </strong>
                                     </div>
                                   </div>
                                 </div>

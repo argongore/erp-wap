@@ -35,6 +35,7 @@ import {
   Rekening,
   TransaksiPenggajian,
 } from '../../server/types.ts';
+import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { ProsesGajiModal } from './ProsesGajiModal.tsx';
 import { SlipGajiModal } from './SlipGajiModal.tsx';
 import { InputPayrollHarianDivisiModal } from './InputPayrollHarianDivisiModal.tsx';
@@ -88,8 +89,8 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
     }
   }, [karyawanList]);
 
-  const loadUpahHarian = async () => {
-    setLoadingUpahHarian(true);
+  const loadUpahHarian = async (silent = false) => {
+    if (!silent && allUpahHarian.length === 0) setLoadingUpahHarian(true);
     try {
       const list = await api.getUpahHarian();
       setAllUpahHarian(list);
@@ -100,9 +101,9 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
     }
   };
 
-  const handleOpenInputPayrollHarian = (idKaryawan?: string, divisiPreset?: NamaDivisi) => {
+  const handleOpenInputPayrollHarian = (idKaryawan?: string, divisiPreset?: string) => {
     setPayrollKaryawanIdPreset(idKaryawan);
-    setPayrollDivisiPreset(divisiPreset);
+    setPayrollDivisiPreset(divisiPreset as NamaDivisi | undefined);
     setIsPayrollHarianModalOpen(true);
   };
 
@@ -140,17 +141,25 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
 
   // Mutasi filter
   const [mutasiSearch, setMutasiSearch] = useState('');
-  const [mutasiFilterJenis, setMutasiFilterJenis] = useState<'ALL' | 'DROPPING_MASUK' | 'GAJI_KARYAWAN' | 'TRANSFER_KELUAR'>('ALL');
+  const [mutasiFilterJenis, setMutasiFilterJenis] = useState<
+    | 'ALL'
+    | 'PENJUALAN_MASUK'
+    | 'PEMBELIAN_KELUAR'
+    | 'PENGELUARAN_OPERASIONAL'
+    | 'DROPPING_MASUK'
+    | 'GAJI_KARYAWAN'
+    | 'TRANSFER_KELUAR'
+  >('ALL');
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (silent = false) => {
+    if (!silent && divisiData.length === 0) setLoading(true);
     try {
       const data = await api.getDivisiKeuangan();
       setDivisiData(data);
-      if (selectedDivisi) {
-        const updated = data.find((d) => d.divisi === selectedDivisi.divisi);
-        if (updated) setSelectedDivisi(updated);
-      }
+      setSelectedDivisi((prev) => {
+        if (!prev) return prev;
+        return data.find((d) => d.divisi === prev.divisi) || prev;
+      });
     } catch (err) {
       console.error('Failed to load divisi keuangan:', err);
     } finally {
@@ -159,13 +168,15 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
   };
 
   useEffect(() => {
-    loadData();
-    loadUpahHarian();
+    loadData(false);
+    loadUpahHarian(false);
+    const onErpUpdated = () => {
+      loadData(true);
+      loadUpahHarian(true);
+    };
+    window.addEventListener('erp:data-updated', onErpUpdated);
+    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
   }, []);
-
-  const formatRupiah = (val: number) => {
-    return 'Rp ' + Number(val || 0).toLocaleString('id-ID');
-  };
 
   const getDivisiIcon = (nama: string) => {
     switch (nama) {
@@ -207,9 +218,26 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
 
   // Totals across all divisions
   const totalSaldoSemuaDivisi = divisiData.reduce((sum, d) => sum + (d.saldoSaatIni || 0), 0);
+  const totalPenjualanSemuaDivisi = divisiData.reduce(
+    (sum, d) => sum + (d.totalPenjualanMasuk || 0),
+    0
+  );
+  const totalPembelianSemuaDivisi = divisiData.reduce(
+    (sum, d) => sum + (d.totalPembelianKeluar || 0),
+    0
+  );
   const totalDroppingSemuaDivisi = divisiData.reduce((sum, d) => sum + (d.totalDroppingMasuk || 0), 0);
-  const totalGajiSemuaDivisi = divisiData.reduce((sum, d) => sum + (d.totalGajiKeluar || 0), 0);
-  const totalTransaksiSemuaDivisi = divisiData.reduce((sum, d) => sum + (d.totalTransaksiGaji || 0), 0);
+  const totalGajiDanOpsSemuaDivisi = divisiData.reduce(
+    (sum, d) =>
+      sum +
+      (d.totalGajiKeluar || 0) +
+      (d.totalPengeluaranOperasional || 0) +
+      (d.totalTransferKeluar || 0),
+    0
+  );
+  const totalArusMasukSemuaDivisi = totalPenjualanSemuaDivisi + totalDroppingSemuaDivisi;
+  const totalArusKeluarSemuaDivisi = totalPembelianSemuaDivisi + totalGajiDanOpsSemuaDivisi;
+  const totalTransaksiSemuaDivisi = divisiData.reduce((sum, d) => sum + (d.mutasi?.length || 0), 0);
 
   const handleOpenDroppingModal = (targetRekKode: string) => {
     setDropTujuanRek(targetRekKode);
@@ -382,49 +410,73 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
 
       {activeMainTab === 'IKHTISAR_DIVISI' && (
         <>
-          {/* Summary KPI Cards */}
+      {/* Summary KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs">
-          <span className="text-xs text-zinc-400 block mb-1">Total Saldo Kas 6 Divisi</span>
-          <p className="text-xl font-bold font-mono text-emerald-400">
-            {formatRupiah(totalSaldoSemuaDivisi)}
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs min-w-0 overflow-hidden">
+          <span className="text-xs text-zinc-400 block mb-1 truncate">
+            Total Saldo Arus Kas ({divisiData.length} Divisi)
+          </span>
+          <p
+            className={`text-xl font-bold font-mono tabular-nums truncate whitespace-nowrap ${
+              totalSaldoSemuaDivisi < 0 ? 'text-rose-400' : 'text-emerald-400'
+            }`}
+            title={formatRupiah(totalSaldoSemuaDivisi)}
+          >
+            {formatRupiahSingkat(totalSaldoSemuaDivisi)}
           </p>
-          <span className="text-[11px] text-zinc-500 mt-1 flex items-center space-x-1">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 inline" />
-            <span>Tersedia di rekening divisi</span>
+          <span className="text-[11px] text-zinc-500 mt-1 flex items-center space-x-1 truncate">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 inline shrink-0" />
+            <span className="truncate">Akumulasi bersih seluruh divisi</span>
           </span>
         </div>
 
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs">
-          <span className="text-xs text-zinc-400 block mb-1">Total Dropping Masuk</span>
-          <p className="text-xl font-bold font-mono text-cyan-400">
-            {formatRupiah(totalDroppingSemuaDivisi)}
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs min-w-0 overflow-hidden">
+          <span className="text-xs text-zinc-400 block mb-1 truncate">
+            Total Arus Kas Masuk (+)
+          </span>
+          <p
+            className="text-xl font-bold font-mono tabular-nums text-emerald-400 truncate whitespace-nowrap"
+            title={formatRupiah(totalArusMasukSemuaDivisi)}
+          >
+            +{formatRupiahSingkat(totalArusMasukSemuaDivisi)}
           </p>
-          <span className="text-[11px] text-zinc-500 mt-1 flex items-center space-x-1">
-            <TrendingUp className="w-3.5 h-3.5 text-cyan-500 inline" />
-            <span>Suntikan dana dari Kas Pusat</span>
+          <span className="text-[11px] text-zinc-400 mt-1 flex items-center space-x-1 truncate">
+            <TrendingUp className="w-3.5 h-3.5 text-emerald-400 inline shrink-0" />
+            <span className="truncate">
+              Jual: +{formatRupiahSingkat(totalPenjualanSemuaDivisi)} · Drop: +{formatRupiahSingkat(totalDroppingSemuaDivisi)}
+            </span>
           </span>
         </div>
 
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs">
-          <span className="text-xs text-zinc-400 block mb-1">Total Biaya Upah/Gaji Divisi</span>
-          <p className="text-xl font-bold font-mono text-amber-400">
-            {formatRupiah(totalGajiSemuaDivisi)}
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs min-w-0 overflow-hidden">
+          <span className="text-xs text-zinc-400 block mb-1 truncate">
+            Total Arus Kas Keluar (-)
+          </span>
+          <p
+            className="text-xl font-bold font-mono tabular-nums text-rose-400 truncate whitespace-nowrap"
+            title={formatRupiah(totalArusKeluarSemuaDivisi)}
+          >
+            -{formatRupiahSingkat(totalArusKeluarSemuaDivisi)}
           </p>
-          <span className="text-[11px] text-zinc-500 mt-1 flex items-center space-x-1">
-            <TrendingDown className="w-3.5 h-3.5 text-amber-500 inline" />
-            <span>Akumulasi upah terbayarkan</span>
+          <span className="text-[11px] text-zinc-400 mt-1 flex items-center space-x-1 truncate">
+            <TrendingDown className="w-3.5 h-3.5 text-rose-400 inline shrink-0" />
+            <span className="truncate">
+              Beli: -{formatRupiahSingkat(totalPembelianSemuaDivisi)} · Ops/Upah: -{formatRupiahSingkat(totalGajiDanOpsSemuaDivisi)}
+            </span>
           </span>
         </div>
 
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs">
-          <span className="text-xs text-zinc-400 block mb-1">Total Transaksi Upah Divisi</span>
-          <p className="text-xl font-bold font-mono text-zinc-100">
-            {totalTransaksiSemuaDivisi} <span className="text-xs text-zinc-400 font-normal">Slip Upah</span>
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl shadow-xs min-w-0 overflow-hidden">
+          <span className="text-xs text-zinc-400 block mb-1 truncate">
+            Total Mutasi Arus Kas Divisi
+          </span>
+          <p className="text-xl font-bold font-mono tabular-nums text-zinc-100 truncate whitespace-nowrap">
+            {totalTransaksiSemuaDivisi}{' '}
+            <span className="text-xs text-zinc-400 font-normal">Transaksi</span>
           </p>
-          <span className="text-[11px] text-zinc-500 mt-1 flex items-center space-x-1">
-            <Users className="w-3.5 h-3.5 text-indigo-400 inline" />
-            <span>Penugasan kerja karyawan</span>
+          <span className="text-[11px] text-zinc-500 mt-1 flex items-center space-x-1 truncate">
+            <Users className="w-3.5 h-3.5 text-indigo-400 inline shrink-0" />
+            <span className="truncate">Penjualan, Pembelian, Ops &amp; Upah</span>
           </span>
         </div>
       </div>
@@ -438,27 +490,27 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
           return (
             <div
               key={d.idDivisi}
-              className={`bg-zinc-900 border transition-all duration-200 rounded-xl overflow-hidden shadow-md flex flex-col justify-between ${
+              className={`bg-zinc-900 border transition-all duration-200 rounded-xl min-w-0 overflow-hidden shadow-md flex flex-col justify-between ${
                 isSelected
                   ? 'border-emerald-500 ring-2 ring-emerald-500/20 shadow-emerald-950/20'
                   : 'border-zinc-800 hover:border-zinc-700'
               }`}
             >
               {/* Card Header */}
-              <div className="p-4 border-b border-zinc-800/80">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 rounded-lg bg-zinc-800 border border-zinc-700">
+              <div className="p-4 border-b border-zinc-800/80 min-w-0">
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="p-2 rounded-lg bg-zinc-800 border border-zinc-700 shrink-0">
                       {getDivisiIcon(d.divisi)}
                     </div>
-                    <div>
-                      <h3 className="font-bold text-sm text-zinc-100">{d.divisi}</h3>
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-sm text-zinc-100 truncate">{d.divisi}</h3>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border inline-block mt-0.5 ${getDivisiBadgeColor(d.divisi)}`}>
                         {d.kodeRekening}
                       </span>
                     </div>
                   </div>
-                  <span className="text-[10px] bg-emerald-950/60 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800 font-mono">
+                  <span className="text-[10px] bg-emerald-950/60 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800 font-mono shrink-0">
                     AKTIF
                   </span>
                 </div>
@@ -466,46 +518,75 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                 <p className="text-[11px] text-zinc-400 mt-2.5 line-clamp-2">
                   {info?.deskripsi || 'Unit operasional PT Wijaya Agro'}
                 </p>
-                <div className="text-[10px] text-zinc-500 mt-1 flex items-center space-x-1">
-                  <span className="font-medium text-zinc-400">PJ:</span>
-                  <span>{info?.penanggungJawab || '-'}</span>
+                <div className="text-[10px] text-zinc-500 mt-1 flex items-center space-x-1 truncate">
+                  <span className="font-medium text-zinc-400 shrink-0">PJ:</span>
+                  <span className="truncate">{info?.penanggungJawab || '-'}</span>
                 </div>
               </div>
 
               {/* Financial Stats */}
-              <div className="p-4 bg-zinc-950/40 space-y-2.5 text-xs">
-                <div className="flex items-center justify-between pb-2 border-b border-zinc-800/60">
-                  <span className="text-zinc-400">Saldo Kas Rekening:</span>
-                  <span className="font-mono font-bold text-emerald-400 text-sm">
-                    {formatRupiah(d.saldoSaatIni)}
+              <div className="p-4 bg-zinc-950/40 space-y-2 text-xs min-w-0">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-zinc-800/60 min-w-0">
+                  <span className="text-zinc-400 shrink-0">Saldo Arus Kas Divisi:</span>
+                  <span
+                    className={`font-mono tabular-nums font-bold text-sm truncate whitespace-nowrap ${
+                      d.saldoSaatIni < 0 ? 'text-rose-400' : 'text-emerald-400'
+                    }`}
+                    title={formatRupiah(d.saldoSaatIni)}
+                  >
+                    {formatRupiahSingkat(d.saldoSaatIni)}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-zinc-400">Dropping Masuk:</span>
-                  <span className="font-mono font-medium text-cyan-400">
-                    +{formatRupiah(d.totalDroppingMasuk)}
+                <div className="flex items-center justify-between gap-2 text-[11px] min-w-0">
+                  <span className="text-zinc-400 shrink-0">Penjualan Masuk (+):</span>
+                  <span
+                    className="font-mono tabular-nums font-bold text-emerald-400 truncate whitespace-nowrap"
+                    title={`+${formatRupiah(d.totalPenjualanMasuk || 0)}`}
+                  >
+                    +{formatRupiahSingkat(d.totalPenjualanMasuk || 0)}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-zinc-400">Total Biaya Upah:</span>
-                  <span className="font-mono font-medium text-rose-400">
-                    -{formatRupiah(d.totalGajiKeluar)}
+                <div className="flex items-center justify-between gap-2 text-[11px] min-w-0">
+                  <span className="text-zinc-400 shrink-0">Pembelian / Kulakan (-):</span>
+                  <span
+                    className="font-mono tabular-nums font-medium text-rose-400 truncate whitespace-nowrap"
+                    title={`-${formatRupiah(d.totalPembelianKeluar || 0)}`}
+                  >
+                    -{formatRupiahSingkat(d.totalPembelianKeluar || 0)}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-zinc-400">Riwayat Penugasan:</span>
+                <div className="flex items-center justify-between gap-2 text-[11px] min-w-0">
+                  <span className="text-zinc-400 shrink-0">Dropping Kas Masuk (+):</span>
+                  <span
+                    className="font-mono tabular-nums font-medium text-cyan-400 truncate whitespace-nowrap"
+                    title={`+${formatRupiah(d.totalDroppingMasuk)}`}
+                  >
+                    +{formatRupiahSingkat(d.totalDroppingMasuk)}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 text-[11px] min-w-0">
+                  <span className="text-zinc-400 shrink-0">Upah &amp; Biaya Ops (-):</span>
+                  <span
+                    className="font-mono tabular-nums font-medium text-amber-400 truncate whitespace-nowrap"
+                    title={`-${formatRupiah(
+                      Math.abs((d.totalGajiKeluar || 0) + (d.totalPengeluaranOperasional || 0))
+                    )}`}
+                  >
+                    -
+                    {formatRupiahSingkat(
+                      Math.abs((d.totalGajiKeluar || 0) + (d.totalPengeluaranOperasional || 0))
+                    )}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 text-[11px] pt-1 border-t border-zinc-800/60">
+                  <span className="text-zinc-400">Total Mutasi Divisi:</span>
                   <span className="font-semibold text-zinc-300">
-                    {d.totalTransaksiGaji} Hari Kerja
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-zinc-800/60">
-                  <span className="text-zinc-400">Penyimpanan Fisik:</span>
-                  <span className="text-emerald-400 font-semibold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800">
-                    Rekening Perusahaan
+                    {d.mutasi.length} Transaksi
                   </span>
                 </div>
 
@@ -624,22 +705,22 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
           </div>
 
           {/* Filter Bar */}
-          <div className="p-3 bg-zinc-900 border-b border-zinc-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 text-xs">
+          <div className="p-3 bg-zinc-900 border-b border-zinc-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 text-xs">
             <div className="relative flex-1 max-w-sm">
               <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-2.5" />
               <input
                 type="text"
-                placeholder="Cari transaksi, karyawan, nomor ref..."
+                placeholder="Cari item beras/komoditas, mitra, nota..."
                 value={mutasiSearch}
                 onChange={(e) => setMutasiSearch(e.target.value)}
                 className="w-full bg-zinc-800 border border-zinc-700 rounded pl-8 pr-3 py-1.5 text-zinc-200 placeholder-zinc-500 focus:outline-hidden focus:border-emerald-500"
               />
             </div>
 
-            <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 sm:pb-0">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 onClick={() => setMutasiFilterJenis('ALL')}
-                className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
                   mutasiFilterJenis === 'ALL'
                     ? 'bg-zinc-700 text-white font-semibold'
                     : 'text-zinc-400 hover:bg-zinc-800'
@@ -648,34 +729,54 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                 Semua ({selectedDivisi.mutasi.length})
               </button>
               <button
+                onClick={() => setMutasiFilterJenis('PENJUALAN_MASUK')}
+                className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                  mutasiFilterJenis === 'PENJUALAN_MASUK'
+                    ? 'bg-emerald-900/80 text-emerald-200 font-semibold border border-emerald-700'
+                    : 'text-zinc-400 hover:bg-zinc-800'
+                }`}
+              >
+                Penjualan (+)
+              </button>
+              <button
+                onClick={() => setMutasiFilterJenis('PEMBELIAN_KELUAR')}
+                className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                  mutasiFilterJenis === 'PEMBELIAN_KELUAR'
+                    ? 'bg-rose-900/80 text-rose-200 font-semibold border border-rose-700'
+                    : 'text-zinc-400 hover:bg-zinc-800'
+                }`}
+              >
+                Pembelian (-)
+              </button>
+              <button
                 onClick={() => setMutasiFilterJenis('DROPPING_MASUK')}
-                className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
                   mutasiFilterJenis === 'DROPPING_MASUK'
                     ? 'bg-cyan-900/80 text-cyan-200 font-semibold border border-cyan-700'
                     : 'text-zinc-400 hover:bg-zinc-800'
                 }`}
               >
-                Dropping Kas
+                Dropping (+)
+              </button>
+              <button
+                onClick={() => setMutasiFilterJenis('PENGELUARAN_OPERASIONAL')}
+                className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                  mutasiFilterJenis === 'PENGELUARAN_OPERASIONAL'
+                    ? 'bg-orange-900/80 text-orange-200 font-semibold border border-orange-700'
+                    : 'text-zinc-400 hover:bg-zinc-800'
+                }`}
+              >
+                Biaya Ops (-)
               </button>
               <button
                 onClick={() => setMutasiFilterJenis('GAJI_KARYAWAN')}
-                className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
                   mutasiFilterJenis === 'GAJI_KARYAWAN'
                     ? 'bg-amber-900/80 text-amber-200 font-semibold border border-amber-700'
                     : 'text-zinc-400 hover:bg-zinc-800'
                 }`}
               >
-                Upah Karyawan
-              </button>
-              <button
-                onClick={() => setMutasiFilterJenis('TRANSFER_KELUAR')}
-                className={`px-2.5 py-1 rounded text-xs transition-colors ${
-                  mutasiFilterJenis === 'TRANSFER_KELUAR'
-                    ? 'bg-rose-900/80 text-rose-200 font-semibold border border-rose-700'
-                    : 'text-zinc-400 hover:bg-zinc-800'
-                }`}
-              >
-                Transfer Keluar
+                Upah (-)
               </button>
             </div>
           </div>
@@ -685,12 +786,14 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
             <table className="w-full text-left text-xs">
               <thead className="bg-zinc-950/80 text-zinc-400 border-b border-zinc-800 sticky top-0 uppercase tracking-wider text-[10px]">
                 <tr>
-                  <th className="py-2.5 px-3">Tanggal & Jam</th>
-                  <th className="py-2.5 px-3">Jenis Mutasi</th>
-                  <th className="py-2.5 px-3">Keterangan & Referensi</th>
-                  <th className="py-2.5 px-3">Pekerja</th>
-                  <th className="py-2.5 px-3 text-right">Kas Masuk (Dropping)</th>
-                  <th className="py-2.5 px-3 text-right">Kas Keluar (Upah/Trf)</th>
+                  <th className="py-2.5 px-3">Tanggal &amp; Jam</th>
+                  <th className="py-2.5 px-3">Jenis Arus Kas</th>
+                  <th className="py-2.5 px-3">Keterangan &amp; Nota</th>
+                  <th className="py-2.5 px-3">Mitra / Pekerja</th>
+                  <th className="py-2.5 px-3">Rek Fisik</th>
+                  <th className="py-2.5 px-3 text-right">Arus Masuk (+)</th>
+                  <th className="py-2.5 px-3 text-right">Arus Keluar (-)</th>
+                  <th className="py-2.5 px-3 text-right">Saldo Divisi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 font-mono text-[11px]">
@@ -702,6 +805,7 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                       return (
                         m.keterangan.toLowerCase().includes(q) ||
                         m.refId.toLowerCase().includes(q) ||
+                        (m.pihakTerkait && m.pihakTerkait.toLowerCase().includes(q)) ||
                         (m.karyawanTerkait && m.karyawanTerkait.toLowerCase().includes(q))
                       );
                     }
@@ -713,6 +817,21 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                         {m.tanggal} <span className="text-[10px] text-zinc-500">pk {m.jam}</span>
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
+                        {m.jenis === 'PENJUALAN_MASUK' && (
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">
+                            Penjualan Masuk
+                          </span>
+                        )}
+                        {m.jenis === 'PEMBELIAN_KELUAR' && (
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 font-semibold">
+                            Pembelian / Kulakan
+                          </span>
+                        )}
+                        {m.jenis === 'PENGELUARAN_OPERASIONAL' && (
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-orange-950 text-orange-300 border border-orange-800 font-semibold">
+                            Biaya Operasional
+                          </span>
+                        )}
                         {m.jenis === 'DROPPING_MASUK' && (
                           <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
                             Dropping Masuk
@@ -724,31 +843,45 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                           </span>
                         )}
                         {m.jenis === 'TRANSFER_KELUAR' && (
-                          <span className="text-[10px] px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800">
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">
                             Transfer Keluar
                           </span>
                         )}
                       </td>
                       <td className="py-2.5 px-3 max-w-xs font-sans text-zinc-200">
-                        <div className="truncate">{m.keterangan}</div>
+                        <div className="truncate" title={m.keterangan}>
+                          {m.keterangan}
+                        </div>
                         <span className="text-[10px] font-mono text-zinc-500">Ref: {m.refId}</span>
                       </td>
                       <td className="py-2.5 px-3 font-sans text-zinc-300 whitespace-nowrap">
-                        {m.karyawanTerkait || '-'}
+                        {m.pihakTerkait || m.karyawanTerkait || '-'}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-bold text-cyan-400 whitespace-nowrap">
+                      <td className="py-2.5 px-3 text-zinc-300 whitespace-nowrap">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">
+                          {m.rekeningFisik || '-'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-bold text-emerald-400 whitespace-nowrap">
                         {m.masuk > 0 ? `+${formatRupiah(m.masuk)}` : '-'}
                       </td>
                       <td className="py-2.5 px-3 text-right font-bold text-rose-400 whitespace-nowrap">
                         {m.keluar > 0 ? `-${formatRupiah(m.keluar)}` : '-'}
+                      </td>
+                      <td
+                        className={`py-2.5 px-3 text-right font-bold whitespace-nowrap ${
+                          m.saldoSetelah < 0 ? 'text-rose-400' : 'text-amber-300'
+                        }`}
+                      >
+                        {formatRupiah(m.saldoSetelah)}
                       </td>
                     </tr>
                   ))}
 
                 {selectedDivisi.mutasi.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-zinc-500 font-sans">
-                      Belum ada mutasi keuangan untuk divisi ini. Klik tombol Dropping Kas atau Input Upah untuk memulai transaksi.
+                    <td colSpan={8} className="py-8 text-center text-zinc-500 font-sans">
+                      Belum ada mutasi arus kas untuk divisi ini. Lakukan Penjualan / Pembelian dengan memilih divisi ini, atau klik Dropping Kas / Input Payroll.
                     </td>
                   </tr>
                 )}

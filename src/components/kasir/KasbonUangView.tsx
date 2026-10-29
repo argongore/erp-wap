@@ -14,6 +14,8 @@ import {
   Printer,
   Sparkles,
   Search,
+  Trash2,
+  Pencil,
 } from 'lucide-react';
 import { Mitra, Rekening, TransaksiKasbonUang } from '../../server/types.ts';
 import { formatRupiah, formatTanggalIndo, getWIBTodayString } from '../../utils/format.ts';
@@ -21,6 +23,8 @@ import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
 import { FotoNotaPreviewModal } from '../common/FotoNotaPreviewModal.tsx';
+import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
+import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 
 interface Props {
   mitraList: Mitra[];
@@ -49,6 +53,7 @@ export const KasbonUangView: React.FC<Props> = ({
   // Common Mitra selection
   const [selectedMitraId, setSelectedMitraId] = useState<string>(activeMitras[0]?.id || '');
   const [mitraCategoryFilter, setMitraCategoryFilter] = useState<'ALL' | 'MITRA' | 'KARYAWAN'>('ALL');
+  const [modalBersihkanNotaOpen, setModalBersihkanNotaOpen] = useState(false);
 
   // State: Kasbon Uang Baru
   const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
@@ -76,6 +81,7 @@ export const KasbonUangView: React.FC<Props> = ({
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [editTxId, setEditTxId] = useState<string | null>(null);
 
   // Photo Lightbox Modal
   const [previewPhoto, setPreviewPhoto] = useState<{
@@ -95,7 +101,17 @@ export const KasbonUangView: React.FC<Props> = ({
   // Check live balance of chosen source account for Kasbon Baru
   const activeSourceAccount =
     metode === 'TUNAI' ? kas01 : availableBanks.find((b) => b.kode === rekeningSumber);
-  const isBalanceSufficient = activeSourceAccount ? activeSourceAccount.saldoSaatIni >= nominal : false;
+  const isSourceAnakPerusahaan = Boolean(
+    activeSourceAccount &&
+      (activeSourceAccount.isAnakPerusahaan ||
+        activeSourceAccount.kategori === 'ANAK_PERUSAHAAN' ||
+        activeSourceAccount.kode === 'REK-DPPARABO')
+  );
+  const isBalanceSufficient = activeSourceAccount
+    ? isSourceAnakPerusahaan
+      ? true
+      : activeSourceAccount.saldoSaatIni >= nominal
+    : false;
 
   // Process standard Kasbon Uang Baru
   const handleProcessSubmitKasbonBaru = async () => {
@@ -110,7 +126,7 @@ export const KasbonUangView: React.FC<Props> = ({
       return;
     }
 
-    if (activeSourceAccount.saldoSaatIni < nominal) {
+    if (!isSourceAnakPerusahaan && activeSourceAccount.saldoSaatIni < nominal) {
       setErrorMsg(
         `Saldo ${activeSourceAccount.nama} (${activeSourceAccount.kode}) tidak mencukupi! Saldo: ${formatRupiah(
           activeSourceAccount.saldoSaatIni
@@ -136,28 +152,32 @@ export const KasbonUangView: React.FC<Props> = ({
       const receipt: ReceiptData = {
         title: 'BUKTI PENGELUARAN KASBON UANG',
         subtitle: 'Pemberian Pinjaman Dana Tunai / Kasbon ke Mitra',
-        nomorTransaksi: result.idTransaksi,
-        tanggal: result.tanggal,
-        jam: result.jam,
-        mitra: result.namaMitra,
-        rekening: result.rekeningSumber,
+        nomorTransaksi: result?.idTransaksi || `KBU-${Date.now().toString().slice(-4)}`,
+        tanggal: result?.tanggal || getWIBTodayString(),
+        jam: result?.jam || '00:00:00',
+        mitra: result?.namaMitra || 'Mitra',
+        rekening: result?.rekeningSumber || rekeningSumber,
         kategori: 'KASBON_UANG',
-        fotoNota: result.fotoNota || fotoKasbonBaru,
+        fotoNota: result?.fotoNota || fotoKasbonBaru || undefined,
         detailRows: [
-          { label: 'Penerima Kasbon', value: result.namaMitra },
+          { label: 'Penerima Kasbon', value: result?.namaMitra || 'Mitra' },
           { label: 'Jenis Transaksi', value: 'KASBON UANG' },
-          { label: 'Metode Pengeluaran', value: result.metode },
-          { label: 'Rekening Sumber Dana', value: `${result.rekeningSumber} (${activeSourceAccount?.nama})` },
-          { label: 'Status Pinjaman', value: result.status, highlight: true },
-          { label: 'Lampiran Foto Nota', value: result.fotoNota ? '✅ Tersimpan' : 'Tidak Ada' },
-          { label: 'Nominal Kasbon Uang', value: result.nominal, isTotal: true },
+          { label: 'Metode Pengeluaran', value: result?.metode || metode },
+          { label: 'Rekening Sumber Dana', value: `${result?.rekeningSumber || rekeningSumber} (${activeSourceAccount?.nama || ''})` },
+          { label: 'Status Pinjaman', value: result?.status || 'BELUM_LUNAS', highlight: true },
+          { label: 'Lampiran Foto Nota', value: (result?.fotoNota || fotoKasbonBaru) ? '✅ Tersimpan' : 'Tidak Ada' },
+          { label: 'Nominal Kasbon Uang', value: result?.nominal ?? nominal, isTotal: true },
         ],
-        catatan: result.keterangan,
+        catatan: result?.keterangan || keterangan,
         kasir: 'Kasir Wijaya Agro',
       };
 
       setFotoKasbonBaru('');
-      onSuccess(receipt);
+      try {
+        onSuccess(receipt);
+      } catch (err) {
+        console.warn('onSuccess callback error in KasbonUangView:', err);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal memproses kasbon uang');
     } finally {
@@ -207,15 +227,15 @@ export const KasbonUangView: React.FC<Props> = ({
             ? 'BUKTI KONVERSI NOTA LALU (PIUTANG BARANG)'
             : 'BUKTI PENCATATAN NOTA LALU (TITIP UANG / PANEN)',
         subtitle: 'Pencatatan Dokumen Fisik Manual Masa Lalu Sebagai Saldo Awal Sistem',
-        nomorTransaksi: res.record.idTransaksi || res.record.noPembelian,
-        tanggal: res.record.tanggalNotaLalu || res.record.tanggal,
-        jam: res.record.jam,
-        mitra: res.mitraNama,
+        nomorTransaksi: res?.record?.idTransaksi || res?.record?.noPembelian || cleanNoNota,
+        tanggal: res?.record?.tanggalNotaLalu || res?.record?.tanggal || getWIBTodayString(),
+        jam: res?.record?.jam || '00:00:00',
+        mitra: res?.mitraNama || 'Mitra',
         rekening: subTipeNotaLalu === 'PIUTANG_BARANG_NOTA_LALU' ? 'BON01 (Virtual Piutang)' : 'TIT01 (Virtual Titip)',
         kategori: subTipeNotaLalu === 'PIUTANG_BARANG_NOTA_LALU' ? 'KASBON_UANG' : 'PEMBELIAN_HASIL_BUMI',
         fotoNota: fotoNotaLalu || undefined,
         detailRows: [
-          { label: 'Pihak Mitra / Anak Buah', value: res.mitraNama },
+          { label: 'Pihak Mitra / Anak Buah', value: res?.mitraNama || 'Mitra' },
           { label: 'No. Dokumen / Nota Manual', value: cleanNoNota },
           { label: 'Tanggal Nota Fisik', value: tanggalNotaLalu },
           {
@@ -243,7 +263,11 @@ export const KasbonUangView: React.FC<Props> = ({
       setKeteranganNotaLalu('');
       setFotoNotaLalu('');
 
-      onSuccess(receipt);
+      try {
+        onSuccess(receipt);
+      } catch (err) {
+        console.warn('onSuccess callback error in KasbonUangView:', err);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal memproses input nota lalu');
     } finally {
@@ -317,6 +341,16 @@ export const KasbonUangView: React.FC<Props> = ({
             <span className="ml-1 px-1.5 py-0.2 bg-amber-400 text-amber-950 rounded text-[10px]">
               Fisik Manual
             </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setModalBersihkanNotaOpen(true)}
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 transition-colors cursor-pointer"
+            title="Bersihkan catatan bukti fisik nota lalu berdasarkan nama atau waktu"
+          >
+            <Trash2 className="w-4 h-4 text-rose-600" />
+            <span>Bersihkan Bukti Nota</span>
           </button>
         </div>
       </div>
@@ -516,7 +550,11 @@ export const KasbonUangView: React.FC<Props> = ({
                   >
                     {availableBanks.map((b) => (
                       <option key={b.kode} value={b.kode}>
-                        {b.nama} ({b.kode}) - Saldo: {formatRupiah(b.saldoSaatIni)}
+                        {b.nama} ({b.kode})
+                        {b.isAnakPerusahaan || b.kategori === 'ANAK_PERUSAHAAN' || b.kode === 'REK-DPPARABO'
+                          ? ' [Anak Perusahaan & Mitra - 1 Transaksi]'
+                          : ''}{' '}
+                        - Saldo: {formatRupiah(b.saldoSaatIni)}
                       </option>
                     ))}
                   </select>
@@ -910,6 +948,16 @@ export const KasbonUangView: React.FC<Props> = ({
 
                         <button
                           type="button"
+                          onClick={() => setEditTxId(k.idTransaksi)}
+                          className="px-2 py-0.5 bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 font-semibold rounded text-[10px] flex items-center space-x-1 transition-colors cursor-pointer"
+                          title="Edit nominal kasbon, rekening, atau keterangan"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit Detail</span>
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => {
                             const receipt: ReceiptData = {
                               title: k.isNotaLalu
@@ -1035,6 +1083,27 @@ export const KasbonUangView: React.FC<Props> = ({
           keterangan={previewPhoto.keterangan}
         />
       )}
+
+      {/* Bersihkan Bukti Nota Lalu Modal */}
+      <ModalBersihkanNotaLalu
+        isOpen={modalBersihkanNotaOpen}
+        onClose={() => setModalBersihkanNotaOpen(false)}
+        mitraList={mitraList}
+        onSuccess={() => {
+          onRefresh();
+        }}
+      />
+
+      {/* Modal Universal Edit Detail Kasbon Uang / Nota Lalu */}
+      <ModalEditTransaksiUniversal
+        isOpen={Boolean(editTxId)}
+        transactionId={editTxId}
+        jenisHint="KASBON_UANG"
+        onClose={() => setEditTxId(null)}
+        onSuccess={() => {
+          onRefresh();
+        }}
+      />
     </div>
   );
 };

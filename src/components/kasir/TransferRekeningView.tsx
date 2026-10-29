@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { ArrowLeftRight, CheckCircle2, AlertCircle, Info, Landmark, History, AlertTriangle } from 'lucide-react';
+import { ArrowLeftRight, CheckCircle2, AlertCircle, Info, Landmark, History, AlertTriangle, Pencil } from 'lucide-react';
 import { Rekening, TransaksiTransferRekening } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 
 interface Props {
   rekeningList: Rekening[];
@@ -29,14 +30,26 @@ export const TransferRekeningView: React.FC<Props> = ({
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [editTxId, setEditTxId] = useState<string | null>(null);
 
   const nominal = Number(nominalInput) || 0;
+
+  const isAnakPerusahaanAccount = (r?: Rekening) =>
+    Boolean(r && (r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.kode === 'REK-DPPARABO'));
 
   const sourceObj = validAccounts.find((r) => r.kode === rekeningSumber);
   const destObj = validAccounts.find((r) => r.kode === rekeningTujuan);
 
+  const isSourceAnakPerusahaan = isAnakPerusahaanAccount(sourceObj);
+  const isDestAnakPerusahaan = isAnakPerusahaanAccount(destObj);
+  const isTouchAnakPerusahaan = isSourceAnakPerusahaan || isDestAnakPerusahaan;
+
   const isSameAccount = rekeningSumber === rekeningTujuan;
-  const isBalanceSufficient = sourceObj ? sourceObj.saldoSaatIni >= nominal : false;
+  const isBalanceSufficient = sourceObj
+    ? isSourceAnakPerusahaan
+      ? true
+      : sourceObj.saldoSaatIni >= nominal
+    : false;
 
   const handleProcessSubmit = async () => {
     setErrorMsg('');
@@ -74,17 +87,30 @@ export const TransferRekeningView: React.FC<Props> = ({
       onRefresh();
 
       const receipt: ReceiptData = {
-        title: 'BUKTI TRANSFER ANTAR REKENING',
-        subtitle: 'Mutasi Dana Internal PT Wijaya Agro',
+        title: isTouchAnakPerusahaan
+          ? 'BUKTI TRANSAKSI TERPADU ANAK PERUSAHAAN'
+          : 'BUKTI TRANSFER ANTAR REKENING',
+        subtitle: isTouchAnakPerusahaan
+          ? '1 Transaksi Otomatis di Master Rekening & Mitra Anak Perusahaan'
+          : 'Mutasi Dana Internal PT Wijaya Agro',
         nomorTransaksi: result.noTransfer,
         tanggal: result.tanggal,
         jam: result.jam,
+        mitra: result.namaMitraTerkait || undefined,
         rekening: `${result.rekeningSumber} -> ${result.rekeningTujuan}`,
         kategori: 'TRANSFER_REKENING',
         detailRows: [
-          { label: 'Jenis Mutasi', value: 'TRANSFER INTERNAL PERUSAHAAN' },
+          {
+            label: 'Jenis Mutasi',
+            value: isTouchAnakPerusahaan
+              ? '1 TRANSAKSI TERPADU (REKENING & MITRA ANAK PERUSAHAAN)'
+              : 'TRANSFER INTERNAL PERUSAHAAN',
+          },
           { label: 'Dari Rekening (Pengirim)', value: `${result.rekeningSumber} (${sourceObj?.nama})` },
           { label: 'Ke Rekening (Penerima)', value: `${result.rekeningTujuan} (${destObj?.nama})` },
+          ...(result.namaMitraTerkait
+            ? [{ label: 'Sinkron Buku Mitra', value: `${result.namaMitraTerkait} (Otomatis 1 Transaksi)` }]
+            : []),
           { label: 'Status Transaksi', value: result.status, highlight: true },
           { label: 'Nominal Perpindahan Dana', value: result.nominal, isTotal: true },
         ],
@@ -164,13 +190,13 @@ export const TransferRekeningView: React.FC<Props> = ({
               >
                 {validAccounts.map((r) => (
                   <option key={r.kode} value={r.kode}>
-                    {r.nama} ({r.kode}) — Saldo: {formatRupiah(r.saldoSaatIni)}
+                    {r.nama} ({r.kode}){isAnakPerusahaanAccount(r) ? ' [Anak Perusahaan & Mitra]' : ''} — Saldo: {formatRupiah(r.saldoSaatIni)}
                   </option>
                 ))}
               </select>
               <div className="flex justify-between text-[11px] text-zinc-500 mt-1">
                 <span>Saldo Aktual Sumber:</span>
-                <span className="font-bold text-emerald-800 font-mono">
+                <span className="font-bold text-emerald-800 font-mono tabular-nums">
                   {formatRupiah(sourceObj?.saldoSaatIni || 0)}
                 </span>
               </div>
@@ -188,17 +214,31 @@ export const TransferRekeningView: React.FC<Props> = ({
               >
                 {validAccounts.map((r) => (
                   <option key={r.kode} value={r.kode}>
-                    {r.nama} ({r.kode}) — Saldo: {formatRupiah(r.saldoSaatIni)}
+                    {r.nama} ({r.kode}){isAnakPerusahaanAccount(r) ? ' [Anak Perusahaan & Mitra]' : ''} — Saldo: {formatRupiah(r.saldoSaatIni)}
                   </option>
                 ))}
               </select>
               <div className="flex justify-between text-[11px] text-zinc-500 mt-1">
                 <span>Saldo Aktual Tujuan:</span>
-                <span className="font-bold text-sky-800 font-mono">
+                <span className="font-bold text-sky-800 font-mono tabular-nums">
                   {formatRupiah(destObj?.saldoSaatIni || 0)}
                 </span>
               </div>
             </div>
+
+            {/* Banner Mode 1 Transaksi Terpadu Anak Perusahaan */}
+            {isTouchAnakPerusahaan && !isSameAccount && (
+              <div className="p-3 bg-teal-50/80 border border-teal-300 rounded-lg text-xs text-teal-950 space-y-1">
+                <div className="font-bold text-teal-900">
+                  Mode 1 Transaksi Terpadu (Rekening &amp; Mitra Anak Perusahaan)
+                </div>
+                <p className="text-[11px] text-zinc-700 leading-relaxed">
+                  {isDestAnakPerusahaan
+                    ? `Menyimpan dana ke ${destObj?.nama} (${destObj?.kode}) otomatis tercatat sebagai 1 transaksi di Master Rekening sekaligus di Rekening Koran Mitra ${destObj?.nama}.`
+                    : `Menarik / memakai dana dari ${sourceObj?.nama} (${sourceObj?.kode}) otomatis tercatat sebagai 1 transaksi di Master Rekening & Buku Mitra. Jika melebihi saldo tersimpan, otomatis diakui sebagai Dana Talangan Anak Perusahaan ke PT.`}
+                </p>
+              </div>
+            )}
 
             {/* Same Account Warning */}
             {isSameAccount && (
@@ -297,13 +337,28 @@ export const TransferRekeningView: React.FC<Props> = ({
                       <span className="bg-sky-50 text-sky-800 px-1.5 py-0.5 rounded font-mono font-bold">
                         {t.rekeningTujuan}
                       </span>
+                      {t.namaMitraTerkait && (
+                        <span className="text-[10px] text-teal-800 font-semibold">
+                          · 1 Transaksi Mitra: {t.namaMitraTerkait}
+                        </span>
+                      )}
                     </div>
 
-                    <div className="flex justify-between text-[10px] text-zinc-400 pt-0.5">
-                      <span className="truncate max-w-[240px]">{t.keterangan}</span>
-                      <span>
-                        {t.tanggal} · {t.jam}
-                      </span>
+                    <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1">
+                      <span className="truncate max-w-[200px]">{t.keterangan}</span>
+                      <div className="flex items-center gap-2">
+                        <span>
+                          {t.tanggal} · {t.jam}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setEditTxId(t.noTransfer)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 font-semibold text-[10px] transition-colors cursor-pointer"
+                        >
+                          <Pencil className="w-2.5 h-2.5" />
+                          <span>Edit</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))
@@ -375,6 +430,17 @@ export const TransferRekeningView: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* Modal Universal Edit Detail Transfer Rekening */}
+      <ModalEditTransaksiUniversal
+        isOpen={Boolean(editTxId)}
+        transactionId={editTxId}
+        jenisHint="TRANSFER_REKENING"
+        onClose={() => setEditTxId(null)}
+        onSuccess={() => {
+          onRefresh();
+        }}
+      />
     </div>
   );
 };

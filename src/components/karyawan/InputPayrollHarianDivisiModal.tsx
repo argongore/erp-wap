@@ -288,7 +288,7 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
               <div>
                 <span className="font-bold text-zinc-100">{activeKry.nama}</span>{' '}
                 <span className="text-[11px] text-zinc-400">
-                  ({activeKry.jabatan} - {activeKry.departemen})
+                  ({activeKry.jabatan} - Divisi: {activeKry.divisi || activeKry.departemen})
                 </span>
               </div>
               <div className="flex items-center space-x-3">
@@ -344,7 +344,7 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
             <div className="flex items-center justify-between">
               <span className="font-bold text-amber-300 text-xs flex items-center space-x-1.5">
                 <FileSpreadsheet className="w-4 h-4 text-amber-400" />
-                <span>Format Patokan Catatan Keuangan Gaji Harian</span>
+                <span>Rincian Pekerjaan &amp; Catatan Gaji Harian</span>
               </span>
               <span className="text-[10px] text-amber-300 bg-amber-950 px-2 py-0.5 rounded border border-amber-700">
                 PT Wijaya Agro Perkasa
@@ -387,11 +387,6 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                     onClick={() => {
                       setItemPekerjaan(it);
                       if (!tugasPekerjaan) setTugasPekerjaan(it);
-                      if (it === 'JALAN') setUpahHarianInput('800000');
-                      else if (it === 'SURJAL') setUpahHarianInput('100000');
-                      else if (it === 'JAJAN') setUpahHarianInput('50000');
-                      else if (it === 'NGEBAL') setUpahHarianInput('70000');
-                      else if (it === 'KERJA GUDANG') setUpahHarianInput(String(defaultUpah));
                     }}
                     className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
                       itemPekerjaan === it

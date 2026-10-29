@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import { LabaRugiSummary, LabaRugiProdukItem } from '../../server/types.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 
 interface Props {
   onNavigateToKasir?: () => void;
@@ -32,8 +32,9 @@ export const LabaRugiProdukView: React.FC<Props> = ({
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (silentArg?: boolean | React.MouseEvent) => {
+    const silent = silentArg === true;
+    if (!silent && !data) setLoading(true);
     try {
       const res = await api.getLabaRugiProduk();
       setData(res);
@@ -45,7 +46,10 @@ export const LabaRugiProdukView: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
+    const onErpUpdated = () => loadData(true);
+    window.addEventListener('erp:data-updated', onErpUpdated);
+    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
   }, []);
 
   const items = data?.items || [];
@@ -114,64 +118,73 @@ export const LabaRugiProdukView: React.FC<Props> = ({
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* KPI 1: Total Omzet Penjualan */}
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
-          <div>
-            <p className="text-xs text-zinc-400">Total Omzet Penjualan</p>
-            <p className="text-xl font-bold text-zinc-100 font-mono mt-1">
-              {formatRupiah(data?.totalOmzet || 0)}
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between gap-3 min-w-0 overflow-hidden">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-zinc-400 truncate">Total Omzet Penjualan</p>
+            <p
+              className="text-xl font-bold text-zinc-100 font-mono tabular-nums mt-1 truncate whitespace-nowrap"
+              title={formatRupiah(data?.totalOmzet || 0)}
+            >
+              {formatRupiahSingkat(data?.totalOmzet || 0)}
             </p>
-            <p className="text-[11px] text-zinc-500 mt-1">
+            <p className="text-[11px] text-zinc-500 mt-1 truncate">
               Dari {data?.totalPenjualanTransaksi || 0} transaksi kasir
             </p>
           </div>
-          <div className="p-3 bg-sky-950/80 border border-sky-800/60 rounded-xl text-sky-400">
+          <div className="p-3 bg-sky-950/80 border border-sky-800/60 rounded-xl text-sky-400 shrink-0">
             <DollarSign className="w-6 h-6" />
           </div>
         </div>
 
         {/* KPI 2: Total Modal HPP */}
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
-          <div>
-            <p className="text-xs text-zinc-400">Total Modal (HPP)</p>
-            <p className="text-xl font-bold text-zinc-300 font-mono mt-1">
-              {formatRupiah(data?.totalHppModal || 0)}
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between gap-3 min-w-0 overflow-hidden">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-zinc-400 truncate">Total Modal (HPP)</p>
+            <p
+              className="text-xl font-bold text-zinc-300 font-mono tabular-nums mt-1 truncate whitespace-nowrap"
+              title={formatRupiah(data?.totalHppModal || 0)}
+            >
+              {formatRupiahSingkat(data?.totalHppModal || 0)}
             </p>
-            <p className="text-[11px] text-zinc-500 mt-1">Harga pokok barang terjual</p>
+            <p className="text-[11px] text-zinc-500 mt-1 truncate">Harga pokok barang terjual</p>
           </div>
-          <div className="p-3 bg-zinc-800 border border-zinc-700 rounded-xl text-zinc-400">
+          <div className="p-3 bg-zinc-800 border border-zinc-700 rounded-xl text-zinc-400 shrink-0">
             <Package className="w-6 h-6" />
           </div>
         </div>
 
         {/* KPI 3: Total Laba Kotor */}
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
-          <div>
-            <p className="text-xs text-zinc-400">Total Laba Kotor (Gross Profit)</p>
-            <p className="text-xl font-bold text-emerald-400 font-mono mt-1">
-              {formatRupiah(data?.totalLabaKotor || 0)}
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between gap-3 min-w-0 overflow-hidden">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-zinc-400 truncate">Total Laba Kotor (Gross Profit)</p>
+            <p
+              className="text-xl font-bold text-emerald-400 font-mono tabular-nums mt-1 truncate whitespace-nowrap"
+              title={formatRupiah(data?.totalLabaKotor || 0)}
+            >
+              {formatRupiahSingkat(data?.totalLabaKotor || 0)}
             </p>
-            <p className="text-[11px] text-emerald-400 mt-1 font-semibold flex items-center space-x-1">
-              <ArrowUpRight className="w-3.5 h-3.5" />
-              <span>Omzet dikurangi HPP Modal</span>
+            <p className="text-[11px] text-emerald-400 mt-1 font-semibold flex items-center space-x-1 truncate">
+              <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Omzet dikurangi HPP Modal</span>
             </p>
           </div>
-          <div className="p-3 bg-emerald-950/80 border border-emerald-800/60 rounded-xl text-emerald-400">
+          <div className="p-3 bg-emerald-950/80 border border-emerald-800/60 rounded-xl text-emerald-400 shrink-0">
             <TrendingUp className="w-6 h-6" />
           </div>
         </div>
 
         {/* KPI 4: Margin Keuntungan % */}
-        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
-          <div>
-            <p className="text-xs text-zinc-400">Rata-rata Margin Keuntungan</p>
-            <p className="text-2xl font-bold text-amber-400 font-mono mt-1">
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between gap-3 min-w-0 overflow-hidden">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-zinc-400 truncate">Rata-rata Margin Keuntungan</p>
+            <p className="text-2xl font-bold text-amber-400 font-mono tabular-nums mt-1 truncate whitespace-nowrap">
               {data?.persentaseMarginRataRata || 0}%
             </p>
-            <p className="text-[11px] text-zinc-500 mt-1">
+            <p className="text-[11px] text-zinc-500 mt-1 truncate">
               Produk Terlaris: <span className="text-zinc-300 font-medium">{data?.produkTerlaris}</span>
             </p>
           </div>
-          <div className="p-3 bg-amber-950/80 border border-amber-800/60 rounded-xl text-amber-400">
+          <div className="p-3 bg-amber-950/80 border border-amber-800/60 rounded-xl text-amber-400 shrink-0">
             <Percent className="w-6 h-6" />
           </div>
         </div>

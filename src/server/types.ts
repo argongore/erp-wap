@@ -2,24 +2,27 @@
 
 export type StatusAktif = 'AKTIF' | 'NONAKTIF';
 
-export type RoleMitra = 'CUSTOMER' | 'SUPPLIER' | 'MITRA_TANI' | 'KARYAWAN' | 'ALL';
+export type RoleMitra = 'CUSTOMER' | 'SUPPLIER' | 'MITRA_TANI' | 'KARYAWAN' | 'ANAK_PERUSAHAAN' | 'ALL';
 
 export type MetodePembayaran = 'TUNAI' | 'TRANSFER' | 'KASBON' | 'TITIP';
 
-export type KategoriRekening = 'PERUSAHAAN' | 'OPERASIONAL_DIVISI' | 'VIRTUAL_SISTEM';
+export type KategoriRekening = 'PERUSAHAAN' | 'ANAK_PERUSAHAAN' | 'OPERASIONAL_DIVISI' | 'VIRTUAL_SISTEM';
 
 export interface Rekening {
-  kode: string;          // e.g. "KAS01", "BNI01", "BCA01", "MAN01", "BRI01", "BER01", "BON01", "TIT01"
-  nama: string;          // e.g. "Kas Utama Kasir", "Bank BNI Operasional", etc.
-  atasNama: string;      // e.g. "PT Wijaya Agro"
+  kode: string;          // e.g. "KAS01", "BNI01", "BCA01", "REK-DPPARABO", "BON01", "TIT01"
+  nama: string;          // e.g. "Kas Utama Kasir", "DP Parabot", etc.
+  atasNama: string;      // e.g. "PT Wijaya Agro" / "DP Parabot - Anak Perusahaan PT. Wijaya Agro Perkasa"
   nomorRekening: string; // e.g. "0847291048"
   saldoAwal: number;
   saldoSaatIni: number;
   status: StatusAktif;
   isVirtual?: boolean;   // true for BON01 (Kasbon Customer) and TIT01 (Titip Supplier)
+  isAnakPerusahaan?: boolean; // true for DP Parabot (Anak Perusahaan PT. Wijaya Agro Perkasa sekaligus Mitra)
+  idMitraTerkait?: string;    // Relasi 1-ke-1 ke tabel Mitra (e.g. "MTR-DPPARABOT")
+  namaMitraTerkait?: string;  // Nama mitra afiliasi terkait (e.g. "DP Parabot")
   keterangan?: string;
-  kategori?: KategoriRekening; // PERUSAHAAN (Penyimpanan Utama) vs OPERASIONAL_DIVISI (Tracking Pergerakan)
-  rekeningIndukPenyimpan?: string; // Rekening perusahaan tempat fisik uang disimpan
+  kategori?: KategoriRekening; // PERUSAHAAN, ANAK_PERUSAHAAN, OPERASIONAL_DIVISI, VIRTUAL_SISTEM
+  rekeningIndukPenyimpan?: string; // Rekening perusahaan tempat fisik uang disimpan (untuk OPERASIONAL_DIVISI)
 }
 
 export interface Mitra {
@@ -31,6 +34,8 @@ export interface Mitra {
   alamat: string;
   status: StatusAktif;
   catatan?: string;
+  isAnakPerusahaan?: boolean;   // true jika merupakan Anak Perusahaan PT. Wijaya Agro Perkasa (misal DP Parabot)
+  kodeRekeningTerkait?: string; // Relasi 1-ke-1 ke Master Rekening (misal "REK-DPPARABO")
 }
 
 export interface RekapMitraItem {
@@ -42,6 +47,13 @@ export interface RekapMitraItem {
   alamat: string;
   status: StatusAktif;
   catatan?: string;
+  isAnakPerusahaan?: boolean;
+  kodeRekeningTerkait?: string;
+  namaRekeningTerkait?: string;
+  // Saldo simpanan/talangan pada Rekening Anak Perusahaan (+ dana PT disimpan di anak perusahaan, - talangan anak perusahaan ke PT)
+  saldoRekeningAnakPerusahaan?: number;
+  // Posisi bersih gabungan (Titip/Hutang PT - Bon Mitra - Saldo Simpanan Rekening Anak Perusahaan)
+  posisiBersihTerpadu?: number;
   // Hutang kita pada mitra (Titip Hasil Bumi belum diambil uangnya)
   totalHutangTitipPanen: number;
   // Bon mitra (Piutang kita pada mitra)
@@ -49,6 +61,9 @@ export interface RekapMitraItem {
   totalKasbonUang: number;
   totalBonMitra: number;
   // Posisi Bersih: totalHutangTitipPanen - totalBonMitra
+  potonganSilangOtomatis?: number;
+  sisaBonBersih?: number;
+  sisaTitipanBersih?: number;
   saldoBersih: number;
   posisiStatus: 'KITA_BERHUTANG' | 'MITRA_BERHUTANG' | 'LUNAS_IMPAS';
   totalTransaksiCount: number;
@@ -69,6 +84,7 @@ export interface RekapKaryawanItem {
   nik: string;
   nama: string;
   jabatan: string;
+  divisi?: string;
   departemen: string;
   telepon: string;
   alamat: string;
@@ -200,9 +216,15 @@ export interface RekapPayrollBulananSummary {
   items: ItemRekapPayrollBulanan[];
 }
 
+export interface ItemKategoriProduk {
+  nama: string;
+  deskripsi?: string;
+  createdAt?: string;
+}
+
 export interface Produk {
   kode: string;
-  kategori: 'PUPUK' | 'PESTISIDA' | 'BENIH' | 'ALAT_PERTANIAN' | 'BERAS' | 'SEMBAKO' | 'LAINNYA';
+  kategori: string;
   nama: string;
   satuan: string;
   hargaBeli: number; // HPP Modal / Harga Kulakan Terakhir
@@ -256,8 +278,9 @@ export interface TransaksiPenjualan {
   idMitra: string;
   namaMitra: string;
   tipePembeli?: 'UMUM' | 'REKANAN'; // Pelanggan Umum atau Mitra Rekanan
-  metode: 'TUNAI' | 'TRANSFER' | 'KASBON';
-  rekeningTujuan: string; // KAS01 for TUNAI, bank for TRANSFER, BON01 for KASBON
+  divisi?: string;       // Divisi usaha terkait saat transaksi
+  metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT';
+  rekeningTujuan: string; // KAS01 for TUNAI, bank for TRANSFER, BON01 for KASBON, INTERNAL_PT for internal use
   items: ItemPenjualan[];
   totalModalHpp?: number;  // Akumulasi modal HPP
   totalNominal: number;    // Akumulasi harga jual / omzet
@@ -289,6 +312,7 @@ export interface TransaksiPembelianBarang {
   namaDistributorManual?: string;
   noFakturSupplier?: string;
   fotoNota?: string;     // Base64 data URL / image link of invoice or physical receipt
+  divisi?: string;       // Divisi usaha terkait saat kulakan
   metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG';
   rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for HUTANG
   items: ItemPembelianBarang[];
@@ -339,6 +363,7 @@ export interface TransaksiPembelianHasilBumi {
   beratBersih: number;   // Kg
   hargaPerKg: number;
   totalNominal: number;
+  divisi?: string;       // Divisi usaha terkait saat pembelian hasil bumi
   metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
   rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for TITIP
   status: 'LUNAS' | 'BELUM_DIAMBIL' | 'TITIP' | 'BELUM_PUTUS_HARGA';
@@ -346,14 +371,115 @@ export interface TransaksiPembelianHasilBumi {
   statusHarga?: 'HARGA_PUTUS' | 'BELUM_PUTUS_HARGA';
   tanggalPutusHarga?: string;
   fotoNota?: string;     // Base64 data URL / image link of weighing receipt or physical slip
+  fotoNotaList?: string[]; // Multiple photos of physical slips / notes
   driveFileUrl?: string; // Link URL ke Google Drive bukti nota fisik
   driveFileId?: string;  // Google Drive File ID
   driveFolderPath?: string; // e.g. NOTA LALU / HUTANG NOTA LAMA
+  driveFileList?: Array<{ url: string; id: string; folderPath: string }>; // Multiple Drive files
   isNotaLalu?: boolean;  // Menandai transaksi titipan panen / saldo titip masa lalu
   noNotaLalu?: string;   // Nomor dokumen fisik / faktur nota lalu manual
   tanggalNotaLalu?: string;
   keterangan: string;
   createdAt: string;
+}
+
+export interface TransaksiPenjualanHasilBumi {
+  noPenjualan: string;
+  tanggal: string;       // DD/MM/YYYY
+  jam: string;           // HH:mm:ss
+  idMitra: string;       // 'UMUM' atau ID Mitra (Pabrik / Eksportir / Bandar)
+  namaMitra: string;
+  komoditasKode: string;
+  komoditasNama: string;
+  beratKotor: number;    // Kg
+  potonganRafaksi: number; // %
+  beratBersih: number;   // Kg keluar dari gudang
+  modalRataRataPerKg: number; // HPP modal rata-rata beli gudang saat transaksi (Rp/Kg)
+  totalModalHpp: number; // beratBersih * modalRataRataPerKg
+  hargaJualPerKg: number; // Harga jual deal per Kg
+  totalNominal: number;  // Omzet penjualan (beratBersih * hargaJualPerKg)
+  labaKotor: number;     // totalNominal - totalModalHpp
+  divisi?: string;       // Divisi usaha terkait saat penjualan hasil bumi
+  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG';
+  rekeningTujuan: string; // KAS01 for TUNAI, bank for TRANSFER, BON01 for PIUTANG
+  statusPembayaran: 'LUNAS' | 'BELUM_BAYAR';
+  sisaPiutang: number;
+  noSuratJalan?: string; // Nomor DO / Surat Jalan / Plat Truk
+  stokGudangSebelum: number;
+  stokGudangSetelah: number;
+  keterangan: string;
+  createdAt: string;
+}
+
+export interface RingkasanKomoditasBulananItem {
+  kode: string;
+  nama: string;
+  satuan: string;
+  isBelumPutusHarga?: boolean;
+  // Posisi pada Bulan & Tahun Terpilih
+  stokAwalBulanKg: number;
+  masukBulanIniKg: number;
+  masukBulanIniNominal: number;
+  rataHargaBeliBulanIni: number;
+  notaBeliBulanIniCount: number;
+  terjualBulanIniKg: number;
+  terjualBulanIniOmzet: number;
+  rataHargaJualBulanIni: number;
+  labaBulanIni: number;
+  notaJualBulanIniCount: number;
+  stokAkhirBulanKg: number;
+  // Posisi Realtime di Gudang Saat Ini
+  readyGudangSaatIniKg: number;
+  rataRataModalGudangPerKg: number;
+  nilaiModalReadyGudang: number;
+  // Akumulasi Keseluruhan
+  totalMasukKumulatifKg: number;
+  totalTerjualKumulatifKg: number;
+}
+
+export interface RingkasanBulanHasilBumiItem {
+  bulan: number; // 1..12
+  tahun: number;
+  namaBulan: string;
+  namaBulanSingkat: string;
+  stokAwalKg: number;
+  masukKg: number;
+  masukNominal: number;
+  notaBeliCount: number;
+  terjualKg: number;
+  terjualOmzet: number;
+  terjualLaba: number;
+  notaJualCount: number;
+  stokAkhirKg: number;
+  isCurrentMonth: boolean;
+}
+
+export interface RingkasanStokHasilBumiBulananResponse {
+  bulan: number;
+  tahun: number;
+  periodeLabel: string;
+  kodeKomoditasFilter: string; // 'ALL' atau kode komoditas
+  daftarTahunTersedia: number[];
+  // Posisi Ready Gudang Aktual Saat Ini
+  totalReadyGudangKg: number;
+  totalNilaiModalReadyGudang: number;
+  jumlahKomoditasReady: number;
+  totalMasukKumulatifKg: number;
+  totalTerjualKumulatifKg: number;
+  // Ringkasan Periode Bulan Terpilih
+  stokAwalBulanKg: number;
+  masukBulanIniKg: number;
+  masukBulanIniNominal: number;
+  jumlahNotaBeliBulanIni: number;
+  terjualBulanIniKg: number;
+  terjualBulanIniOmzet: number;
+  terjualBulanIniModal: number;
+  terjualBulanIniLaba: number;
+  jumlahNotaJualBulanIni: number;
+  stokAkhirBulanKg: number;
+  // Rincian
+  komoditasItems: RingkasanKomoditasBulananItem[];
+  rekapPerBulanTahunIni: RingkasanBulanHasilBumiItem[];
 }
 
 export interface TransaksiKasbonUang {
@@ -370,9 +496,11 @@ export interface TransaksiKasbonUang {
   keterangan: string;
   status: 'BELUM LUNAS' | 'SEBAGIAN' | 'LUNAS';
   fotoNota?: string;     // Capture foto detail fisik nota lalu / slip kasbon manual
+  fotoNotaList?: string[]; // Multiple photos of physical slips / notes
   driveFileUrl?: string; // Link URL ke Google Drive bukti nota fisik
   driveFileId?: string;  // Google Drive File ID
   driveFolderPath?: string; // e.g. NOTA LALU / PIUTANG NOTA LAMA
+  driveFileList?: Array<{ url: string; id: string; folderPath: string }>; // Multiple Drive files
   isNotaLalu?: boolean;  // Menandai piutang barang / bon masa lalu bertahun-tahun
   noNotaLalu?: string;   // Nomor nota manual lama
   tanggalNotaLalu?: string;
@@ -395,12 +523,18 @@ export interface TransaksiBayarBon {
   idMitra: string;
   namaMitra: string;
   totalBonSebelum: number;
+  totalBonAwalKotor?: number;
+  nominalPotongTitipanOtomatis?: number;
   nominalBayar: number;
   sisaBonSetelah: number;
-  metode: 'TUNAI' | 'TRANSFER';
-  rekeningTujuan: string; // KAS01 or chosen bank
+  metode: 'TUNAI' | 'TRANSFER' | 'SINKRON' | 'KOMPENSASI_TITIP' | 'POTONG_GAJI';
+  rekeningTujuan: string; // KAS01, chosen bank, SINKRON, KOMPENSASI_TITIP, or POTONG_GAJI
+  isKompensasiTitipan?: boolean;
+  isPotongGaji?: boolean;
   alokasi: AlokasiPembayaranBon[];
   keterangan: string;
+  fotoBukti?: string;
+  fotoNota?: string;
   createdAt: string;
 }
 
@@ -413,6 +547,9 @@ export interface TransaksiTransferRekening {
   nominal: number;
   keterangan: string;
   status: 'BERHASIL';
+  idMitraTerkait?: string;
+  namaMitraTerkait?: string;
+  tipeMutasiAfiliasi?: 'SIMPAN_KE_ANAK_PERUSAHAAN' | 'TARIK_DARI_ANAK_PERUSAHAAN' | 'ANTAR_ANAK_PERUSAHAAN';
   createdAt: string;
 }
 
@@ -433,9 +570,10 @@ export interface Karyawan {
   id: string;              // e.g. "KRY-001"
   nik: string;             // e.g. "KRY-001"
   nama: string;
-  jabatan: string;         // e.g. "Kasir Toko", "Staff Gudang", "Supir Logistik", "Admin Keuangan", "Tenaga Lapangan"
-  departemen: string;      // e.g. "Toko Saprotan", "Gudang Hasil Bumi", "Logistik", "Administrasi"
-  gajiPokok: number;       // Standar gaji harian/bulanan
+  jabatan: string;         // e.g. "Staff Gudang", "Supir", "Kasir Toko"
+  divisi?: string;         // Divisi ERP Wijaya Agro
+  departemen: string;      // Divisi / Departemen operasional
+  gajiPokok?: number;      // Standar gaji (opsional/fleksibel per penugasan harian)
   tunjanganTetap: number;  // Tunjangan tetap bulanan
   telepon: string;
   alamat: string;
@@ -488,6 +626,15 @@ export type NamaDivisi =
   | 'CV Wijaya Agro'
   | 'PT Wijaya Agro Perkasa'
   | 'Okussa';
+
+export interface ItemDivisi {
+  id: string;
+  nama: string;
+  kodeRekening: string;
+  penanggungJawab?: string;
+  deskripsi?: string;
+  isCustom?: boolean;
+}
 
 export const DAFTAR_DIVISI: Array<{
   id: string;
@@ -635,24 +782,38 @@ export interface MutasiKeuanganDivisi {
   id: string;
   tanggal: string;
   jam: string;
-  jenis: 'DROPPING_MASUK' | 'TRANSFER_KELUAR' | 'GAJI_KARYAWAN' | 'LAINNYA';
+  jenis:
+    | 'PENJUALAN_MASUK'
+    | 'PEMBELIAN_KELUAR'
+    | 'PENGELUARAN_OPERASIONAL'
+    | 'DROPPING_MASUK'
+    | 'TRANSFER_KELUAR'
+    | 'GAJI_KARYAWAN'
+    | 'LAINNYA';
   keterangan: string;
   masuk: number;
   keluar: number;
   saldoSetelah: number;
   refId: string;
   karyawanTerkait?: string;
+  pihakTerkait?: string;
+  rekeningFisik?: string;
 }
 
 export interface PergerakanKeuanganDivisiSummary {
-  divisi: NamaDivisi;
+  divisi: string;
   idDivisi: string;
   kodeRekening: string;
   namaRekening: string;
   saldoSaatIni: number;
+  totalPenjualanMasuk: number;
+  totalPembelianKeluar: number;
+  totalPengeluaranOperasional: number;
   totalDroppingMasuk: number;
   totalGajiKeluar: number;
   totalTransferKeluar: number;
+  totalArusMasuk: number;
+  totalArusKeluar: number;
   totalTransaksiGaji: number;
   daftarKaryawanTerakhir: string[];
   mutasi: MutasiKeuanganDivisi[];
@@ -674,12 +835,30 @@ export interface RekeningKoranMitraSummary {
   telepon: string;
   alamat: string;
   status: StatusAktif;
+  isAnakPerusahaan?: boolean;
+  kodeRekeningTerkait?: string;
+  namaRekeningTerkait?: string;
+  saldoAwalRekeningAnakPerusahaan?: number;
+  saldoRekeningAnakPerusahaan?: number;
+  totalSimpanKeAnakPerusahaan?: number;
+  totalPakaiDariAnakPerusahaan?: number;
+  posisiBersihTerpadu?: number;
+  profilPerusahaan?: ProfilPerusahaan;
+  rekeningUtamaDetail?: {
+    kode: string;
+    nama: string;
+    nomorRekening?: string;
+    atasNama?: string;
+  };
   totalKasbonBarang: number;     // Total outstanding bon dari penjualan barang
   totalKasbonUang: number;       // Total outstanding kasbon uang
   totalTitip: number;            // Total hutang perusahaan ke mitra (hasil bumi titip)
   totalPembayaranBon: number;    // Total uang pembayaran bon yang sudah disetor mitra
-  totalBonKeseluruhan: number;   // totalKasbonBarang + totalKasbonUang
+  totalBonKeseluruhan: number;   // totalKasbonBarang + totalKasbonUang (kotor sebelum potong titipan)
   sisaBon: number;               // Sama dengan totalBonKeseluruhan saat ini
+  potonganTitipanOtomatis?: number; // min(totalBonKeseluruhan, totalTitip)
+  sisaBonBersih?: number;           // max(0, totalBonKeseluruhan - totalTitip) -> bon bersih wajib dibayar mitra
+  sisaTitipanBersih?: number;       // max(0, totalTitip - totalBonKeseluruhan) -> sisa bersih wajib dibayar PT ke mitra
   history: Array<{
     id: string;
     tanggal: string;
@@ -749,5 +928,305 @@ export interface SpreadsheetSheetDataResponse {
   rows: Array<Record<string, any>>;
   totalRows: number;
   footerSummary?: Record<string, any>;
+}
+
+// ==========================================
+// PROFIL PERUSAHAAN
+// ==========================================
+export interface ProfilPerusahaan {
+  namaPerusahaan: string;
+  badanHukum: string;
+  alamat: string;
+  telepon: string;
+  email: string;
+  penanggungJawab: string;
+  rekeningUtama: string;
+  catatanHeaderNota: string;
+  pinBos?: string;
+  pinKasir?: string;
+  wajibPinPublik?: boolean;
+  updateTerakhir?: string;
+}
+
+// ==========================================
+// PENGELUARAN & BEBAN OPERASIONAL PER DIVISI
+// ==========================================
+export interface TransaksiPengeluaran {
+  idTransaksi: string;
+  tanggal: string;       // DD/MM/YYYY
+  jam: string;           // HH:mm:ss
+  divisi: string;        // e.g. "Wijaya Transport", "Gudang Wijaya Agro", "Wijaya Karya", "CV Wijaya Agro", "PT Wijaya Agro Perkasa", "Okussa"
+  kategori: string;      // e.g. "Sparepart & Perbaikan Armada", "Konsumsi Karyawan", "BBM Solar & Pelumas", "Operasional Gudang", "ATK & Kantor", "Lain-lain"
+  keterangan: string;    // e.g. "Beli gorengan karyawan & gula", "Ganti oli dump truck & kampas rem L300"
+  nominal: number;
+  rekeningSumber: string; // KAS01, BNI01, etc.
+  penerima?: string;
+  idInventaris?: string;
+  fotoKuitansi?: string;
+  createdAt: string;
+}
+
+// ==========================================
+// MASTER INVENTARIS KENDARAAN, ARMADA & ASET PT
+// ==========================================
+export type KategoriInventaris =
+  | 'TRUCK_ANGKUTAN'
+  | 'PICKUP_L300'
+  | 'MOBIL_OPERASIONAL'
+  | 'ALAT_BERAT'
+  | 'MOTOR'
+  | 'MESIN_GUDANG'
+  | 'LAINNYA';
+
+export type KondisiInventaris = 'BAIK' | 'SERVIS_RINGAN' | 'PERBAIKAN_BENGKEL' | 'NONAKTIF';
+
+export interface ItemInventaris {
+  id: string;                   // e.g. "INV-001"
+  kode: string;                 // e.g. "INV-001"
+  namaItem: string;             // e.g. "Dump Truck Hino Dutro 130 HD"
+  kategori: KategoriInventaris;
+  nomorPlat: string;            // e.g. "BE 8206 AMN" (atau nomor seri aset)
+  merkTipe?: string;            // e.g. "Hino Dutro 130 HD / Mitsubishi L300"
+  tahunKeluaran?: string;       // e.g. "2021"
+  warna?: string;               // e.g. "Hijau / Kuning / Hitam"
+  driverPenanggungJawab: string;// Nama sopir / operator / penanggung jawab
+  idKaryawanDriver?: string;    // ID karyawan PT jika dipilih dari master karyawan
+  teleponDriver?: string;       // No. HP / WA driver
+  tanggalPajakTahunan?: string; // DD/MM/YYYY atau YYYY-MM-DD (Jatuh tempo pajak STNK tahunan)
+  tanggalPajakLimaTahunan?: string; // Ganti plat / STNK 5 tahunan
+  tanggalKir?: string;          // Jatuh tempo Uji KIR angkutan
+  nomorRangka?: string;
+  nomorMesin?: string;
+  divisi?: string;              // e.g. "Wijaya Transport", "Gudang Wijaya Agro"
+  kondisi: KondisiInventaris;
+  nilaiPerolehan?: number;      // Nilai beli aset (opsional)
+  tanggalBeli?: string;         // Tanggal beli aset (opsional)
+  fotoItem?: string;            // Foto kendaraan (base64 / URL)
+  fotoStnk?: string;            // Foto STNK / dokumen pajak (base64 / URL)
+  catatan?: string;             // Catatan perawatan, ukuran ban, oli, dll.
+  status: StatusAktif;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// ==========================================
+// PENCAIRAN TITIPAN HASIL BUMI DARI PETANI
+// ==========================================
+export interface TransaksiPencairanTitipan {
+  idPencairan: string;
+  tanggal: string;       // DD/MM/YYYY
+  jam: string;           // HH:mm:ss
+  idMitra: string;
+  namaMitra: string;
+  nominalPencairan: number;
+  rekeningSumber: string; // Kas, Bank, SINKRON, atau KOMPENSASI_BON
+  saldoTitipanSebelum: number;
+  totalTitipanAwalKotor?: number;
+  nominalPotongBonOtomatis?: number;
+  saldoTitipanSisa: number;
+  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'SINKRON' | 'KOMPENSASI_BON';
+  isKompensasiBon?: boolean;
+  keterangan: string;
+  createdAt: string;
+}
+// ==========================================
+// UNIFIED TRANSACTION JURNAL REKAPITULASI
+// ==========================================
+export type ArusUangType = 'MASUK' | 'KELUAR' | 'MUTASI' | 'NON_TUNAI';
+
+export interface UnifiedTransactionItem {
+  id: string;
+  tanggal: string;
+  jam: string;
+  timestamp: string;
+  jenis:
+    | 'PENJUALAN'
+    | 'PENJUALAN_HASIL_BUMI'
+    | 'PEMBELIAN_HASIL_BUMI'
+    | 'PEMBELIAN_BARANG'
+    | 'KASBON_UANG'
+    | 'BAYAR_BON'
+    | 'PENGELUARAN_DIVISI'
+    | 'PENCAIRAN_TITIPAN'
+    | 'UPAH_HARIAN'
+    | 'PENGGAJIAN'
+    | 'TRANSFER_REKENING';
+  jenisLabel: string;
+  arusUang: ArusUangType;
+  arusUangLabel: string;
+  deskripsi: string;
+  pihakTerkait: string;
+  kategoriPihak: 'MITRA' | 'KARYAWAN' | 'VENDOR' | 'DIVISI' | 'INTERNAL';
+  rekening: string;
+  nominal: number;
+  nominalMasuk: number;
+  nominalKeluar: number;
+  metode: string;
+  status: string;
+  fotoBukti?: string;
+  divisi?: string;
+}
+
+export interface RekapSemuaTransaksiResponse {
+  summary: {
+    tanggalQuery?: string;
+    totalTransaksi: number;
+    totalUangMasuk: number;
+    totalUangKeluar: number;
+    arusKasBersih: number;
+    totalNonTunai: number;
+    rincianArus: {
+      masukCount: number;
+      keluarCount: number;
+      mutasiCount: number;
+      nonTunaiCount: number;
+    };
+  };
+  transactions: UnifiedTransactionItem[];
+  daftarPihakTerkait: string[];
+  daftarTanggalTersedia: string[];
+}
+
+export interface FullErpDataset {
+  rekeningList: Rekening[];
+  mitraList: Mitra[];
+  karyawanList: Karyawan[];
+  upahHarianList: CatatanUpahHarian[];
+  penggajianList: TransaksiPenggajian[];
+  produkList: Produk[];
+  kategoriProdukList?: Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>;
+  stokList: StokBarang[];
+  stokHasilBumiList: StokHasilBumi[];
+  pembelianList: TransaksiPembelianHasilBumi[];
+  penjualanHasilBumiList?: TransaksiPenjualanHasilBumi[];
+  pembelianBarangList: TransaksiPembelianBarang[];
+  pencairanTitipanList?: TransaksiPencairanTitipan[];
+  penjualanList: TransaksiPenjualan[];
+  kasbonUangList: TransaksiKasbonUang[];
+  bayarBonList: TransaksiBayarBon[];
+  pengeluaranList?: TransaksiPengeluaran[];
+  inventarisList?: ItemInventaris[];
+  transferList: TransaksiTransferRekening[];
+  auditLogs: AuditLog[];
+}
+
+export type FullErpModularDataset = FullErpDataset;
+
+export interface DatabaseIntegrityStatus {
+  singleSource: 'SUPABASE_CLOUD' | 'LOCAL_WAITING_CONFIG';
+  supabaseConfigured: boolean;
+  supabaseUrlMasked: string;
+  lastSyncTime: string | null;
+  lastSyncStatus: 'SUCCESS' | 'ERROR' | null;
+  lastSyncMessage: string | null;
+  isHealthy: boolean;
+  counts: {
+    produk: number;
+    kategoriProduk: number;
+    stokBarang: number;
+    stokHasilBumi: number;
+    mitra: number;
+    karyawan: number;
+    rekening: number;
+    penjualan: number;
+    pembelianBarang: number;
+    pembelianHasilBumi: number;
+    penjualanHasilBumi?: number;
+    pencairanTitipan: number;
+    kasbonUang: number;
+    bayarBon: number;
+    pengeluaran: number;
+    transferRekening: number;
+    upahHarian: number;
+    penggajian: number;
+    auditLogs: number;
+    totalRecords: number;
+  };
+  checks: {
+    produkStokMatched: boolean;
+    karyawanMitraMatched: boolean;
+    anakPerusahaanMitraMatched?: boolean;
+    bon01Reconciled: boolean;
+    tit01Reconciled: boolean;
+    bon01Saldo: number;
+    tit01Saldo: number;
+  };
+}
+
+// ==========================================
+// PUSAT KLIRING SILANG, AUDIT DUPLIKAT & CASH OPNAME KASIR
+// ==========================================
+export interface KandidatKliringMitra {
+  idMitra: string;
+  kodeMitra: string;
+  namaMitra: string;
+  role: RoleMitra;
+  telepon: string;
+  saldoTitipan: number;
+  kasbonBarang: number;
+  kasbonUang: number;
+  totalKasbon: number;
+  potensiPotongSilang: number;
+  hakBersihMitra: number;
+  sisaKurangBon: number;
+  jumlahNotaBonAktif: number;
+}
+
+export interface PasanganMitraKembar {
+  pairKey: string;
+  mitraA: RekapMitraItem;
+  mitraB: RekapMitraItem;
+  similarityScore: number; // 0..100
+  alasanKemiripan: string;
+  risikoSilang: boolean; // true jika satu punya titipan dan satunya punya kasbon
+}
+
+export interface CatatanCashOpname {
+  id: string;
+  tanggal: string;
+  jam: string;
+  petugasKasir: string;
+  saldoSistemSebelum: number;
+  totalFisikLaci: number;
+  selisih: number; // totalFisikLaci - saldoSistemSebelum
+  statusRekonsiliasi: 'COCOK' | 'SELISIH_LEBIH' | 'SELISIH_KURANG';
+  rincianPecahan: Record<string, number>;
+  sesuaikanSaldoSistem: boolean;
+  catatan: string;
+  createdAt: string;
+}
+
+export interface SmartControlOverviewResponse {
+  kandidatKliring: KandidatKliringMitra[];
+  semuaMitraSaldo: KandidatKliringMitra[];
+  pasanganKembar: PasanganMitraKembar[];
+  cashOpnameLogs: CatatanCashOpname[];
+  saldoKas01SaatIni: number;
+  ringkasanKasHariIni: {
+    tanggal: string;
+    masukTunaiKas01: number;
+    keluarTunaiKas01: number;
+    kompensasiNonTunaiHariIni: number;
+  };
+}
+
+export interface HasilKliringSilangResponse {
+  idReferensiKliring: string;
+  tanggal: string;
+  jam: string;
+  idMitra: string;
+  kodeMitra: string;
+  namaMitra: string;
+  saldoTitipanAwal: number;
+  totalKasbonAwal: number;
+  nominalPotongSilang: number;
+  aksiSisa: 'HANYA_POTONG_SILANG' | 'CAIRKAN_SISA_TITIPAN' | 'TERIMA_PELUNASAN_SISA_BON';
+  nominalPenyelesaianFisik: number;
+  metodeFisik?: 'TUNAI' | 'TRANSFER';
+  rekeningFisik?: string;
+  saldoTitipanAkhir: number;
+  sisaKasbonAkhir: number;
+  alokasiBonLunas: AlokasiPembayaranBon[];
+  keterangan: string;
 }
 

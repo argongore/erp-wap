@@ -1,0 +1,900 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  Sprout,
+  RefreshCw,
+  Lock,
+  Search,
+  FileText,
+  ArrowUpRight,
+  Wallet,
+  Landmark,
+  Layers,
+  Users,
+  Boxes,
+  Truck,
+  ChevronDown,
+  ChevronUp,
+  ArrowLeft,
+} from 'lucide-react';
+import { api } from '../../api/client.ts';
+import {
+  ProfilPerusahaan,
+  Rekening,
+  StokBarang,
+  StokHasilBumi,
+  ItemInventaris,
+  PergerakanKeuanganDivisiSummary,
+  RekapMasterMitraSummary,
+  RekeningKoranMitraSummary,
+} from '../../server/types.ts';
+import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
+import { BukuKasHarianBosWidget } from '../dashboard/BukuKasHarianBosWidget.tsx';
+import { RekapSemuaTransaksiHarianView } from '../laporan/RekapSemuaTransaksiHarianView.tsx';
+import { LabaRugiProdukView } from '../laporan/LabaRugiProdukView.tsx';
+import { CetakRekeningKoranModal } from '../laporan/CetakRekeningKoranModal.tsx';
+
+type BosTab = 'kas' | 'divisi' | 'mitra' | 'jurnal' | 'stok';
+
+interface PortalEksekutifBosViewProps {
+  profilPerusahaan: ProfilPerusahaan | null;
+  rekeningList: Rekening[];
+  stokBarangList: StokBarang[];
+  stokHasilBumiList: StokHasilBumi[];
+  inventarisList: ItemInventaris[];
+  onRefreshAll: () => void;
+  onLockScreen: () => void;
+  canSwitchToKasir?: boolean;
+  onSwitchToKasir?: () => void;
+}
+
+export const PortalEksekutifBosView: React.FC<PortalEksekutifBosViewProps> = ({
+  profilPerusahaan,
+  rekeningList,
+  stokBarangList,
+  stokHasilBumiList,
+  inventarisList,
+  onRefreshAll,
+  onLockScreen,
+  canSwitchToKasir = false,
+  onSwitchToKasir,
+}) => {
+  const [activeTab, setActiveTab] = useState<BosTab>('kas');
+  const [timeStr, setTimeStr] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Division financial state
+  const [divisiData, setDivisiData] = useState<PergerakanKeuanganDivisiSummary[]>([]);
+  const [loadingDivisi, setLoadingDivisi] = useState(false);
+  const [expandedDivisi, setExpandedDivisi] = useState<string | null>(null);
+
+  // Mitra summary & read-only statement modal
+  const [rekapMitra, setRekapMitra] = useState<RekapMasterMitraSummary | null>(null);
+  const [loadingMitra, setLoadingMitra] = useState(false);
+  const [mitraSearch, setMitraSearch] = useState('');
+  const [mitraFilter, setMitraFilter] = useState<'ALL' | 'BON' | 'TITIP'>('ALL');
+  const [selectedStatement, setSelectedStatement] = useState<RekeningKoranMitraSummary | null>(null);
+  const [loadingStatementId, setLoadingStatementId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const updateClock = () => {
+      const now = new Date();
+      const date = now.toLocaleDateString('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      });
+      const time = now
+        .toLocaleTimeString('id-ID', {
+          timeZone: 'Asia/Jakarta',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        })
+        .replace(/\./g, ':');
+      setTimeStr(`${date} · ${time} WIB`);
+    };
+    updateClock();
+    const timer = setInterval(updateClock, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const loadBosExtraData = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadingDivisi(true);
+      setLoadingMitra(true);
+    }
+    try {
+      const [divRes, mitraRes] = await Promise.all([
+        api.getDivisiKeuangan().catch(() => [] as PergerakanKeuanganDivisiSummary[]),
+        api.getRekapMitra().catch(() => null),
+      ]);
+      setDivisiData(Array.isArray(divRes) ? divRes : []);
+      if (mitraRes) setRekapMitra(mitraRes);
+    } finally {
+      setLoadingDivisi(false);
+      setLoadingMitra(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBosExtraData(false);
+  }, [loadBosExtraData]);
+
+  useEffect(() => {
+    const onUpdated = () => {
+      void loadBosExtraData(true);
+    };
+    window.addEventListener('erp:data-updated', onUpdated);
+    return () => window.removeEventListener('erp:data-updated', onUpdated);
+  }, [loadBosExtraData]);
+
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    onRefreshAll();
+    await loadBosExtraData(true);
+    setTimeout(() => setRefreshing(false), 350);
+  };
+
+  const handleOpenStatement = async (idMitra: string) => {
+    setLoadingStatementId(idMitra);
+    try {
+      const stmt = await api.getRekeningKoranMitra(idMitra);
+      setSelectedStatement(stmt);
+    } catch (err) {
+      console.warn('Gagal membuka rekening koran mitra:', err);
+    } finally {
+      setLoadingStatementId(null);
+    }
+  };
+
+  // Financial aggregations
+  const safeRekening = Array.isArray(rekeningList) ? rekeningList : [];
+  const kas01 = safeRekening.find((r) => r.kode === 'KAS01');
+  const bon01 = safeRekening.find((r) => r.kode === 'BON01');
+  const tit01 = safeRekening.find((r) => r.kode === 'TIT01');
+
+  const bankPerusahaanList = useMemo(
+    () =>
+      safeRekening.filter(
+        (r) =>
+          (r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-'))) &&
+          r.kode !== 'KAS01' &&
+          r.status === 'AKTIF'
+      ),
+    [safeRekening]
+  );
+
+  const anakPerusahaanList = useMemo(
+    () =>
+      safeRekening.filter(
+        (r) => r.kategori === 'ANAK_PERUSAHAAN' || r.isAnakPerusahaan
+      ),
+    [safeRekening]
+  );
+
+  const totalKasTunai = Number(kas01?.saldoSaatIni) || 0;
+  const totalBankPerusahaan = bankPerusahaanList.reduce(
+    (sum, r) => sum + (Number(r.saldoSaatIni) || 0),
+    0
+  );
+  const totalLikuiditasRiil = totalKasTunai + totalBankPerusahaan;
+  const totalPiutangBon = Number(bon01?.saldoSaatIni) || 0;
+  const totalTitipanMitra = Number(tit01?.saldoSaatIni) || 0;
+
+  const filteredMitraItems = useMemo(() => {
+    const items = rekapMitra?.items || [];
+    const q = mitraSearch.trim().toLowerCase();
+    return items.filter((m) => {
+      if (mitraFilter === 'BON' && (m.sisaBonBersih ?? m.totalBonMitra) <= 0) return false;
+      if (mitraFilter === 'TITIP' && (m.sisaTitipanBersih ?? m.totalHutangTitipPanen) <= 0) return false;
+      if (!q) return true;
+      return (
+        m.nama.toLowerCase().includes(q) ||
+        m.kode.toLowerCase().includes(q) ||
+        (m.alamat || '').toLowerCase().includes(q) ||
+        (m.role || '').toLowerCase().includes(q)
+      );
+    });
+  }, [rekapMitra, mitraSearch, mitraFilter]);
+
+  const rekeningUtamaDetail = useMemo(() => {
+    const kode = profilPerusahaan?.rekeningUtama || 'KAS01';
+    const found = safeRekening.find((r) => r.kode === kode);
+    if (!found) return undefined;
+    return {
+      kode: found.kode,
+      nama: found.nama,
+      nomorRekening: found.nomorRekening,
+      atasNama: found.atasNama,
+    };
+  }, [profilPerusahaan, safeRekening]);
+
+  const navTabs: Array<{ id: BosTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+    { id: 'kas', label: 'Kas & Saldo PT', icon: Wallet },
+    { id: 'divisi', label: 'Divisi & Armada', icon: Layers },
+    { id: 'mitra', label: 'Rekening Mitra', icon: Users },
+    { id: 'jurnal', label: 'Jurnal & Bukti Nota', icon: FileText },
+    { id: 'stok', label: 'Stok & Laba Rugi', icon: Boxes },
+  ];
+
+  return (
+    <div className="min-h-screen w-full bg-slate-50 text-slate-900 font-sans flex flex-col">
+      {/* Sticky Executive Top Header */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+              <Sprout className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <h1 className="font-bold text-sm sm:text-base tracking-tight text-slate-900 truncate">
+                  {profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+                </h1>
+                <span className="hidden md:inline text-slate-300">·</span>
+                <span className="hidden md:inline text-xs font-medium text-emerald-800 whitespace-nowrap">
+                  Portal Pantauan Pimpinan (Mode Baca Aman)
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 truncate">
+                {timeStr || 'Waktu Indonesia Barat'} · Data tersinkron otomatis dari kasir
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {canSwitchToKasir && onSwitchToKasir && (
+              <button
+                type="button"
+                onClick={onSwitchToKasir}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                title="Kembali ke tampilan operasional kasir"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Menu Kasir</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleManualRefresh()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+              title="Segarkan data terbaru"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-700' : ''}`} />
+              <span className="hidden sm:inline">Segarkan</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onLockScreen}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer"
+              title="Kunci layar kembali dengan PIN"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>Kunci PIN</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Clean Segmented Navigation Bar (Scrollable on Mobile) */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 border-t border-slate-100 overflow-x-auto">
+          <nav className="flex items-center gap-1 py-2 min-w-max" aria-label="Menu Pantauan Pimpinan">
+            {navTabs.map((t) => {
+              const Icon = t.icon;
+              const isActive = activeTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActiveTab(t.id)}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                    isActive
+                      ? 'bg-emerald-700 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* TAB 1: KAS & SALDO PT */}
+        {activeTab === 'kas' && (
+          <div className="space-y-6">
+            {/* Primary Financial Anchor */}
+            <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6">
+              <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-5 border-b border-slate-100">
+                <div>
+                  <p className="text-xs font-medium text-slate-500">
+                    Total Uang Riil Perusahaan Saat Ini (Kas Fisik + Seluruh Bank PT)
+                  </p>
+                  <div className="mt-1 font-mono text-2xl sm:text-4xl font-bold tracking-tight text-slate-900 tabular-nums">
+                    {formatRupiah(totalLikuiditasRiil)}
+                  </div>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Diperbarui otomatis setiap kasir menyimpan transaksi
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-5">
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-500">Brankas &amp; Kasir Tunai (KAS01)</div>
+                  <div className="font-mono text-lg font-bold text-emerald-700 tabular-nums">
+                    {formatRupiah(totalKasTunai)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">Uang tunai fisik di kantor</div>
+                </div>
+
+                <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
+                  <div className="text-xs text-slate-500">Total Rekening Bank PT</div>
+                  <div className="font-mono text-lg font-bold text-slate-900 tabular-nums">
+                    {formatRupiah(totalBankPerusahaan)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Akumulasi {bankPerusahaanList.length} rekening bank aktif
+                  </div>
+                </div>
+
+                <div className="space-y-1 lg:border-l lg:border-slate-100 lg:pl-4">
+                  <div className="text-xs text-slate-500">Total Piutang Bon Mitra (BON01)</div>
+                  <div className="font-mono text-lg font-bold text-amber-700 tabular-nums">
+                    {formatRupiah(totalPiutangBon)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">Uang PT di luar (belum ditagih)</div>
+                </div>
+
+                <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
+                  <div className="text-xs text-slate-500">Titipan Hasil Bumi Mitra (TIT01)</div>
+                  <div className="font-mono text-lg font-bold text-rose-700 tabular-nums">
+                    {formatRupiah(totalTitipanMitra)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">Kewajiban panen belum dicairkan</div>
+                </div>
+              </div>
+            </section>
+
+            {/* Detailed Bank & Cash Account Table */}
+            <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
+                    Rincian Posisi Saldo Tiap Rekening Kas &amp; Bank
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Saldo riil masing-masing rekening perusahaan dan afiliasi
+                  </p>
+                </div>
+                <Landmark className="w-4 h-4 text-slate-400" />
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
+                      <th className="py-3 px-5 font-semibold">Kode</th>
+                      <th className="py-3 px-4 font-semibold">Nama Rekening</th>
+                      <th className="py-3 px-4 font-semibold hidden md:table-cell">Atas Nama / No. Rek</th>
+                      <th className="py-3 px-5 font-semibold text-right">Saldo Saat Ini</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {kas01 && (
+                      <tr className="hover:bg-slate-50/60">
+                        <td className="py-3.5 px-5 font-mono font-bold text-emerald-800">{kas01.kode}</td>
+                        <td className="py-3.5 px-4 font-semibold text-slate-900">{kas01.nama}</td>
+                        <td className="py-3.5 px-4 text-slate-500 hidden md:table-cell">
+                          {kas01.atasNama} · {kas01.nomorRekening}
+                        </td>
+                        <td className="py-3.5 px-5 text-right font-mono font-bold text-emerald-700 tabular-nums">
+                          {formatRupiah(kas01.saldoSaatIni)}
+                        </td>
+                      </tr>
+                    )}
+                    {bankPerusahaanList.map((rek) => (
+                      <tr key={rek.kode} className="hover:bg-slate-50/60">
+                        <td className="py-3.5 px-5 font-mono font-semibold text-slate-700">{rek.kode}</td>
+                        <td className="py-3.5 px-4 font-medium text-slate-900">{rek.nama}</td>
+                        <td className="py-3.5 px-4 text-slate-500 hidden md:table-cell">
+                          {rek.atasNama} · {rek.nomorRekening}
+                        </td>
+                        <td className="py-3.5 px-5 text-right font-mono font-bold text-slate-900 tabular-nums">
+                          {formatRupiah(rek.saldoSaatIni)}
+                        </td>
+                      </tr>
+                    ))}
+                    {anakPerusahaanList.map((rek) => (
+                      <tr key={rek.kode} className="bg-slate-50/40 hover:bg-slate-50">
+                        <td className="py-3.5 px-5 font-mono font-semibold text-sky-800">{rek.kode}</td>
+                        <td className="py-3.5 px-4 font-medium text-slate-900">
+                          {rek.nama} <span className="text-xs text-slate-500">· Anak Perusahaan</span>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-500 hidden md:table-cell">
+                          {rek.atasNama}
+                        </td>
+                        <td className="py-3.5 px-5 text-right font-mono font-bold text-sky-800 tabular-nums">
+                          {formatRupiah(rek.saldoSaatIni)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {/* Buku Kas Harian Bos Widget */}
+            <BukuKasHarianBosWidget
+              onNavigate={() => setActiveTab('jurnal')}
+              onRefreshParent={onRefreshAll}
+            />
+          </div>
+        )}
+
+        {/* TAB 2: ARUS KAS DIVISI & ARMADA */}
+        {activeTab === 'divisi' && (
+          <div className="space-y-6">
+            <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
+                    Pergerakan Arus Kas &amp; Saldo Buku per Divisi Usaha
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Klik baris divisi untuk melihat rincian mutasi transaksi terakhir pada divisi tersebut
+                  </p>
+                </div>
+              </div>
+
+              {loadingDivisi ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  Memuat rekap keuangan divisi...
+                </div>
+              ) : divisiData.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  Belum ada data pergerakan divisi.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {divisiData.map((d) => {
+                    const isOpen = expandedDivisi === d.idDivisi;
+                    return (
+                      <div key={d.idDivisi}>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedDivisi(isOpen ? null : d.idDivisi)}
+                          className="w-full px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/70 transition-colors text-left cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold text-sm text-slate-900">{d.divisi}</div>
+                            <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono tabular-nums">
+                              <span>Kode {d.kodeRekening}</span>
+                              <span>·</span>
+                              <span className="text-emerald-700">
+                                Masuk +{formatRupiahSingkat(d.totalArusMasuk)}
+                              </span>
+                              <span>·</span>
+                              <span className="text-rose-700">
+                                Keluar −{formatRupiahSingkat(d.totalArusKeluar)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                            <div className="text-left sm:text-right">
+                              <div className="text-[11px] text-slate-400">Saldo Buku Divisi</div>
+                              <div
+                                className={`font-mono text-sm sm:text-base font-bold tabular-nums ${
+                                  d.saldoSaatIni >= 0 ? 'text-slate-900' : 'text-rose-700'
+                                }`}
+                              >
+                                {formatRupiah(d.saldoSaatIni)}
+                              </div>
+                            </div>
+                            {isOpen ? (
+                              <ChevronUp className="w-4 h-4 text-slate-400" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-slate-400" />
+                            )}
+                          </div>
+                        </button>
+
+                        {isOpen && (
+                          <div className="px-5 pb-5 pt-2 bg-slate-50/60 border-t border-slate-100 space-y-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                              <div>
+                                <span className="text-slate-500">Penjualan Masuk</span>
+                                <div className="font-mono font-bold text-emerald-700 tabular-nums mt-0.5">
+                                  {formatRupiah(d.totalPenjualanMasuk)}
+                                </div>
+                              </div>
+                              <div>
+                                <span className="text-slate-500">Pembelian Stok/Panen</span>
+                                <div className="font-mono font-bold text-rose-700 tabular-nums mt-0.5">
+                                  {formatRupiah(d.totalPembelianKeluar)}
+                                </div>
+                              </div>
+                              <div>
+                                <span className="text-slate-500">Biaya Operasional</span>
+                                <div className="font-mono font-bold text-rose-700 tabular-nums mt-0.5">
+                                  {formatRupiah(d.totalPengeluaranOperasional)}
+                                </div>
+                              </div>
+                              <div>
+                                <span className="text-slate-500">Gaji &amp; Upah</span>
+                                <div className="font-mono font-bold text-rose-700 tabular-nums mt-0.5">
+                                  {formatRupiah(d.totalGajiKeluar)}
+                                </div>
+                              </div>
+                            </div>
+
+                            {d.mutasi && d.mutasi.length > 0 && (
+                              <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl">
+                                <table className="w-full text-left text-xs border-collapse">
+                                  <thead>
+                                    <tr className="border-b border-slate-100 text-slate-500 bg-slate-50/60">
+                                      <th className="py-2 px-3 font-semibold">Tanggal</th>
+                                      <th className="py-2 px-3 font-semibold">Keterangan</th>
+                                      <th className="py-2 px-3 font-semibold text-right">Masuk</th>
+                                      <th className="py-2 px-3 font-semibold text-right">Keluar</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {d.mutasi.slice(0, 10).map((m) => (
+                                      <tr key={m.id}>
+                                        <td className="py-2 px-3 font-mono text-slate-600 whitespace-nowrap">
+                                          {m.tanggal}
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-800">{m.keterangan}</td>
+                                        <td className="py-2 px-3 text-right font-mono text-emerald-700 tabular-nums whitespace-nowrap">
+                                          {m.masuk > 0 ? `+${formatRupiah(m.masuk)}` : '-'}
+                                        </td>
+                                        <td className="py-2 px-3 text-right font-mono text-rose-700 tabular-nums whitespace-nowrap">
+                                          {m.keluar > 0 ? `-${formatRupiah(m.keluar)}` : '-'}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            {/* Inventaris & Armada Kendaraan PT */}
+            <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
+                    Daftar Inventaris Kendaraan &amp; Armada PT ({inventarisList.length} Unit)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Pantauan sopir penanggung jawab, kondisi unit, dan jadwal pajak STNK
+                  </p>
+                </div>
+                <Truck className="w-4 h-4 text-slate-400" />
+              </div>
+
+              {inventarisList.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  Belum ada unit kendaraan di menu Inventaris.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
+                        <th className="py-3 px-5 font-semibold">No. Polisi / Kode</th>
+                        <th className="py-3 px-4 font-semibold">Nama Armada / Kendaraan</th>
+                        <th className="py-3 px-4 font-semibold">Driver / Penanggung Jawab</th>
+                        <th className="py-3 px-4 font-semibold">Pajak STNK</th>
+                        <th className="py-3 px-5 font-semibold">Kondisi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {inventarisList.map((inv) => (
+                        <tr key={inv.id} className="hover:bg-slate-50/60">
+                          <td className="py-3 px-5 font-mono font-bold text-slate-900 whitespace-nowrap">
+                            {inv.nomorPlat || inv.kode}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-900">{inv.namaItem}</div>
+                            <div className="text-xs text-slate-500">
+                              {inv.tahunKeluaran ? `Tahun ${inv.tahunKeluaran}` : inv.kategori}
+                              {inv.divisi ? ` · ${inv.divisi}` : ''}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-slate-700">
+                            <div>{inv.driverPenanggungJawab || '-'}</div>
+                            {inv.teleponDriver && (
+                              <div className="font-mono text-xs text-slate-400">{inv.teleponDriver}</div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-xs text-slate-700 whitespace-nowrap">
+                            {inv.tanggalPajakTahunan || '-'}
+                          </td>
+                          <td className="py-3 px-5 text-xs font-semibold text-slate-700">
+                            {inv.kondisi.replace(/_/g, ' ')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* TAB 3: REKENING KORAN MITRA (READ-ONLY + DOWNLOAD PDF) */}
+        {activeTab === 'mitra' && (
+          <div className="space-y-5">
+            <section className="bg-white border border-slate-200 rounded-2xl p-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pb-5 border-b border-slate-100">
+                <div>
+                  <div className="text-xs text-slate-500">Total Piutang Bon Mitra ke PT</div>
+                  <div className="font-mono text-xl font-bold text-amber-700 tabular-nums mt-0.5">
+                    {formatRupiah(rekapMitra?.totalBonMitra || totalPiutangBon)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {rekapMitra?.mitraDenganBonCount || 0} mitra memiliki bon aktif
+                  </div>
+                </div>
+                <div className="sm:border-l sm:border-slate-100 sm:pl-4">
+                  <div className="text-xs text-slate-500">Total Kewajiban Titipan Panen Mitra</div>
+                  <div className="font-mono text-xl font-bold text-rose-700 tabular-nums mt-0.5">
+                    {formatRupiah(rekapMitra?.totalHutangPerusahaanKeMitra || totalTitipanMitra)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {rekapMitra?.mitraDenganHutangTitipCount || 0} mitra memiliki saldo titip
+                  </div>
+                </div>
+                <div className="sm:border-l sm:border-slate-100 sm:pl-4">
+                  <div className="text-xs text-slate-500">Total Mitra Terdaftar</div>
+                  <div className="font-mono text-xl font-bold text-slate-900 tabular-nums mt-0.5">
+                    {rekapMitra?.totalMitra || 0} Mitra
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Klik nama mitra untuk buka Rekening Koran &amp; Bukti Nota
+                  </div>
+                </div>
+              </div>
+
+              {/* Search & Segmented Filter */}
+              <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={mitraSearch}
+                    onChange={(e) => setMitraSearch(e.target.value)}
+                    placeholder="Cari nama mitra, petani, supplier, atau karyawan..."
+                    className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setMitraFilter('ALL')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      mitraFilter === 'ALL'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Semua ({rekapMitra?.items.length || 0})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMitraFilter('BON')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      mitraFilter === 'BON'
+                        ? 'bg-white text-amber-800 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Punya Bon ({rekapMitra?.mitraDenganBonCount || 0})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMitraFilter('TITIP')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      mitraFilter === 'TITIP'
+                        ? 'bg-white text-rose-800 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Punya Titipan ({rekapMitra?.mitraDenganHutangTitipCount || 0})
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+              {loadingMitra ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  Memuat buku besar mitra...
+                </div>
+              ) : filteredMitraItems.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  Tidak ada mitra yang sesuai dengan pencarian.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
+                        <th className="py-3 px-5 font-semibold">Nama Mitra</th>
+                        <th className="py-3 px-4 font-semibold text-right">Sisa Bon ke PT</th>
+                        <th className="py-3 px-4 font-semibold text-right">Saldo Titip di PT</th>
+                        <th className="py-3 px-5 font-semibold text-right">Rekening Koran</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredMitraItems.map((m) => {
+                        const bonBersih = m.sisaBonBersih ?? m.totalBonMitra;
+                        const titipBersih = m.sisaTitipanBersih ?? m.totalHutangTitipPanen;
+                        const isLoadingThis = loadingStatementId === m.id;
+                        return (
+                          <tr key={m.id} className="hover:bg-slate-50/70">
+                            <td className="py-3.5 px-5">
+                              <div className="font-semibold text-slate-900">{m.nama}</div>
+                              <div className="text-xs text-slate-500">
+                                {m.kode} · {m.role.replace(/_/g, ' ')}
+                                {m.alamat && m.alamat !== '-' ? ` · ${m.alamat}` : ''}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-amber-700">
+                              {bonBersih > 0 ? formatRupiah(bonBersih) : '-'}
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-rose-700">
+                              {titipBersih > 0 ? formatRupiah(titipBersih) : '-'}
+                            </td>
+                            <td className="py-3.5 px-5 text-right">
+                              <button
+                                type="button"
+                                disabled={isLoadingThis}
+                                onClick={() => void handleOpenStatement(m.id)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                              >
+                                <span>{isLoadingThis ? 'Memuat...' : 'Buka & PDF'}</span>
+                                <ArrowUpRight className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* TAB 4: JURNAL SEMUA TRANSAKSI HARIAN & BUKTI NOTA */}
+        {activeTab === 'jurnal' && (
+          <RekapSemuaTransaksiHarianView onRefreshParent={onRefreshAll} />
+        )}
+
+        {/* TAB 5: STOK GUDANG & LABA RUGI */}
+        {activeTab === 'stok' && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Stok Hasil Bumi */}
+              <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100">
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
+                    Stok Gudang Hasil Bumi
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Volume komoditas hasil bumi tersedia saat ini
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
+                        <th className="py-2.5 px-4 font-semibold">Komoditas</th>
+                        <th className="py-2.5 px-4 font-semibold text-right">Stok (Kg)</th>
+                        <th className="py-2.5 px-4 font-semibold text-right">Tonase</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {stokHasilBumiList.map((hb) => (
+                        <tr key={hb.kode}>
+                          <td className="py-3 px-4 font-medium text-slate-900">{hb.nama}</td>
+                          <td className="py-3 px-4 text-right font-mono font-bold text-slate-900 tabular-nums">
+                            {Number(hb.stok || 0).toLocaleString('id-ID')} {hb.satuan}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-slate-500 tabular-nums">
+                            {(Number(hb.stok || 0) / 1000).toFixed(2)} Ton
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              {/* Stok Barang Toko */}
+              <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100">
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
+                    Stok Barang Dagangan Toko ({stokBarangList.length} Item)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Diurutkan dari stok yang paling memerlukan perhatian kulakan
+                  </p>
+                </div>
+                <div className="max-h-96 overflow-y-auto">
+                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                    <thead className="sticky top-0 bg-slate-50">
+                      <tr className="border-b border-slate-100 text-slate-500 text-xs">
+                        <th className="py-2.5 px-4 font-semibold">Nama Barang</th>
+                        <th className="py-2.5 px-4 font-semibold text-right">Sisa Stok</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {[...stokBarangList]
+                        .sort((a, b) => (a.stok || 0) - (b.stok || 0))
+                        .map((sb) => {
+                          const isLow = (sb.stok || 0) <= (sb.minimum || 5);
+                          return (
+                            <tr key={sb.kode}>
+                              <td className="py-2.5 px-4">
+                                <div className="font-medium text-slate-900">{sb.namaProduk}</div>
+                                {isLow && (
+                                  <div className="text-[11px] text-rose-700">
+                                    Stok menipis (min. {sb.minimum || 5} {sb.satuan})
+                                  </div>
+                                )}
+                              </td>
+                              <td
+                                className={`py-2.5 px-4 text-right font-mono font-bold tabular-nums ${
+                                  isLow ? 'text-rose-700' : 'text-slate-900'
+                                }`}
+                              >
+                                {Number(sb.stok || 0).toLocaleString('id-ID')} {sb.satuan}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+
+            {/* Laba & Rugi Produk */}
+            <LabaRugiProdukView />
+          </div>
+        )}
+      </main>
+
+      {/* Read-Only Rekening Koran + Bukti Nota Lalu + PDF Export Modal */}
+      {selectedStatement && (
+        <CetakRekeningKoranModal
+          statement={selectedStatement}
+          profilPerusahaan={profilPerusahaan}
+          rekeningUtamaDetail={rekeningUtamaDetail}
+          onClose={() => setSelectedStatement(null)}
+        />
+      )}
+    </div>
+  );
+};

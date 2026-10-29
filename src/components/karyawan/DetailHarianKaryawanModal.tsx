@@ -18,6 +18,7 @@ import {
   ShoppingBag,
   ArrowRight,
   Sparkles,
+  Pencil,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import {
@@ -27,6 +28,7 @@ import {
   TransaksiPenggajian,
 } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
+import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 
 interface DetailHarianKaryawanModalProps {
   idKaryawan: string;
@@ -55,6 +57,7 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
   const [settlePersenBon, setSettlePersenBon] = useState<number>(100);
   const [settleSubmitting, setSettleSubmitting] = useState(false);
   const [settleError, setSettleError] = useState('');
+  const [editTarget, setEditTarget] = useState<{ id: string; jenis: string } | null>(null);
 
   const loadDetail = async () => {
     setLoading(true);
@@ -324,12 +327,13 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                       <th className="py-2.5 px-3 text-right">JUMLAH</th>
                       <th className="py-2.5 px-2 text-center w-16">KET</th>
                       <th className="py-2.5 px-3">CATATAN</th>
+                      <th className="py-2.5 px-2 text-center">AKSI</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 text-zinc-800 text-[11px]">
                     {logHarian.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-6 text-center text-zinc-400">
+                        <td colSpan={9} className="py-6 text-center text-zinc-400">
                           Belum ada log pekerjaan harian tercatat untuk karyawan ini
                         </td>
                       </tr>
@@ -375,6 +379,16 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                             </td>
                             <td className="py-2.5 px-3 text-zinc-600 text-xs">
                               {log.catatan || (log.uangMakanLembur > 0 ? `Lembur/Makan +${formatRupiah(log.uangMakanLembur)}` : '-')}
+                            </td>
+                            <td className="py-2.5 px-2 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setEditTarget({ id: log.id, jenis: 'UPAH_HARIAN' })}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer"
+                              >
+                                <Pencil className="w-2.5 h-2.5" />
+                                <span>Edit</span>
+                              </button>
                             </td>
                           </tr>
                         );
@@ -526,12 +540,13 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                       <th className="py-2.5 px-3 text-right">POTONG BON</th>
                       <th className="py-2.5 px-3 text-right">BERSIH DIBAYAR</th>
                       <th className="py-2.5 px-3">SUMBER KAS</th>
+                      <th className="py-2.5 px-3 text-center">AKSI</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 text-zinc-800">
                     {riwayatGaji.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-6 text-center text-zinc-400">
+                        <td colSpan={8} className="py-6 text-center text-zinc-400">
                           Belum ada slip gaji yang dicairkan untuk karyawan ini
                         </td>
                       </tr>
@@ -549,6 +564,16 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                             {formatRupiah(g.gajiBersihDibayar)}
                           </td>
                           <td className="py-2.5 px-3 text-zinc-600">{g.rekeningSumber} ({g.metodePembayaran})</td>
+                          <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setEditTarget({ id: g.id, jenis: 'PENGGAJIAN' })}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer"
+                            >
+                              <Pencil className="w-2.5 h-2.5" />
+                              <span>Edit</span>
+                            </button>
+                          </td>
                         </tr>
                       ))
                     )}
@@ -681,6 +706,18 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
           </div>
         </div>
       )}
+
+      {/* Modal Universal Edit Detail Upah Harian / Slip Gaji */}
+      <ModalEditTransaksiUniversal
+        isOpen={Boolean(editTarget)}
+        transactionId={editTarget?.id || null}
+        jenisHint={editTarget?.jenis}
+        onClose={() => setEditTarget(null)}
+        onSuccess={() => {
+          loadDetail();
+          onRefreshAll();
+        }}
+      />
     </div>
   );
 };

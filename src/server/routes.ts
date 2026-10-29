@@ -2,13 +2,36 @@ import { Router } from 'express';
 import { dbManager, getWIBDateTime } from './db.ts';
 import { TransactionService } from './services/transactionService.ts';
 import { DAFTAR_DIVISI } from './types.ts';
+import { supabaseSyncEngine } from './supabase.ts';
 
 export const apiRouter = Router();
+
+function parseNominalInput(raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null;
+  }
+  const str = String(raw).trim();
+  if (!str) return null;
+  // Support direct numeric strings ("25000000", "-500000", "25000000.5")
+  // as well as Indonesian thousand-dot formatting ("Rp 25.000.000", "-500.000")
+  if (/^-?\d+(\.\d+)?$/.test(str)) {
+    const direct = Number(str);
+    return Number.isFinite(direct) ? direct : null;
+  }
+  const isNegative = str.startsWith('-') || str.includes('-');
+  const cleaned = str
+    .replace(/[^0-9,]/g, '')
+    .replace(/,/g, '.');
+  if (!cleaned) return 0;
+  const parsed = Number(cleaned) * (isNegative ? -1 : 1);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 // ==========================================
 // MASTER REKENING
 // ==========================================
-apiRouter.get('/rekening', (req, res) => {
+apiRouter.get('/rekening', (_req, res) => {
   try {
     const db = dbManager.get();
     res.json({ success: true, data: db.rekening });
@@ -19,7 +42,17 @@ apiRouter.get('/rekening', (req, res) => {
 
 apiRouter.post('/rekening', async (req, res) => {
   try {
-    const { kode, nama, atasNama, nomorRekening, saldoAwal, keterangan } = req.body;
+    const {
+      kode,
+      nama,
+      atasNama,
+      nomorRekening,
+      saldoAwal,
+      keterangan,
+      kategori,
+      rekeningIndukPenyimpan,
+      idMitraTerkait,
+    } = req.body;
     if (!kode || !nama || !atasNama) {
       return res.status(400).json({ success: false, message: 'Kode, Nama, dan Atas Nama wajib diisi' });
     }
@@ -32,7 +65,13 @@ apiRouter.post('/rekening', async (req, res) => {
       if (db.rekening.some((r) => r.kode === cleanKode)) {
         throw new Error(`Rekening dengan kode ${cleanKode} sudah terdaftar`);
       }
-      const saldo = Number(saldoAwal) || 0;
+      const parsedSaldo = parseNominalInput(saldoAwal);
+      const saldo = parsedSaldo !== null ? parsedSaldo : 0;
+      const finalKategori =
+        kategori === 'ANAK_PERUSAHAAN' || kategori === 'OPERASIONAL_DIVISI' || kategori === 'PERUSAHAAN'
+          ? kategori
+          : 'PERUSAHAAN';
+      const isAnak = finalKategori === 'ANAK_PERUSAHAAN';
       const newRek: any = {
         kode: cleanKode,
         nama: String(nama).trim(),
@@ -42,7 +81,15 @@ apiRouter.post('/rekening', async (req, res) => {
         saldoSaatIni: saldo,
         status: 'AKTIF',
         isVirtual: false,
-        keterangan: keterangan || '',
+        isAnakPerusahaan: isAnak,
+        idMitraTerkait: isAnak ? idMitraTerkait : undefined,
+        kategori: finalKategori,
+        rekeningIndukPenyimpan: finalKategori === 'OPERASIONAL_DIVISI' ? (rekeningIndukPenyimpan || 'KAS01') : undefined,
+        keterangan:
+          keterangan ||
+          (isAnak
+            ? 'Anak Perusahaan PT. Wijaya Agro Perkasa (Bukan Bank) — Terintegrasi otomatis sebagai Mitra dalam 1 transaksi terpadu'
+            : ''),
       };
       db.rekening.push(newRek);
       return newRek;
@@ -54,77 +101,73 @@ apiRouter.post('/rekening', async (req, res) => {
   }
 });
 
-apiRouter.put('/rekening/:kode', async (req, res) => {
-  try {
-    const kode = req.params.kode.toUpperCase();
-    const { nama, atasNama, nomorRekening, status, keterangan, saldoSaatIni, saldoAwal, alasanPenyesuaian } = req.body;
-
-    const updated = await dbManager.executeTransaction((db) => {
-      const rek = db.rekening.find((r) => r.kode === kode);
-      if (!rek) throw new Error(`Rekening ${kode} tidak ditemukan`);
-      if (rek.isVirtual && status && status !== 'AKTIF') {
-        throw new Error(`Rekening sistem ${kode} tidak boleh dinonaktifkan`);
-      }
-      if (nama) rek.nama = nama;
-      if (atasNama) rek.atasNama = atasNama;
-      if (nomorRekening) rek.nomorRekening = nomorRekening;
-      if (status) rek.status = status;
-      if (keterangan !== undefined) rek.keterangan = keterangan;
-
-      // Update Saldo Fleksibel
-      if (saldoSaatIni !== undefined && !isNaN(Number(saldoSaatIni))) {
-        const oldSaldo = rek.saldoSaatIni;
-        const newSaldo = Number(saldoSaatIni);
-        rek.saldoSaatIni = newSaldo;
-
-        if (saldoAwal !== undefined && !isNaN(Number(saldoAwal))) {
-          rek.saldoAwal = Number(saldoAwal);
-        }
-
-        const { iso, tanggal, jam } = getWIBDateTime();
-        db.auditLogs.unshift({
-          id: `AUDIT-${Date.now().toString().slice(-6)}`,
-          timestamp: iso,
-          tanggal,
-          jam,
-          user: 'Admin Keuangan',
-          jenisTransaksi: 'UPDATE',
-          idTransaksi: rek.kode,
-          detail: `Penyesuaian Saldo Rekening ${rek.nama} (${rek.kode}): Rp ${oldSaldo.toLocaleString('id-ID')} -> Rp ${newSaldo.toLocaleString('id-ID')}${alasanPenyesuaian ? ` (${alasanPenyesuaian})` : ''}`,
-          nominal: Math.abs(newSaldo - oldSaldo),
-          rekeningTerkait: rek.kode,
-        });
-      }
-
-      return rek;
-    });
-
-    res.json({ success: true, data: updated });
-  } catch (err: any) {
-    res.status(400).json({ success: false, message: err.message });
+async function handleUpdateRekeningRequest(rawKode: string, body: any) {
+  const kode = decodeURIComponent(String(rawKode || '')).toUpperCase().trim();
+  if (!kode) {
+    throw new Error('Kode rekening wajib disertakan');
   }
-});
 
-// Update Saldo Fleksibel Rekening Langsung
-apiRouter.post('/rekening/:kode/update-saldo', async (req, res) => {
-  try {
-    const kode = req.params.kode.toUpperCase();
-    const { saldoBaru, updateSaldoAwal, alasan } = req.body;
+  const {
+    nama,
+    atasNama,
+    nomorRekening,
+    status,
+    keterangan,
+    kategori,
+    rekeningIndukPenyimpan,
+    saldoSaatIni,
+    saldoAwal,
+    alasanPenyesuaian,
+  } = body || {};
 
-    if (saldoBaru === undefined || isNaN(Number(saldoBaru))) {
-      throw new Error('Nominal saldo baru harus berupa angka valid');
+  return await dbManager.executeTransaction((db) => {
+    const rek = db.rekening.find((r) => r.kode.toUpperCase() === kode);
+    if (!rek) throw new Error(`Rekening ${kode} tidak ditemukan`);
+    if (rek.isVirtual && status && status !== 'AKTIF') {
+      throw new Error(`Rekening sistem ${kode} tidak boleh dinonaktifkan`);
+    }
+    if (nama) rek.nama = String(nama).trim();
+    if (atasNama) rek.atasNama = String(atasNama).trim();
+    if (nomorRekening !== undefined) rek.nomorRekening = String(nomorRekening).trim();
+    if (status) rek.status = status;
+    if (keterangan !== undefined) rek.keterangan = keterangan;
+    if (!rek.isVirtual && kategori) {
+      rek.kategori = kategori;
+      rek.isAnakPerusahaan = kategori === 'ANAK_PERUSAHAAN';
+      if (kategori === 'OPERASIONAL_DIVISI') {
+        rek.rekeningIndukPenyimpan = rekeningIndukPenyimpan || rek.rekeningIndukPenyimpan || 'KAS01';
+      } else {
+        delete rek.rekeningIndukPenyimpan;
+      }
     }
 
-    const updated = await dbManager.executeTransaction((db) => {
-      const rek = db.rekening.find((r) => r.kode === kode);
-      if (!rek) throw new Error(`Rekening ${kode} tidak ditemukan`);
+    // Sinkronkan nama ke Mitra terkait apabila rekening adalah Anak Perusahaan
+    if (rek.isAnakPerusahaan && rek.idMitraTerkait && nama) {
+      const linkedMitra = db.mitra.find((m) => m.id === rek.idMitraTerkait);
+      if (linkedMitra) {
+        linkedMitra.nama = rek.nama;
+        linkedMitra.status = rek.status;
+        rek.namaMitraTerkait = linkedMitra.nama;
+      }
+    }
 
+    // Update Saldo Fleksibel
+    const parsedSaldoSaatIni = parseNominalInput(saldoSaatIni);
+    const parsedSaldoAwal = parseNominalInput(saldoAwal);
+
+    if (parsedSaldoSaatIni !== null) {
+      if (rek.isVirtual || rek.kode === 'BON01' || rek.kode === 'TIT01' || rek.kode === 'SINKRON') {
+        throw new Error(
+          `Saldo rekening sistem ${rek.kode} dihitung otomatis dari transaksi piutang kasbon, titipan, & sinkronisasi potong bon.`
+        );
+      }
       const oldSaldo = rek.saldoSaatIni;
-      const numSaldo = Number(saldoBaru);
-      rek.saldoSaatIni = numSaldo;
+      rek.saldoSaatIni = parsedSaldoSaatIni;
 
-      if (updateSaldoAwal) {
-        rek.saldoAwal = numSaldo;
+      if (parsedSaldoAwal !== null) {
+        rek.saldoAwal = parsedSaldoAwal;
+      } else if (rek.kategori === 'OPERASIONAL_DIVISI') {
+        rek.saldoAwal = Math.round((Number(rek.saldoAwal) || 0) + (parsedSaldoSaatIni - oldSaldo));
       }
 
       const { iso, tanggal, jam } = getWIBDateTime();
@@ -136,14 +179,110 @@ apiRouter.post('/rekening/:kode/update-saldo', async (req, res) => {
         user: 'Admin Keuangan',
         jenisTransaksi: 'UPDATE',
         idTransaksi: rek.kode,
-        detail: `Pembaruan Nominal Saldo Fleksibel Rekening ${rek.nama} (${rek.kode}): Rp ${oldSaldo.toLocaleString('id-ID')} -> Rp ${numSaldo.toLocaleString('id-ID')}${alasan ? ` (Catatan: ${alasan})` : ''}`,
-        nominal: Math.abs(numSaldo - oldSaldo),
+        detail: `Penyesuaian Saldo Rekening ${rek.nama} (${rek.kode}): Rp ${oldSaldo.toLocaleString('id-ID')} -> Rp ${parsedSaldoSaatIni.toLocaleString('id-ID')}${alasanPenyesuaian ? ` (${alasanPenyesuaian})` : ''}`,
+        nominal: Math.abs(parsedSaldoSaatIni - oldSaldo),
         rekeningTerkait: rek.kode,
       });
+    } else if (parsedSaldoAwal !== null && !rek.isVirtual) {
+      rek.saldoAwal = parsedSaldoAwal;
+    }
 
-      return rek;
+    return rek;
+  });
+}
+
+async function handleUpdateSaldoRekeningRequest(rawKode: string, body: any) {
+  const kode = decodeURIComponent(String(rawKode || '')).toUpperCase().trim();
+  if (!kode) {
+    throw new Error('Kode rekening wajib dipilih');
+  }
+
+  const { saldoBaru, saldoAwalBaru, updateSaldoAwal, alasan } = body || {};
+  const numSaldo = parseNominalInput(saldoBaru);
+  if (numSaldo === null) {
+    throw new Error('Nominal saldo baru harus berupa angka yang valid');
+  }
+
+  return await dbManager.executeTransaction((db) => {
+    const rek = db.rekening.find((r) => r.kode.toUpperCase() === kode);
+    if (!rek) throw new Error(`Rekening ${kode} tidak ditemukan`);
+    if (rek.isVirtual || rek.kode === 'BON01' || rek.kode === 'TIT01' || rek.kode === 'SINKRON') {
+      throw new Error(
+        `Saldo rekening sistem ${rek.kode} dihitung otomatis dari transaksi piutang kasbon, titipan, & sinkronisasi potong bon.`
+      );
+    }
+
+    const oldSaldo = rek.saldoSaatIni;
+    rek.saldoSaatIni = numSaldo;
+
+    const explicitSaldoAwal = parseNominalInput(saldoAwalBaru);
+    if (explicitSaldoAwal !== null) {
+      rek.saldoAwal = explicitSaldoAwal;
+    } else if (rek.kategori === 'OPERASIONAL_DIVISI') {
+      rek.saldoAwal = Math.round((Number(rek.saldoAwal) || 0) + (numSaldo - oldSaldo));
+    } else if (updateSaldoAwal) {
+      rek.saldoAwal = numSaldo;
+    }
+
+    const { iso, tanggal, jam } = getWIBDateTime();
+    db.auditLogs.unshift({
+      id: `AUDIT-${Date.now().toString().slice(-6)}`,
+      timestamp: iso,
+      tanggal,
+      jam,
+      user: 'Admin Keuangan',
+      jenisTransaksi: 'UPDATE',
+      idTransaksi: rek.kode,
+      detail: `Pembaruan Nominal Saldo Fleksibel Rekening ${rek.nama} (${rek.kode}): Rp ${oldSaldo.toLocaleString('id-ID')} -> Rp ${numSaldo.toLocaleString('id-ID')}${alasan ? ` (Catatan: ${alasan})` : ''}`,
+      nominal: Math.abs(numSaldo - oldSaldo),
+      rekeningTerkait: rek.kode,
     });
 
+    return rek;
+  });
+}
+
+// Body-based endpoints (immune to special characters / slashes / proxy URL decoding)
+apiRouter.post('/rekening/update-saldo', async (req, res) => {
+  try {
+    const updated = await handleUpdateSaldoRekeningRequest(req.body?.kode, req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/rekening/update', async (req, res) => {
+  try {
+    const updated = await handleUpdateRekeningRequest(req.body?.kode, req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/rekening/update', async (req, res) => {
+  try {
+    const updated = await handleUpdateRekeningRequest(req.body?.kode, req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Path-param endpoints (preserved for backwards compatibility)
+apiRouter.put('/rekening/:kode', async (req, res) => {
+  try {
+    const updated = await handleUpdateRekeningRequest(req.params.kode, req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/rekening/:kode/update-saldo', async (req, res) => {
+  try {
+    const updated = await handleUpdateSaldoRekeningRequest(req.params.kode, req.body);
     res.json({ success: true, data: updated });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
@@ -160,19 +299,25 @@ apiRouter.get('/mitra', (_req, res) => {
     let modified = false;
     for (const kry of db.karyawan || []) {
       const idMitra = kry.idMitraTerkait || `MTR-${kry.id}`;
-      const existing = db.mitra.find((m) => m.id === idMitra || m.kode === kry.nik);
+      const existing = db.mitra.find((m) => m.id === idMitra || m.kode === kry.nik || (m.role === 'KARYAWAN' && m.nama.toLowerCase() === kry.nama.toLowerCase()));
       if (!existing) {
         db.mitra.push({
           id: idMitra,
-          kode: kry.nik,
-          nama: `${kry.nama} (Karyawan)`,
+          kode: kry.nik || kry.id,
+          nama: kry.nama,
           role: 'KARYAWAN',
-          telepon: kry.telepon,
-          alamat: kry.alamat,
-          status: kry.status,
-          catatan: `Karyawan: ${kry.jabatan} (${kry.departemen})`,
+          telepon: kry.telepon || '-',
+          alamat: kry.alamat || '-',
+          status: kry.status || 'AKTIF',
+          catatan: `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang'})`,
         });
         modified = true;
+      } else {
+        // Ensure clean matching name and role
+        if (existing.nama.endsWith(' (Karyawan)')) {
+          existing.nama = kry.nama;
+          modified = true;
+        }
       }
     }
     if (modified) {
@@ -233,12 +378,27 @@ apiRouter.put('/mitra/:id', async (req, res) => {
     const updated = await dbManager.executeTransaction((db) => {
       const mitra = db.mitra.find((m) => m.id === id);
       if (!mitra) throw new Error(`Mitra dengan ID ${id} tidak ditemukan`);
-      if (nama) mitra.nama = nama;
+      if (nama) mitra.nama = String(nama).trim();
       if (role) mitra.role = role;
       if (telepon) mitra.telepon = telepon;
       if (alamat) mitra.alamat = alamat;
       if (status) mitra.status = status;
       if (catatan !== undefined) mitra.catatan = catatan;
+
+      // Sinkronkan balik ke Karyawan apabila mitra adalah akun karyawan terkait
+      if (mitra.role === 'KARYAWAN') {
+        const kry = (db.karyawan || []).find(
+          (k) => k.idMitraTerkait === mitra.id || `MTR-${k.id}` === mitra.id || k.nik === mitra.kode
+        );
+        if (kry) {
+          if (nama) kry.nama = mitra.nama;
+          if (telepon) kry.telepon = mitra.telepon;
+          if (alamat) kry.alamat = mitra.alamat;
+          if (status) kry.status = mitra.status;
+          kry.idMitraTerkait = mitra.id;
+        }
+      }
+
       return mitra;
     });
 
@@ -249,9 +409,290 @@ apiRouter.put('/mitra/:id', async (req, res) => {
 });
 
 // ==========================================
-// MASTER PRODUK & STOK
+// MASTER PRODUK, KATEGORI KUSTOM & STOK
 // ==========================================
-apiRouter.get('/produk', (req, res) => {
+function normalizeKategoriName(raw: unknown): string {
+  const cleaned = String(raw || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+  return cleaned || 'LAINNYA';
+}
+
+function ensureKategoriRegistered(db: any, namaKategori: string, deskripsi?: string) {
+  if (!Array.isArray(db.kategoriProduk)) {
+    db.kategoriProduk = [];
+  }
+  const norm = normalizeKategoriName(namaKategori);
+  const existing = db.kategoriProduk.find(
+    (k: any) => normalizeKategoriName(k.nama) === norm
+  );
+  if (!existing) {
+    db.kategoriProduk.push({
+      nama: norm,
+      deskripsi: deskripsi ? String(deskripsi).trim() : '',
+      createdAt: getWIBDateTime().iso,
+    });
+  } else if (deskripsi !== undefined && String(deskripsi).trim()) {
+    existing.deskripsi = String(deskripsi).trim();
+  }
+  return norm;
+}
+
+apiRouter.get('/kategori-produk', (_req, res) => {
+  try {
+    const db = dbManager.get();
+    const savedList = Array.isArray(db.kategoriProduk) ? db.kategoriProduk : [];
+    const produkList = Array.isArray(db.produk) ? db.produk : [];
+
+    const map = new Map<
+      string,
+      { nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }
+    >();
+
+    for (const k of savedList) {
+      const norm = normalizeKategoriName(k.nama);
+      map.set(norm, {
+        nama: norm,
+        deskripsi: k.deskripsi || '',
+        jumlahProduk: 0,
+        isSaved: true,
+      });
+    }
+
+    for (const p of produkList) {
+      const norm = normalizeKategoriName(p.kategori);
+      const current = map.get(norm);
+      if (current) {
+        current.jumlahProduk += 1;
+      } else {
+        map.set(norm, {
+          nama: norm,
+          deskripsi: '',
+          jumlahProduk: 1,
+          isSaved: false,
+        });
+      }
+    }
+
+    const result = Array.from(map.values()).sort((a, b) => {
+      if (b.jumlahProduk !== a.jumlahProduk) return b.jumlahProduk - a.jumlahProduk;
+      return a.nama.localeCompare(b.nama, 'id');
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/kategori-produk', async (req, res) => {
+  try {
+    const { nama, deskripsi } = req.body;
+    if (!nama || !String(nama).trim()) {
+      return res.status(400).json({ success: false, message: 'Nama kategori wajib diisi' });
+    }
+
+    const norm = normalizeKategoriName(nama);
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const created = await dbManager.executeTransaction((db) => {
+      ensureKategoriRegistered(db, norm, deskripsi);
+      db.auditLogs.unshift({
+        id: `LOG-KAT-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin / Gudang',
+        jenisTransaksi: 'CREATE',
+        idTransaksi: `KAT-${norm.slice(0, 12)}`,
+        detail: `Menambahkan kategori produk kustom baru: "${norm}"`,
+        nominal: 0,
+      });
+      return db.kategoriProduk?.find((k) => normalizeKategoriName(k.nama) === norm);
+    });
+
+    res.json({ success: true, data: created });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/kategori-produk/rename', async (req, res) => {
+  try {
+    const { kategoriLama, kategoriBaru, deskripsi } = req.body;
+    if (!kategoriLama || !kategoriBaru || !String(kategoriBaru).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nama kategori lama dan kategori baru wajib diisi',
+      });
+    }
+
+    const oldNorm = normalizeKategoriName(kategoriLama);
+    const newNorm = normalizeKategoriName(kategoriBaru);
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const summary = await dbManager.executeTransaction((db) => {
+      if (!Array.isArray(db.kategoriProduk)) db.kategoriProduk = [];
+
+      // Update or merge in kategoriProduk
+      const oldIdx = db.kategoriProduk.findIndex(
+        (k) => normalizeKategoriName(k.nama) === oldNorm
+      );
+      const existingNew = db.kategoriProduk.find(
+        (k) => normalizeKategoriName(k.nama) === newNorm
+      );
+
+      if (oldIdx >= 0) {
+        const oldDesc = db.kategoriProduk[oldIdx].deskripsi;
+        if (existingNew && oldNorm !== newNorm) {
+          if (deskripsi !== undefined) existingNew.deskripsi = String(deskripsi).trim();
+          else if (!existingNew.deskripsi && oldDesc) existingNew.deskripsi = oldDesc;
+          db.kategoriProduk.splice(oldIdx, 1);
+        } else {
+          db.kategoriProduk[oldIdx].nama = newNorm;
+          if (deskripsi !== undefined) {
+            db.kategoriProduk[oldIdx].deskripsi = String(deskripsi).trim();
+          }
+        }
+      } else {
+        ensureKategoriRegistered(db, newNorm, deskripsi);
+      }
+
+      // Update all matching products
+      let affectedCount = 0;
+      for (const p of db.produk) {
+        if (normalizeKategoriName(p.kategori) === oldNorm) {
+          p.kategori = newNorm;
+          affectedCount += 1;
+        }
+      }
+
+      db.auditLogs.unshift({
+        id: `LOG-KAT-REN-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin / Gudang',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: `KAT-${newNorm.slice(0, 12)}`,
+        detail: `Mengubah kategori produk "${oldNorm}" menjadi "${newNorm}" (${affectedCount} produk diperbarui)`,
+        nominal: 0,
+      });
+
+      return { kategoriLama: oldNorm, kategoriBaru: newNorm, affectedCount };
+    });
+
+    res.json({ success: true, data: summary });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/kategori-produk/delete', async (req, res) => {
+  try {
+    const { nama, kategoriPengganti } = req.body;
+    if (!nama || !String(nama).trim()) {
+      return res.status(400).json({ success: false, message: 'Nama kategori wajib diisi' });
+    }
+
+    const targetNorm = normalizeKategoriName(nama);
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const summary = await dbManager.executeTransaction((db) => {
+      const usedProducts = db.produk.filter(
+        (p) => normalizeKategoriName(p.kategori) === targetNorm
+      );
+
+      if (usedProducts.length > 0 && !kategoriPengganti) {
+        throw new Error(
+          `Kategori "${targetNorm}" masih dipakai oleh ${usedProducts.length} produk. Pindahkan produk terlebih dahulu atau gunakan fitur Ubah Nama Kategori.`
+        );
+      }
+
+      let movedCount = 0;
+      if (usedProducts.length > 0 && kategoriPengganti) {
+        const fallbackNorm = ensureKategoriRegistered(db, kategoriPengganti);
+        for (const p of usedProducts) {
+          p.kategori = fallbackNorm;
+          movedCount += 1;
+        }
+      }
+
+      if (Array.isArray(db.kategoriProduk)) {
+        db.kategoriProduk = db.kategoriProduk.filter(
+          (k) => normalizeKategoriName(k.nama) !== targetNorm
+        );
+      }
+
+      db.auditLogs.unshift({
+        id: `LOG-KAT-DEL-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin / Gudang',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: `KAT-DEL-${targetNorm.slice(0, 10)}`,
+        detail: `Menghapus kategori "${targetNorm}"${movedCount > 0 ? ` (${movedCount} produk dipindahkan)` : ''}`,
+        nominal: 0,
+      });
+
+      return { deleted: targetNorm, movedCount };
+    });
+
+    res.json({ success: true, data: summary });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/produk/bulk-kategori', async (req, res) => {
+  try {
+    const { kodeProdukList, kategoriBaru, deskripsiKategori } = req.body;
+    if (!Array.isArray(kodeProdukList) || kodeProdukList.length === 0) {
+      return res.status(400).json({ success: false, message: 'Pilih minimal satu produk' });
+    }
+    if (!kategoriBaru || !String(kategoriBaru).trim()) {
+      return res.status(400).json({ success: false, message: 'Nama kategori tujuan wajib diisi' });
+    }
+
+    const newNorm = normalizeKategoriName(kategoriBaru);
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const result = await dbManager.executeTransaction((db) => {
+      ensureKategoriRegistered(db, newNorm, deskripsiKategori);
+      const targetCodes = new Set(kodeProdukList.map((c: any) => String(c).trim().toUpperCase()));
+      let updatedCount = 0;
+
+      for (const p of db.produk) {
+        if (targetCodes.has(p.kode.toUpperCase())) {
+          p.kategori = newNorm;
+          updatedCount += 1;
+        }
+      }
+
+      db.auditLogs.unshift({
+        id: `LOG-PRD-BULK-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin / Gudang',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: `BULK-KAT-${Date.now().toString().slice(-4)}`,
+        detail: `Memperbarui kategori ${updatedCount} produk secara massal ke "${newNorm}"`,
+        nominal: 0,
+      });
+
+      return { kategoriBaru: newNorm, updatedCount };
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/produk', (_req, res) => {
   try {
     const db = dbManager.get();
     res.json({ success: true, data: db.produk });
@@ -262,25 +703,37 @@ apiRouter.get('/produk', (req, res) => {
 
 apiRouter.post('/produk', async (req, res) => {
   try {
-    const { kode, kategori, nama, satuan, hargaBeli, hargaJual, stokAwal, minimum } = req.body;
+    const { kode, kategori, nama, satuan, hargaBeli, hargaJual, hargaKhususRekanan, stokAwal, minimum } = req.body;
     if (!kode || !nama || !satuan || hargaJual === undefined) {
       return res.status(400).json({ success: false, message: 'Kode, nama, satuan, dan harga jual wajib diisi' });
     }
 
     const { iso } = getWIBDateTime();
     const cleanKode = String(kode).toUpperCase().trim();
+    const cleanKategori = normalizeKategoriName(kategori);
 
     const created = await dbManager.executeTransaction((db) => {
       if (db.produk.some((p) => p.kode === cleanKode)) {
         throw new Error(`Produk dengan kode ${cleanKode} sudah terdaftar`);
       }
+      ensureKategoriRegistered(db, cleanKategori);
+
+      const buyVal = Math.max(0, Number(hargaBeli) || 0);
+      const rawSell = Math.max(0, Number(hargaJual) || 0);
+      const sellVal = rawSell > 0 ? rawSell : buyVal;
+      const rekananVal =
+        hargaKhususRekanan !== undefined && hargaKhususRekanan !== '' && Number(hargaKhususRekanan) > 0
+          ? Math.max(0, Number(hargaKhususRekanan) || 0)
+          : sellVal;
+
       const newProd: any = {
         kode: cleanKode,
-        kategori: kategori || 'LAINNYA',
+        kategori: cleanKategori,
         nama: String(nama).trim(),
         satuan: String(satuan).trim(),
-        hargaBeli: Number(hargaBeli) || 0,
-        hargaJual: Number(hargaJual) || 0,
+        hargaBeli: buyVal,
+        hargaJual: sellVal,
+        hargaKhususRekanan: rekananVal,
         status: 'AKTIF',
       };
       db.produk.push(newProd);
@@ -299,6 +752,68 @@ apiRouter.post('/produk', async (req, res) => {
     });
 
     res.json({ success: true, data: created });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/produk/:kode', async (req, res) => {
+  try {
+    const { kode } = req.params;
+    const { nama, kategori, satuan, hargaBeli, hargaJual, hargaKhususRekanan, status, minimum } = req.body;
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const updated = await dbManager.executeTransaction((db) => {
+      const prod = db.produk.find((p) => p.kode === kode);
+      if (!prod) throw new Error(`Produk dengan kode ${kode} tidak ditemukan`);
+
+      if (nama) prod.nama = String(nama).trim();
+      if (kategori && String(kategori).trim()) {
+        const cleanKategori = normalizeKategoriName(kategori);
+        prod.kategori = cleanKategori;
+        ensureKategoriRegistered(db, cleanKategori);
+      }
+      if (satuan) prod.satuan = String(satuan).trim();
+      if (hargaBeli !== undefined) prod.hargaBeli = Math.max(0, Number(hargaBeli) || 0);
+      if (hargaJual !== undefined) prod.hargaJual = Math.max(0, Number(hargaJual) || 0);
+      if (hargaKhususRekanan !== undefined) prod.hargaKhususRekanan = Math.max(0, Number(hargaKhususRekanan) || 0);
+      if (status) prod.status = status;
+
+      // Sync name, unit & minimum to stokBarang (or create if missing)
+      let stok = db.stokBarang.find((s) => s.kode === kode);
+      if (stok) {
+        stok.namaProduk = prod.nama;
+        stok.satuan = prod.satuan;
+        if (minimum !== undefined) stok.minimum = Math.max(0, Number(minimum) || 0);
+        stok.updateTerakhir = iso;
+      } else {
+        stok = {
+          kode: prod.kode,
+          namaProduk: prod.nama,
+          satuan: prod.satuan,
+          stok: 0,
+          minimum: minimum !== undefined ? Math.max(0, Number(minimum) || 0) : 5,
+          updateTerakhir: iso,
+        };
+        db.stokBarang.push(stok);
+      }
+
+      db.auditLogs.unshift({
+        id: `LOG-PRD-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Kasir & Gudang',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: `PRD-${kode}`,
+        detail: `Pembaruan data produk ${prod.nama} [${prod.kategori}]: Harga Jual Rp ${(prod.hargaJual || 0).toLocaleString('id-ID')}, HPP Rp ${(prod.hargaBeli || 0).toLocaleString('id-ID')}`,
+        nominal: prod.hargaJual || 0,
+      });
+
+      return { produk: prod, stok };
+    });
+
+    res.json({ success: true, data: updated });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -365,29 +880,98 @@ apiRouter.get('/stok-hasil-bumi', (req, res) => {
 
 apiRouter.post('/stok-hasil-bumi', async (req, res) => {
   try {
-    const { kode, nama, satuan, hargaBeliStandar } = req.body;
-    if (!nama) {
-      return res.status(400).json({ success: false, message: 'Nama komoditas hasil bumi wajib diisi' });
+    const { kode, nama, satuan, hargaBeliStandar, isBelumPutusHarga } = req.body;
+    if (!nama || !String(nama).trim()) {
+      return res.status(400).json({ success: false, message: 'Nama barang hasil bumi wajib diisi' });
     }
-    const { iso } = getWIBDateTime();
+    const { iso, tanggal, jam } = getWIBDateTime();
     const created = await dbManager.executeTransaction((db) => {
       if (!Array.isArray(db.stokHasilBumi)) db.stokHasilBumi = [];
-      const cleanKode = kode ? String(kode).trim().toUpperCase() : `HB-${Date.now().toString().slice(-4)}`;
-      if (db.stokHasilBumi.some((h) => h.kode === cleanKode)) {
+      const cleanNama = String(nama).trim();
+
+      if (db.stokHasilBumi.some((h) => h.nama.trim().toUpperCase() === cleanNama.toUpperCase())) {
+        throw new Error(`Barang hasil bumi "${cleanNama}" sudah terdaftar di sistem`);
+      }
+
+      let cleanKode = kode ? String(kode).trim().toUpperCase() : '';
+      if (!cleanKode) {
+        let maxNum = 8;
+        for (const h of db.stokHasilBumi) {
+          const match = /^HB-(\d+)$/i.exec(h.kode || '');
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (!Number.isNaN(num) && num > maxNum) maxNum = num;
+          }
+        }
+        let nextNum = maxNum + 1;
+        cleanKode = `HB-${String(nextNum).padStart(2, '0')}`;
+        while (db.stokHasilBumi.some((h) => h.kode.toUpperCase() === cleanKode)) {
+          nextNum += 1;
+          cleanKode = `HB-${String(nextNum).padStart(2, '0')}`;
+        }
+      } else if (db.stokHasilBumi.some((h) => h.kode.toUpperCase() === cleanKode)) {
         throw new Error(`Komoditas dengan kode ${cleanKode} sudah terdaftar`);
       }
+
       const newKomoditas = {
         kode: cleanKode,
-        nama: String(nama).trim(),
+        nama: cleanNama,
         satuan: String(satuan || 'Kg').trim(),
         stok: 0,
         hargaBeliStandar: Math.max(0, Number(hargaBeliStandar) || 0),
+        isBelumPutusHarga: Boolean(isBelumPutusHarga),
         updateTerakhir: iso,
       };
       db.stokHasilBumi.push(newKomoditas);
+
+      db.auditLogs.unshift({
+        id: `LOG-HB-ADD-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Kasir Hasil Bumi',
+        jenisTransaksi: 'CREATE',
+        idTransaksi: cleanKode,
+        detail: `Tambah Barang Hasil Bumi Baru: ${cleanNama} (${cleanKode}) — Satuan ${newKomoditas.satuan}, Harga Standar Rp ${newKomoditas.hargaBeliStandar.toLocaleString('id-ID')}/${newKomoditas.satuan}`,
+        nominal: newKomoditas.hargaBeliStandar,
+      });
+
       return newKomoditas;
     });
     res.json({ success: true, data: created });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/stok-hasil-bumi/:kode/harga', async (req, res) => {
+  try {
+    const { kode } = req.params;
+    const { hargaBeliStandar } = req.body;
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const updated = await dbManager.executeTransaction((db) => {
+      const hb = (db.stokHasilBumi || []).find((h) => h.kode === kode);
+      if (!hb) throw new Error(`Komoditas dengan kode ${kode} tidak ditemukan`);
+      hb.hargaBeliStandar = Math.max(0, Number(hargaBeliStandar) || 0);
+      hb.updateTerakhir = iso;
+
+      db.auditLogs.unshift({
+        id: `LOG-HB-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Kasir Hasil Bumi',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: `HB-${kode}`,
+        detail: `Pembaruan harga standar hasil bumi ${hb.nama} menjadi Rp ${hb.hargaBeliStandar.toLocaleString('id-ID')}/${hb.satuan}`,
+        nominal: hb.hargaBeliStandar,
+      });
+
+      return hb;
+    });
+
+    res.json({ success: true, data: updated });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -426,10 +1010,14 @@ apiRouter.post('/stok-hasil-bumi/saldo-awal', async (req, res) => {
             ? Number(item.modalAwalTotal)
             : Math.round(validStokAwal * validRataRata);
 
-        // Hitung total pembelian berjalan menggunakan aplikasi
+        // Hitung total pembelian fisik & penjualan keluar berjalan di aplikasi
         const pembelianBerjalanKg = db.pembelianHasilBumi
-          .filter((p) => p.komoditasKode === item.kode)
+          .filter((p) => p.komoditasKode === item.kode && TransactionService.isPhysicalPembelianHasilBumi(p))
           .reduce((sum, p) => sum + (p.beratBersih || 0), 0);
+
+        const penjualanBerjalanKg = (db.penjualanHasilBumi || [])
+          .filter((j) => j.komoditasKode === item.kode)
+          .reduce((sum, j) => sum + (j.beratBersih || 0), 0);
 
         // Update saldo awal dan akumulasi modal lama
         hb.stokAwal = validStokAwal;
@@ -438,8 +1026,8 @@ apiRouter.post('/stok-hasil-bumi/saldo-awal', async (req, res) => {
         hb.keteranganStokAwal = item.keterangan?.trim() || 'Rekap stok manual lama sebelum aplikasi';
         hb.tanggalInputStokAwal = `${tanggal} ${jam}`;
 
-        // Stok fisik gudang = Stok Awal Lama + Pembelian Baru Berjalan
-        hb.stok = validStokAwal + pembelianBerjalanKg;
+        // Stok fisik Ready Gudang = Stok Awal Lama + Pembelian Baru - Penjualan Keluar
+        hb.stok = Math.max(0, Math.round((validStokAwal + pembelianBerjalanKg - penjualanBerjalanKg) * 100) / 100);
         hb.updateTerakhir = iso;
 
         db.auditLogs.unshift({
@@ -506,6 +1094,16 @@ apiRouter.get('/transaksi/pembelian-barang', (req, res) => {
   }
 });
 
+apiRouter.delete('/transaksi/pembelian-barang/:noPembelian', async (req, res) => {
+  try {
+    const { noPembelian } = req.params;
+    const result = await TransactionService.deletePembelianBarang(noPembelian);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 // Laporan Laba Rugi Produk Penjualan
 apiRouter.get('/laporan/laba-rugi-produk', (_req, res) => {
   try {
@@ -543,6 +1141,48 @@ apiRouter.post('/transaksi/pembelian-hasil-bumi/putus-harga', async (req, res) =
   }
 });
 
+// Penjualan / Pengiriman Hasil Bumi Keluar Gudang & Ringkasan Bulanan
+apiRouter.get('/transaksi/penjualan-hasil-bumi', (_req, res) => {
+  try {
+    const db = dbManager.get();
+    res.json({ success: true, data: db.penjualanHasilBumi || [] });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/penjualan-hasil-bumi', async (req, res) => {
+  try {
+    const record = await TransactionService.processPenjualanHasilBumi(req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/transaksi/penjualan-hasil-bumi/:noPenjualan', async (req, res) => {
+  try {
+    const result = await TransactionService.deletePenjualanHasilBumi(req.params.noPenjualan);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/laporan/ringkasan-hasil-bumi-bulanan', (req, res) => {
+  try {
+    const { bulan, tahun, kodeKomoditas } = req.query;
+    const summary = TransactionService.getRingkasanStokHasilBumiBulanan({
+      bulan: bulan ? Number(bulan) : undefined,
+      tahun: tahun ? Number(tahun) : undefined,
+      kodeKomoditas: kodeKomoditas ? String(kodeKomoditas) : undefined,
+    });
+    res.json({ success: true, data: summary });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.post('/transaksi/kasbon-uang', async (req, res) => {
   try {
     const record = await TransactionService.processKasbonUang(req.body);
@@ -565,6 +1205,45 @@ apiRouter.get('/transaksi/kasbon-uang', (req, res) => {
 apiRouter.post('/transaksi/nota-lalu', async (req, res) => {
   try {
     const result = await TransactionService.processInputNotaLalu(req.body);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Daftar Bukti Nota Lalu (dengan filter nama & waktu)
+apiRouter.get('/transaksi/bukti-nota-lalu', (req, res) => {
+  try {
+    const { idMitra, waktuFilter, beforeDate, startDate, endDate, search, hanyaNotaLalu } = req.query;
+    const data = TransactionService.getDaftarBuktiNotaLalu({
+      idMitra: idMitra ? String(idMitra) : undefined,
+      waktuFilter: waktuFilter ? (String(waktuFilter) as any) : undefined,
+      beforeDate: beforeDate ? String(beforeDate) : undefined,
+      startDate: startDate ? String(startDate) : undefined,
+      endDate: endDate ? String(endDate) : undefined,
+      search: search ? String(search) : undefined,
+      hanyaNotaLalu: hanyaNotaLalu === 'true' || hanyaNotaLalu === '1',
+    });
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Bersihkan Bukti Nota Lalu & Otomatis Sinkronkan Rekening Mitra
+apiRouter.post('/transaksi/bersihkan-bukti-nota-lalu', async (req, res) => {
+  try {
+    const result = await TransactionService.bersihkanBuktiNotaLalu(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Pinjam Uang dari PT ke Mitra (Masuk Saldo Titip Mitra)
+apiRouter.post('/mitra/pinjam-uang', async (req, res) => {
+  try {
+    const result = await TransactionService.processPinjamanUangDariMitra(req.body);
     res.json({ success: true, data: result });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
@@ -608,6 +1287,373 @@ apiRouter.get('/transaksi/transfer-rekening', (req, res) => {
 });
 
 // ==========================================
+// PENCAIRAN TITIPAN HASIL BUMI
+// ==========================================
+apiRouter.post('/transaksi/cairkan-titipan', async (req, res) => {
+  try {
+    const record = await TransactionService.processPencairanTitipan(req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/transaksi/cairkan-titipan', (_req, res) => {
+  try {
+    const list = TransactionService.getPencairanTitipanList();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// PENGELUARAN & BIAYA OPERASIONAL DIVISI
+// ==========================================
+apiRouter.post('/pengeluaran', async (req, res) => {
+  try {
+    const record = await TransactionService.processPengeluaran(req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/pengeluaran', (_req, res) => {
+  try {
+    const list = TransactionService.getPengeluaranList();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/pengeluaran/:id', async (req, res) => {
+  try {
+    const result = await TransactionService.deletePengeluaran(req.params.id);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// MASTER INVENTARIS & ARMADA KENDARAAN PT
+// ==========================================
+apiRouter.get('/inventaris', (_req, res) => {
+  try {
+    const db = dbManager.get();
+    res.json({ success: true, data: db.inventaris || [] });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/inventaris', async (req, res) => {
+  try {
+    const {
+      kode,
+      namaItem,
+      kategori,
+      nomorPlat,
+      merkTipe,
+      tahunKeluaran,
+      warna,
+      nomorRangka,
+      nomorMesin,
+      driverPenanggungJawab,
+      idKaryawanDriver,
+      teleponDriver,
+      divisi,
+      tanggalPajakTahunan,
+      tanggalPajakLimaTahunan,
+      tanggalKir,
+      kondisi,
+      nilaiPerolehan,
+      tanggalBeli,
+      fotoItem,
+      fotoStnk,
+      catatan,
+    } = req.body || {};
+
+    if (!namaItem || !String(namaItem).trim()) {
+      return res.status(400).json({ success: false, message: 'Nama item / kendaraan inventaris wajib diisi' });
+    }
+
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const created = await dbManager.executeTransaction((db) => {
+      if (!Array.isArray(db.inventaris)) db.inventaris = [];
+
+      const cleanPlat = nomorPlat ? String(nomorPlat).trim().toUpperCase() : '';
+      if (
+        cleanPlat &&
+        cleanPlat !== '-' &&
+        db.inventaris.some(
+          (item) => (item.nomorPlat || '').replace(/\s+/g, '').toUpperCase() === cleanPlat.replace(/\s+/g, '')
+        )
+      ) {
+        throw new Error(`Kendaraan dengan Nomor Plat ${cleanPlat} sudah terdaftar di Inventaris PT`);
+      }
+
+      let maxNum = 0;
+      for (const inv of db.inventaris) {
+        const m = /^INV-(\d+)$/i.exec(inv.kode || '');
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (!Number.isNaN(n) && n > maxNum) maxNum = n;
+        }
+      }
+      const cleanKode = kode
+        ? String(kode).trim().toUpperCase()
+        : `INV-${String(maxNum + 1).padStart(3, '0')}`;
+
+      const newItem = {
+        id: `INV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+        kode: cleanKode,
+        namaItem: String(namaItem).trim(),
+        kategori: kategori || 'TRUCK_ANGKUTAN',
+        nomorPlat: cleanPlat || '-',
+        merkTipe: String(merkTipe || '-').trim(),
+        tahunKeluaran: String(tahunKeluaran || '-').trim(),
+        warna: warna ? String(warna).trim() : '',
+        nomorRangka: nomorRangka ? String(nomorRangka).trim().toUpperCase() : '',
+        nomorMesin: nomorMesin ? String(nomorMesin).trim().toUpperCase() : '',
+        driverPenanggungJawab: String(driverPenanggungJawab || '-').trim(),
+        idKaryawanDriver: idKaryawanDriver ? String(idKaryawanDriver).trim() : undefined,
+        teleponDriver: teleponDriver ? String(teleponDriver).trim() : '',
+        divisi: String(divisi || 'Wijaya Transport').trim(),
+        tanggalPajakTahunan: String(tanggalPajakTahunan || '').trim(),
+        tanggalPajakLimaTahunan: tanggalPajakLimaTahunan ? String(tanggalPajakLimaTahunan).trim() : '',
+        tanggalKir: tanggalKir ? String(tanggalKir).trim() : '',
+        kondisi: kondisi || 'BAIK',
+        nilaiPerolehan: nilaiPerolehan !== undefined ? Math.max(0, Number(nilaiPerolehan) || 0) : 0,
+        tanggalBeli: tanggalBeli ? String(tanggalBeli).trim() : '',
+        fotoItem: fotoItem || undefined,
+        fotoStnk: fotoStnk || undefined,
+        catatan: catatan ? String(catatan).trim() : '',
+        status: 'AKTIF' as const,
+        createdAt: iso,
+        updatedAt: iso,
+      };
+
+      db.inventaris.unshift(newItem);
+
+      db.auditLogs.unshift({
+        id: `LOG-INV-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin Inventaris',
+        jenisTransaksi: 'CREATE',
+        idTransaksi: newItem.kode,
+        detail: `Tambah Inventaris PT: ${newItem.namaItem} (${newItem.nomorPlat !== '-' ? newItem.nomorPlat : newItem.kode}) — Driver: ${newItem.driverPenanggungJawab}, Tahun: ${newItem.tahunKeluaran}`,
+        nominal: newItem.nilaiPerolehan || 0,
+      });
+
+      return newItem;
+    });
+
+    res.json({ success: true, data: created });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/inventaris/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const updated = await dbManager.executeTransaction((db) => {
+      if (!Array.isArray(db.inventaris)) db.inventaris = [];
+      const item = db.inventaris.find((inv) => inv.id === id || inv.kode === id);
+      if (!item) throw new Error('Item inventaris tidak ditemukan');
+
+      if (body.nomorPlat !== undefined) {
+        const cleanPlat = String(body.nomorPlat || '').trim().toUpperCase();
+        if (
+          cleanPlat &&
+          cleanPlat !== '-' &&
+          db.inventaris.some(
+            (other) =>
+              other.id !== item.id &&
+              (other.nomorPlat || '').replace(/\s+/g, '').toUpperCase() === cleanPlat.replace(/\s+/g, '')
+          )
+        ) {
+          throw new Error(`Nomor Plat ${cleanPlat} sudah digunakan pada unit inventaris lain`);
+        }
+        item.nomorPlat = cleanPlat || '-';
+      }
+
+      if (body.namaItem !== undefined && String(body.namaItem).trim()) {
+        item.namaItem = String(body.namaItem).trim();
+      }
+      if (body.kategori !== undefined) item.kategori = body.kategori;
+      if (body.merkTipe !== undefined) item.merkTipe = String(body.merkTipe || '-').trim();
+      if (body.tahunKeluaran !== undefined) item.tahunKeluaran = String(body.tahunKeluaran || '-').trim();
+      if (body.warna !== undefined) item.warna = String(body.warna || '').trim();
+      if (body.nomorRangka !== undefined) item.nomorRangka = String(body.nomorRangka || '').trim().toUpperCase();
+      if (body.nomorMesin !== undefined) item.nomorMesin = String(body.nomorMesin || '').trim().toUpperCase();
+      if (body.driverPenanggungJawab !== undefined) {
+        item.driverPenanggungJawab = String(body.driverPenanggungJawab || '-').trim();
+      }
+      if (body.idKaryawanDriver !== undefined) {
+        item.idKaryawanDriver = body.idKaryawanDriver ? String(body.idKaryawanDriver).trim() : undefined;
+      }
+      if (body.teleponDriver !== undefined) item.teleponDriver = String(body.teleponDriver || '').trim();
+      if (body.divisi !== undefined) item.divisi = String(body.divisi || 'Wijaya Transport').trim();
+      if (body.tanggalPajakTahunan !== undefined) {
+        item.tanggalPajakTahunan = String(body.tanggalPajakTahunan || '').trim();
+      }
+      if (body.tanggalPajakLimaTahunan !== undefined) {
+        item.tanggalPajakLimaTahunan = String(body.tanggalPajakLimaTahunan || '').trim();
+      }
+      if (body.tanggalKir !== undefined) item.tanggalKir = String(body.tanggalKir || '').trim();
+      if (body.kondisi !== undefined) item.kondisi = body.kondisi;
+      if (body.nilaiPerolehan !== undefined) {
+        item.nilaiPerolehan = Math.max(0, Number(body.nilaiPerolehan) || 0);
+      }
+      if (body.tanggalBeli !== undefined) item.tanggalBeli = String(body.tanggalBeli || '').trim();
+      if (body.fotoItem !== undefined) item.fotoItem = body.fotoItem || undefined;
+      if (body.fotoStnk !== undefined) item.fotoStnk = body.fotoStnk || undefined;
+      if (body.catatan !== undefined) item.catatan = String(body.catatan || '').trim();
+      if (body.status !== undefined) item.status = body.status;
+
+      item.updatedAt = iso;
+
+      db.auditLogs.unshift({
+        id: `LOG-INV-UPD-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin Inventaris',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: item.kode,
+        detail: `Update Profil Inventaris: ${item.namaItem} (${item.nomorPlat}) — Driver: ${item.driverPenanggungJawab}, Pajak: ${item.tanggalPajakTahunan || '-'}`,
+        nominal: item.nilaiPerolehan || 0,
+      });
+
+      return item;
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/inventaris/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { iso, tanggal, jam } = getWIBDateTime();
+
+    const result = await dbManager.executeTransaction((db) => {
+      if (!Array.isArray(db.inventaris)) db.inventaris = [];
+      const idx = db.inventaris.findIndex((inv) => inv.id === id || inv.kode === id);
+      if (idx === -1) throw new Error('Item inventaris tidak ditemukan');
+      const removed = db.inventaris[idx];
+      db.inventaris.splice(idx, 1);
+
+      db.auditLogs.unshift({
+        id: `LOG-INV-DEL-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin Inventaris',
+        jenisTransaksi: 'VOID',
+        idTransaksi: removed.kode,
+        detail: `Hapus Item Inventaris PT: ${removed.namaItem} (${removed.nomorPlat})`,
+        nominal: 0,
+      });
+
+      return { id: removed.id, kode: removed.kode, namaItem: removed.namaItem };
+    });
+
+    res.json({ success: true, data: result, message: 'Item inventaris berhasil dihapus' });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// EDIT / NEGO TRANSAKSI DARI REKENING KORAN MITRA
+// ==========================================
+apiRouter.put('/transaksi/update-statement-entry', async (req, res) => {
+  try {
+    const result = await TransactionService.updateTransactionFromStatement(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// UNIVERSAL DETAIL & EDIT TRANSAKSI (NOMINAL, TONASE, QTY, HARGA, REKENING, TANGGAL)
+// ==========================================
+apiRouter.get('/transaksi/detail', (req, res) => {
+  try {
+    const id = String(req.query.id || '').trim();
+    const jenis = req.query.jenis ? String(req.query.jenis).trim() : undefined;
+    const data = TransactionService.getTransactionDetail(id, jenis);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/detail', (req, res) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    const jenis = req.body?.jenis ? String(req.body.jenis).trim() : undefined;
+    const data = TransactionService.getTransactionDetail(id, jenis);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/edit-detail', async (req, res) => {
+  try {
+    const result = await TransactionService.editTransactionDetail(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/transaksi/edit-detail', async (req, res) => {
+  try {
+    const result = await TransactionService.editTransactionDetail(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// PROFIL PERUSAHAAN (PT. WIJAYA AGRO PERKASA)
+// ==========================================
+apiRouter.get('/profil-perusahaan', (_req, res) => {
+  try {
+    const profile = TransactionService.getProfilPerusahaan();
+    res.json({ success: true, data: profile });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/profil-perusahaan', async (req, res) => {
+  try {
+    const profile = await TransactionService.updateProfilPerusahaan(req.body);
+    res.json({ success: true, data: profile });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
 // REKENING KORAN MITRA & DASHBOARD
 // ==========================================
 apiRouter.get('/rekening-koran-mitra/:id', (req, res) => {
@@ -623,6 +1669,39 @@ apiRouter.get('/dashboard', (req, res) => {
   try {
     const stats = TransactionService.getDashboardStats();
     res.json({ success: true, data: stats });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/laporan/arus-kas-harian', (req, res) => {
+  try {
+    const tanggal = req.query.tanggal as string | undefined;
+    const data = TransactionService.getRekapHarianKas(tanggal);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Rekapan Semua Transaksi Terpadu (Semua Transaksi Hari Ini / Filter Tanggal, Arus Uang, Jenis, Nama)
+apiRouter.get('/transaksi/semua', (req, res) => {
+  try {
+    const { tanggal, arusUang, kategori, pihakTerkait, search } = req.query as {
+      tanggal?: string;
+      arusUang?: string;
+      kategori?: string;
+      pihakTerkait?: string;
+      search?: string;
+    };
+    const result = TransactionService.getAllUnifiedTransactions({
+      tanggal,
+      arusUang,
+      kategori,
+      pihakTerkait,
+      search,
+    });
+    res.json({ success: true, data: result });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -749,7 +1828,7 @@ apiRouter.post('/karyawan/:id/settle-gaji', async (req, res) => {
 
 apiRouter.post('/karyawan', async (req, res) => {
   try {
-    const { nik, nama, jabatan, departemen, gajiPokok, tunjanganTetap, telepon, alamat, tanggalMasuk, catatan } = req.body;
+    const { nik, nama, jabatan, divisi, departemen, gajiPokok, tunjanganTetap, telepon, alamat, tanggalMasuk, catatan } = req.body;
     if (!nama || !jabatan) {
       return res.status(400).json({ success: false, message: 'Nama dan Jabatan karyawan wajib diisi' });
     }
@@ -763,13 +1842,15 @@ apiRouter.post('/karyawan', async (req, res) => {
 
       const id = `KRY-${Date.now().toString().slice(-4)}`;
       const idMitra = `MTR-${id}`;
+      const selectedDivisi = String(divisi || departemen || 'Gudang Wijaya Agro').trim();
 
       const newKaryawan: any = {
         id,
         nik: cleanNik,
         nama: String(nama).trim(),
         jabatan: String(jabatan).trim(),
-        departemen: String(departemen || 'Operasional').trim(),
+        divisi: selectedDivisi,
+        departemen: selectedDivisi,
         gajiPokok: Math.max(0, Number(gajiPokok) || 0),
         tunjanganTetap: Math.max(0, Number(tunjanganTetap) || 0),
         telepon: telepon || '-',
@@ -782,17 +1863,27 @@ apiRouter.post('/karyawan', async (req, res) => {
 
       db.karyawan.push(newKaryawan);
 
-      // Otomatis buat entitas Mitra terkait dengan role KARYAWAN
-      db.mitra.push({
-        id: idMitra,
-        kode: cleanNik,
-        nama: `${newKaryawan.nama} (Karyawan)`,
-        role: 'KARYAWAN',
-        telepon: newKaryawan.telepon,
-        alamat: newKaryawan.alamat,
-        status: 'AKTIF',
-        catatan: `Karyawan: ${newKaryawan.jabatan} (${newKaryawan.departemen})`,
-      });
+      // Otomatis buat entitas Mitra terkait dengan role KARYAWAN (Auto-sync ke Database Mitra)
+      const existingMitraIdx = db.mitra.findIndex((m) => m.id === idMitra || m.kode === cleanNik || (m.role === 'KARYAWAN' && m.nama.toLowerCase() === newKaryawan.nama.toLowerCase()));
+      if (existingMitraIdx >= 0) {
+        db.mitra[existingMitraIdx].nama = newKaryawan.nama;
+        db.mitra[existingMitraIdx].role = 'KARYAWAN';
+        db.mitra[existingMitraIdx].telepon = newKaryawan.telepon;
+        db.mitra[existingMitraIdx].alamat = newKaryawan.alamat;
+        db.mitra[existingMitraIdx].status = 'AKTIF';
+        db.mitra[existingMitraIdx].catatan = `Karyawan: ${newKaryawan.jabatan} (Divisi ${newKaryawan.divisi})`;
+      } else {
+        db.mitra.push({
+          id: idMitra,
+          kode: cleanNik,
+          nama: newKaryawan.nama,
+          role: 'KARYAWAN',
+          telepon: newKaryawan.telepon,
+          alamat: newKaryawan.alamat,
+          status: 'AKTIF',
+          catatan: `Karyawan: ${newKaryawan.jabatan} (Divisi ${newKaryawan.divisi})`,
+        });
+      }
 
       return newKaryawan;
     });
@@ -806,7 +1897,7 @@ apiRouter.post('/karyawan', async (req, res) => {
 apiRouter.put('/karyawan/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { nama, jabatan, departemen, gajiPokok, tunjanganTetap, telepon, alamat, status, catatan } = req.body;
+    const { nama, jabatan, divisi, departemen, gajiPokok, tunjanganTetap, telepon, alamat, status, catatan } = req.body;
 
     const updated = await dbManager.executeTransaction((db) => {
       const kry = db.karyawan.find((k) => k.id === id);
@@ -814,7 +1905,13 @@ apiRouter.put('/karyawan/:id', async (req, res) => {
 
       if (nama) kry.nama = String(nama).trim();
       if (jabatan) kry.jabatan = String(jabatan).trim();
-      if (departemen) kry.departemen = String(departemen).trim();
+      if (divisi) {
+        kry.divisi = String(divisi).trim();
+        kry.departemen = String(divisi).trim();
+      } else if (departemen) {
+        kry.divisi = String(departemen).trim();
+        kry.departemen = String(departemen).trim();
+      }
       if (gajiPokok !== undefined) kry.gajiPokok = Math.max(0, Number(gajiPokok) || 0);
       if (tunjanganTetap !== undefined) kry.tunjanganTetap = Math.max(0, Number(tunjanganTetap) || 0);
       if (telepon) kry.telepon = telepon;
@@ -824,13 +1921,25 @@ apiRouter.put('/karyawan/:id', async (req, res) => {
 
       // Sync ke entitas Mitra
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
-      const mtr = db.mitra.find((m) => m.id === mitraId || m.kode === kry.nik);
+      const mtr = db.mitra.find((m) => m.id === mitraId || m.kode === kry.nik || (m.role === 'KARYAWAN' && m.nama.toLowerCase() === kry.nama.toLowerCase()));
       if (mtr) {
-        mtr.nama = `${kry.nama} (Karyawan)`;
+        mtr.nama = kry.nama;
+        mtr.role = 'KARYAWAN';
         mtr.telepon = kry.telepon;
         mtr.alamat = kry.alamat;
         mtr.status = kry.status;
-        mtr.catatan = `Karyawan: ${kry.jabatan} (${kry.departemen})`;
+        mtr.catatan = `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`;
+      } else {
+        db.mitra.push({
+          id: mitraId,
+          kode: kry.nik || kry.id,
+          nama: kry.nama,
+          role: 'KARYAWAN',
+          telepon: kry.telepon || '-',
+          alamat: kry.alamat || '-',
+          status: kry.status || 'AKTIF',
+          catatan: `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`,
+        });
       }
 
       return kry;
@@ -967,7 +2076,21 @@ apiRouter.get('/payroll/rekap-bulanan', (req, res) => {
 // ==========================================
 apiRouter.get('/divisi', (_req, res) => {
   try {
-    res.json({ success: true, data: DAFTAR_DIVISI });
+    const data = dbManager.getDivisiList();
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/divisi', async (req, res) => {
+  try {
+    const { nama, deskripsi, penanggungJawab } = req.body;
+    if (!nama || !nama.trim()) {
+      return res.status(400).json({ success: false, message: 'Nama divisi wajib diisi' });
+    }
+    const created = await dbManager.addDivisi(nama, deskripsi, penanggungJawab);
+    res.json({ success: true, data: created });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -983,6 +2106,21 @@ apiRouter.get('/divisi/keuangan', (_req, res) => {
 });
 
 // ==========================================
+// PEMBERSIHAN DATA UNTUK INPUT DATA RIIL (RESET)
+// ==========================================
+apiRouter.post('/system/reset-data', async (_req, res) => {
+  try {
+    await dbManager.resetAllData();
+    res.json({
+      success: true,
+      message: 'Seluruh data transaksi, piutang, mutasi, data mitra, dan karyawan berhasil dikosongkan. Sistem siap menerima data riil!',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
 // BILLBOARD / LIVE COMMAND CENTER MONITORING
 // ==========================================
 apiRouter.get('/billboard', (_req, res) => {
@@ -990,53 +2128,10 @@ apiRouter.get('/billboard', (_req, res) => {
     const db = dbManager.get();
     const { tanggal: todayTanggal } = getWIBDateTime();
 
-    // 1. Calculations for Today's Real Cashflow
-    let uangMasukHariIni = 0;
-    let uangKeluarHariIni = 0;
-
-    // Penjualan toko hari ini
-    const penjualanHariIni = (db.penjualan || []).filter((p) => p.tanggal === todayTanggal);
-    for (const p of penjualanHariIni) {
-      if (p.metode === 'TUNAI' || p.metode === 'TRANSFER') {
-        uangMasukHariIni += p.totalNominal;
-      }
-    }
-
-    // Pembayaran kasbon (Bayar Bon) hari ini
-    const bayarBonHariIni = (db.bayarBon || []).filter((b) => b.tanggal === todayTanggal);
-    for (const b of bayarBonHariIni) {
-      uangMasukHariIni += b.nominalBayar;
-    }
-
-    // Pembelian hasil bumi hari ini (uang keluar ke petani)
-    const pembelianHariIni = (db.pembelianHasilBumi || []).filter((pb) => pb.tanggal === todayTanggal);
-    for (const pb of pembelianHariIni) {
-      if (pb.metodePembayaran === 'TUNAI' || pb.metodePembayaran === 'TRANSFER') {
-        uangKeluarHariIni += pb.totalNominal;
-      }
-    }
-
-    // Kasbon uang hari ini (uang keluar ke mitra)
-    const kasbonHariIni = (db.kasbonUang || []).filter((k) => k.tanggal === todayTanggal);
-    for (const k of kasbonHariIni) {
-      uangKeluarHariIni += k.nominal;
-    }
-
-    // Penggajian / Upah cair hari ini (uang keluar)
-    const gajiHariIni = (db.penggajian || []).filter(
-      (g) => g.tanggal === todayTanggal || g.tanggalKerja === todayTanggal
-    );
-    for (const g of gajiHariIni) {
-      uangKeluarHariIni += g.gajiBersihDibayar || 0;
-    }
-
-    // Fallback display if today is morning or early demo: compute active total recent movement
-    if (uangMasukHariIni === 0 && uangKeluarHariIni === 0) {
-      const recentSales = (db.penjualan || []).slice(0, 5);
-      const recentBuys = (db.pembelianHasilBumi || []).slice(0, 5);
-      uangMasukHariIni = recentSales.reduce((sum, s) => sum + (s.metode !== 'KASBON' ? s.totalNominal : 0), 0);
-      uangKeluarHariIni = recentBuys.reduce((sum, b) => sum + (b.metodePembayaran !== 'TITIP' ? b.totalNominal : 0), 0);
-    }
+    // 1. Unified Real Cashflow Calculation (Single Source Formula)
+    const rekapKasHariIni = TransactionService.getRekapHarianKas(todayTanggal);
+    const uangMasukHariIni = rekapKasHariIni.totalUangMasuk;
+    const uangKeluarHariIni = rekapKasHariIni.totalUangKeluar;
 
     // Real Company Balances
     const kas01 = db.rekening.find((r) => r.kode === 'KAS01');
@@ -1135,4 +2230,489 @@ apiRouter.post('/database/reset-clean', async (_req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+// Download Cadangan JSON Lengkap (Anti Kehilangan Data)
+apiRouter.get('/database/backup-json', (_req, res) => {
+  try {
+    const data = dbManager.get();
+    const d = new Date();
+    const dateStr = d.toISOString().split('T')[0];
+    const filename = `wijaya_agro_erp_backup_${dateStr}_${d.getHours()}h.json`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(JSON.stringify(data, null, 2));
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Pulihkan Data dari File Cadangan JSON
+apiRouter.post('/database/restore-json', async (req, res) => {
+  try {
+    const { data } = req.body;
+    if (!data || typeof data !== 'object') {
+      return res.status(400).json({ success: false, message: 'Format data JSON cadangan tidak valid' });
+    }
+    const success = await dbManager.restoreDatabase(data);
+    res.json({
+      success,
+      message: 'Database berhasil dipulihkan dari file JSON cadangan! Seluruh data transaksi, mitra, dan karyawan telah disinkronkan kembali.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// SUPABASE AUTO-SYNC & PERSISTENT CLOUD DATABASE
+// ==========================================
+
+// Real-time Cross-Module & Supabase Single Source Integrity Status
+apiRouter.get('/database/integrity-status', (_req, res) => {
+  try {
+    const status = dbManager.getIntegrityStatus();
+    res.json({ success: true, data: status });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Get Supabase status & config
+apiRouter.get('/supabase/status', (_req, res) => {
+  try {
+    const status = supabaseSyncEngine.getStatus();
+    res.json({ success: true, data: status });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Update Supabase configuration (URL & API Key) - Cloud-First Smart Sync (Never Overwrites Existing Cloud Data!)
+apiRouter.post('/supabase/config', async (req, res) => {
+  try {
+    const { url, key, autoSync } = req.body;
+    if (!url) {
+      return res.status(400).json({ success: false, message: 'Supabase URL wajib diisi' });
+    }
+    supabaseSyncEngine.updateConfig({ url, key, autoSync });
+    const testResult = await supabaseSyncEngine.testConnection();
+    let initialSyncMessage = '';
+    if (testResult.success) {
+      try {
+        const smartSync = await supabaseSyncEngine.syncSmartWithCloud(dbManager);
+        if (smartSync.message) {
+          initialSyncMessage = ` ${smartSync.message}`;
+        }
+      } catch (e: any) {
+        console.warn('Initial smart sync with Supabase warning:', e);
+      }
+    }
+    const latestStatus = supabaseSyncEngine.getStatus();
+    res.json({
+      success: true,
+      data: latestStatus,
+      testResult: {
+        ...testResult,
+        message: `${testResult.message}${initialSyncMessage}`,
+      },
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Test connection to Supabase
+apiRouter.post('/supabase/test', async (_req, res) => {
+  try {
+    const result = await supabaseSyncEngine.testConnection();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Push entire ERP database to Supabase
+apiRouter.post('/supabase/sync-push', async (_req, res) => {
+  try {
+    const db = dbManager.get();
+    const result = await supabaseSyncEngine.pushToSupabase(db);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Pull ERP database from Supabase & hydrate locally without feedback loop
+apiRouter.post('/supabase/sync-pull', async (_req, res) => {
+  try {
+    const pullResult = await supabaseSyncEngine.pullFromSupabase();
+    if (!pullResult.success || !pullResult.data) {
+      return res.status(400).json({ success: false, message: pullResult.message });
+    }
+    await dbManager.hydrateFromSupabase(pullResult.data);
+    res.json({
+      success: true,
+      message: 'Berhasil menarik & menyinkronkan data terbaru dari Cloud Supabase ke seluruh modul aplikasi!',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Get SQL DDL Schema for Supabase SQL Editor
+apiRouter.get('/supabase/sql-schema', (_req, res) => {
+  try {
+    const sql = supabaseSyncEngine.getSqlSchemaScript();
+    res.json({ success: true, data: sql });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// All data synchronization is now managed 24/7 via Supabase Cloud PostgreSQL.
+
+// ==========================================
+// PUSAT KONTROL KASIR: KLIRING SILANG, AUDIT NAMA KEMBAR & CASH OPNAME
+// ==========================================
+apiRouter.get('/kontrol-kasir/overview', (_req, res) => {
+  try {
+    const overview = TransactionService.getSmartControlOverview();
+    res.json({ success: true, data: overview });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/kontrol-kasir/kliring-silang', async (req, res) => {
+  try {
+    const result = await TransactionService.processKliringSilangMitra(req.body);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/kontrol-kasir/kliring-massal', async (req, res) => {
+  try {
+    const { mitraIds } = req.body || {};
+    const result = await TransactionService.processBatchKliringOtomatis(
+      Array.isArray(mitraIds) ? mitraIds : undefined
+    );
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/kontrol-kasir/gabung-mitra', async (req, res) => {
+  try {
+    const result = await TransactionService.mergeDuplicateMitra(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/kontrol-kasir/cash-opname', async (req, res) => {
+  try {
+    const record = await TransactionService.recordCashOpname(req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// UNIFIED HIGH-SPEED SNAPSHOT & BUKTI PHOTO OFFLOAD
+// ==========================================
+apiRouter.get('/erp-snapshot', (_req, res) => {
+  try {
+    const db = dbManager.get();
+
+    // Ensure karyawan <-> mitra link is healthy without blocking
+    let modified = false;
+    for (const kry of db.karyawan || []) {
+      const idMitra = kry.idMitraTerkait || `MTR-${kry.id}`;
+      const existing = db.mitra.find(
+        (m) =>
+          m.id === idMitra ||
+          m.kode === kry.nik ||
+          (m.role === 'KARYAWAN' && m.nama.toLowerCase() === kry.nama.toLowerCase())
+      );
+      if (!existing) {
+        db.mitra.push({
+          id: idMitra,
+          kode: kry.nik || kry.id,
+          nama: kry.nama,
+          role: 'KARYAWAN',
+          telepon: kry.telepon || '-',
+          alamat: kry.alamat || '-',
+          status: kry.status || 'AKTIF',
+          catatan: `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang'})`,
+        });
+        modified = true;
+      } else if (existing.nama.endsWith(' (Karyawan)')) {
+        existing.nama = kry.nama;
+        modified = true;
+      }
+    }
+    if (modified) {
+      dbManager.save();
+    }
+
+    // Pre-index outstanding kasbon per mitra in O(N) instead of O(K * N)
+    const outstandingBarangByMitra = new Map<string, number>();
+    for (const p of db.penjualan || []) {
+      if (p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR' && p.idMitra) {
+        outstandingBarangByMitra.set(
+          p.idMitra,
+          (outstandingBarangByMitra.get(p.idMitra) || 0) + (p.sisaPiutang || 0)
+        );
+      }
+    }
+    const outstandingUangByMitra = new Map<string, number>();
+    for (const ku of db.kasbonUang || []) {
+      if (ku.status !== 'LUNAS' && ku.idMitra) {
+        outstandingUangByMitra.set(
+          ku.idMitra,
+          (outstandingUangByMitra.get(ku.idMitra) || 0) + (ku.sisaKasbon || 0)
+        );
+      }
+    }
+
+    const karyawanEnriched = (db.karyawan || []).map((k) => {
+      const mitraId = k.idMitraTerkait || `MTR-${k.id}`;
+      const outstandingBarang = outstandingBarangByMitra.get(mitraId) || 0;
+      const outstandingUang = outstandingUangByMitra.get(mitraId) || 0;
+      return {
+        ...k,
+        kasbonBarang: outstandingBarang,
+        kasbonUang: outstandingUang,
+        totalKasbonAktif: outstandingBarang + outstandingUang,
+      };
+    });
+
+    // Kategori produk summary
+    const savedKat = Array.isArray(db.kategoriProduk) ? db.kategoriProduk : [];
+    const produkArr = Array.isArray(db.produk) ? db.produk : [];
+    const katMap = new Map<
+      string,
+      { nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }
+    >();
+    for (const k of savedKat) {
+      const norm = normalizeKategoriName(k.nama);
+      katMap.set(norm, {
+        nama: norm,
+        deskripsi: k.deskripsi || '',
+        jumlahProduk: 0,
+        isSaved: true,
+      });
+    }
+    for (const p of produkArr) {
+      const norm = normalizeKategoriName(p.kategori);
+      const cur = katMap.get(norm);
+      if (cur) {
+        cur.jumlahProduk += 1;
+      } else {
+        katMap.set(norm, {
+          nama: norm,
+          deskripsi: '',
+          jumlahProduk: 1,
+          isSaved: false,
+        });
+      }
+    }
+    const kategoriProduk = Array.from(katMap.values()).sort((a, b) => {
+      if (b.jumlahProduk !== a.jumlahProduk) return b.jumlahProduk - a.jumlahProduk;
+      return a.nama.localeCompare(b.nama, 'id');
+    });
+
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.json({
+      success: true,
+      data: {
+        dashboard: TransactionService.getDashboardStats(),
+        rekening: db.rekening || [],
+        mitra: db.mitra || [],
+        karyawan: karyawanEnriched,
+        upahHarian: db.upahHarian || [],
+        produk: db.produk || [],
+        kategoriProduk,
+        stokBarang: db.stokBarang || [],
+        stokHasilBumi: db.stokHasilBumi || [],
+        penjualan: db.penjualan || [],
+        pembelianHasilBumi: db.pembelianHasilBumi || [],
+        penjualanHasilBumi: db.penjualanHasilBumi || [],
+        pembelianBarang: db.pembelianBarang || [],
+        pencairanTitipan: TransactionService.getPencairanTitipanList(),
+        kasbonUang: db.kasbonUang || [],
+        bayarBon: db.bayarBon || [],
+        pengeluaran: TransactionService.getPengeluaranList(),
+        transferRekening: db.transferRekening || [],
+        penggajian: db.penggajian || [],
+        auditLogs: db.auditLogs || [],
+        profilPerusahaan: TransactionService.getProfilPerusahaan(),
+        inventaris: db.inventaris || [],
+        supabaseStatus: supabaseSyncEngine.getStatus(),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/upload-bukti', async (req, res) => {
+  try {
+    const { dataUrl, prefix } = req.body || {};
+    if (!dataUrl || typeof dataUrl !== 'string') {
+      return res.status(400).json({ success: false, message: 'Data gambar wajib dikirim' });
+    }
+    // If already an external URL, return directly
+    if (/^https?:\/\//i.test(dataUrl)) {
+      return res.json({
+        success: true,
+        data: { url: dataUrl, storage: 'SUPABASE_STORAGE' },
+      });
+    }
+    const cloudUrl = await supabaseSyncEngine.uploadBuktiImage(dataUrl, prefix || 'nota');
+    res.json({
+      success: true,
+      data: {
+        url: cloudUrl || dataUrl,
+        storage: cloudUrl ? 'SUPABASE_STORAGE' : 'INLINE_COMPRESSED',
+      },
+    });
+  } catch (err: any) {
+    // Graceful fallback so cashier upload never fails
+    res.json({
+      success: true,
+      data: {
+        url: req.body?.dataUrl || '',
+        storage: 'INLINE_COMPRESSED',
+      },
+    });
+  }
+});
+
+// ==========================================
+// PORTAL EKSEKUTIF BOS & KUNCI PIN 2-PERAN (BOS vs KASIR)
+// ==========================================
+apiRouter.get('/access/status', (_req, res) => {
+  try {
+    const profil = TransactionService.getProfilPerusahaan();
+    const pinBos = (process.env.PIN_BOS || profil?.pinBos || '888888').trim();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      data: {
+        namaPerusahaan: profil?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA',
+        badanHukum: profil?.badanHukum || 'PT (Perseroan Terbatas)',
+        wajibPinPublik: profil?.wajibPinPublik !== false,
+        pinLengthHint: pinBos.length,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/access/verify-pin', (req, res) => {
+  try {
+    const inputPin = String(req.body?.pin || '').trim();
+    if (!inputPin) {
+      return res.status(400).json({ success: false, message: 'Masukkan kode PIN terlebih dahulu.' });
+    }
+    const profil = TransactionService.getProfilPerusahaan();
+    const activePinBos = (process.env.PIN_BOS || profil?.pinBos || '888888').trim();
+    const activePinKasir = (process.env.PIN_KASIR || profil?.pinKasir || '123456').trim();
+
+    if (inputPin === activePinBos) {
+      return res.json({
+        success: true,
+        data: {
+          role: 'BOS' as const,
+          label: 'Portal Eksekutif Pimpinan (Mode Pantau Aman)',
+        },
+      });
+    }
+
+    if (inputPin === activePinKasir) {
+      return res.json({
+        success: true,
+        data: {
+          role: 'KASIR' as const,
+          label: 'Operasional Kasir & Admin Penuh',
+        },
+      });
+    }
+
+    return res.status(401).json({
+      success: false,
+      message: 'Kode PIN salah. Gunakan PIN Bos untuk memantau laporan atau PIN Kasir untuk operasional.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/access/admin-config', (_req, res) => {
+  try {
+    const profil = TransactionService.getProfilPerusahaan();
+    const sup = supabaseSyncEngine.getStatus();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      data: {
+        pinBos: (profil?.pinBos || '888888').trim(),
+        pinKasir: (profil?.pinKasir || '123456').trim(),
+        wajibPinPublik: profil?.wajibPinPublik !== false,
+        supabaseConfigured: sup.configured,
+        supabaseUrl: sup.fullUrl || '',
+        supabaseKeyPreview: sup.keyPreview || '',
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/access/admin-config', async (req, res) => {
+  try {
+    const pinBos = String(req.body?.pinBos || '').replace(/\D/g, '').trim();
+    const pinKasir = String(req.body?.pinKasir || '').replace(/\D/g, '').trim();
+    const wajibPinPublik = req.body?.wajibPinPublik !== false;
+
+    if (pinBos.length < 4 || pinBos.length > 8) {
+      return res.status(400).json({ success: false, message: 'PIN Bos wajib terdiri dari 4 hingga 8 angka.' });
+    }
+    if (pinKasir.length < 4 || pinKasir.length > 8) {
+      return res.status(400).json({ success: false, message: 'PIN Kasir wajib terdiri dari 4 hingga 8 angka.' });
+    }
+    if (pinBos === pinKasir) {
+      return res.status(400).json({
+        success: false,
+        message: 'PIN Bos dan PIN Kasir harus berbeda agar sistem otomatis mengarahkan tampilan Bos vs Kasir.',
+      });
+    }
+
+    await TransactionService.updateProfilPerusahaan({
+      pinBos,
+      pinKasir,
+      wajibPinPublik,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        pinBos,
+        pinKasir,
+        wajibPinPublik,
+      },
+      message: 'PIN Bos & PIN Kasir berhasil diperbarui dan tersinkron ke Cloud Supabase.',
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 

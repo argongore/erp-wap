@@ -17,6 +17,8 @@ import {
   Phone,
   MapPin,
   TrendingUp,
+  Pencil,
+  Plus,
 } from 'lucide-react';
 import { Mitra, Rekening, StokHasilBumi, TransaksiPembelianHasilBumi } from '../../server/types.ts';
 import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
@@ -24,6 +26,16 @@ import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
 import { ModalInputStokAwalHasilBumi } from '../stok/ModalInputStokAwalHasilBumi.tsx';
+import { ModalTambahHasilBumi } from '../stok/ModalTambahHasilBumi.tsx';
+import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { findSimilarMitra, useFuzzyMitraMatches } from '../../utils/nameSimilarity.ts';
+import { FuzzyNameWarningCard } from '../common/FuzzyNameWarningCard.tsx';
+import {
+  ArusKasDivisiSelectorCard,
+  DoubleCheckVerifikasiPanel,
+  isRealTransferBankAccount,
+  useDivisiOptions,
+} from '../common/DoubleCheckVerifikasiPanel.tsx';
 
 interface Props {
   stokHasilBumiList: StokHasilBumi[];
@@ -40,10 +52,15 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   onSuccess,
   onRefresh,
 }) => {
-  const activeMitras = mitraList.filter((m) => m.status === 'AKTIF');
-  const availableBanks = rekeningList.filter(
-    (r) => !r.isVirtual && r.kode !== 'KAS01' && r.status === 'AKTIF'
+  const activeMitras = React.useMemo(
+    () => mitraList.filter((m) => m.status === 'AKTIF'),
+    [mitraList]
   );
+  const availableBanks = React.useMemo(
+    () => rekeningList.filter(isRealTransferBankAccount),
+    [rekeningList]
+  );
+  const divisiOptions = useDivisiOptions();
   const kas01 = rekeningList.find((r) => r.kode === 'KAS01');
 
   const [selectedMitraId, setSelectedMitraId] = useState<string>(activeMitras[0]?.id || '');
@@ -67,7 +84,8 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   const [isBelumPutusHarga, setIsBelumPutusHarga] = useState<boolean>(false);
 
   const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'TITIP'>('TUNAI');
-  const [rekeningSumber, setRekeningSumber] = useState<string>('BNI01');
+  const [rekeningSumber, setRekeningSumber] = useState<string>(availableBanks[0]?.kode || 'BNI01');
+  const [divisi, setDivisi] = useState<string>('Gudang Wijaya Agro');
   const [keterangan, setKeterangan] = useState<string>('');
   const [fotoNota, setFotoNota] = useState<string>('');
   const [isNotaLalu, setIsNotaLalu] = useState<boolean>(false);
@@ -91,21 +109,40 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
     hargaDeal: string;
     metode: 'TUNAI' | 'TRANSFER' | 'TITIP';
     rekening: string;
+    divisi: string;
   }>({
     open: false,
     hargaDeal: '',
     metode: 'TUNAI',
-    rekening: 'BNI01',
+    rekening: availableBanks[0]?.kode || 'BNI01',
+    divisi: 'Gudang Wijaya Agro',
   });
+  const [verifiedPutusHarga, setVerifiedPutusHarga] = useState<boolean>(false);
   const [isSavingPutusHarga, setIsSavingPutusHarga] = useState<boolean>(false);
 
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [verifiedDoubleCheck, setVerifiedDoubleCheck] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [quickAddMitraError, setQuickAddMitraError] = useState('');
+  const [dismissedQuickAddWarning, setDismissedQuickAddWarning] = useState<string>('');
+  const [putusHargaError, setPutusHargaError] = useState('');
 
-  // Saldo Awal / Rekap Manual Modal state
+  // Saldo Awal / Rekap Manual & Tambah Barang Hasil Bumi Modal state
   const [showSaldoAwalModal, setShowSaldoAwalModal] = useState<boolean>(false);
   const [selectedSaldoAwalKode, setSelectedSaldoAwalKode] = useState<string | undefined>(undefined);
+  const [showTambahBarangModal, setShowTambahBarangModal] = useState<boolean>(false);
+  const [localAddedKomoditas, setLocalAddedKomoditas] = useState<StokHasilBumi[]>([]);
+  const [editTxId, setEditTxId] = useState<string | null>(null);
+
+  const mergedHasilBumiList = React.useMemo(() => {
+    const map = new Map<string, StokHasilBumi>();
+    stokHasilBumiList.forEach((h) => map.set(h.kode, h));
+    localAddedKomoditas.forEach((h) => {
+      if (!map.has(h.kode)) map.set(h.kode, h);
+    });
+    return Array.from(map.values());
+  }, [stokHasilBumiList, localAddedKomoditas]);
 
   // Keep selectedMitraId synced when activeMitras changes
   useEffect(() => {
@@ -115,8 +152,8 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   }, [activeMitras, selectedMitraId]);
 
   // Load existing transactions to show pending Belum Putus Harga lots
-  const loadTransactions = async () => {
-    setLoadingTx(true);
+  const loadTransactions = async (silent = false) => {
+    if (!silent && allTransactions.length === 0) setLoadingTx(true);
     try {
       const data = await api.getPembelianHasilBumi();
       setAllTransactions(data || []);
@@ -128,23 +165,24 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    loadTransactions();
+    loadTransactions(false);
+    const onErpUpdated = () => loadTransactions(true);
+    window.addEventListener('erp:data-updated', onErpUpdated);
+    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
   }, []);
 
-  const selectedKomoditas = stokHasilBumiList.find((k) => k.kode === selectedKomoditasKode);
+  const selectedKomoditas = mergedHasilBumiList.find((k) => k.kode === selectedKomoditasKode);
   const selectedMitra = activeMitras.find((m) => m.id === selectedMitraId);
 
-  // Smart suggestion for manual farmer name vs registered contacts
-  const queryPetani = namaPetaniManual.trim().toLowerCase();
-  const matchingMitras = queryPetani.length >= 1
-    ? mitraList.filter(
-        (m) =>
-          m.status === 'AKTIF' &&
-          (m.nama.toLowerCase().includes(queryPetani) ||
-            m.kode.toLowerCase().includes(queryPetani) ||
-            (m.telepon && m.telepon.includes(queryPetani)))
-      )
-    : [];
+  const [dismissedPetaniWarning, setDismissedPetaniWarning] = useState<string>('');
+
+  // Non-blocking fuzzy name matching & duplicate prevention (lag-free typing)
+  const similarMitras = useFuzzyMitraMatches(namaPetaniManual, activeMitras);
+  const quickAddSimilarMitras = useFuzzyMitraMatches(newMitraNama, activeMitras);
+
+  const isCurrentPetaniWarningDismissed =
+    dismissedPetaniWarning.length > 0 &&
+    dismissedPetaniWarning.toLowerCase() === namaPetaniManual.trim().toLowerCase();
 
   // Ongoing purchases & balance for the selected commodity
   const pembelianBerjalanKomoditas = allTransactions.filter(
@@ -174,10 +212,14 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   const totalTagihan = Math.round(beratBersih * hargaPerKg);
 
   const handleKomoditasChange = (kode: string) => {
+    if (kode === '__ADD_NEW__') {
+      setShowTambahBarangModal(true);
+      return;
+    }
     setSelectedKomoditasKode(kode);
-    const kom = stokHasilBumiList.find((k) => k.kode === kode);
+    const kom = mergedHasilBumiList.find((k) => k.kode === kode);
     if (kom) {
-      const isKopiTitip = kom.kode === 'HB-08' || kom.isBelumPutusHarga || kom.nama.toUpperCase().includes('TITIP');
+      const isKopiTitip = kom.kode === 'HB-08' || Boolean(kom.isBelumPutusHarga) || kom.nama.toUpperCase().includes('TITIP');
       setIsBelumPutusHarga(isKopiTitip);
       if (isKopiTitip) {
         setMetode('TITIP');
@@ -190,11 +232,30 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
 
   const handleQuickAddMitraSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMitraNama.trim()) return;
+    setQuickAddMitraError('');
+    const trimmed = newMitraNama.trim();
+    if (!trimmed) return;
+
+    const similar = findSimilarMitra(trimmed, activeMitras);
+    const highRisk = similar.find(
+      (s) => s.isHighRiskDuplicate || s.matchType === 'PHONETIC' || s.similarity >= 80
+    );
+
+    const isDismissed =
+      dismissedQuickAddWarning.length > 0 &&
+      dismissedQuickAddWarning.toLowerCase() === trimmed.toLowerCase();
+
+    if (highRisk && !isDismissed) {
+      setQuickAddMitraError(
+        `⚠️ Peringatan Duplikasi Nama: Di database sudah ada "${highRisk.mitra.nama}" (${highRisk.mitra.kode}). Jika orang ini sama, jangan buat akun baru! Klik 'Pakai Akun Resmi' atau klik 'Bukan, Ini Orang Berbeda' jika memang beda orang.`
+      );
+      return;
+    }
+
     setIsSavingMitra(true);
     try {
       const created = await api.createMitra({
-        nama: newMitraNama.trim(),
+        nama: trimmed,
         role: newMitraRole,
         telepon: newMitraTelepon.trim() || '-',
         alamat: newMitraAlamat.trim() || '-',
@@ -209,17 +270,22 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         setSelectedMitraId(created.id);
       }
     } catch (err: any) {
-      alert(err.message || 'Gagal menambah mitra');
+      setQuickAddMitraError(err.message || 'Gagal menambah mitra');
     } finally {
       setIsSavingMitra(false);
     }
   };
 
   const handlePutusHargaSubmit = async () => {
+    setPutusHargaError('');
     if (!putusHargaModal.tx) return;
     const dealPrice = Number(putusHargaModal.hargaDeal) || 0;
     if (dealPrice <= 0) {
-      alert('Masukkan harga deal per Kg yang valid (> 0)');
+      setPutusHargaError('Masukkan harga deal per Kg yang valid (> 0)');
+      return;
+    }
+    if (!verifiedPutusHarga) {
+      setPutusHargaError('Harap centang verifikasi rekening uang riil & divisi terkait terlebih dahulu');
       return;
     }
     setIsSavingPutusHarga(true);
@@ -227,14 +293,22 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       await api.putusHargaHasilBumi({
         noPembelian: putusHargaModal.tx.noPembelian,
         hargaDealPerKg: dealPrice,
+        divisi: putusHargaModal.divisi,
         metodePembayaran: putusHargaModal.metode,
         rekeningSumber: putusHargaModal.metode === 'TRANSFER' ? putusHargaModal.rekening : undefined,
       });
-      setPutusHargaModal({ open: false, hargaDeal: '', metode: 'TUNAI', rekening: 'BNI01' });
+      setVerifiedPutusHarga(false);
+      setPutusHargaModal({
+        open: false,
+        hargaDeal: '',
+        metode: 'TUNAI',
+        rekening: availableBanks[0]?.kode || 'BNI01',
+        divisi: 'Gudang Wijaya Agro',
+      });
       onRefresh();
       loadTransactions();
     } catch (err: any) {
-      alert(err.message || 'Gagal memutus harga');
+      setPutusHargaError(err.message || 'Gagal memutus harga');
     } finally {
       setIsSavingPutusHarga(false);
     }
@@ -256,6 +330,10 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
     }
     if (!isBelumPutusHarga && hargaPerKg <= 0) {
       setErrorMsg('Harga per kg harus lebih dari Rp 0 (atau centang Belum Putus Harga)');
+      return;
+    }
+    if (!verifiedDoubleCheck) {
+      setErrorMsg('Harap centang verifikasi rekening uang riil & divisi terkait terlebih dahulu');
       return;
     }
 
@@ -288,12 +366,14 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         isNotaLalu,
         noNotaLalu: isNotaLalu ? noNotaLalu.trim() || undefined : undefined,
         tanggalNotaLalu: isNotaLalu ? tanggalNotaLalu.trim() || undefined : undefined,
+        divisi,
         metodePembayaran: isBelumPutusHarga ? 'TITIP' : metode,
         rekeningSumber: metode === 'TRANSFER' ? rekeningSumber : undefined,
         keterangan: finalKet,
       });
 
       setShowConfirmModal(false);
+      setVerifiedDoubleCheck(false);
       setFotoNota('');
       setIsNotaLalu(false);
       setNoNotaLalu('');
@@ -310,39 +390,44 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           ? 'SLIP TITIP TIMBANG HASIL BUMI (BELUM PUTUS HARGA)'
           : 'SLIP PEMBELIAN HASIL BUMI',
         subtitle: isBelumPutusHarga
-          ? 'STATUS: TITIP TIMBANG - HARGA MENGAMBANG'
-          : `Metode: ${result.metodePembayaran} (${result.status})`,
-        nomorTransaksi: result.noPembelian,
-        tanggal: result.tanggal,
-        jam: result.jam,
-        mitra: result.namaMitra || farmerDisplayName,
-        rekening: result.rekeningSumber,
+          ? `STATUS: TITIP TIMBANG | Divisi: ${result?.divisi || divisi}`
+          : `Metode: ${result?.metodePembayaran || metode} | Divisi: ${result?.divisi || divisi}`,
+        nomorTransaksi: result?.noPembelian || `PHB-${Date.now().toString().slice(-4)}`,
+        tanggal: result?.tanggal || new Date().toISOString().split('T')[0],
+        jam: result?.jam || '00:00:00',
+        mitra: result?.namaMitra || farmerDisplayName,
+        rekening: result?.rekeningSumber,
         kategori: 'PEMBELIAN_HASIL_BUMI',
-        fotoNota: result.fotoNota || fotoNota,
+        fotoNota: result?.fotoNota || fotoNota || undefined,
         detailRows: [
-          { label: 'Komoditas', value: result.komoditasNama },
-          { label: 'Berat Timbangan Kotor', value: `${result.beratKotor.toLocaleString('id-ID')} Kg` },
-          { label: 'Potongan Rafaksi / Kadar Air', value: `${result.potonganRafaksi}%` },
-          { label: 'Berat Bersih Diterima', value: `${result.beratBersih.toLocaleString('id-ID')} Kg`, highlight: true },
+          { label: 'Divisi Terkait', value: result?.divisi || divisi },
+          { label: 'Komoditas', value: result?.komoditasNama || selectedKomoditas?.nama || 'Hasil Bumi' },
+          { label: 'Berat Timbangan Kotor', value: `${(result?.beratKotor ?? beratKotor ?? 0).toLocaleString('id-ID')} Kg` },
+          { label: 'Potongan Rafaksi / Kadar Air', value: `${result?.potonganRafaksi ?? rafaksi ?? 0}%` },
+          { label: 'Berat Bersih Diterima', value: `${(result?.beratBersih ?? 0).toLocaleString('id-ID')} Kg`, highlight: true },
           {
             label: 'Harga Satuan / Kg',
-            value: isBelumPutusHarga ? 'Belum Putus (Mengambang)' : formatRupiah(result.hargaPerKg),
+            value: isBelumPutusHarga ? 'Belum Putus (Mengambang)' : formatRupiah(result?.hargaPerKg ?? hargaPerKg),
           },
-          { label: 'Status Harga', value: result.statusHarga || (isBelumPutusHarga ? 'BELUM_PUTUS_HARGA' : 'HARGA_PUTUS') },
-          { label: 'Lampiran Foto Fisik', value: result.fotoNota || fotoNota ? '✅ Tersimpan' : 'Tidak Ada' },
-          { label: 'Metode Pembayaran', value: result.metodePembayaran },
-          { label: 'Rekening Pengeluaran / Status', value: `${result.rekeningSumber} (${result.status})` },
+          { label: 'Status Harga', value: result?.statusHarga || (isBelumPutusHarga ? 'BELUM_PUTUS_HARGA' : 'HARGA_PUTUS') },
+          { label: 'Lampiran Foto Fisik', value: (result?.fotoNota || fotoNota) ? '✅ Tersimpan' : 'Tidak Ada' },
+          { label: 'Metode Pembayaran', value: result?.metodePembayaran || (isBelumPutusHarga ? 'TITIP' : metode) },
+          { label: 'Rekening Uang Riil / Status', value: `${result?.rekeningSumber || '-'} (${result?.status || 'SELESAI'})` },
           {
             label: isBelumPutusHarga ? 'Total Tagihan Sementara' : 'Total Pembayaran',
-            value: isBelumPutusHarga ? 'Rp 0 (Mengambang)' : result.totalNominal,
+            value: isBelumPutusHarga ? 'Rp 0 (Mengambang)' : (result?.totalNominal ?? 0),
             isTotal: true,
           },
         ],
-        catatan: result.keterangan,
+        catatan: result?.keterangan || finalKet,
         kasir: 'Kasir Wijaya Agro',
       };
 
-      onSuccess(receipt);
+      try {
+        onSuccess(receipt);
+      } catch (err) {
+        console.warn('onSuccess callback error in PembelianHasilBumiView:', err);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal memproses pembelian hasil bumi');
     } finally {
@@ -369,14 +454,23 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowTambahBarangModal(true)}
+            className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Barang Hasil Bumi</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
               setSelectedSaldoAwalKode(selectedKomoditasKode);
               setShowSaldoAwalModal(true);
             }}
-            className="px-3.5 py-2 bg-gradient-to-r from-amber-700 to-amber-800 hover:from-amber-800 hover:to-amber-900 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer shrink-0"
+            className="px-3.5 py-2 bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer shrink-0"
             title="Input stok yang sudah direkap manual sebelum aplikasi & rata-rata pembelian awal"
           >
             <Scale className="w-4 h-4 text-amber-200" />
@@ -448,101 +542,30 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                     className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-medium bg-white focus:ring-1 focus:ring-amber-600 focus:border-amber-600"
                   />
 
-                  {/* Smart Autocomplete / Suggestions for Matching Registered Contacts */}
-                  {matchingMitras.length > 0 && (
-                    <div className="mt-2 p-2.5 bg-amber-100/90 border border-amber-300 rounded-xl space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-amber-950 flex items-center space-x-1">
-                          <Search className="w-3.5 h-3.5 text-amber-700" />
-                          <span>Ditemukan {matchingMitras.length} Rekanan Terdaftar dengan nama serupa:</span>
-                        </span>
-                        <span className="text-[10px] text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded font-mono">
-                          SUGESTI DATABASE
-                        </span>
-                      </div>
+                  {/* Advanced Fuzzy Name Suggestion & Anti-Duplicate Warning */}
+                  <FuzzyNameWarningCard
+                    inputName={namaPetaniManual}
+                    matches={similarMitras}
+                    contextLabel="Petani / Penjual"
+                    theme="light"
+                    isDismissed={isCurrentPetaniWarningDismissed}
+                    onDismissDifferentPerson={() => setDismissedPetaniWarning(namaPetaniManual.trim())}
+                    onSelectRegistered={(m) => {
+                      setTipePetani('TERDAFTAR');
+                      setSelectedMitraId(m.id);
+                    }}
+                    onApplyCorrectedName={(corrected) => {
+                      setNamaPetaniManual(corrected);
+                    }}
+                  />
 
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                        {matchingMitras.map((m) => {
-                          const roleLabel =
-                            m.role === 'MITRA_TANI'
-                              ? '🌾 Mitra Tani / Petani'
-                              : m.role === 'SUPPLIER'
-                              ? '🏢 Supplier Pemasok'
-                              : m.role === 'CUSTOMER'
-                              ? '🛒 Customer / Pembeli'
-                              : '🔄 Rekanan';
-
-                          return (
-                            <div
-                              key={m.id}
-                              className="p-2 bg-white rounded-lg border border-amber-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                            >
-                              <div className="space-y-0.5">
-                                <div className="flex items-center space-x-1.5">
-                                  <span className="font-bold text-xs text-zinc-900">{m.nama}</span>
-                                  <span className="text-[10px] font-mono font-semibold px-1.5 py-0.2 bg-zinc-100 text-zinc-600 rounded">
-                                    {m.kode}
-                                  </span>
-                                  <span className="text-[10px] font-semibold px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded">
-                                    {roleLabel}
-                                  </span>
-                                </div>
-                                <div className="text-[10px] text-zinc-500 flex items-center space-x-2">
-                                  {m.telepon && m.telepon !== '-' && (
-                                    <span className="flex items-center space-x-0.5">
-                                      <Phone className="w-3 h-3 text-zinc-400" />
-                                      <span>{m.telepon}</span>
-                                    </span>
-                                  )}
-                                  {m.alamat && m.alamat !== '-' && (
-                                    <span className="flex items-center space-x-0.5">
-                                      <MapPin className="w-3 h-3 text-zinc-400" />
-                                      <span>{m.alamat}</span>
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="flex items-center space-x-1.5 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setTipePetani('TERDAFTAR');
-                                    setSelectedMitraId(m.id);
-                                  }}
-                                  className="px-2 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-[11px] font-bold shadow-2xs flex items-center space-x-1 cursor-pointer transition-colors"
-                                  title="Gunakan akun mitra terdaftar ini untuk transaksi"
-                                >
-                                  <Check className="w-3 h-3" />
-                                  <span>Gunakan Akun Terdaftar Ini</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setNamaPetaniManual(m.nama);
-                                    if (m.telepon && m.telepon !== '-') setTeleponPetaniManual(m.telepon);
-                                    if (m.alamat && m.alamat !== '-') setAlamatPetaniManual(m.alamat);
-                                  }}
-                                  className="px-2 py-1 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded text-[11px] font-medium border border-zinc-300 cursor-pointer transition-colors"
-                                  title="Pakai nama ini saja tanpa mencatat ke akun mitra"
-                                >
-                                  <span>Gunakan Nama Saja (Tetap Umum)</span>
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Unregistered notification badge */}
-                  {queryPetani.length >= 2 && matchingMitras.length === 0 && (
+                  {/* Unregistered notification badge when truly no similar names exist */}
+                  {namaPetaniManual.trim().length >= 2 && similarMitras.length === 0 && (
                     <div className="mt-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-[11px] text-emerald-900 flex items-center justify-between gap-2">
                       <div className="flex items-center space-x-1.5">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                         <span>
-                          Nama <strong>"{namaPetaniManual}"</strong> belum terdaftar di database Mitra. Transaksi akan disimpan murni sebagai <strong>Petani Umum (Non-Terdaftar)</strong> tanpa menambah daftar Master Mitra.
+                          Nama <strong>"{namaPetaniManual}"</strong> belum ada yang serupa di database. Transaksi akan disimpan murni sebagai <strong>Petani Umum (Non-Terdaftar)</strong> tanpa menambah daftar Master Mitra.
                         </span>
                       </div>
                       <button
@@ -662,18 +685,31 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             </div>
 
             <div>
-              <label className="block text-[11px] text-zinc-500 mb-1">Jenis Hasil Bumi (1 s/d 8)</label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label className="block text-[11px] text-zinc-500">
+                  Jenis Barang Hasil Bumi ({mergedHasilBumiList.length} Komoditas)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowTambahBarangModal(true)}
+                  className="text-[11px] flex items-center space-x-1 text-emerald-800 font-bold hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300 transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>+ Tambah Barang Hasil Bumi Baru</span>
+                </button>
+              </div>
               <select
                 value={selectedKomoditasKode}
                 onChange={(e) => handleKomoditasChange(e.target.value)}
                 className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-amber-600"
               >
-                {stokHasilBumiList.map((hb, idx) => (
+                {mergedHasilBumiList.map((hb, idx) => (
                   <option key={hb.kode} value={hb.kode}>
                     No {idx + 1}. {hb.nama} ({hb.kode}) — Stok: {hb.stok.toLocaleString('id-ID')} {hb.satuan}{' '}
                     {hb.isBelumPutusHarga || hb.kode === 'HB-08' ? '★ BELUM PUTUS HARGA' : ''}
                   </option>
                 ))}
+                <option value="__ADD_NEW__">+ Tambah Barang Hasil Bumi Baru...</option>
               </select>
             </div>
 
@@ -982,6 +1018,22 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               </div>
             )}
 
+            {/* Arus Kas Divisi Terkait */}
+            <div className="pt-2 border-t border-zinc-200">
+              <ArusKasDivisiSelectorCard
+                direction="KELUAR"
+                metode={metode}
+                nominal={totalTagihan}
+                divisi={divisi}
+                divisiOptions={divisiOptions}
+                onChangeDivisi={setDivisi}
+                rekeningList={rekeningList}
+                theme="light"
+                isBelumPutusHarga={isBelumPutusHarga}
+                onDivisiCreated={onRefresh}
+              />
+            </div>
+
             {/* Insert Image Nota Timbangan / Slip Panen */}
             <div className="pt-2 border-t border-zinc-200">
               <ImageUploadZone
@@ -995,24 +1047,31 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             {/* Total Recap Card */}
             <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-200 space-y-2 text-xs">
               <div className="flex justify-between">
+                <span className="text-zinc-500">Divisi Terkait:</span>
+                <span className="font-semibold text-sky-900">{divisi}</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-zinc-500">Komoditas:</span>
                 <span className="font-semibold text-zinc-900">{selectedKomoditas?.nama}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-500">Berat Bersih:</span>
-                <span className="font-bold font-mono text-zinc-900">{beratBersih.toLocaleString('id-ID')} Kg</span>
+                <span className="font-bold font-mono tabular-nums text-zinc-900">{beratBersih.toLocaleString('id-ID')} Kg</span>
               </div>
               <div className="flex justify-between text-base font-bold text-zinc-900 pt-2 border-t border-zinc-200">
                 <span>Total Biaya Pembelian:</span>
-                <span className="text-amber-900">{formatRupiah(totalTagihan)}</span>
+                <span className="text-amber-900 font-mono tabular-nums">{formatRupiah(totalTagihan)}</span>
               </div>
             </div>
 
             <button
               type="button"
               disabled={beratBersih <= 0 || (!isBelumPutusHarga && totalTagihan <= 0)}
-              onClick={() => setShowConfirmModal(true)}
-              className="w-full py-2.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white font-bold text-sm rounded-lg shadow-sm transition-all flex items-center justify-center space-x-2"
+              onClick={() => {
+                setVerifiedDoubleCheck(false);
+                setShowConfirmModal(true);
+              }}
+              className="w-full py-2.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white font-bold text-sm rounded-lg shadow-sm transition-all flex items-center justify-center space-x-2 cursor-pointer"
             >
               {isBelumPutusHarga ? (
                 <>
@@ -1086,22 +1145,36 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPutusHargaModal({
-                            open: true,
-                            tx,
-                            hargaDeal: tx.hargaPerKg > 0 ? tx.hargaPerKg.toString() : '42000',
-                            metode: 'TUNAI',
-                            rekening: 'BNI01',
-                          })
-                        }
-                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs shadow-2xs transition-colors flex items-center space-x-1 mx-auto"
-                      >
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>⚡ Putus Harga Sekarang</span>
-                      </button>
+                      <div className="inline-flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setVerifiedPutusHarga(false);
+                            setPutusHargaError('');
+                            setPutusHargaModal({
+                              open: true,
+                              tx,
+                              hargaDeal: tx.hargaPerKg > 0 ? tx.hargaPerKg.toString() : '42000',
+                              metode: 'TUNAI',
+                              rekening: availableBanks[0]?.kode || 'BNI01',
+                              divisi: tx.divisi || 'Gudang Wijaya Agro',
+                            });
+                          }}
+                          className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs shadow-2xs transition-colors flex items-center space-x-1 cursor-pointer"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Putus Harga</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditTxId(tx.noPembelian)}
+                          className="px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-300 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1 cursor-pointer"
+                          title="Edit tonase bruto, rafaksi, atau detail timbangan"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1111,18 +1184,123 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         )}
       </div>
 
-      {/* Confirmation Modal */}
+      {/* Section: Riwayat Transaksi Timbangan Pembelian Hasil Bumi Terbaru */}
+      <div className="bg-white rounded-xl border border-zinc-200 shadow-2xs overflow-hidden">
+        <div className="p-4 bg-zinc-50 border-b border-zinc-200 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <History className="w-4 h-4 text-zinc-700" />
+            <div>
+              <h2 className="text-sm font-bold text-zinc-900">
+                Riwayat Transaksi Pembelian Hasil Bumi Terbaru
+              </h2>
+              <p className="text-[11px] text-zinc-500">
+                Klik tombol Edit Detail apabila terjadi kesalahan input tonase bruto, rafaksi, maupun harga per Kg.
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-mono text-zinc-600">
+            {allTransactions.length} Transaksi
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold text-[11px]">
+              <tr>
+                <th className="py-2.5 px-3">No. Nota</th>
+                <th className="py-2.5 px-3">Waktu</th>
+                <th className="py-2.5 px-3">Petani / Mitra</th>
+                <th className="py-2.5 px-3">Komoditas</th>
+                <th className="py-2.5 px-3 text-right">Bruto / Rafaksi</th>
+                <th className="py-2.5 px-3 text-right">Netto (Kg)</th>
+                <th className="py-2.5 px-3 text-right">Harga / Kg</th>
+                <th className="py-2.5 px-3 text-right">Total Nominal</th>
+                <th className="py-2.5 px-3 text-center">Metode</th>
+                <th className="py-2.5 px-3 text-center">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200">
+              {loadingTx ? (
+                <tr>
+                  <td colSpan={10} className="py-8 text-center text-zinc-400">
+                    Memuat riwayat timbangan...
+                  </td>
+                </tr>
+              ) : allTransactions.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="py-8 text-center text-zinc-400">
+                    Belum ada transaksi timbangan hasil bumi yang tercatat.
+                  </td>
+                </tr>
+              ) : (
+                allTransactions.slice(0, 30).map((tx) => (
+                  <tr key={tx.noPembelian} className="hover:bg-zinc-50/80">
+                    <td className="py-2.5 px-3 font-mono font-bold text-amber-900">{tx.noPembelian}</td>
+                    <td className="py-2.5 px-3 text-zinc-600 font-mono whitespace-nowrap">
+                      {tx.tanggal} <span className="text-[10px] text-zinc-400">{tx.jam}</span>
+                    </td>
+                    <td className="py-2.5 px-3 font-semibold text-zinc-900">{tx.namaMitra}</td>
+                    <td className="py-2.5 px-3 font-medium text-zinc-800">{tx.komoditasNama}</td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-600">
+                      {tx.beratKotor > 0
+                        ? `${tx.beratKotor.toLocaleString('id-ID')} Kg (${tx.potonganRafaksi}%)`
+                        : '-'}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-zinc-900">
+                      {tx.beratBersih > 0 ? `${tx.beratBersih.toLocaleString('id-ID')} Kg` : '-'}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-700">
+                      {tx.hargaPerKg > 0 ? formatRupiah(tx.hargaPerKg) : '-'}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-emerald-800">
+                      {formatRupiah(tx.totalNominal)}
+                    </td>
+                    <td className="py-2.5 px-3 text-center text-[11px] font-semibold text-zinc-700">
+                      <div>
+                        {tx.metodePembayaran} ({tx.rekeningSumber})
+                      </div>
+                      {tx.divisi && (
+                        <div className="text-[10px] text-sky-800 font-medium mt-0.5">{tx.divisi}</div>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setEditTxId(tx.noPembelian)}
+                        className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span>Edit Detail</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Confirmation Modal with Double-Check Verifikasi */}
       {showConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-zinc-200 animate-in fade-in">
-            <div className="p-4 bg-amber-800 text-white font-bold text-sm flex justify-between items-center">
-              <span>{isBelumPutusHarga ? 'Konfirmasi Titip Timbang (Belum Putus)' : 'Konfirmasi Pembelian Hasil Bumi'}</span>
-              <button onClick={() => setShowConfirmModal(false)} className="text-amber-200 hover:text-white">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg my-auto max-h-[92vh] flex flex-col overflow-hidden border border-zinc-200 animate-in fade-in">
+            <div className="p-4 bg-amber-800 text-white font-bold text-sm flex justify-between items-center shrink-0">
+              <span>
+                {isBelumPutusHarga
+                  ? 'Verifikasi & Konfirmasi Titip Timbang (Belum Putus)'
+                  : 'Verifikasi & Konfirmasi Pembelian Hasil Bumi'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowConfirmModal(false)}
+                className="text-amber-200 hover:text-white cursor-pointer"
+              >
                 ✕
               </button>
             </div>
 
-            <div className="p-5 space-y-3.5 text-xs text-zinc-700">
+            <div className="p-5 space-y-3.5 text-xs text-zinc-700 overflow-y-auto">
               <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1">
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Petani / Supplier:</span>
@@ -1138,7 +1316,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Berat Bersih:</span>
-                  <span className="font-bold font-mono">{beratBersih.toLocaleString('id-ID')} Kg</span>
+                  <span className="font-bold font-mono tabular-nums">{beratBersih.toLocaleString('id-ID')} Kg</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Status Harga:</span>
@@ -1148,25 +1326,42 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 </div>
                 <div className="flex justify-between pt-1 border-t border-zinc-200">
                   <span className="text-zinc-500 font-bold">Total Nilai Tagihan:</span>
-                  <span className="font-bold text-sm text-zinc-900">
+                  <span className="font-bold text-sm font-mono tabular-nums text-zinc-900">
                     {isBelumPutusHarga && totalTagihan === 0 ? 'Rp 0 (Mengambang)' : formatRupiah(totalTagihan)}
                   </span>
                 </div>
               </div>
 
+              {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
+              <DoubleCheckVerifikasiPanel
+                direction="KELUAR"
+                metode={isBelumPutusHarga ? 'TITIP' : metode}
+                nominal={totalTagihan}
+                rekeningList={rekeningList}
+                selectedTransferKode={rekeningSumber}
+                onChangeTransferKode={setRekeningSumber}
+                divisi={divisi}
+                divisiOptions={divisiOptions}
+                onChangeDivisi={setDivisi}
+                verified={verifiedDoubleCheck}
+                onToggleVerified={setVerifiedDoubleCheck}
+                theme="light"
+                isBelumPutusHarga={isBelumPutusHarga}
+              />
+
               <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-200">
                 <button
                   type="button"
                   onClick={() => setShowConfirmModal(false)}
-                  className="px-3 py-1.5 text-zinc-600 hover:bg-zinc-100 rounded-md font-medium"
+                  className="px-3 py-1.5 text-zinc-600 hover:bg-zinc-100 rounded-md font-medium cursor-pointer"
                 >
                   Batal / Cek Lagi
                 </button>
                 <button
                   type="button"
-                  disabled={submitting}
+                  disabled={submitting || !verifiedDoubleCheck}
                   onClick={handleProcessSubmit}
-                  className="px-4 py-1.5 bg-amber-700 text-white font-bold rounded-md hover:bg-amber-800 disabled:opacity-50"
+                  className="px-4 py-1.5 bg-amber-700 text-white font-bold rounded-md hover:bg-amber-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   {submitting ? 'Memproses...' : 'Konfirmasi & Simpan'}
                 </button>
@@ -1176,21 +1371,28 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Modal Quick Add Mitra / Petani Baru */}
+      {/* Modal Quick Add Mitra / Petani Baru (Scrollable Up/Down & Left/Right) */}
       {showQuickAddMitra && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-zinc-200 animate-in fade-in">
-            <div className="p-4 bg-emerald-800 text-white font-bold text-sm flex justify-between items-center">
+        <div className="fixed inset-0 z-50 bg-black/60 p-3 sm:p-4 backdrop-blur-xs overflow-y-auto overflow-x-auto flex items-start sm:items-center justify-center">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg my-auto max-h-[92vh] flex flex-col border border-zinc-200">
+            <div className="p-4 bg-emerald-800 text-white font-bold text-sm flex justify-between items-center rounded-t-xl shrink-0">
               <div className="flex items-center space-x-2">
                 <UserPlus className="w-4 h-4 text-emerald-300" />
                 <span>Tambah Petani / Mitra Baru (Real Data)</span>
               </div>
-              <button onClick={() => setShowQuickAddMitra(false)} className="text-emerald-200 hover:text-white">
+              <button
+                type="button"
+                onClick={() => setShowQuickAddMitra(false)}
+                className="text-emerald-200 hover:text-white cursor-pointer px-1"
+              >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleQuickAddMitraSubmit} className="p-5 space-y-3.5 text-xs">
+            <form
+              onSubmit={handleQuickAddMitraSubmit}
+              className="p-5 space-y-3.5 text-xs flex-1 overflow-y-auto overflow-x-auto overscroll-contain"
+            >
               <div>
                 <label className="block font-bold text-zinc-700 mb-1">
                   Nama Petani / Mitra <span className="text-rose-500">*</span>
@@ -1202,6 +1404,27 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                   value={newMitraNama}
                   onChange={(e) => setNewMitraNama(e.target.value)}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-emerald-600"
+                />
+
+                {/* Advanced Fuzzy Name Suggestion & Anti-Duplicate Warning */}
+                <FuzzyNameWarningCard
+                  inputName={newMitraNama}
+                  matches={quickAddSimilarMitras}
+                  contextLabel="Petani / Mitra"
+                  theme="light"
+                  isDismissed={
+                    dismissedQuickAddWarning.length > 0 &&
+                    dismissedQuickAddWarning.toLowerCase() === newMitraNama.trim().toLowerCase()
+                  }
+                  onDismissDifferentPerson={() => setDismissedQuickAddWarning(newMitraNama.trim())}
+                  onSelectRegistered={(m) => {
+                    setSelectedMitraId(m.id);
+                    setTipePetani('TERDAFTAR');
+                    setShowQuickAddMitra(false);
+                  }}
+                  onApplyCorrectedName={(corrected) => {
+                    setNewMitraNama(corrected);
+                  }}
                 />
               </div>
 
@@ -1242,6 +1465,12 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 />
               </div>
 
+              {quickAddMitraError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                  {quickAddMitraError}
+                </div>
+              )}
+
               <div className="flex justify-end space-x-2 pt-3 border-t border-zinc-200">
                 <button
                   type="button"
@@ -1263,24 +1492,25 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Modal Putus Harga */}
+      {/* Modal Putus Harga + Double-Check Verifikasi */}
       {putusHargaModal.open && putusHargaModal.tx && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-zinc-200 animate-in fade-in">
-            <div className="p-4 bg-gradient-to-r from-amber-700 to-amber-900 text-white font-bold text-sm flex justify-between items-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg my-auto max-h-[92vh] flex flex-col overflow-hidden border border-zinc-200 animate-in fade-in">
+            <div className="p-4 bg-gradient-to-r from-amber-700 to-amber-900 text-white font-bold text-sm flex justify-between items-center shrink-0">
               <div className="flex items-center space-x-2">
                 <Sparkles className="w-4 h-4 text-amber-300" />
                 <span>Putus Harga Lot #{putusHargaModal.tx.noPembelian}</span>
               </div>
               <button
+                type="button"
                 onClick={() => setPutusHargaModal({ ...putusHargaModal, open: false })}
-                className="text-amber-200 hover:text-white"
+                className="text-amber-200 hover:text-white cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <div className="p-5 space-y-4 text-xs text-zinc-700">
+            <div className="p-5 space-y-4 text-xs text-zinc-700 overflow-y-auto">
               <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 space-y-1">
                 <div className="flex justify-between">
                   <span className="text-zinc-600">Petani:</span>
@@ -1292,7 +1522,9 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-600">Berat Bersih Lot:</span>
-                  <span className="font-bold font-mono text-zinc-900">{putusHargaModal.tx.beratBersih.toLocaleString('id-ID')} Kg</span>
+                  <span className="font-bold font-mono tabular-nums text-zinc-900">
+                    {putusHargaModal.tx.beratBersih.toLocaleString('id-ID')} Kg
+                  </span>
                 </div>
               </div>
 
@@ -1305,12 +1537,15 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                   min="1"
                   required
                   value={putusHargaModal.hargaDeal}
-                  onChange={(e) => setPutusHargaModal({ ...putusHargaModal, hargaDeal: e.target.value })}
+                  onChange={(e) => {
+                    setVerifiedPutusHarga(false);
+                    setPutusHargaModal({ ...putusHargaModal, hargaDeal: e.target.value });
+                  }}
                   placeholder="Misal: 43500"
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-sm font-mono font-bold focus:ring-1 focus:ring-emerald-600"
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-sm font-mono tabular-nums font-bold focus:ring-1 focus:ring-emerald-600"
                 />
-                <div className="mt-1 text-right font-bold text-amber-900">
-                  Total Nilai: {formatRupiah((Number(putusHargaModal.hargaDeal) || 0) * putusHargaModal.tx.beratBersih)}
+                <div className="mt-1 text-right font-bold font-mono tabular-nums text-amber-900">
+                  Total Nilai: {formatRupiah(Math.round((Number(putusHargaModal.hargaDeal) || 0) * putusHargaModal.tx.beratBersih))}
                 </div>
               </div>
 
@@ -1319,8 +1554,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
-                    onClick={() => setPutusHargaModal({ ...putusHargaModal, metode: 'TUNAI' })}
-                    className={`py-1.5 px-2 text-center rounded-lg font-semibold text-xs border ${
+                    onClick={() => {
+                      setVerifiedPutusHarga(false);
+                      setPutusHargaModal({ ...putusHargaModal, metode: 'TUNAI' });
+                    }}
+                    className={`py-1.5 px-2 text-center rounded-lg font-semibold text-xs border cursor-pointer ${
                       putusHargaModal.metode === 'TUNAI'
                         ? 'bg-amber-600 text-white border-amber-600'
                         : 'bg-zinc-50 border-zinc-300'
@@ -1330,8 +1568,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPutusHargaModal({ ...putusHargaModal, metode: 'TRANSFER' })}
-                    className={`py-1.5 px-2 text-center rounded-lg font-semibold text-xs border ${
+                    onClick={() => {
+                      setVerifiedPutusHarga(false);
+                      setPutusHargaModal({ ...putusHargaModal, metode: 'TRANSFER' });
+                    }}
+                    className={`py-1.5 px-2 text-center rounded-lg font-semibold text-xs border cursor-pointer ${
                       putusHargaModal.metode === 'TRANSFER'
                         ? 'bg-amber-600 text-white border-amber-600'
                         : 'bg-zinc-50 border-zinc-300'
@@ -1341,8 +1582,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPutusHargaModal({ ...putusHargaModal, metode: 'TITIP' })}
-                    className={`py-1.5 px-2 text-center rounded-lg font-semibold text-xs border ${
+                    onClick={() => {
+                      setVerifiedPutusHarga(false);
+                      setPutusHargaModal({ ...putusHargaModal, metode: 'TITIP' });
+                    }}
+                    className={`py-1.5 px-2 text-center rounded-lg font-semibold text-xs border cursor-pointer ${
                       putusHargaModal.metode === 'TITIP'
                         ? 'bg-purple-600 text-white border-purple-600'
                         : 'bg-zinc-50 border-zinc-300'
@@ -1353,20 +1597,29 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 </div>
               </div>
 
-              {putusHargaModal.metode === 'TRANSFER' && (
-                <div>
-                  <label className="block font-semibold text-zinc-600 mb-1">Pilih Rekening Bank:</label>
-                  <select
-                    value={putusHargaModal.rekening}
-                    onChange={(e) => setPutusHargaModal({ ...putusHargaModal, rekening: e.target.value })}
-                    className="w-full px-2.5 py-1.5 border border-zinc-300 rounded text-xs"
-                  >
-                    {availableBanks.map((b) => (
-                      <option key={b.kode} value={b.kode}>
-                        {b.nama} ({b.kode}) — Saldo: {formatRupiah(b.saldoSaatIni)}
-                      </option>
-                    ))}
-                  </select>
+              {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
+              <DoubleCheckVerifikasiPanel
+                direction="KELUAR"
+                metode={putusHargaModal.metode}
+                nominal={Math.round(
+                  (Number(putusHargaModal.hargaDeal) || 0) * putusHargaModal.tx.beratBersih
+                )}
+                rekeningList={rekeningList}
+                selectedTransferKode={putusHargaModal.rekening}
+                onChangeTransferKode={(kode) =>
+                  setPutusHargaModal({ ...putusHargaModal, rekening: kode })
+                }
+                divisi={putusHargaModal.divisi}
+                divisiOptions={divisiOptions}
+                onChangeDivisi={(d) => setPutusHargaModal({ ...putusHargaModal, divisi: d })}
+                verified={verifiedPutusHarga}
+                onToggleVerified={setVerifiedPutusHarga}
+                theme="light"
+              />
+
+              {putusHargaError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                  {putusHargaError}
                 </div>
               )}
 
@@ -1374,15 +1627,19 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => setPutusHargaModal({ ...putusHargaModal, open: false })}
-                  className="px-3 py-1.5 text-zinc-600 hover:bg-zinc-100 rounded-md font-medium"
+                  className="px-3 py-1.5 text-zinc-600 hover:bg-zinc-100 rounded-md font-medium cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="button"
-                  disabled={isSavingPutusHarga || (Number(putusHargaModal.hargaDeal) || 0) <= 0}
+                  disabled={
+                    isSavingPutusHarga ||
+                    (Number(putusHargaModal.hargaDeal) || 0) <= 0 ||
+                    !verifiedPutusHarga
+                  }
                   onClick={handlePutusHargaSubmit}
-                  className="px-4 py-1.5 bg-emerald-700 text-white font-bold rounded-md hover:bg-emerald-800 disabled:opacity-50"
+                  className="px-4 py-1.5 bg-emerald-700 text-white font-bold rounded-md hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   {isSavingPutusHarga ? 'Menyimpan...' : 'Konfirmasi & Putus Harga'}
                 </button>
@@ -1406,6 +1663,38 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           initialSelectedKode={selectedSaldoAwalKode}
         />
       )}
+
+      {/* Modal Tambah Barang / Komoditas Hasil Bumi Baru */}
+      <ModalTambahHasilBumi
+        isOpen={showTambahBarangModal}
+        onClose={() => setShowTambahBarangModal(false)}
+        existingCount={mergedHasilBumiList.length}
+        onCreated={(created) => {
+          setLocalAddedKomoditas((prev) => [...prev, created]);
+          setSelectedKomoditasKode(created.kode);
+          const isTitip = Boolean(created.isBelumPutusHarga) || created.nama.toUpperCase().includes('TITIP');
+          setIsBelumPutusHarga(isTitip);
+          if (isTitip) {
+            setMetode('TITIP');
+            setHargaPerKgInput('0');
+          } else {
+            setHargaPerKgInput(String(created.hargaBeliStandar || 0));
+          }
+          onRefresh();
+        }}
+      />
+
+      {/* Modal Universal Edit Detail Pembelian Hasil Bumi */}
+      <ModalEditTransaksiUniversal
+        isOpen={Boolean(editTxId)}
+        transactionId={editTxId}
+        jenisHint="PEMBELIAN_HASIL_BUMI"
+        onClose={() => setEditTxId(null)}
+        onSuccess={() => {
+          onRefresh();
+          loadTransactions();
+        }}
+      />
     </div>
   );
 };

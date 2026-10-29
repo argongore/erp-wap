@@ -230,7 +230,7 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
               <div>
                 <span className="font-bold text-zinc-800">{activeKry.nama}</span>{' '}
                 <span className="text-[11px] text-zinc-500">
-                  ({activeKry.jabatan} - {activeKry.departemen})
+                  ({activeKry.jabatan} - Divisi: {activeKry.divisi || activeKry.departemen})
                 </span>
               </div>
               <div className="flex items-center space-x-3">

@@ -24,9 +24,23 @@ import {
   TransaksiKasbonUang,
   TransaksiPembelianBarang,
   TransaksiPembelianHasilBumi,
+  TransaksiPenjualanHasilBumi,
+  RingkasanStokHasilBumiBulananResponse,
   TransaksiPenggajian,
   TransaksiPenjualan,
   TransaksiTransferRekening,
+  ProfilPerusahaan,
+  TransaksiPengeluaran,
+  TransaksiPencairanTitipan,
+  UnifiedTransactionItem,
+  RekapSemuaTransaksiResponse,
+  SmartControlOverviewResponse,
+  HasilKliringSilangResponse,
+  CatatanCashOpname,
+  DatabaseIntegrityStatus,
+  ItemInventaris,
+  KategoriInventaris,
+  KondisiInventaris,
 } from '../server/types.ts';
 
 export interface KaryawanWithBon extends Karyawan {
@@ -37,6 +51,8 @@ export interface KaryawanWithBon extends Karyawan {
 
 export interface DashboardStatsResponse {
   totalPenjualan: number;
+  totalPenjualanHasilBumi?: number;
+  totalTerjualHasilBumiKg?: number;
   totalPembelianHasilBumi: number;
   totalUangPerusahaan: number;
   saldoKas: number;
@@ -63,22 +79,98 @@ export interface DashboardStatsResponse {
   rekeningList: Rekening[];
 }
 
+/**
+ * Resilient JSON HTTP client for ERP API routes.
+ * Automatically retries gateway warmup / container wakeup HTML responses (502/503/504 or <!doctype html>)
+ * and guarantees clean Indonesian error messages instead of raw JSON syntax exceptions.
+ */
+export async function requestJson<T = any>(url: string, init?: RequestInit): Promise<T> {
+  const maxAttempts = 4;
+  const retryDelays = [600, 1200, 2000];
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...((init?.headers as Record<string, string>) || {}),
+  };
+
+  const isGet = !init?.method || init.method.toUpperCase() === 'GET';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        cache: isGet ? 'no-store' : init?.cache,
+        headers,
+      });
+    } catch (netErr: any) {
+      if (attempt < maxAttempts - 1) {
+        await new Promise((r) => setTimeout(r, retryDelays[attempt] || 1500));
+        continue;
+      }
+      throw new Error('Tidak dapat terhubung ke server aplikasi. Periksa koneksi internet Anda lalu coba lagi.');
+    }
+
+    const rawText = await res.text();
+    const trimmed = rawText.trimStart();
+    const looksLikeHtml =
+      trimmed.toLowerCase().startsWith('<!doctype') ||
+      trimmed.toLowerCase().startsWith('<html') ||
+      (res.headers.get('content-type') || '').toLowerCase().includes('text/html');
+
+    if (looksLikeHtml || res.status === 502 || res.status === 503 || res.status === 504) {
+      // Do not retry auth/forbidden HTML pages; guide user to refresh session immediately
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(
+          'Sesi otorisasi halaman telah kedaluwarsa. Silakan muat ulang (Refresh) halaman browser Anda lalu coba kembali.'
+        );
+      }
+
+      if (attempt < maxAttempts - 1) {
+        await new Promise((r) => setTimeout(r, retryDelays[attempt] || 1500));
+        continue;
+      }
+
+      throw new Error(
+        'Server aplikasi baru saja dimuat ulang atau halaman belum sinkron dengan versi terbaru. Silakan muat ulang (Refresh) halaman browser Anda lalu coba kembali.'
+      );
+    }
+
+    if (!trimmed) {
+      if (!res.ok) {
+        throw new Error(`Permintaan gagal diproses oleh server (HTTP ${res.status}).`);
+      }
+      return {} as T;
+    }
+
+    try {
+      return JSON.parse(trimmed) as T;
+    } catch {
+      throw new Error(
+        res.ok
+          ? 'Format respons dari server tidak valid. Silakan muat ulang halaman dan coba lagi.'
+          : `Permintaan gagal diproses (HTTP ${res.status}): ${trimmed.slice(0, 120)}`
+      );
+    }
+  }
+
+  throw new Error('Gagal memproses permintaan ke server.');
+}
+
 export const api = {
   // Master Rekening
   getRekening: async (): Promise<Rekening[]> => {
-    const res = await fetch('/api/rekening');
-    const data = await res.json();
+    const data = await requestJson('/api/rekening');
     if (!data.success) throw new Error(data.message || 'Gagal memuat rekening');
     return data.data;
   },
 
   createRekening: async (payload: Partial<Rekening>): Promise<Rekening> => {
-    const res = await fetch('/api/rekening', {
+    const data = await requestJson('/api/rekening', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal membuat rekening');
     return data.data;
   },
@@ -87,12 +179,11 @@ export const api = {
     kode: string,
     payload: Partial<Rekening> & { saldoSaatIni?: number; saldoAwal?: number; alasanPenyesuaian?: string }
   ): Promise<Rekening> => {
-    const res = await fetch(`/api/rekening/${kode}`, {
-      method: 'PUT',
+    const data = await requestJson('/api/rekening/update', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, kode }),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memperbarui rekening');
     return data.data;
   },
@@ -101,95 +192,155 @@ export const api = {
     kode: string,
     saldoBaru: number,
     updateSaldoAwal: boolean = false,
-    alasan?: string
+    alasan?: string,
+    saldoAwalBaru?: number
   ): Promise<Rekening> => {
-    const res = await fetch(`/api/rekening/${kode}/update-saldo`, {
+    const data = await requestJson('/api/rekening/update-saldo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ saldoBaru, updateSaldoAwal, alasan }),
+      body: JSON.stringify({ kode, saldoBaru, updateSaldoAwal, alasan, saldoAwalBaru }),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memperbarui saldo rekening');
     return data.data;
   },
 
   // Master Mitra
   getMitra: async (): Promise<Mitra[]> => {
-    const res = await fetch('/api/mitra');
-    const data = await res.json();
+    const data = await requestJson('/api/mitra');
     if (!data.success) throw new Error(data.message || 'Gagal memuat mitra');
     return data.data;
   },
 
   getRekapMitra: async (): Promise<RekapMasterMitraSummary> => {
-    const res = await fetch('/api/mitra/rekap');
-    const data = await res.json();
+    const data = await requestJson('/api/mitra/rekap');
     if (!data.success) throw new Error(data.message || 'Gagal memuat rekap saldo mitra');
     return data.data;
   },
 
   createMitra: async (payload: Partial<Mitra>): Promise<Mitra> => {
-    const res = await fetch('/api/mitra', {
+    const data = await requestJson('/api/mitra', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menambah mitra');
     return data.data;
   },
 
   updateMitra: async (id: string, payload: Partial<Mitra>): Promise<Mitra> => {
-    const res = await fetch(`/api/mitra/${id}`, {
+    const data = await requestJson(`/api/mitra/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memperbarui mitra');
     return data.data;
   },
 
-  // Master Produk & Stok
+  // Master Produk, Kategori Kustom & Stok
+  getKategoriProduk: async (): Promise<
+    Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>
+  > => {
+    const data = await requestJson('/api/kategori-produk');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat daftar kategori produk');
+    return data.data;
+  },
+
+  createKategoriProduk: async (payload: { nama: string; deskripsi?: string }): Promise<any> => {
+    const data = await requestJson('/api/kategori-produk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menambahkan kategori baru');
+    return data.data;
+  },
+
+  renameKategoriProduk: async (payload: {
+    kategoriLama: string;
+    kategoriBaru: string;
+    deskripsi?: string;
+  }): Promise<{ kategoriLama: string; kategoriBaru: string; affectedCount: number }> => {
+    const data = await requestJson('/api/kategori-produk/rename', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mengubah nama kategori');
+    return data.data;
+  },
+
+  deleteKategoriProduk: async (payload: {
+    nama: string;
+    kategoriPengganti?: string;
+  }): Promise<{ deleted: string; movedCount: number }> => {
+    const data = await requestJson('/api/kategori-produk/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus kategori');
+    return data.data;
+  },
+
+  bulkUpdateKategoriProduk: async (payload: {
+    kodeProdukList: string[];
+    kategoriBaru: string;
+    deskripsiKategori?: string;
+  }): Promise<{ kategoriBaru: string; updatedCount: number }> => {
+    const data = await requestJson('/api/produk/bulk-kategori', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui kategori produk secara massal');
+    return data.data;
+  },
+
   getProduk: async (): Promise<Produk[]> => {
-    const res = await fetch('/api/produk');
-    const data = await res.json();
+    const data = await requestJson('/api/produk');
     if (!data.success) throw new Error(data.message || 'Gagal memuat produk');
     return data.data;
   },
 
   createProduk: async (payload: any): Promise<any> => {
-    const res = await fetch('/api/produk', {
+    const data = await requestJson('/api/produk', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menambah produk');
     return data.data;
   },
 
+  updateProduk: async (kode: string, payload: Partial<Produk> & { minimum?: number }): Promise<any> => {
+    const data = await requestJson(`/api/produk/${encodeURIComponent(kode)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui produk & harga');
+    return data.data;
+  },
+
   getStok: async (): Promise<StokBarang[]> => {
-    const res = await fetch('/api/stok');
-    const data = await res.json();
+    const data = await requestJson('/api/stok');
     if (!data.success) throw new Error(data.message || 'Gagal memuat stok');
     return data.data;
   },
 
   adjustStok: async (payload: { kode: string; penyesuaianQty: number; alasan: string }): Promise<StokBarang> => {
-    const res = await fetch('/api/stok/adjust', {
+    const data = await requestJson('/api/stok/adjust', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menyesuaikan stok');
     return data.data;
   },
 
   getStokHasilBumi: async (): Promise<StokHasilBumi[]> => {
-    const res = await fetch('/api/stok-hasil-bumi');
-    const data = await res.json();
+    const data = await requestJson('/api/stok-hasil-bumi');
     if (!data.success) throw new Error(data.message || 'Gagal memuat stok hasil bumi');
     return data.data;
   },
@@ -199,14 +350,24 @@ export const api = {
     nama: string;
     satuan?: string;
     hargaBeliStandar?: number;
+    isBelumPutusHarga?: boolean;
   }): Promise<StokHasilBumi> => {
-    const res = await fetch('/api/stok-hasil-bumi', {
+    const data = await requestJson('/api/stok-hasil-bumi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menambah komoditas hasil bumi');
+    return data.data;
+  },
+
+  updateHargaHasilBumi: async (kode: string, hargaBeliStandar: number): Promise<StokHasilBumi> => {
+    const data = await requestJson(`/api/stok-hasil-bumi/${encodeURIComponent(kode)}/harga`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hargaBeliStandar }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui harga standar hasil bumi');
     return data.data;
   },
 
@@ -224,12 +385,11 @@ export const api = {
       keterangan?: string;
     }>;
   }): Promise<StokHasilBumi[]> => {
-    const res = await fetch('/api/stok-hasil-bumi/saldo-awal', {
+    const data = await requestJson('/api/stok-hasil-bumi/saldo-awal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menyimpan saldo awal hasil bumi');
     return data.data;
   },
@@ -239,24 +399,23 @@ export const api = {
     idMitra?: string;
     namaPembeliManual?: string;
     tipePembeli?: 'UMUM' | 'REKANAN';
-    metode: 'TUNAI' | 'TRANSFER' | 'KASBON';
+    divisi?: string;
+    metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT';
     rekeningTujuan?: string;
     items: Array<{ kodeProduk: string; qty: number; harga?: number; hargaSugesti?: number }>;
     keterangan?: string;
   }): Promise<TransaksiPenjualan> => {
-    const res = await fetch('/api/transaksi/penjualan', {
+    const data = await requestJson('/api/transaksi/penjualan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses transaksi penjualan');
     return data.data;
   },
 
   getPenjualan: async (): Promise<TransaksiPenjualan[]> => {
-    const res = await fetch('/api/transaksi/penjualan');
-    const data = await res.json();
+    const data = await requestJson('/api/transaksi/penjualan');
     if (!data.success) throw new Error(data.message);
     return data.data;
   },
@@ -270,6 +429,7 @@ export const api = {
     isRekapanGlobal?: boolean;
     judulRekapan?: string;
     totalNominalRekapan?: number;
+    divisi?: string;
     metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG';
     rekeningSumber?: string;
     items?: Array<{
@@ -281,27 +441,32 @@ export const api = {
     }>;
     keterangan?: string;
   }): Promise<TransaksiPembelianBarang> => {
-    const res = await fetch('/api/transaksi/pembelian-barang', {
+    const data = await requestJson('/api/transaksi/pembelian-barang', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses pembelian barang');
     return data.data;
   },
 
   getPembelianBarang: async (): Promise<TransaksiPembelianBarang[]> => {
-    const res = await fetch('/api/transaksi/pembelian-barang');
-    const data = await res.json();
+    const data = await requestJson('/api/transaksi/pembelian-barang');
     if (!data.success) throw new Error(data.message);
+    return data.data;
+  },
+
+  deletePembelianBarang: async (noPembelian: string): Promise<{ deleted: TransaksiPembelianBarang }> => {
+    const data = await requestJson(`/api/transaksi/pembelian-barang/${encodeURIComponent(noPembelian)}`, {
+      method: 'DELETE',
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal membatalkan transaksi pembelian');
     return data.data;
   },
 
   // Laba Rugi Produk
   getLabaRugiProduk: async (): Promise<LabaRugiSummary> => {
-    const res = await fetch('/api/laporan/laba-rugi-produk');
-    const data = await res.json();
+    const data = await requestJson('/api/laporan/laba-rugi-produk');
     if (!data.success) throw new Error(data.message || 'Gagal memuat laporan laba rugi produk');
     return data.data;
   },
@@ -321,23 +486,22 @@ export const api = {
     isNotaLalu?: boolean;
     noNotaLalu?: string;
     tanggalNotaLalu?: string;
+    divisi?: string;
     metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPembelianHasilBumi> => {
-    const res = await fetch('/api/transaksi/pembelian-hasil-bumi', {
+    const data = await requestJson('/api/transaksi/pembelian-hasil-bumi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses pembelian hasil bumi');
     return data.data;
   },
 
   getPembelianHasilBumi: async (): Promise<TransaksiPembelianHasilBumi[]> => {
-    const res = await fetch('/api/transaksi/pembelian-hasil-bumi');
-    const data = await res.json();
+    const data = await requestJson('/api/transaksi/pembelian-hasil-bumi');
     if (!data.success) throw new Error(data.message);
     return data.data;
   },
@@ -345,25 +509,80 @@ export const api = {
   putusHargaHasilBumi: async (payload: {
     noPembelian: string;
     hargaDealPerKg: number;
+    divisi?: string;
     metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPembelianHasilBumi> => {
-    const res = await fetch('/api/transaksi/pembelian-hasil-bumi/putus-harga', {
+    const data = await requestJson('/api/transaksi/pembelian-hasil-bumi/putus-harga', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses putus harga');
     return data.data;
   },
 
+  // Penjualan / Pengiriman Hasil Bumi Keluar Gudang & Ringkasan Bulanan
+  getPenjualanHasilBumi: async (): Promise<TransaksiPenjualanHasilBumi[]> => {
+    const data = await requestJson('/api/transaksi/penjualan-hasil-bumi');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat riwayat penjualan hasil bumi');
+    return data.data;
+  },
+
+  processPenjualanHasilBumi: async (payload: {
+    idMitra?: string;
+    namaPembeliManual?: string;
+    komoditasKode: string;
+    beratKotor: number;
+    potonganRafaksi?: number;
+    hargaJualPerKg: number;
+    divisi?: string;
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG';
+    rekeningTujuan?: string;
+    noSuratJalan?: string;
+    tanggal?: string;
+    keterangan?: string;
+  }): Promise<TransaksiPenjualanHasilBumi> => {
+    const data = await requestJson('/api/transaksi/penjualan-hasil-bumi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mencatat penjualan hasil bumi');
+    return data.data;
+  },
+
+  deletePenjualanHasilBumi: async (
+    noPenjualan: string
+  ): Promise<{ deleted: TransaksiPenjualanHasilBumi }> => {
+    const data = await requestJson(
+      `/api/transaksi/penjualan-hasil-bumi/${encodeURIComponent(noPenjualan)}`,
+      { method: 'DELETE' }
+    );
+    if (!data.success) throw new Error(data.message || 'Gagal membatalkan penjualan hasil bumi');
+    return data.data;
+  },
+
+  getRingkasanHasilBumiBulanan: async (params?: {
+    bulan?: number;
+    tahun?: number;
+    kodeKomoditas?: string;
+  }): Promise<RingkasanStokHasilBumiBulananResponse> => {
+    const qs = new URLSearchParams();
+    if (params?.bulan) qs.set('bulan', String(params.bulan));
+    if (params?.tahun) qs.set('tahun', String(params.tahun));
+    if (params?.kodeKomoditas) qs.set('kodeKomoditas', params.kodeKomoditas);
+    const queryStr = qs.toString() ? `?${qs.toString()}` : '';
+    const data = await requestJson(`/api/laporan/ringkasan-hasil-bumi-bulanan${queryStr}`);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat ringkasan bulanan stok hasil bumi');
+    return data.data;
+  },
+
   resetCleanDatabase: async (): Promise<{ message: string }> => {
-    const res = await fetch('/api/database/reset-clean', {
+    const data = await requestJson('/api/database/reset-clean', {
       method: 'POST',
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal mereset database');
     return data;
   },
@@ -377,12 +596,11 @@ export const api = {
     keterangan?: string;
     fotoNota?: string;
   }): Promise<TransaksiKasbonUang> => {
-    const res = await fetch('/api/transaksi/kasbon-uang', {
+    const data = await requestJson('/api/transaksi/kasbon-uang', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses kasbon uang');
     return data.data;
   },
@@ -401,30 +619,175 @@ export const api = {
     driveFolderPath?: string;
     keterangan?: string;
   }): Promise<{ record: any; tipe: string; mitraNama: string; nominal: number }> => {
-    const res = await fetch('/api/transaksi/nota-lalu', {
+    const data = await requestJson('/api/transaksi/nota-lalu', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      let msg = 'Gagal memproses input nota lalu';
-      try {
-        const parsed = JSON.parse(text);
-        msg = parsed.message || msg;
-      } catch {
-        msg = text || `HTTP ${res.status}`;
-      }
-      throw new Error(msg);
-    }
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses input nota lalu');
     return data.data;
   },
 
+  // Pinjam Uang dari PT ke Mitra (Masuk Saldo Titip Mitra)
+  processPinjamanUangDariMitra: async (payload: {
+    idMitra: string;
+    nominal: number;
+    rekeningTujuan: string;
+    tanggal?: string;
+    noReferensi?: string;
+    keterangan?: string;
+    fotoNota?: string;
+    fotoNotaList?: string[];
+  }): Promise<{ record: any; mitraNama: string; nominal: number; rekeningNama: string }> => {
+    const data = await requestJson('/api/mitra/pinjam-uang', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memproses pinjaman uang');
+    return data.data;
+  },
+
+  // Daftar Bukti Nota Lalu (dengan opsi filter nama & waktu)
+  getDaftarBuktiNotaLalu: async (params?: {
+    idMitra?: string;
+    waktuFilter?: string;
+    beforeDate?: string;
+    startDate?: string;
+    endDate?: string;
+    search?: string;
+    hanyaNotaLalu?: boolean;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      tabel: 'kasbonUang' | 'pembelianHasilBumi';
+      tipe: 'PIUTANG_NOTA_LALU' | 'TITIP_NOTA_LALU' | 'KASBON_FOTO' | 'TITIP_FOTO';
+      tipeLabel: string;
+      idMitra: string;
+      namaMitra: string;
+      tanggal: string;
+      jam?: string;
+      noNota: string;
+      nominal: number;
+      keterangan: string;
+      rincianBarang?: string;
+      hasFoto: boolean;
+      fotoNota: string;
+      fotoNotaCount: number;
+      driveFileUrl?: string;
+      isNotaLalu: boolean;
+      createdAt?: string;
+    }>;
+    summary: {
+      totalItems: number;
+      totalPiutangNotaLalu: number;
+      totalTitipNotaLalu: number;
+      totalFotoBukti: number;
+      daftarMitraTerkait: Array<{ id: string; nama: string; count: number }>;
+    };
+  }> => {
+    const q = new URLSearchParams();
+    if (params?.idMitra) q.set('idMitra', params.idMitra);
+    if (params?.waktuFilter) q.set('waktuFilter', params.waktuFilter);
+    if (params?.beforeDate) q.set('beforeDate', params.beforeDate);
+    if (params?.startDate) q.set('startDate', params.startDate);
+    if (params?.endDate) q.set('endDate', params.endDate);
+    if (params?.search) q.set('search', params.search);
+    if (params?.hanyaNotaLalu !== undefined) q.set('hanyaNotaLalu', String(params.hanyaNotaLalu));
+
+    const data = await requestJson(`/api/transaksi/bukti-nota-lalu?${q.toString()}`);
+    if (!data.success) throw new Error(data.message || 'Gagal mengambil daftar bukti nota');
+    return data.data;
+  },
+
+  // Bersihkan Bukti Nota Lalu (Hapus Transaksi & Update Rekening Koran Mitra)
+  bersihkanBuktiNotaLalu: async (payload: {
+    targetIds?: string[];
+    idMitra?: string;
+    waktuFilter?: 'ALL' | 'BEFORE_DATE' | 'RANGE' | 'TODAY' | 'THIS_MONTH';
+    beforeDate?: string;
+    startDate?: string;
+    endDate?: string;
+    search?: string;
+    hanyaNotaLalu?: boolean;
+    modeHapus?: 'HAPUS_TRANSAKSI' | 'HANYA_HAPUS_FOTO';
+    user?: string;
+  }): Promise<{
+    success: boolean;
+    countDeleted: number;
+    affectedMitraIds: string[];
+    affectedMitraNames: string[];
+    totalNominalPiutang: number;
+    totalNominalTitip: number;
+    message: string;
+  }> => {
+    const data = await requestJson('/api/transaksi/bersihkan-bukti-nota-lalu', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal membersihkan bukti nota lalu');
+    return data;
+  },
+
+  // Supabase Auto-Sync & Cloud Storage
+  getSupabaseStatus: async (): Promise<{
+    configured: boolean;
+    url: string;
+    fullUrl: string;
+    hasKey: boolean;
+    keyPreview: string;
+    autoSync: boolean;
+    lastSyncTime: string | null;
+    lastSyncStatus: 'SUCCESS' | 'ERROR' | null;
+    lastSyncMessage: string | null;
+  }> => {
+    const data = await requestJson('/api/supabase/status');
+    if (!data.success) throw new Error(data.message || 'Gagal mengambil status Supabase');
+    return data.data;
+  },
+
+  updateSupabaseConfig: async (payload: { url: string; key: string; autoSync?: boolean }) => {
+    const data = await requestJson('/api/supabase/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyimpan konfigurasi Supabase');
+    return data;
+  },
+
+  testSupabaseConnection: async () => {
+    const data = await requestJson('/api/supabase/test', { method: 'POST' });
+    return data;
+  },
+
+  pushToSupabase: async () => {
+    const data = await requestJson('/api/supabase/sync-push', { method: 'POST' });
+    if (!data.success) throw new Error(data.message || 'Gagal sinkron data ke Supabase');
+    return data;
+  },
+
+  pullFromSupabase: async () => {
+    const data = await requestJson('/api/supabase/sync-pull', { method: 'POST' });
+    if (!data.success) throw new Error(data.message || 'Gagal menarik data dari Supabase');
+    return data;
+  },
+
+  getSupabaseSqlSchema: async (): Promise<string> => {
+    const data = await requestJson('/api/supabase/sql-schema');
+    if (!data.success) throw new Error(data.message || 'Gagal mengambil skrip SQL Supabase');
+    return data.data;
+  },
+
+  getDatabaseIntegrityStatus: async (): Promise<DatabaseIntegrityStatus> => {
+    const data = await requestJson('/api/database/integrity-status');
+    if (!data.success) throw new Error(data.message || 'Gagal memeriksa status integrasi database');
+    return data.data;
+  },
+
   getKasbonUang: async (): Promise<TransaksiKasbonUang[]> => {
-    const res = await fetch('/api/transaksi/kasbon-uang');
-    const data = await res.json();
+    const data = await requestJson('/api/transaksi/kasbon-uang');
     if (!data.success) throw new Error(data.message);
     return data.data;
   },
@@ -433,23 +796,21 @@ export const api = {
   processBayarBon: async (payload: {
     idMitra: string;
     nominalBayar: number;
-    metode: 'TUNAI' | 'TRANSFER';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningTujuan?: string;
     keterangan?: string;
   }): Promise<TransaksiBayarBon> => {
-    const res = await fetch('/api/transaksi/bayar-bon', {
+    const data = await requestJson('/api/transaksi/bayar-bon', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses pembayaran bon');
     return data.data;
   },
 
   getBayarBon: async (): Promise<TransaksiBayarBon[]> => {
-    const res = await fetch('/api/transaksi/bayar-bon');
-    const data = await res.json();
+    const data = await requestJson('/api/transaksi/bayar-bon');
     if (!data.success) throw new Error(data.message);
     return data.data;
   },
@@ -461,63 +822,92 @@ export const api = {
     nominal: number;
     keterangan: string;
   }): Promise<TransaksiTransferRekening> => {
-    const res = await fetch('/api/transaksi/transfer-rekening', {
+    const data = await requestJson('/api/transaksi/transfer-rekening', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses transfer antar rekening');
     return data.data;
   },
 
   getTransferRekening: async (): Promise<TransaksiTransferRekening[]> => {
-    const res = await fetch('/api/transaksi/transfer-rekening');
-    const data = await res.json();
+    const data = await requestJson('/api/transaksi/transfer-rekening');
     if (!data.success) throw new Error(data.message);
     return data.data;
   },
 
   // Rekening Koran Mitra & Dashboard
   getRekeningKoranMitra: async (idMitra: string): Promise<RekeningKoranMitraSummary> => {
-    const res = await fetch(`/api/rekening-koran-mitra/${idMitra}`);
-    const data = await res.json();
+    const data = await requestJson(`/api/rekening-koran-mitra/${encodeURIComponent(idMitra)}`);
     if (!data.success) throw new Error(data.message || 'Gagal memuat rekening koran mitra');
     return data.data;
   },
 
   getDashboard: async (): Promise<DashboardStatsResponse> => {
-    const res = await fetch('/api/dashboard');
-    const data = await res.json();
+    const data = await requestJson('/api/dashboard');
     if (!data.success) throw new Error(data.message || 'Gagal memuat dashboard');
     return data.data;
   },
 
+  getRekapHarianKas: async (tanggal?: string): Promise<{
+    tanggal: string;
+    totalUangMasuk: number;
+    rincianMasuk: {
+      penjualanToko: number;
+      bayarBon: number;
+      droppingMasuk: number;
+      jumlahTransaksi: number;
+    };
+    totalUangKeluar: number;
+    rincianKeluar: {
+      pengeluaranDivisi: number;
+      beliHasilBumi: number;
+      kasbonUang: number;
+      kulakanBarang: number;
+      pencairanTitipan: number;
+      upahGaji: number;
+      jumlahTransaksi: number;
+    };
+    arusKasBersih: number;
+    saldoKasFisik: number;
+    saldoTotalBank: number;
+    totalSaldoRil: number;
+    rekapDivisiHariIni: Array<{
+      divisi: string;
+      total: number;
+      count: number;
+    }>;
+  }> => {
+    const url = tanggal
+      ? `/api/laporan/arus-kas-harian?tanggal=${encodeURIComponent(tanggal)}`
+      : '/api/laporan/arus-kas-harian';
+    const data = await requestJson(url);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat rekap arus kas harian');
+    return data.data;
+  },
+
   getAuditLogs: async (): Promise<AuditLog[]> => {
-    const res = await fetch('/api/audit-logs');
-    const data = await res.json();
+    const data = await requestJson('/api/audit-logs');
     if (!data.success) throw new Error(data.message || 'Gagal memuat audit log');
     return data.data;
   },
 
   // Master Karyawan
   getKaryawan: async (): Promise<KaryawanWithBon[]> => {
-    const res = await fetch('/api/karyawan');
-    const data = await res.json();
+    const data = await requestJson('/api/karyawan');
     if (!data.success) throw new Error(data.message || 'Gagal memuat data karyawan');
     return data.data;
   },
 
   getRekapKaryawan: async (): Promise<RekapMasterKaryawanSummary> => {
-    const res = await fetch('/api/karyawan/rekap');
-    const data = await res.json();
+    const data = await requestJson('/api/karyawan/rekap');
     if (!data.success) throw new Error(data.message || 'Gagal memuat rekap saldo karyawan');
     return data.data;
   },
 
   getUpahHarianList: async (): Promise<CatatanUpahHarian[]> => {
-    const res = await fetch('/api/karyawan/upah-harian');
-    const data = await res.json();
+    const data = await requestJson('/api/karyawan/upah-harian');
     if (!data.success) throw new Error(data.message || 'Gagal memuat riwayat upah harian');
     return data.data;
   },
@@ -543,19 +933,17 @@ export const api = {
     nominalPotongKustom?: number;
     metodePembayaran?: 'TUNAI' | 'TRANSFER';
   }): Promise<{ catatan: CatatanUpahHarian; slipGaji?: TransaksiPenggajian }> => {
-    const res = await fetch('/api/karyawan/kerja-harian', {
+    const data = await requestJson('/api/karyawan/kerja-harian', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menyimpan input kerja harian');
     return data.data;
   },
 
   getDetailHarianKaryawan: async (id: string): Promise<DetailHarianKaryawanResponse> => {
-    const res = await fetch(`/api/karyawan/${id}/detail-harian`);
-    const data = await res.json();
+    const data = await requestJson(`/api/karyawan/${encodeURIComponent(id)}/detail-harian`);
     if (!data.success) throw new Error(data.message || 'Gagal memuat detail harian karyawan');
     return data.data;
   },
@@ -572,52 +960,47 @@ export const api = {
       keterangan?: string;
     }
   ): Promise<TransaksiPenggajian> => {
-    const res = await fetch(`/api/karyawan/${id}/settle-gaji`, {
+    const data = await requestJson(`/api/karyawan/${encodeURIComponent(id)}/settle-gaji`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal mencairkan hak upah karyawan');
     return data.data;
   },
 
   createKaryawan: async (payload: Partial<Karyawan>): Promise<Karyawan> => {
-    const res = await fetch('/api/karyawan', {
+    const data = await requestJson('/api/karyawan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menambah karyawan');
     return data.data;
   },
 
   updateKaryawan: async (id: string, payload: Partial<Karyawan>): Promise<Karyawan> => {
-    const res = await fetch(`/api/karyawan/${id}`, {
+    const data = await requestJson(`/api/karyawan/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memperbarui karyawan');
     return data.data;
   },
 
   toggleKaryawanStatus: async (id: string): Promise<Karyawan> => {
-    const res = await fetch(`/api/karyawan/${id}`, {
+    const data = await requestJson(`/api/karyawan/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal mengubah status karyawan');
     return data.data;
   },
 
   deleteKaryawanPermanent: async (id: string): Promise<boolean> => {
-    const res = await fetch(`/api/karyawan/${id}/permanent`, {
+    const data = await requestJson(`/api/karyawan/${encodeURIComponent(id)}/permanent`, {
       method: 'DELETE',
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal menghapus data karyawan');
     return data.data;
   },
@@ -637,12 +1020,11 @@ export const api = {
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPenggajian> => {
-    const res = await fetch('/api/transaksi/penggajian', {
+    const data = await requestJson('/api/transaksi/penggajian', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses penggajian');
     return data.data;
   },
@@ -660,19 +1042,17 @@ export const api = {
       keterangan?: string;
     }>;
   }): Promise<TransaksiPenggajian[]> => {
-    const res = await fetch('/api/transaksi/penggajian/batch', {
+    const data = await requestJson('/api/transaksi/penggajian/batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
     if (!data.success) throw new Error(data.message || 'Gagal memproses batch penggajian');
     return data.data;
   },
 
   getPenggajian: async (): Promise<TransaksiPenggajian[]> => {
-    const res = await fetch('/api/transaksi/penggajian');
-    const data = await res.json();
+    const data = await requestJson('/api/transaksi/penggajian');
     if (!data.success) throw new Error(data.message || 'Gagal memuat riwayat penggajian');
     return data.data;
   },
@@ -689,8 +1069,7 @@ export const api = {
     if (params?.bulan) searchParams.append('bulan', String(params.bulan));
     if (params?.tahun) searchParams.append('tahun', String(params.tahun));
     const url = `/api/transaksi/upah-harian${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
-    const res = await fetch(url);
-    const data = await res.json();
+    const data = await requestJson(url);
     if (!data.success) throw new Error(data.message || 'Gagal memuat catatan upah harian');
     return data.data;
   },
@@ -705,32 +1084,498 @@ export const api = {
     if (params?.tahun) searchParams.append('tahun', String(params.tahun));
     if (params?.divisi) searchParams.append('divisi', params.divisi);
     const url = `/api/payroll/rekap-bulanan${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
-    const res = await fetch(url);
-    const data = await res.json();
+    const data = await requestJson(url);
     if (!data.success) throw new Error(data.message || 'Gagal memuat rekapitulasi payroll bulanan');
     return data.data;
   },
 
   // Divisi & Keuangan
-  getDivisi: async (): Promise<typeof DAFTAR_DIVISI> => {
-    const res = await fetch('/api/divisi');
-    const data = await res.json();
+  getDivisi: async (): Promise<
+    Array<{
+      id: string;
+      nama: string;
+      kodeRekening: string;
+      penanggungJawab?: string;
+      deskripsi?: string;
+      isCustom?: boolean;
+    }>
+  > => {
+    const data = await requestJson('/api/divisi');
     if (!data.success) throw new Error(data.message || 'Gagal memuat daftar divisi');
     return data.data;
   },
 
+  createDivisi: async (payload: { nama: string; deskripsi?: string; penanggungJawab?: string }): Promise<any> => {
+    const data = await requestJson('/api/divisi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menambahkan divisi baru');
+    return data.data;
+  },
+
+  resetSystemData: async (): Promise<{ success: boolean; message: string }> => {
+    const data = await requestJson('/api/system/reset-data', { method: 'POST' });
+    if (!data.success) throw new Error(data.message || 'Gagal mengosongkan data sistem');
+    return data;
+  },
+
   getDivisiKeuangan: async (): Promise<PergerakanKeuanganDivisiSummary[]> => {
-    const res = await fetch('/api/divisi/keuangan');
-    const data = await res.json();
+    const data = await requestJson('/api/divisi/keuangan');
     if (!data.success) throw new Error(data.message || 'Gagal memuat pergerakan keuangan divisi');
     return data.data;
   },
 
   // Billboard & Big-Screen Command Center
   getBillboardData: async (): Promise<BillboardData> => {
-    const res = await fetch('/api/billboard');
-    const data = await res.json();
+    const data = await requestJson('/api/billboard');
     if (!data.success) throw new Error(data.message || 'Gagal memuat data billboard command center');
+    return data.data;
+  },
+
+  // Profil Perusahaan
+  getProfilPerusahaan: async (): Promise<ProfilPerusahaan> => {
+    const data = await requestJson('/api/profil-perusahaan');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat profil perusahaan');
+    return data.data;
+  },
+
+  updateProfilPerusahaan: async (payload: Partial<ProfilPerusahaan>): Promise<ProfilPerusahaan> => {
+    const data = await requestJson('/api/profil-perusahaan', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui profil perusahaan');
+    return data.data;
+  },
+
+  // Pengeluaran & Biaya Operasional Divisi
+  getPengeluaran: async (): Promise<TransaksiPengeluaran[]> => {
+    const data = await requestJson('/api/pengeluaran');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat catatan pengeluaran');
+    return data.data;
+  },
+
+  createPengeluaran: async (payload: {
+    divisi: string;
+    kategori: string;
+    keterangan: string;
+    nominal: number;
+    rekeningSumber: string;
+    penerima?: string;
+    idInventaris?: string;
+    tanggal?: string;
+    fotoKuitansi?: string;
+  }): Promise<TransaksiPengeluaran> => {
+    const data = await requestJson('/api/pengeluaran', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyimpan pengeluaran');
+    return data.data;
+  },
+
+  deletePengeluaran: async (id: string): Promise<void> => {
+    const data = await requestJson(`/api/pengeluaran/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!data.success) throw new Error(data.message || 'Gagal membatalkan pengeluaran');
+  },
+
+  // Master Inventaris & Armada PT
+  getInventaris: async (): Promise<ItemInventaris[]> => {
+    const data = await requestJson('/api/inventaris');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat daftar inventaris PT');
+    return data.data;
+  },
+
+  createInventaris: async (payload: {
+    kode?: string;
+    namaItem: string;
+    kategori?: KategoriInventaris;
+    nomorPlat?: string;
+    merkTipe?: string;
+    tahunKeluaran?: string;
+    warna?: string;
+    nomorRangka?: string;
+    nomorMesin?: string;
+    driverPenanggungJawab?: string;
+    idKaryawanDriver?: string;
+    teleponDriver?: string;
+    divisi?: string;
+    tanggalPajakTahunan?: string;
+    tanggalPajakLimaTahunan?: string;
+    tanggalKir?: string;
+    kondisi?: KondisiInventaris;
+    nilaiPerolehan?: number;
+    tanggalBeli?: string;
+    fotoItem?: string;
+    fotoStnk?: string;
+    catatan?: string;
+  }): Promise<ItemInventaris> => {
+    const data = await requestJson('/api/inventaris', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menambah item inventaris');
+    return data.data;
+  },
+
+  updateInventaris: async (
+    id: string,
+    payload: Partial<ItemInventaris>
+  ): Promise<ItemInventaris> => {
+    const data = await requestJson(`/api/inventaris/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui profil inventaris');
+    return data.data;
+  },
+
+  deleteInventaris: async (id: string): Promise<void> => {
+    const data = await requestJson(`/api/inventaris/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus item inventaris');
+  },
+
+  // Pencairan Titipan Hasil Bumi
+  getPencairanTitipan: async (): Promise<TransaksiPencairanTitipan[]> => {
+    const data = await requestJson('/api/transaksi/cairkan-titipan');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat pencairan titipan');
+    return data.data;
+  },
+
+  cairkanTitipan: async (payload: {
+    idMitra: string;
+    nominal: number;
+    rekeningSumber: string;
+    metode: 'TUNAI' | 'TRANSFER';
+    keterangan?: string;
+    tanggal?: string;
+  }): Promise<TransaksiPencairanTitipan> => {
+    const data = await requestJson('/api/transaksi/cairkan-titipan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memproses pencairan titipan');
+    return data.data;
+  },
+
+  // Update Transaksi Langsung dari Rekening Koran Mitra
+  updateStatementEntry: async (payload: {
+    idTransaksi: string;
+    nominalBaru: number;
+    keteranganBaru?: string;
+    tanggalBaru?: string;
+  }): Promise<{ success: boolean; message: string; updatedRecord: any }> => {
+    const data = await requestJson('/api/transaksi/update-statement-entry', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui transaksi');
+    return data;
+  },
+
+  // Universal Lookup & Edit Detail Setiap Transaksi (Nominal, Tonase, Rafaksi, Qty, Harga, Rekening, Tanggal)
+  getTransactionDetail: async (
+    id: string,
+    jenis?: string
+  ): Promise<{
+    jenis:
+      | 'PENJUALAN'
+      | 'PEMBELIAN_BARANG'
+      | 'PEMBELIAN_HASIL_BUMI'
+      | 'PENJUALAN_HASIL_BUMI'
+      | 'KASBON_UANG'
+      | 'BAYAR_BON'
+      | 'PENCAIRAN_TITIPAN'
+      | 'PENGELUARAN_DIVISI'
+      | 'TRANSFER_REKENING'
+      | 'UPAH_HARIAN'
+      | 'PENGGAJIAN';
+    id: string;
+    record: any;
+    masters: {
+      rekeningList: Rekening[];
+      produkList: Produk[];
+      stokBarangList: StokBarang[];
+      stokHasilBumiList: StokHasilBumi[];
+      mitraList: Mitra[];
+      divisiList: Array<{ id: string; nama: string; kodeRekening: string }>;
+    };
+  }> => {
+    const data = await requestJson('/api/transaksi/detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, jenis }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mengambil detail transaksi');
+    return data.data;
+  },
+
+  editTransactionDetail: async (payload: {
+    idTransaksi: string;
+    jenis?: string;
+    tanggal?: string;
+    keterangan?: string;
+    idMitra?: string;
+    namaMitraManual?: string;
+    nominal?: number;
+    metode?: string;
+    rekeningSumber?: string;
+    rekeningTujuan?: string;
+    komoditasKode?: string;
+    beratKotor?: number;
+    potonganRafaksi?: number;
+    beratBersihManual?: number;
+    hargaPerKg?: number;
+    hargaJualPerKg?: number;
+    isBelumPutusHarga?: boolean;
+    noSuratJalan?: string;
+    noNotaLalu?: string;
+    noFakturSupplier?: string;
+    items?: Array<{
+      kodeProduk: string;
+      namaProduk?: string;
+      satuan?: string;
+      qty: number;
+      harga?: number;
+      hargaBeliSatuan?: number;
+    }>;
+    rincianBarangNotaLalu?: string;
+    divisi?: string;
+    kategori?: string;
+    penerima?: string;
+    itemKerja?: string;
+    kuantiti?: number;
+    hargaSatuanUpah?: number;
+    uangMakanLembur?: number;
+    catatanKerja?: string;
+    gajiPokok?: number;
+    tunjangan?: number;
+    bonus?: number;
+    potonganKasbon?: number;
+    periodeBulan?: string;
+  }): Promise<{
+    success: boolean;
+    jenis: string;
+    idTransaksi: string;
+    message: string;
+    updatedRecord: any;
+  }> => {
+    const data = await requestJson('/api/transaksi/edit-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyimpan perubahan detail transaksi');
+    return data;
+  },
+
+  // Rekapan Semua Transaksi Terpadu (Semua Transaksi Hari Tersebut)
+  getSemuaTransaksi: async (params?: {
+    tanggal?: string;
+    arusUang?: string;
+    kategori?: string;
+    pihakTerkait?: string;
+    search?: string;
+  }): Promise<RekapSemuaTransaksiResponse> => {
+    const query = new URLSearchParams();
+    if (params?.tanggal) query.append('tanggal', params.tanggal);
+    if (params?.arusUang) query.append('arusUang', params.arusUang);
+    if (params?.kategori) query.append('kategori', params.kategori);
+    if (params?.pihakTerkait) query.append('pihakTerkait', params.pihakTerkait);
+    if (params?.search) query.append('search', params.search);
+
+    const queryString = query.toString();
+    const url = `/api/transaksi/semua${queryString ? `?${queryString}` : ''}`;
+    const data = await requestJson(url);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat rekap semua transaksi');
+    return data.data;
+  },
+
+  // Pusat Kontrol Kasir: Kliring Silang Panen vs Bon, Deteksi Nama Kembar & Cash Opname
+  getSmartControlOverview: async (): Promise<SmartControlOverviewResponse> => {
+    const data = await requestJson('/api/kontrol-kasir/overview');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat data pusat kontrol kasir');
+    return data.data;
+  },
+
+  processKliringSilang: async (payload: {
+    idMitra: string;
+    nominalPotongSilang: number;
+    aksiSisa: 'HANYA_POTONG_SILANG' | 'CAIRKAN_SISA_TITIPAN' | 'TERIMA_PELUNASAN_SISA_BON';
+    nominalPenyelesaianFisik?: number;
+    metodeFisik?: 'TUNAI' | 'TRANSFER';
+    rekeningFisik?: string;
+    keterangan?: string;
+  }): Promise<HasilKliringSilangResponse> => {
+    const data = await requestJson('/api/kontrol-kasir/kliring-silang', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memproses kliring silang kemitraan');
+    return data.data;
+  },
+
+  processBatchKliring: async (mitraIds?: string[]): Promise<{
+    processedCount: number;
+    totalKompensasi: number;
+    items: HasilKliringSilangResponse[];
+  }> => {
+    const data = await requestJson('/api/kontrol-kasir/kliring-massal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mitraIds }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memproses kliring massal otomatis');
+    return data.data;
+  },
+
+  mergeDuplicateMitra: async (payload: {
+    primaryMitraId: string;
+    duplicateMitraId: string;
+    alasan?: string;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    migratedCounts: Record<string, number>;
+    primaryMitraNama: string;
+    mergedDuplicateNama: string;
+  }> => {
+    const data = await requestJson('/api/kontrol-kasir/gabung-mitra', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menggabungkan akun mitra duplikat');
+    return data;
+  },
+
+  recordCashOpname: async (payload: {
+    petugasKasir: string;
+    rincianPecahan: Record<string, number>;
+    sesuaikanSaldoSistem: boolean;
+    catatan?: string;
+  }): Promise<CatatanCashOpname> => {
+    const data = await requestJson('/api/kontrol-kasir/cash-opname', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyimpan berita acara cash opname');
+    return data.data;
+  },
+
+  // Unified Instant ERP Snapshot (Single HTTP Request)
+  getErpSnapshot: async (): Promise<{
+    dashboard: DashboardStatsResponse;
+    rekening: Rekening[];
+    mitra: Mitra[];
+    karyawan: KaryawanWithBon[];
+    upahHarian: CatatanUpahHarian[];
+    produk: Produk[];
+    kategoriProduk: Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>;
+    stokBarang: StokBarang[];
+    stokHasilBumi: StokHasilBumi[];
+    penjualan: TransaksiPenjualan[];
+    pembelianHasilBumi: TransaksiPembelianHasilBumi[];
+    penjualanHasilBumi: TransaksiPenjualanHasilBumi[];
+    pembelianBarang: TransaksiPembelianBarang[];
+    pencairanTitipan: TransaksiPencairanTitipan[];
+    kasbonUang: TransaksiKasbonUang[];
+    bayarBon: TransaksiBayarBon[];
+    pengeluaran: TransaksiPengeluaran[];
+    transferRekening: TransaksiTransferRekening[];
+    penggajian: TransaksiPenggajian[];
+    auditLogs: AuditLog[];
+    profilPerusahaan: ProfilPerusahaan;
+    inventaris: ItemInventaris[];
+    supabaseStatus: {
+      configured: boolean;
+      url?: string;
+      autoSync?: boolean;
+      lastSyncTime?: string | null;
+      lastSyncStatus?: 'SUCCESS' | 'ERROR';
+      lastSyncMessage?: string;
+    };
+  }> => {
+    const data = await requestJson('/api/erp-snapshot');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat snapshot ERP');
+    return data.data;
+  },
+
+  uploadBuktiImage: async (
+    dataUrl: string,
+    prefix = 'nota'
+  ): Promise<{ url: string; storage: 'SUPABASE_STORAGE' | 'INLINE_COMPRESSED' }> => {
+    const data = await requestJson('/api/upload-bukti', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataUrl, prefix }),
+    });
+    if (!data.success) {
+      return { url: dataUrl, storage: 'INLINE_COMPRESSED' };
+    }
+    return data.data;
+  },
+
+  // Akses PIN Bos & Kasir
+  getAccessStatus: async (): Promise<{
+    namaPerusahaan: string;
+    badanHukum: string;
+    wajibPinPublik: boolean;
+    pinLengthHint: number;
+  }> => {
+    const data = await requestJson('/api/access/status');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat status keamanan');
+    return data.data;
+  },
+
+  verifyAccessPin: async (
+    pin: string
+  ): Promise<{ role: 'BOS' | 'KASIR'; label: string }> => {
+    const data = await requestJson('/api/access/verify-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    });
+    if (!data.success) throw new Error(data.message || 'PIN tidak valid');
+    return data.data;
+  },
+
+  getAccessAdminConfig: async (): Promise<{
+    pinBos: string;
+    pinKasir: string;
+    wajibPinPublik: boolean;
+    supabaseConfigured: boolean;
+    supabaseUrl: string;
+    supabaseKeyPreview: string;
+  }> => {
+    const data = await requestJson('/api/access/admin-config');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat konfigurasi PIN');
+    return data.data;
+  },
+
+  updateAccessAdminConfig: async (payload: {
+    pinBos: string;
+    pinKasir: string;
+    wajibPinPublik: boolean;
+  }): Promise<{ pinBos: string; pinKasir: string; wajibPinPublik: boolean }> => {
+    const data = await requestJson('/api/access/admin-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyimpan konfigurasi PIN');
     return data.data;
   },
 };

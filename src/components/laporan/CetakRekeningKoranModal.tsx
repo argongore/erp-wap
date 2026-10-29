@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Printer,
   X,
@@ -13,21 +13,78 @@ import {
   Phone,
   MapPin,
   FileDown,
+  Camera,
+  Image as ImageIcon,
+  Share2,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { RekeningKoranMitraSummary } from '../../server/types.ts';
+import { ProfilPerusahaan, RekeningKoranMitraSummary } from '../../server/types.ts';
 import { formatRupiah, formatTanggalIndo } from '../../utils/format.ts';
+import { ShareLinkModal } from '../public/ShareLinkModal.tsx';
 
 interface Props {
   statement: RekeningKoranMitraSummary | null;
+  profilPerusahaan?: ProfilPerusahaan | null;
+  rekeningUtamaDetail?: {
+    kode: string;
+    nama: string;
+    nomorRekening?: string;
+    atasNama?: string;
+  };
   onClose: () => void;
 }
 
-export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose }) => {
+export const CetakRekeningKoranModal: React.FC<Props> = ({
+  statement,
+  profilPerusahaan,
+  rekeningUtamaDetail,
+  onClose,
+}) => {
   const [copied, setCopied] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [printWarning, setPrintWarning] = useState('');
+  const [includeNotaProofs, setIncludeNotaProofs] = useState(true);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+
+  const activeProfil = useMemo<ProfilPerusahaan>(() => {
+    const src = profilPerusahaan || statement?.profilPerusahaan;
+    return {
+      namaPerusahaan: src?.namaPerusahaan?.trim() || 'PT. WIJAYA AGRO PERKASA',
+      badanHukum: src?.badanHukum?.trim() || 'PT (Perseroan Terbatas)',
+      alamat: src?.alamat?.trim() || '-',
+      telepon: src?.telepon?.trim() || '-',
+      email: src?.email?.trim() || '-',
+      penanggungJawab: src?.penanggungJawab?.trim() || 'Bagian Keuangan & Manajemen',
+      rekeningUtama: src?.rekeningUtama?.trim() || 'KAS01',
+      catatanHeaderNota: src?.catatanHeaderNota?.trim() || '',
+      updateTerakhir: src?.updateTerakhir,
+    };
+  }, [profilPerusahaan, statement?.profilPerusahaan]);
+
+  const activeRekeningUtama = rekeningUtamaDetail || statement?.rekeningUtamaDetail;
+
+  // Extract all uploaded physical nota proofs across transaction history
+  const notaAttachments = useMemo(() => {
+    if (!statement) return [];
+    return statement.history
+      .filter((h) => !!h.fotoNota)
+      .flatMap((h) => {
+        const rawImgs = (h.fotoNota || '').split('|||').map((s) => s.trim()).filter(Boolean);
+        const resolvedNominal = h.debet > 0 ? h.debet : h.kredit > 0 ? h.kredit : (h.itemsDetail?.[0]?.subtotal || 0);
+        return rawImgs.map((img, idx) => ({
+          txId: h.id,
+          noNotaLalu: h.noNotaLalu,
+          tanggal: h.tanggal,
+          jenis: h.jenis,
+          keterangan: h.keterangan,
+          nominal: resolvedNominal,
+          image: img,
+          index: idx + 1,
+          totalCount: rawImgs.length,
+        }));
+      });
+  }, [statement]);
 
   if (!statement) return null;
 
@@ -51,7 +108,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
   /**
    * Generates and downloads an authentic .pdf document using jsPDF & autoTable
    */
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     setIsGeneratingPdf(true);
     try {
       const doc = new jsPDF({
@@ -63,24 +120,37 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
       // Margin & dimensions (A4 is 210mm x 297mm)
       const pageWidth = doc.internal.pageSize.getWidth();
 
-      // 1. Kop Surat
+      // 1. Kop Surat (Dinamis dari Profil Perusahaan)
       doc.setFillColor(15, 60, 40); // Emerald dark
-      doc.rect(14, 12, 6, 22, 'F');
+      doc.rect(14, 12, 6, 23, 'F');
 
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(16);
+      doc.setFontSize(14);
       doc.setTextColor(20, 20, 20);
-      doc.text('PT WIJAYA AGRO', 24, 18);
+      doc.text(activeProfil.namaPerusahaan, 24, 17.5);
 
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
+      doc.setFontSize(8.5);
       doc.setTextColor(80, 80, 80);
-      doc.text('PERDAGANGAN SARANA PERTANIAN & PEMBELIAN HASIL BUMI', 24, 23);
+      doc.text(activeProfil.badanHukum, 24, 22);
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(110, 110, 110);
-      doc.text('Jl. Raya Agro Industri No. 88, Wlingi, Blitar · Telp: (021) 8892-0192 · Email: admin@wijayaagro.com', 24, 28);
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 100, 100);
+      const contactLine = `${activeProfil.alamat} · Telp: ${activeProfil.telepon}${
+        activeProfil.email && activeProfil.email !== '-' ? ` · Email: ${activeProfil.email}` : ''
+      }`;
+      const wrappedContact = doc.splitTextToSize(contactLine, pageWidth - 95);
+      doc.text(wrappedContact.slice(0, 2), 24, 26.5);
+
+      if (activeRekeningUtama) {
+        const rekText = `Rekening Utama: ${activeRekeningUtama.nama}${
+          activeRekeningUtama.nomorRekening ? ` (${activeRekeningUtama.nomorRekening})` : ` (${activeRekeningUtama.kode})`
+        }${activeRekeningUtama.atasNama ? ` a.n. ${activeRekeningUtama.atasNama}` : ''}`;
+        doc.setFontSize(7);
+        doc.setTextColor(120, 120, 120);
+        doc.text(doc.splitTextToSize(rekText, pageWidth - 95)[0], 24, wrappedContact.length > 1 ? 33.5 : 31);
+      }
 
       // Document title block (right side)
       doc.setFont('helvetica', 'bold');
@@ -97,7 +167,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
       // Horizontal separator line
       doc.setDrawColor(20, 20, 20);
       doc.setLineWidth(0.6);
-      doc.line(14, 34, pageWidth - 14, 34);
+      doc.line(14, 35.5, pageWidth - 14, 35.5);
 
       // 2. Biodata Mitra Box
       doc.setFillColor(248, 250, 252);
@@ -228,8 +298,8 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
       const colLeftX = 40;
       const colRightX = pageWidth - 60;
 
-      doc.text('Bagian Keuangan / Kasir,', colLeftX, signY, { align: 'center' });
-      doc.text('PT Wijaya Agro', colLeftX, signY + 4, { align: 'center' });
+      doc.text('Penanggung Jawab / Keuangan,', colLeftX, signY, { align: 'center' });
+      doc.text(activeProfil.namaPerusahaan, colLeftX, signY + 4, { align: 'center' });
 
       doc.text('Mitra / Petani Penerima,', colRightX, signY, { align: 'center' });
       doc.text('Konfirmasi Saldo Mutasi', colRightX, signY + 4, { align: 'center' });
@@ -237,20 +307,105 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
       // Signature line
       doc.setDrawColor(120, 120, 120);
       doc.setLineWidth(0.4);
-      doc.line(colLeftX - 25, signY + 24, colLeftX + 25, signY + 24);
-      doc.line(colRightX - 25, signY + 24, colRightX + 25, signY + 24);
+      doc.line(colLeftX - 28, signY + 24, colLeftX + 28, signY + 24);
+      doc.line(colRightX - 28, signY + 24, colRightX + 28, signY + 24);
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
       doc.setTextColor(20, 20, 20);
-      doc.text('( Kasir & Keuangan )', colLeftX, signY + 28, { align: 'center' });
+      doc.text(`( ${activeProfil.penanggungJawab} )`, colLeftX, signY + 28, { align: 'center' });
       doc.text(`( ${statement.namaMitra} )`, colRightX, signY + 28, { align: 'center' });
 
       // Footer note
       doc.setFont('helvetica', 'italic');
       doc.setFontSize(7);
       doc.setTextColor(140, 140, 140);
-      doc.text('Dokumen rekening koran ini sah dan diterbitkan secara elektronik oleh Sistem ERP PT Wijaya Agro.', pageWidth / 2, signY + 35, { align: 'center' });
+      const footerText = activeProfil.catatanHeaderNota
+        ? `${activeProfil.catatanHeaderNota} — Diterbitkan secara elektronik oleh Sistem ERP ${activeProfil.namaPerusahaan}.`
+        : `Dokumen rekening koran ini sah dan diterbitkan secara elektronik oleh Sistem ERP ${activeProfil.namaPerusahaan}.`;
+      doc.text(doc.splitTextToSize(footerText, pageWidth - 28), pageWidth / 2, signY + 35, { align: 'center' });
+
+      // 6. Appendix: Lampiran Bukti Fisik Nota Lalu jika ada
+      if (includeNotaProofs && notaAttachments.length > 0) {
+        for (let i = 0; i < notaAttachments.length; i++) {
+          const att = notaAttachments[i];
+          doc.addPage();
+
+          // Header Lampiran
+          doc.setFillColor(180, 83, 9); // Amber 700
+          doc.rect(14, 12, 5, 18, 'F');
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(11);
+          doc.setTextColor(30, 41, 59);
+          doc.text(`LAMPIRAN BUKTI FISIK NOTA LALU (${i + 1}/${notaAttachments.length})`, 22, 17);
+
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8);
+          doc.setTextColor(80, 80, 80);
+          doc.text(`Mitra: ${statement.namaMitra} (${statement.kodeMitra}) · No: ${att.noNotaLalu || att.txId} · Tgl: ${att.tanggal}`, 22, 23);
+          doc.text(`Jenis: ${att.jenis.replace(/_/g, ' ')} · Nilai: ${formatRupiah(att.nominal)} · Ket: ${att.keterangan || '-'}`, 22, 28);
+
+          doc.setDrawColor(210, 215, 220);
+          doc.setLineWidth(0.3);
+          doc.line(14, 33, pageWidth - 14, 33);
+
+          try {
+            let embedSrc = att.image || '';
+            if (embedSrc && /^https?:\/\//i.test(embedSrc)) {
+              try {
+                const imgResp = await fetch(embedSrc);
+                if (imgResp.ok) {
+                  const blob = await imgResp.blob();
+                  embedSrc = await new Promise<string>((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(String(reader.result || ''));
+                    reader.onerror = () => resolve(att.image || '');
+                    reader.readAsDataURL(blob);
+                  });
+                }
+              } catch {
+                // fallback to link text below if CORS/network prevents fetch
+              }
+            }
+
+            if (embedSrc && embedSrc.startsWith('data:image/')) {
+              const format = embedSrc.includes('png') ? 'PNG' : 'JPEG';
+              const maxW = pageWidth - 28;
+              const maxH = 230;
+              let imgW = maxW;
+              let imgH = 180;
+              let imgX = 14;
+
+              try {
+                const props = doc.getImageProperties(embedSrc);
+                if (props && props.width && props.height) {
+                  const ratio = props.width / props.height;
+                  imgW = maxW;
+                  imgH = imgW / ratio;
+                  if (imgH > maxH) {
+                    imgH = maxH;
+                    imgW = imgH * ratio;
+                  }
+                  imgX = 14 + (maxW - imgW) / 2;
+                }
+              } catch {
+                imgW = maxW;
+                imgH = 200;
+              }
+
+              doc.addImage(embedSrc, format, imgX, 38, imgW, imgH, undefined, 'FAST');
+            } else if (att.image) {
+              doc.setFont('helvetica', 'italic');
+              doc.setFontSize(8);
+              doc.setTextColor(100, 100, 100);
+              doc.text(`Dokumen foto tersimpan secara eksternal: ${att.image}`, 14, 45);
+            }
+          } catch (imgErr) {
+            console.warn('PDF addImage error:', imgErr);
+          }
+        }
+      }
 
       // Save file with .pdf extension
       const safeMitraName = statement.namaMitra.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -258,7 +413,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
       doc.save(filename);
     } catch (err: any) {
       console.error('PDF generation error:', err);
-      alert(`Gagal membuat file PDF: ${err.message || err}`);
+      setPrintWarning(`Gagal membuat file PDF: ${err.message || err}`);
     } finally {
       setIsGeneratingPdf(false);
     }
@@ -268,7 +423,16 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
     const divider = '==================================================';
     const lines = [
       `*REKENING KORAN & BUKU BESAR MITRA*`,
-      `*PT WIJAYA AGRO - Blitar, Jawa Timur*`,
+      `*${activeProfil.namaPerusahaan}* (${activeProfil.badanHukum})`,
+      `Alamat: ${activeProfil.alamat}`,
+      `Kontak: ${activeProfil.telepon}${activeProfil.email && activeProfil.email !== '-' ? ` | ${activeProfil.email}` : ''}`,
+      ...(activeRekeningUtama
+        ? [
+            `Rekening Utama: ${activeRekeningUtama.nama}${
+              activeRekeningUtama.nomorRekening ? ` (${activeRekeningUtama.nomorRekening})` : ` (${activeRekeningUtama.kode})`
+            }${activeRekeningUtama.atasNama ? ` a.n. ${activeRekeningUtama.atasNama}` : ''}`,
+          ]
+        : []),
       `Tanggal Cetak: ${tglCetak} jam ${jamCetak} WIB`,
       `No. Dokumen: ${noDokumen}`,
       divider,
@@ -305,8 +469,11 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
 
     lines.push(divider);
     lines.push(`Total Sisa Hutang Bon: ${formatRupiah(statement.totalBonKeseluruhan)}`);
-    lines.push(`Harap konfirmasi apabila terdapat ketidaksesuaian.`);
-    lines.push(`_Dicetak resmi via ERP Wijaya Agro_`);
+    if (activeProfil.catatanHeaderNota) {
+      lines.push(`Catatan: ${activeProfil.catatanHeaderNota}`);
+    }
+    lines.push(`Penanggung Jawab: ${activeProfil.penanggungJawab}`);
+    lines.push(`_Dicetak resmi via ERP ${activeProfil.namaPerusahaan}_`);
 
     return lines.join('\n');
   };
@@ -324,22 +491,49 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
       {/* Print Specific CSS to prevent cut-off and fit perfectly to A4 */}
       <style>{`
         @media print {
-          /* Hide all application layout elements and modal wrapper during printing */
           body * {
             visibility: hidden !important;
           }
-          /* Make only the document container visible */
-          #printable-rekening-koran, #printable-rekening-koran * {
+          html, body {
+            overflow: visible !important;
+            height: auto !important;
+            background: white !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          #printable-modal-overlay,
+          #printable-modal-container,
+          #printable-rekening-koran,
+          #printable-rekening-koran * {
             visibility: visible !important;
           }
+          #printable-modal-overlay {
+            position: static !important;
+            display: block !important;
+            overflow: visible !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            background: white !important;
+          }
+          #printable-modal-container {
+            position: static !important;
+            display: block !important;
+            max-height: none !important;
+            max-width: none !important;
+            overflow: visible !important;
+            border: none !important;
+            box-shadow: none !important;
+            background: white !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
           #printable-rekening-koran {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
+            position: static !important;
+            display: block !important;
             width: 100% !important;
             max-width: 100% !important;
             margin: 0 !important;
-            padding: 8mm 10mm !important;
+            padding: 4mm 6mm !important;
             border: none !important;
             box-shadow: none !important;
             background: white !important;
@@ -352,16 +546,31 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
           }
           #printable-rekening-koran tr {
             page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+          .print-page-break {
+            page-break-before: always !important;
+            break-before: page !important;
+            display: block !important;
+          }
+          .print-avoid-break {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+          img {
+            max-width: 100% !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
           }
           @page {
             size: A4 portrait;
-            margin: 10mm;
+            margin: 8mm 10mm;
           }
         }
       `}</style>
 
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-6 overflow-y-auto print:p-0 print:bg-white">
-        <div className="bg-white text-zinc-900 w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden border border-zinc-200 animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[92vh] print:max-h-none print:border-none print:shadow-none print:rounded-none">
+      <div id="printable-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-6 overflow-y-auto print:static print:inset-auto print:block print:overflow-visible print:p-0 print:bg-white">
+        <div id="printable-modal-container" className="bg-white text-zinc-900 w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden border border-zinc-200 animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[92vh] print:max-h-none print:w-full print:max-w-none print:overflow-visible print:border-none print:shadow-none print:rounded-none">
           {/* Modal Top Header (Interactive Actions - Hidden on Print) */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-3.5 bg-zinc-900 text-white gap-3 shrink-0 print:hidden">
             <div className="flex items-center space-x-2.5">
@@ -381,7 +590,29 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
               </div>
             </div>
 
-            <div className="flex items-center space-x-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {notaAttachments.length > 0 && (
+                <label className="flex items-center space-x-1.5 bg-amber-500/20 border border-amber-500/40 px-2.5 py-1 rounded-lg text-[11px] text-amber-200 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeNotaProofs}
+                    onChange={(e) => setIncludeNotaProofs(e.target.checked)}
+                    className="rounded text-amber-600 focus:ring-0"
+                  />
+                  <span>Ikutkan {notaAttachments.length} Foto Nota Lalu</span>
+                </label>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShareModalOpen(true)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-800/90 hover:bg-indigo-700 text-indigo-100 border border-indigo-500/40 transition-colors cursor-pointer"
+                title="Bagikan tautan khusus ini agar mitra/user lain dapat melihat secara online (Read-Only)"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>Bagikan Link</span>
+              </button>
+
               <button
                 onClick={handleCopyWhatsApp}
                 className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-700/80 hover:bg-emerald-600 text-emerald-100 transition-colors cursor-pointer"
@@ -433,19 +664,29 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
               id="printable-rekening-koran"
               className="bg-white rounded-xl shadow-xs border border-zinc-200 p-6 sm:p-8 space-y-6 max-w-3xl mx-auto text-zinc-900 print:border-none print:shadow-none print:p-0 print:max-w-none"
             >
-              {/* Kop Surat Resmi */}
-              <div className="border-b-2 border-zinc-900 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
+              {/* Kop Surat Resmi (Dinamis dari Menu Profil Perusahaan) */}
+              <div className="border-b-2 border-zinc-900 pb-4 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                <div className="space-y-0.5">
                   <div className="flex items-center space-x-2">
-                    <Building2 className="w-6 h-6 text-emerald-800" />
-                    <span className="text-xl font-black text-zinc-900 tracking-tight">PT WIJAYA AGRO</span>
+                    <Building2 className="w-6 h-6 text-emerald-800 shrink-0" />
+                    <span className="text-xl font-black text-zinc-900 tracking-tight">
+                      {activeProfil.namaPerusahaan}
+                    </span>
                   </div>
-                  <p className="text-xs font-semibold text-zinc-700 mt-0.5">
-                    PERDAGANGAN SARANA PERTANIAN &amp; PEMBELIAN HASIL BUMI
+                  <p className="text-xs font-semibold text-zinc-700">
+                    {activeProfil.badanHukum}
                   </p>
                   <p className="text-[11px] text-zinc-500">
-                    Jl. Raya Agro Industri No. 88, Wlingi, Blitar · Telp: (021) 8892-0192 · Email: admin@wijayaagro.com
+                    {activeProfil.alamat} · Telp: {activeProfil.telepon}
+                    {activeProfil.email && activeProfil.email !== '-' ? ` · Email: ${activeProfil.email}` : ''}
                   </p>
+                  {activeRekeningUtama && (
+                    <p className="text-[11px] text-zinc-600 font-medium pt-0.5">
+                      Rekening Utama: <span className="font-mono font-semibold">{activeRekeningUtama.nama}</span>
+                      {activeRekeningUtama.nomorRekening ? ` (${activeRekeningUtama.nomorRekening})` : ` (${activeRekeningUtama.kode})`}
+                      {activeRekeningUtama.atasNama ? ` a.n. ${activeRekeningUtama.atasNama}` : ''}
+                    </p>
+                  )}
                 </div>
 
                 <div className="sm:text-right border-t sm:border-t-0 pt-2 sm:pt-0 border-zinc-200">
@@ -626,11 +867,11 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
               {/* Kolom Tanda Tangan Resmi */}
               <div className="pt-6 border-t border-dashed border-zinc-300 grid grid-cols-2 text-center text-xs text-zinc-600 gap-8">
                 <div>
-                  <p className="font-semibold text-zinc-800">Bagian Keuangan / Kasir</p>
-                  <p className="text-[10px] text-zinc-500">PT Wijaya Agro</p>
+                  <p className="font-semibold text-zinc-800">Penanggung Jawab / Keuangan</p>
+                  <p className="text-[10px] text-zinc-500">{activeProfil.namaPerusahaan}</p>
                   <div className="h-16 flex items-end justify-center">
-                    <div className="border-b border-zinc-400 w-40 text-center text-[10px] text-zinc-400 pb-0.5">
-                      ( Tanda Tangan &amp; Cap )
+                    <div className="border-b border-zinc-400 min-w-40 px-2 text-center font-semibold text-zinc-800 pb-0.5">
+                      ( {activeProfil.penanggungJawab} )
                     </div>
                   </div>
                 </div>
@@ -639,16 +880,78 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
                   <p className="font-semibold text-zinc-800">Mitra / Petani Penerima</p>
                   <p className="text-[10px] text-zinc-500">Konfirmasi Saldo Mutasi</p>
                   <div className="h-16 flex items-end justify-center">
-                    <div className="border-b border-zinc-400 w-40 text-center font-semibold text-zinc-800 pb-0.5">
+                    <div className="border-b border-zinc-400 min-w-40 px-2 text-center font-semibold text-zinc-800 pb-0.5">
                       ( {statement.namaMitra} )
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="text-center text-[10px] text-zinc-400 border-t border-zinc-100 pt-3">
-                Catatan: Dokumen mutasi ini sah dan diterbitkan secara elektronik oleh Sistem ERP PT Wijaya Agro.
+              <div className="text-center text-[10px] text-zinc-500 border-t border-zinc-100 pt-3 space-y-0.5">
+                {activeProfil.catatanHeaderNota && (
+                  <p className="font-medium text-zinc-600 italic">&ldquo;{activeProfil.catatanHeaderNota}&rdquo;</p>
+                )}
+                <p className="text-zinc-400">
+                  Dokumen mutasi ini sah dan diterbitkan secara elektronik oleh Sistem ERP {activeProfil.namaPerusahaan}.
+                </p>
               </div>
+
+              {/* 6. LAMPIRAN BUKTI FISIK NOTA LALU & FAKTUR (DICETAK DI HALAMAN BERIKUTNYA) */}
+              {includeNotaProofs && notaAttachments.length > 0 && (
+                <div className="pt-8 border-t-2 border-dashed border-zinc-300 space-y-4 print-page-break print:break-before-page">
+                  <div className="flex items-center justify-between border-b-2 border-amber-600 pb-2">
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-900 flex items-center gap-2">
+                        <Camera className="w-4 h-4 text-amber-600" />
+                        <span>LAMPIRAN BUKTI FISIK NOTA LALU &amp; DOKUMEN PENDUKUNG</span>
+                        <span className="text-[10px] bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-full font-bold">
+                          {notaAttachments.length} Lembar Dokumen
+                        </span>
+                      </h3>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">
+                        Bukti otentik lembaran nota manual bertahun-tahun lalu yang diikutsertakan dalam rekapan rekening koran mitra.
+                      </p>
+                    </div>
+                    <span className="text-[9px] text-zinc-400 font-mono">
+                      Lampiran Resmi ERP {activeProfil.namaPerusahaan}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {notaAttachments.map((att, idx) => (
+                      <div
+                        key={idx}
+                        className="border border-zinc-300 rounded-xl p-3 bg-zinc-50/60 space-y-2 shadow-2xs print-avoid-break break-inside-avoid print:break-inside-avoid print:bg-white print:border-zinc-400"
+                      >
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="font-mono font-bold text-zinc-900 bg-white px-2 py-0.5 rounded border border-zinc-200 shadow-2xs">
+                            {att.noNotaLalu ? `No. Nota: ${att.noNotaLalu}` : `ID: ${att.txId}`}
+                            {att.totalCount > 1 ? ` (Foto ${att.index}/${att.totalCount})` : ''}
+                          </span>
+                          <span className="text-zinc-600 font-medium">{att.tanggal}</span>
+                        </div>
+                        <div className="text-[11px] text-zinc-800 font-semibold flex items-center justify-between">
+                          <span>{att.jenis.replace(/_/g, ' ')}</span>
+                          <span className="text-amber-900 font-mono font-bold">{formatRupiah(att.nominal)}</span>
+                        </div>
+                        {att.keterangan && (
+                          <div className="text-[10px] text-zinc-600 italic bg-white/80 p-1.5 rounded border border-zinc-200">
+                            {att.keterangan}
+                          </div>
+                        )}
+                        <div className="rounded-lg border border-zinc-200 bg-white overflow-hidden flex items-center justify-center p-2 min-h-[180px] print:border-zinc-400 print:p-2">
+                          <img
+                            src={att.image}
+                            alt={`Bukti Nota ${att.txId}`}
+                            className="max-h-80 w-auto object-contain rounded print:max-h-[380px] print:w-auto"
+                            loading="eager"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -683,6 +986,18 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({ statement, onClose })
           </div>
         </div>
       </div>
+
+      {/* Share Link Modal */}
+      <ShareLinkModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        title={`Bagikan Rekening Koran ${statement.namaMitra}`}
+        subtitle="Tautan publik resmi khusus penerima (Hanya Baca / Read-Only)"
+        shareType="rekening-koran"
+        targetId={statement.idMitra}
+        targetName={statement.namaMitra}
+        companyName={activeProfil.namaPerusahaan}
+      />
     </>
   );
 };

@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+data/backups/
+data/*.tmp.*
+data/supabase_config.json
+data/wijaya_agro_erp.json
+

@@ -3,7 +3,6 @@ import {
   Users,
   Plus,
   Edit2,
-  FileSpreadsheet,
   CheckCircle2,
   AlertCircle,
   Search,
@@ -16,41 +15,53 @@ import {
   Scale,
   RefreshCw,
   FileText,
+  Zap,
+  Trash2,
+  Database,
+  Building2,
 } from 'lucide-react';
-import { Mitra, RoleMitra, RekapMasterMitraSummary, RekapMitraItem } from '../../server/types.ts';
+import { Mitra, RoleMitra, RekapMasterMitraSummary, RekapMitraItem, FullErpModularDataset, Rekening } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { InputNotaLaluModal } from '../common/InputNotaLaluModal.tsx';
-import { FullErpModularDataset, buildModularSpreadsheets } from '../../utils/modularSpreadsheets.ts';
-import { syncModularFileDirectly, getAccessToken, googleSignIn } from '../../services/googleSheetsService.ts';
-import { HardDrive, ExternalLink } from 'lucide-react';
+import { ModalPinjamUangMitra } from '../common/ModalPinjamUangMitra.tsx';
+import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
+import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
+import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { findSimilarMitra, useFuzzyMitraMatches } from '../../utils/nameSimilarity.ts';
+import { FuzzyNameWarningCard } from '../common/FuzzyNameWarningCard.tsx';
 
 interface Props {
   mitraList: Mitra[];
+  rekeningList?: Rekening[];
   fullErpData?: FullErpModularDataset;
   onRefresh: () => void;
   onOpenStatement: (idMitra: string) => void;
+  onOpenDuplicateMerger?: () => void;
+  onSuccessReceipt?: (receipt: ReceiptData) => void;
 }
 
-type FilterTab = 'ALL' | 'HUTANG_TITIP' | 'BON_AKTIF' | 'MITRA_TANI' | 'CUSTOMER' | 'SUPPLIER';
+type FilterTab = 'ALL' | 'ANAK_PERUSAHAAN' | 'EKSTERNAL' | 'KARYAWAN' | 'MITRA_TANI' | 'CUSTOMER' | 'SUPPLIER' | 'HUTANG_TITIP' | 'BON_AKTIF';
 
 export const MasterMitraView: React.FC<Props> = ({
   mitraList,
+  rekeningList = [],
   fullErpData,
   onRefresh,
   onOpenStatement,
+  onOpenDuplicateMerger,
+  onSuccessReceipt,
 }) => {
   const [rekapData, setRekapData] = useState<RekapMasterMitraSummary | null>(null);
   const [loadingRekap, setLoadingRekap] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterTab>('ALL');
 
-  // Spreadsheet direct sync state
-  const [isSyncingSheet, setIsSyncingSheet] = useState(false);
-  const [sheetSyncFeedback, setSheetSyncFeedback] = useState<{
+  // Supabase sync state
+  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
+  const [supabaseFeedback, setSupabaseFeedback] = useState<{
     success: boolean;
     message: string;
-    webViewLink?: string;
   } | null>(null);
 
   // Modals
@@ -58,6 +69,10 @@ export const MasterMitraView: React.FC<Props> = ({
   const [editingMitra, setEditingMitra] = useState<Mitra | null>(null);
   const [notaLaluModalOpen, setNotaLaluModalOpen] = useState(false);
   const [notaLaluSelectedMitraId, setNotaLaluSelectedMitraId] = useState<string | undefined>(undefined);
+  const [bersihkanNotaModalOpen, setBersihkanNotaModalOpen] = useState(false);
+  const [pinjamUangModalOpen, setPinjamUangModalOpen] = useState(false);
+  const [pinjamUangSelectedMitraId, setPinjamUangSelectedMitraId] = useState<string | undefined>(undefined);
+  const [anakPerusahaanRekKode, setAnakPerusahaanRekKode] = useState<string | null>(null);
 
   // Form State
   const [formKode, setFormKode] = useState('');
@@ -70,57 +85,37 @@ export const MasterMitraView: React.FC<Props> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [dismissedAddWarning, setDismissedAddWarning] = useState<string>('');
 
-  const handleSyncToSpreadsheet = async () => {
-    setIsSyncingSheet(true);
-    setSheetSyncFeedback(null);
+  // Non-blocking fuzzy name matching & duplicate prevention (lag-free typing)
+  const similarMitrasInAdd = useFuzzyMitraMatches(formNama, mitraList);
+
+  const isCurrentAddWarningDismissed =
+    dismissedAddWarning.length > 0 &&
+    dismissedAddWarning.toLowerCase() === formNama.trim().toLowerCase();
+
+  const handleSyncToSupabase = async () => {
+    setIsSyncingSupabase(true);
+    setSupabaseFeedback(null);
     try {
-      let token = await getAccessToken();
-      if (!token) {
-        const signRes = await googleSignIn();
-        if (!signRes) throw new Error('Akses Google belum terhubung.');
-      }
-
-      const currentErpData: FullErpModularDataset = fullErpData || {
-        rekeningList: [],
-        mitraList,
-        karyawanList: [],
-        upahHarianList: [],
-        penggajianList: [],
-        produkList: [],
-        stokList: [],
-        stokHasilBumiList: [],
-        pembelianList: [],
-        pembelianBarangList: [],
-        penjualanList: [],
-        kasbonUangList: [],
-        bayarBonList: [],
-        transferList: [],
-        auditLogs: [],
-      };
-
-      const modularFiles = buildModularSpreadsheets(currentErpData);
-      const fileMitra = modularFiles.find((f) => f.id === 'file-mitra');
-      if (!fileMitra) throw new Error('Definisi file mitra tidak ditemukan');
-
-      const res = await syncModularFileDirectly(fileMitra);
-      setSheetSyncFeedback({
+      const res = await api.pushToSupabase();
+      setSupabaseFeedback({
         success: true,
-        message: `Database Mitra berhasil disinkronkan ke Spreadsheet (${mitraList.length} Mitra Riil)!`,
-        webViewLink: res.webViewLink,
+        message: `Database Mitra & ERP berhasil disinkronkan ke Cloud Supabase (${res.message || `${mitraList.length} Mitra Riil`})!`,
       });
+      handleRefreshAll();
     } catch (err: any) {
-      setSheetSyncFeedback({
+      setSupabaseFeedback({
         success: false,
-        message: `Gagal sinkronisasi ke Spreadsheet: ${err.message}`,
+        message: `Gagal sinkronisasi ke Supabase: ${err.message}`,
       });
     } finally {
-      setIsSyncingSheet(false);
+      setIsSyncingSupabase(false);
     }
   };
 
-  const loadRekap = async () => {
-    setLoadingRekap(true);
+  const loadRekap = async (silent = false) => {
+    if (!silent && !rekapData) setLoadingRekap(true);
     try {
       const data = await api.getRekapMitra();
       setRekapData(data);
@@ -132,18 +127,39 @@ export const MasterMitraView: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    loadRekap();
+    loadRekap(Boolean(rekapData));
   }, [mitraList]);
+
+  useEffect(() => {
+    const onErpUpdated = () => {
+      loadRekap(true);
+    };
+    window.addEventListener('erp:data-updated', onErpUpdated);
+    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
+  }, []);
 
   const handleRefreshAll = () => {
     onRefresh();
-    loadRekap();
+    loadRekap(true);
   };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
+
+    // High risk duplicate prevention evaluated synchronously on submit
+    const latestMatches = formNama.trim().length >= 2 ? findSimilarMitra(formNama, mitraList) : [];
+    const highRiskMatch = latestMatches.find(
+      (s) => s.isHighRiskDuplicate || s.matchType === 'PHONETIC' || s.similarity >= 80
+    );
+    if (highRiskMatch && !isCurrentAddWarningDismissed) {
+      setErrorMsg(
+        `⚠️ Peringatan Duplikasi Nama: Di database sudah ada Mitra "${highRiskMatch.mitra.nama}" (${highRiskMatch.mitra.kode}). Jika orang ini sama, jangan buat akun baru agar piutang & titipan tidak terpecah! Jika memang orang yang berbeda, klik tombol "Bukan, Orang Berbeda" di kotak peringatan lalu simpan kembali.`
+      );
+      return;
+    }
+
     setSubmitting(true);
     try {
       await api.createMitra({
@@ -215,6 +231,8 @@ export const MasterMitraView: React.FC<Props> = ({
     alamat: m.alamat,
     status: m.status,
     catatan: m.catatan,
+    isAnakPerusahaan: m.isAnakPerusahaan || m.role === 'ANAK_PERUSAHAAN',
+    kodeRekeningTerkait: m.kodeRekeningTerkait,
     totalHutangTitipPanen: 0,
     totalKasbonBarang: 0,
     totalKasbonUang: 0,
@@ -223,6 +241,14 @@ export const MasterMitraView: React.FC<Props> = ({
     posisiStatus: 'LUNAS_IMPAS',
     totalTransaksiCount: 0,
   }));
+
+  // Category Counts
+  const countAnakPerusahaan = items.filter((i) => i.isAnakPerusahaan || i.role === 'ANAK_PERUSAHAAN').length;
+  const countEksternal = items.filter((i) => i.role !== 'KARYAWAN').length;
+  const countKaryawan = items.filter((i) => i.role === 'KARYAWAN').length;
+  const countMitraTani = items.filter((i) => i.role === 'MITRA_TANI' || i.role === 'ALL').length;
+  const countCustomer = items.filter((i) => i.role === 'CUSTOMER' || i.role === 'ALL').length;
+  const countSupplier = items.filter((i) => i.role === 'SUPPLIER' || i.role === 'ALL').length;
 
   // Filtering
   const filteredItems = items.filter((item) => {
@@ -235,6 +261,15 @@ export const MasterMitraView: React.FC<Props> = ({
 
     if (!matchesSearch) return false;
 
+    if (activeFilter === 'ANAK_PERUSAHAAN') {
+      return Boolean(item.isAnakPerusahaan || item.role === 'ANAK_PERUSAHAAN');
+    }
+    if (activeFilter === 'EKSTERNAL') {
+      return item.role !== 'KARYAWAN';
+    }
+    if (activeFilter === 'KARYAWAN') {
+      return item.role === 'KARYAWAN';
+    }
     if (activeFilter === 'HUTANG_TITIP') {
       return item.totalHutangTitipPanen > 0;
     }
@@ -281,14 +316,26 @@ export const MasterMitraView: React.FC<Props> = ({
           {/* Tombol Sinkronisasi Langsung ke Google Spreadsheet */}
           <button
             type="button"
-            onClick={handleSyncToSpreadsheet}
-            disabled={isSyncingSheet}
-            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-            title="Sinkronkan database mitra riil ke Google Spreadsheet di Drive"
+            onClick={handleSyncToSupabase}
+            disabled={isSyncingSupabase}
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+            title="Sinkronkan database mitra riil ke Cloud Supabase"
           >
-            <FileSpreadsheet className={`w-4 h-4 ${isSyncingSheet ? 'animate-spin text-indigo-300' : 'text-emerald-300'}`} />
-            <span>{isSyncingSheet ? 'Menyinkronkan...' : '⚡ Sinkronkan ke Spreadsheet'}</span>
+            <Zap className={`w-4 h-4 ${isSyncingSupabase ? 'animate-spin text-amber-300' : 'text-amber-300'}`} />
+            <span>{isSyncingSupabase ? 'Menyinkronkan...' : '⚡ Sinkronkan ke Supabase'}</span>
           </button>
+
+          {onOpenDuplicateMerger && (
+            <button
+              type="button"
+              onClick={onOpenDuplicateMerger}
+              className="flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-zinc-800 bg-white hover:bg-zinc-50 border border-zinc-300 rounded-lg shadow-2xs transition-colors cursor-pointer"
+              title="Lacak dan satukan akun mitra yang namanya ganda atau salah ejaan (misal Wiwid vs Wiwit)"
+            >
+              <Scale className="w-4 h-4 text-emerald-700" />
+              <span>Audit &amp; Gabung Nama Kembar</span>
+            </button>
+          )}
 
           <button
             onClick={() => {
@@ -299,6 +346,27 @@ export const MasterMitraView: React.FC<Props> = ({
           >
             <FileText className="w-4 h-4" />
             <span>+ Input Nota Lalu (Fisik)</span>
+          </button>
+
+          <button
+            onClick={() => setBersihkanNotaModalOpen(true)}
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 rounded-lg shadow-xs transition-colors cursor-pointer"
+            title="Bersihkan bukti nota lalu berdasarkan nama mitra atau rentang waktu"
+          >
+            <Trash2 className="w-4 h-4 text-rose-600" />
+            <span>Bersihkan Bukti Nota</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setPinjamUangSelectedMitraId(undefined);
+              setPinjamUangModalOpen(true);
+            }}
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-xs transition-colors cursor-pointer"
+            title="Catat penerimaan pinjaman dana dari mitra ke PT (otomatis masuk ke saldo titip mitra)"
+          >
+            <HandCoins className="w-4 h-4 text-emerald-200" />
+            <span>+ Pinjam Uang PT ke Mitra</span>
           </button>
 
           <button
@@ -315,78 +383,68 @@ export const MasterMitraView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Feedback Sinkronisasi Spreadsheet */}
-      {sheetSyncFeedback && (
+      {/* Feedback Sinkronisasi Supabase */}
+      {supabaseFeedback && (
         <div
           className={`p-3 rounded-xl border text-xs flex items-center justify-between gap-3 animate-in fade-in ${
-            sheetSyncFeedback.success
+            supabaseFeedback.success
               ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
               : 'bg-rose-50 border-rose-200 text-rose-900'
           }`}
         >
           <div className="flex items-center space-x-2">
-            {sheetSyncFeedback.success ? (
+            {supabaseFeedback.success ? (
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             ) : (
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
             )}
-            <span className="font-semibold">{sheetSyncFeedback.message}</span>
+            <span className="font-semibold">{supabaseFeedback.message}</span>
           </div>
 
-          <div className="flex items-center space-x-2 shrink-0">
-            {sheetSyncFeedback.webViewLink && (
-              <a
-                href={sheetSyncFeedback.webViewLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center space-x-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors"
-              >
-                <span>Buka di Google Drive</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={() => setSheetSyncFeedback(null)}
-              className="text-zinc-400 hover:text-zinc-600 cursor-pointer text-xs p-1"
-            >
-              ✕
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setSupabaseFeedback(null)}
+            className="text-zinc-400 hover:text-zinc-600 cursor-pointer text-xs p-1"
+          >
+            ✕
+          </button>
         </div>
       )}
 
-      {/* Info Banner: Penyimpanan Bukti Nota Fisik di Google Drive */}
-      <div className="p-3 bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-200 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div className="flex items-center space-x-2 text-sky-950">
-          <HardDrive className="w-4 h-4 text-sky-600 shrink-0" />
+      {/* Info Banner: Penyimpanan Cloud Supabase PostgreSQL */}
+      <div className="p-3 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex items-center space-x-2 text-emerald-950">
+          <Database className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>
-            <strong>Penyimpanan Bukti Nota Fisik:</strong> Folder Drive{' '}
-            <code className="bg-white px-2 py-0.5 rounded border border-sky-300 font-mono text-[11px] text-sky-900 font-bold">
-              NOTA LALU - PT WIJAYA AGRO / PIUTANG NOTA LAMA &amp; HUTANG NOTA LAMA
+            <strong>Cloud Database Supabase:</strong> Tabel{' '}
+            <code className="bg-white px-2 py-0.5 rounded border border-emerald-300 font-mono text-[11px] text-emerald-900 font-bold">
+              wijaya_agro_erp_state (PostgreSQL)
             </code>
           </span>
         </div>
-        <div className="text-[11px] text-sky-700 font-medium">
-          Setiap capture nota lama otomatis tersusun rapi per kategori tanpa membuat aplikasi stagnan.
+        <div className="text-[11px] text-emerald-800 font-medium">
+          Seluruh data 24 mitra riil, bukti nota fisik, dan saldo titip disinkronkan 24/7 ke Cloud.
         </div>
       </div>
 
       {/* Top Rekap Master Mitra KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
         {/* Card 1: Hutang Kita pada Mitra (Titip Hasil Bumi) */}
-        <div className="p-4 bg-white rounded-xl border-2 border-purple-400 shadow-xs space-y-1.5 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-purple-900 uppercase tracking-wider flex items-center space-x-1">
-              <Wheat className="w-3.5 h-3.5 text-purple-700" />
-              <span>HUTANG KITA PADA MITRA</span>
+        <div className="p-4 bg-white rounded-xl border-2 border-purple-400 shadow-xs space-y-1.5 relative min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="text-[10px] font-bold text-purple-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
+              <Wheat className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+              <span className="truncate">HUTANG KITA PADA MITRA</span>
             </span>
-            <span className="text-[9px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.5 rounded border border-purple-200">
+            <span className="text-[9px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.5 rounded border border-purple-200 shrink-0">
               TITIP PANEN
             </span>
           </div>
-          <p className="text-xl font-black text-purple-950 font-mono">
-            {formatRupiah(rekapData?.totalHutangPerusahaanKeMitra || 0)}
+          <p
+            className="text-xl font-black text-purple-950 font-mono tabular-nums truncate whitespace-nowrap"
+            title={formatRupiah(rekapData?.totalHutangPerusahaanKeMitra || 0)}
+          >
+            {formatRupiahSingkat(rekapData?.totalHutangPerusahaanKeMitra || 0)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
             Hasil panen petani yang sudah disetor namun <strong>uangnya belum diambil</strong> ({rekapData?.mitraDenganHutangTitipCount || 0} mitra).
@@ -394,18 +452,21 @@ export const MasterMitraView: React.FC<Props> = ({
         </div>
 
         {/* Card 2: Total Bon Mitra (Piutang Kita ke Mitra) */}
-        <div className="p-4 bg-white rounded-xl border-2 border-amber-400 shadow-xs space-y-1.5 relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center space-x-1">
-              <HandCoins className="w-3.5 h-3.5 text-amber-700" />
-              <span>TOTAL BON MITRA</span>
+        <div className="p-4 bg-white rounded-xl border-2 border-amber-400 shadow-xs space-y-1.5 relative min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
+              <HandCoins className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+              <span className="truncate">TOTAL BON MITRA</span>
             </span>
-            <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded border border-amber-200">
+            <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded border border-amber-200 shrink-0">
               PIUTANG KASBON
             </span>
           </div>
-          <p className="text-xl font-black text-amber-950 font-mono">
-            {formatRupiah(rekapData?.totalBonMitra || 0)}
+          <p
+            className="text-xl font-black text-amber-950 font-mono tabular-nums truncate whitespace-nowrap"
+            title={formatRupiah(rekapData?.totalBonMitra || 0)}
+          >
+            {formatRupiahSingkat(rekapData?.totalBonMitra || 0)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
             Kewajiban kasbon barang toko + kasbon pinjaman uang ({rekapData?.mitraDenganBonCount || 0} mitra berhutang bon).
@@ -413,14 +474,14 @@ export const MasterMitraView: React.FC<Props> = ({
         </div>
 
         {/* Card 3: Saldo Bersih Kemitraan (Net Balance) */}
-        <div className="p-4 bg-white rounded-xl border border-zinc-200 shadow-xs space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-zinc-700 uppercase tracking-wider flex items-center space-x-1">
-              <Scale className="w-3.5 h-3.5 text-zinc-600" />
-              <span>POSISI NET KEMITRAAN</span>
+        <div className="p-4 bg-white rounded-xl border border-zinc-200 shadow-xs space-y-1.5 min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="text-[10px] font-bold text-zinc-700 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
+              <Scale className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
+              <span className="truncate">POSISI NET KEMITRAAN</span>
             </span>
             <span
-              className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+              className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
                 (rekapData?.saldoBersihKemitraan || 0) >= 0
                   ? 'bg-purple-100 text-purple-800'
                   : 'bg-amber-100 text-amber-800'
@@ -430,11 +491,12 @@ export const MasterMitraView: React.FC<Props> = ({
             </span>
           </div>
           <p
-            className={`text-xl font-black font-mono ${
+            className={`text-xl font-black font-mono tabular-nums truncate whitespace-nowrap ${
               (rekapData?.saldoBersihKemitraan || 0) >= 0 ? 'text-purple-900' : 'text-amber-900'
             }`}
+            title={formatRupiah(Math.abs(rekapData?.saldoBersihKemitraan || 0))}
           >
-            {formatRupiah(Math.abs(rekapData?.saldoBersihKemitraan || 0))}
+            {formatRupiahSingkat(Math.abs(rekapData?.saldoBersihKemitraan || 0))}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
             {(rekapData?.saldoBersihKemitraan || 0) >= 0
@@ -444,17 +506,17 @@ export const MasterMitraView: React.FC<Props> = ({
         </div>
 
         {/* Card 4: Total Mitra Aktif */}
-        <div className="p-4 bg-white rounded-xl border border-zinc-200 shadow-xs space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-zinc-700 uppercase tracking-wider flex items-center space-x-1">
-              <Users className="w-3.5 h-3.5 text-sky-600" />
-              <span>JUMLAH MITRA TERDAFTAR</span>
+        <div className="p-4 bg-white rounded-xl border border-zinc-200 shadow-xs space-y-1.5 min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="text-[10px] font-bold text-zinc-700 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
+              <Users className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+              <span className="truncate">JUMLAH MITRA TERDAFTAR</span>
             </span>
-            <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
+            <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded shrink-0">
               SINKRON
             </span>
           </div>
-          <p className="text-xl font-black text-zinc-900 font-mono">
+          <p className="text-xl font-black text-zinc-900 font-mono tabular-nums truncate whitespace-nowrap">
             {rekapData?.totalMitra || mitraList.length}{' '}
             <span className="text-xs font-normal text-zinc-500">Mitra</span>
           </p>
@@ -465,12 +527,15 @@ export const MasterMitraView: React.FC<Props> = ({
       </div>
 
       {/* Explanatory Policy Callout */}
-      <div className="p-3.5 bg-sky-50/70 border border-sky-200 rounded-xl text-xs text-sky-950 flex items-start space-x-2.5">
+      <div className="p-3.5 bg-gradient-to-r from-sky-50 to-indigo-50/50 border border-sky-200 rounded-xl text-xs text-sky-950 flex items-start space-x-2.5">
         <ShieldCheck className="w-4 h-4 text-sky-700 shrink-0 mt-0.5" />
-        <div className="space-y-0.5">
-          <strong className="text-sky-950 font-bold">Sinkronisasi Keuangan Mitra Terpadu:</strong>
-          <p className="text-[11px] text-zinc-600">
-            Kolom <strong>Hutang Kita pada Mitra</strong> mencatat hasil panen (gabah, jagung, dll) yang diserahkan mitra dengan metode <em>TITIP</em> namun uangnya belum diambil/dicairkan. Sedangkan kolom <strong>Bon Mitra</strong> adalah total kasbon barang saprotan toko dan kasbon pinjaman uang tunai. Saldo selalu terhubung langsung dengan rekening koran masing-masing mitra.
+        <div className="space-y-1">
+          <div className="flex items-center space-x-2">
+            <strong className="text-sky-950 font-bold">Sinkronisasi Keuangan &amp; Akun Karyawan Terpadu:</strong>
+            <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-bold">Otomatis Terhubung</span>
+          </div>
+          <p className="text-[11px] text-zinc-600 leading-relaxed">
+            Di sistem ERP Wijaya Agro, setiap karyawan yang diinput di <strong>Master Karyawan</strong> otomatis dibuatkan akun di <strong>Database Mitra</strong> (Role: KARYAWAN) agar siap untuk transaksi <em>Kasbon Uang Tunai</em>, <em>Kasbon Barang Toko</em>, dan <em>Potong Gaji</em> di kasir. Anda dapat memfilter tampilan di bawah untuk melihat hanya mitra bisnis luar (<strong>Mitra Eksternal</strong>) atau akun kasbon staf (<strong>Internal Karyawan</strong>).
           </p>
         </div>
       </div>
@@ -504,6 +569,76 @@ export const MasterMitraView: React.FC<Props> = ({
           </button>
 
           <button
+            onClick={() => setActiveFilter('ANAK_PERUSAHAAN')}
+            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'ANAK_PERUSAHAAN'
+                ? 'bg-teal-700 text-white shadow-2xs'
+                : 'bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200'
+            }`}
+            title="Anak perusahaan PT. Wijaya Agro Perkasa yang menyatu dengan Master Rekening (seperti DP Parabot)"
+          >
+            <Building2 className="w-3.5 h-3.5" />
+            <span>Anak Perusahaan ({countAnakPerusahaan})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('EKSTERNAL')}
+            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'EKSTERNAL'
+                ? 'bg-emerald-700 text-white shadow-2xs'
+                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+            }`}
+            title="Hanya mitra bisnis luar (Petani, Customer, Supplier, Anak Perusahaan)"
+          >
+            <span>Mitra Eksternal ({countEksternal})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('KARYAWAN')}
+            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'KARYAWAN'
+                ? 'bg-indigo-700 text-white shadow-2xs'
+                : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-200'
+            }`}
+            title="Akun internal karyawan untuk pencatatan kasbon uang dan barang toko"
+          >
+            <span>Internal Karyawan ({countKaryawan})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('MITRA_TANI')}
+            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'MITRA_TANI'
+                ? 'bg-emerald-800 text-white shadow-2xs'
+                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            }`}
+          >
+            Petani ({countMitraTani})
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('CUSTOMER')}
+            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'CUSTOMER'
+                ? 'bg-sky-700 text-white shadow-2xs'
+                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            }`}
+          >
+            Customer ({countCustomer})
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('SUPPLIER')}
+            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'SUPPLIER'
+                ? 'bg-amber-700 text-white shadow-2xs'
+                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+            }`}
+          >
+            Supplier ({countSupplier})
+          </button>
+
+          <button
             onClick={() => setActiveFilter('HUTANG_TITIP')}
             className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
               activeFilter === 'HUTANG_TITIP'
@@ -512,7 +647,7 @@ export const MasterMitraView: React.FC<Props> = ({
             }`}
           >
             <Wheat className="w-3.5 h-3.5" />
-            <span>Punya Titip Panen / Kita Berhutang ({rekapData?.mitraDenganHutangTitipCount || 0})</span>
+            <span>Titip Panen ({rekapData?.mitraDenganHutangTitipCount || 0})</span>
           </button>
 
           <button
@@ -524,29 +659,7 @@ export const MasterMitraView: React.FC<Props> = ({
             }`}
           >
             <HandCoins className="w-3.5 h-3.5" />
-            <span>Punya Bon Aktif ({rekapData?.mitraDenganBonCount || 0})</span>
-          </button>
-
-          <button
-            onClick={() => setActiveFilter('MITRA_TANI')}
-            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-              activeFilter === 'MITRA_TANI'
-                ? 'bg-emerald-700 text-white shadow-2xs'
-                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-            }`}
-          >
-            Mitra Tani
-          </button>
-
-          <button
-            onClick={() => setActiveFilter('CUSTOMER')}
-            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-              activeFilter === 'CUSTOMER'
-                ? 'bg-sky-700 text-white shadow-2xs'
-                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-            }`}
-          >
-            Customer
+            <span>Bon Aktif ({rekapData?.mitraDenganBonCount || 0})</span>
           </button>
         </div>
 
@@ -625,9 +738,21 @@ export const MasterMitraView: React.FC<Props> = ({
                 filteredItems.map((m) => {
                   const hasTitip = m.totalHutangTitipPanen > 0;
                   const hasBon = m.totalBonMitra > 0;
+                  const isAnak = Boolean(m.isAnakPerusahaan || m.role === 'ANAK_PERUSAHAAN');
+                  const rekKode = m.kodeRekeningTerkait || (isAnak ? 'REK-DPPARABO' : undefined);
+                  const saldoRekAnak =
+                    m.saldoRekeningAnakPerusahaan ??
+                    (rekKode ? rekeningList.find((r) => r.kode === rekKode)?.saldoSaatIni || 0 : 0);
+                  const posisiTerpadu =
+                    m.posisiBersihTerpadu ?? m.saldoBersih - saldoRekAnak;
 
                   return (
-                    <tr key={m.id} className="hover:bg-zinc-50/80 transition-colors">
+                    <tr
+                      key={m.id}
+                      className={`hover:bg-zinc-50/80 transition-colors ${
+                        isAnak ? 'bg-teal-50/30' : ''
+                      }`}
+                    >
                       {/* Identity */}
                       <td className="py-3 px-4">
                         <div className="flex items-center space-x-2">
@@ -636,6 +761,11 @@ export const MasterMitraView: React.FC<Props> = ({
                           </span>
                           <span className="font-bold text-zinc-900 text-sm">{m.nama}</span>
                         </div>
+                        {isAnak && rekKode && (
+                          <div className="text-[11px] text-teal-800 font-semibold mt-0.5">
+                            Terintegrasi 1 Transaksi dengan Rekening <span className="font-mono">{rekKode}</span>
+                          </div>
+                        )}
                         {m.alamat && (
                           <div className="text-[10px] text-zinc-500 mt-0.5 truncate max-w-xs">
                             {m.alamat}
@@ -645,21 +775,39 @@ export const MasterMitraView: React.FC<Props> = ({
 
                       {/* Role & Telepon */}
                       <td className="py-3 px-4">
-                        <div className="flex items-center space-x-1.5">
-                          <span
-                            className={`text-[9px] font-bold px-2 py-0.5 rounded ${
-                              m.role === 'MITRA_TANI'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : m.role === 'CUSTOMER'
-                                ? 'bg-sky-100 text-sky-800'
-                                : m.role === 'SUPPLIER'
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-purple-100 text-purple-800'
-                            }`}
-                          >
-                            {m.role}
-                          </span>
+                        <div className="text-[11px] font-bold">
+                          {isAnak ? (
+                            <span className="text-teal-900">
+                              ANAK PERUSAHAAN &amp; MITRA
+                            </span>
+                          ) : (
+                            <span
+                              className={
+                                m.role === 'MITRA_TANI'
+                                  ? 'text-emerald-800'
+                                  : m.role === 'CUSTOMER'
+                                  ? 'text-sky-800'
+                                  : m.role === 'SUPPLIER'
+                                  ? 'text-amber-800'
+                                  : m.role === 'KARYAWAN'
+                                  ? 'text-indigo-900'
+                                  : 'text-purple-800'
+                              }
+                            >
+                              {m.role === 'KARYAWAN' ? 'KARYAWAN (INTERNAL)' : m.role}
+                            </span>
+                          )}
                         </div>
+                        {isAnak && (
+                          <div className="text-[10px] text-teal-700 font-medium mt-0.5">
+                            Anak Perusahaan PT. Wijaya Agro Perkasa
+                          </div>
+                        )}
+                        {m.role === 'KARYAWAN' && (
+                          <div className="text-[10px] text-indigo-700 font-medium mt-0.5">
+                            Akun Kasbon Karyawan
+                          </div>
+                        )}
                         <div className="text-[10px] font-mono text-zinc-600 mt-1">
                           HP: {m.telepon || '-'}
                         </div>
@@ -669,23 +817,28 @@ export const MasterMitraView: React.FC<Props> = ({
                       <td className="py-3 px-4 text-right">
                         {hasTitip ? (
                           <div>
-                            <div className="font-mono font-black text-purple-700 text-sm">
+                            <div className="font-mono font-black text-purple-700 text-sm tabular-nums">
                               +{formatRupiah(m.totalHutangTitipPanen)}
                             </div>
-                            <span className="text-[9px] font-medium text-purple-600 bg-purple-50 px-1.5 py-0.2 rounded border border-purple-200">
-                              Simpanan panen aktif
-                            </span>
+                            <div className="text-[10px] text-purple-700">Simpanan panen aktif</div>
+                          </div>
+                        ) : isAnak && saldoRekAnak < 0 ? (
+                          <div>
+                            <div className="font-mono font-black text-rose-700 text-sm tabular-nums">
+                              +{formatRupiah(Math.abs(saldoRekAnak))}
+                            </div>
+                            <div className="text-[10px] text-rose-700">Talangan {m.nama} ke PT</div>
                           </div>
                         ) : (
                           <span className="text-zinc-400 font-mono">-</span>
                         )}
                       </td>
 
-                      {/* Bon Mitra (Barang + Uang) */}
+                      {/* Bon Mitra (Barang + Uang) / Simpanan PT di Anak Perusahaan */}
                       <td className="py-3 px-4 text-right">
                         {hasBon ? (
                           <div>
-                            <div className="font-mono font-black text-amber-700 text-sm">
+                            <div className="font-mono font-black text-amber-700 text-sm tabular-nums">
                               -{formatRupiah(m.totalBonMitra)}
                             </div>
                             <div className="text-[9px] text-zinc-500 mt-0.5 flex justify-end gap-1.5">
@@ -701,6 +854,15 @@ export const MasterMitraView: React.FC<Props> = ({
                               )}
                             </div>
                           </div>
+                        ) : isAnak && saldoRekAnak > 0 ? (
+                          <div>
+                            <div className="font-mono font-black text-teal-800 text-sm tabular-nums">
+                              {formatRupiah(saldoRekAnak)}
+                            </div>
+                            <div className="text-[10px] text-teal-700">
+                              Dana PT tersimpan di {rekKode}
+                            </div>
+                          </div>
                         ) : (
                           <span className="text-emerald-700 font-medium font-mono">Rp 0 (Lunas)</span>
                         )}
@@ -708,42 +870,58 @@ export const MasterMitraView: React.FC<Props> = ({
 
                       {/* Posisi Bersih (Net Saldo) */}
                       <td className="py-3 px-4 text-center">
-                        {m.posisiStatus === 'KITA_BERHUTANG' && (
-                          <div className="inline-block p-1.5 rounded-lg bg-purple-50 border border-purple-200 text-center">
-                            <span className="text-[9px] font-bold text-purple-900 uppercase block">
-                              KITA BERHUTANG
-                            </span>
-                            <span className="font-mono font-bold text-purple-800 text-xs">
-                              {formatRupiah(m.saldoBersih)}
-                            </span>
+                        {isAnak ? (
+                          <div className="space-y-0.5">
+                            <div className="text-[10px] font-bold text-teal-900">
+                              Saldo {rekKode}:{' '}
+                              <span className="font-mono tabular-nums">{formatRupiah(saldoRekAnak)}</span>
+                            </div>
+                            <div className="text-[10px] text-zinc-600">
+                              {posisiTerpadu > 0
+                                ? `PT Berhutang ${formatRupiah(posisiTerpadu)}`
+                                : posisiTerpadu < 0
+                                ? `Dana PT di ${m.nama} ${formatRupiah(Math.abs(posisiTerpadu))}`
+                                : 'Impas Terpadu (Rp 0)'}
+                            </div>
                           </div>
-                        )}
+                        ) : (
+                          <>
+                            {m.posisiStatus === 'KITA_BERHUTANG' && (
+                              <div className="inline-block p-1.5 rounded-lg bg-purple-50 border border-purple-200 text-center">
+                                <span className="text-[9px] font-bold text-purple-900 uppercase block">
+                                  KITA BERHUTANG
+                                </span>
+                                <span className="font-mono font-bold text-purple-800 text-xs tabular-nums">
+                                  {formatRupiah(m.saldoBersih)}
+                                </span>
+                              </div>
+                            )}
 
-                        {m.posisiStatus === 'MITRA_BERHUTANG' && (
-                          <div className="inline-block p-1.5 rounded-lg bg-amber-50 border border-amber-200 text-center">
-                            <span className="text-[9px] font-bold text-amber-900 uppercase block">
-                              MITRA BERHUTANG
-                            </span>
-                            <span className="font-mono font-bold text-amber-800 text-xs">
-                              {formatRupiah(Math.abs(m.saldoBersih))}
-                            </span>
-                          </div>
-                        )}
+                            {m.posisiStatus === 'MITRA_BERHUTANG' && (
+                              <div className="inline-block p-1.5 rounded-lg bg-amber-50 border border-amber-200 text-center">
+                                <span className="text-[9px] font-bold text-amber-900 uppercase block">
+                                  MITRA BERHUTANG
+                                </span>
+                                <span className="font-mono font-bold text-amber-800 text-xs tabular-nums">
+                                  {formatRupiah(Math.abs(m.saldoBersih))}
+                                </span>
+                              </div>
+                            )}
 
-                        {m.posisiStatus === 'LUNAS_IMPAS' && (
-                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
-                            IMPAS / LUNAS
-                          </span>
+                            {m.posisiStatus === 'LUNAS_IMPAS' && (
+                              <span className="text-[11px] font-bold text-emerald-800">
+                                IMPAS / LUNAS
+                              </span>
+                            )}
+                          </>
                         )}
                       </td>
 
                       {/* Status */}
                       <td className="py-3 px-4 text-center">
                         <span
-                          className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
-                            m.status === 'AKTIF'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-rose-100 text-rose-800'
+                          className={`text-[10px] font-semibold ${
+                            m.status === 'AKTIF' ? 'text-emerald-800' : 'text-rose-800'
                           }`}
                         >
                           {m.status}
@@ -752,7 +930,19 @@ export const MasterMitraView: React.FC<Props> = ({
 
                       {/* Aksi */}
                       <td className="py-3 px-4 text-center">
-                        <div className="flex items-center justify-center space-x-1.5">
+                        <div className="flex flex-wrap items-center justify-center gap-1.5">
+                          {isAnak && rekeningList.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setAnakPerusahaanRekKode(rekKode || 'REK-DPPARABO')}
+                              className="flex items-center space-x-1 px-2.5 py-1.5 text-[10px] font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-lg transition-colors shadow-2xs cursor-pointer"
+                              title="Simpan atau tarik dana 1 transaksi terpadu dengan Master Rekening"
+                            >
+                              <ArrowRightLeft className="w-3 h-3" />
+                              <span>Simpan / Tarik</span>
+                            </button>
+                          )}
+
                           <button
                             onClick={() => {
                               setNotaLaluSelectedMitraId(m.id);
@@ -766,11 +956,23 @@ export const MasterMitraView: React.FC<Props> = ({
                           </button>
 
                           <button
+                            onClick={() => {
+                              setPinjamUangSelectedMitraId(m.id);
+                              setPinjamUangModalOpen(true);
+                            }}
+                            className="flex items-center space-x-1 px-2 py-1.5 text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-300 transition-colors shadow-2xs cursor-pointer"
+                            title="Pinjam Uang dari PT ke Mitra Ini (Otomatis Masuk Saldo Titip Mitra)"
+                          >
+                            <HandCoins className="w-3 h-3 text-emerald-600" />
+                            <span>+ Pinjam Uang</span>
+                          </button>
+
+                          <button
                             onClick={() => onOpenStatement(m.id)}
                             className="flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors shadow-2xs cursor-pointer"
                             title="Buka Rekening Koran & Download PDF"
                           >
-                            <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-600" />
+                            <FileText className="w-3.5 h-3.5 text-indigo-600" />
                             <span>Rekening Koran</span>
                           </button>
 
@@ -792,20 +994,29 @@ export const MasterMitraView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Modal Add Mitra */}
+      {/* Modal Add Mitra (Scrollable Up/Down & Left/Right) */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-zinc-200 animate-in fade-in">
-            <div className="p-4 bg-sky-700 text-white font-bold text-sm flex justify-between items-center">
+        <div className="fixed inset-0 z-50 bg-black/60 p-3 sm:p-4 overflow-y-auto overflow-x-auto flex items-start sm:items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg my-auto max-h-[92vh] flex flex-col border border-zinc-200">
+            <div className="p-4 bg-sky-700 text-white font-bold text-sm flex justify-between items-center rounded-t-2xl shrink-0">
               <span>Tambah Mitra Baru</span>
               <button
+                type="button"
                 onClick={() => setShowAddModal(false)}
-                className="text-sky-200 hover:text-white cursor-pointer"
+                className="text-sky-200 hover:text-white cursor-pointer px-1"
               >
                 ✕
               </button>
             </div>
-            <form onSubmit={handleCreate} className="p-6 space-y-3.5 text-xs">
+            <form
+              onSubmit={handleCreate}
+              className="p-5 sm:p-6 space-y-3.5 text-xs flex-1 overflow-y-auto overflow-x-auto overscroll-contain"
+            >
+              {errorMsg && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 font-medium">
+                  {errorMsg}
+                </div>
+              )}
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
                   Kode Mitra (Opsional, contoh: BUDI02)
@@ -831,6 +1042,23 @@ export const MasterMitraView: React.FC<Props> = ({
                   onChange={(e) => setFormNama(e.target.value)}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-sky-600"
                 />
+
+                {/* Advanced Fuzzy Name Suggestion & Anti-Duplicate Warning */}
+                <FuzzyNameWarningCard
+                  inputName={formNama}
+                  matches={similarMitrasInAdd}
+                  contextLabel="Mitra Terdaftar"
+                  theme="light"
+                  isDismissed={isCurrentAddWarningDismissed}
+                  onDismissDifferentPerson={() => setDismissedAddWarning(formNama.trim())}
+                  onSelectRegistered={(m) => {
+                    setShowAddModal(false);
+                    onOpenStatement(m.id);
+                  }}
+                  onApplyCorrectedName={(corrected) => {
+                    setFormNama(corrected);
+                  }}
+                />
               </div>
 
               <div>
@@ -845,6 +1073,7 @@ export const MasterMitraView: React.FC<Props> = ({
                   <option value="MITRA_TANI">MITRA_TANI (Petani Binaan / Pemasok Komoditas)</option>
                   <option value="CUSTOMER">CUSTOMER (Pembeli Sarana Produksi / Saprotan)</option>
                   <option value="SUPPLIER">SUPPLIER (Pemasok Komoditas / Barang)</option>
+                  <option value="ANAK_PERUSAHAAN">ANAK_PERUSAHAAN (Anak Perusahaan PT &amp; Rekening Terpadu)</option>
                   <option value="ALL">ALL (Pelanggan Sekaligus Pemasok)</option>
                 </select>
               </div>
@@ -907,20 +1136,24 @@ export const MasterMitraView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Modal Edit Mitra */}
+      {/* Modal Edit Mitra (Scrollable Up/Down & Left/Right) */}
       {editingMitra && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-zinc-200 animate-in fade-in">
-            <div className="p-4 bg-sky-700 text-white font-bold text-sm flex justify-between items-center">
-              <span>Edit Mitra: {editingMitra.nama}</span>
+        <div className="fixed inset-0 z-50 bg-black/60 p-3 sm:p-4 overflow-y-auto overflow-x-auto flex items-start sm:items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg my-auto max-h-[92vh] flex flex-col border border-zinc-200">
+            <div className="p-4 bg-sky-700 text-white font-bold text-sm flex justify-between items-center rounded-t-2xl shrink-0">
+              <span className="truncate pr-2">Edit Mitra: {editingMitra.nama}</span>
               <button
+                type="button"
                 onClick={() => setEditingMitra(null)}
-                className="text-sky-200 hover:text-white cursor-pointer"
+                className="text-sky-200 hover:text-white cursor-pointer px-1 shrink-0"
               >
                 ✕
               </button>
             </div>
-            <form onSubmit={handleUpdate} className="p-6 space-y-3.5 text-xs">
+            <form
+              onSubmit={handleUpdate}
+              className="p-5 sm:p-6 space-y-3.5 text-xs flex-1 overflow-y-auto overflow-x-auto overscroll-contain"
+            >
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">Nama Mitra</label>
                 <input
@@ -942,6 +1175,7 @@ export const MasterMitraView: React.FC<Props> = ({
                   <option value="MITRA_TANI">MITRA_TANI</option>
                   <option value="CUSTOMER">CUSTOMER</option>
                   <option value="SUPPLIER">SUPPLIER</option>
+                  <option value="ANAK_PERUSAHAAN">ANAK_PERUSAHAAN</option>
                   <option value="ALL">ALL</option>
                 </select>
               </div>
@@ -1021,6 +1255,50 @@ export const MasterMitraView: React.FC<Props> = ({
         preselectedMitraId={notaLaluSelectedMitraId}
         onSuccess={() => {
           handleRefreshAll();
+        }}
+      />
+
+      {/* Pinjam Uang dari PT ke Mitra Modal (Masuk Saldo Titip) */}
+      <ModalPinjamUangMitra
+        isOpen={pinjamUangModalOpen}
+        onClose={() => {
+          setPinjamUangModalOpen(false);
+          setPinjamUangSelectedMitraId(undefined);
+        }}
+        mitraList={mitraList}
+        preselectedMitraId={pinjamUangSelectedMitraId}
+        onSuccess={(result) => {
+          setSuccessMsg(`✅ Pinjaman uang dari PT ke mitra "${result.mitraNama}" sebesar ${formatRupiah(result.nominal)} berhasil dicatat ke ${result.rekeningNama} dan otomatis masuk Saldo Titip Mitra!`);
+          setTimeout(() => setSuccessMsg(''), 8000);
+          handleRefreshAll();
+        }}
+      />
+
+      {/* Bersihkan Bukti Nota Lalu Modal */}
+      <ModalBersihkanNotaLalu
+        isOpen={bersihkanNotaModalOpen}
+        onClose={() => setBersihkanNotaModalOpen(false)}
+        mitraList={mitraList}
+        onSuccess={(res) => {
+          setSuccessMsg(`✅ ${res.message}`);
+          setTimeout(() => setSuccessMsg(''), 8000);
+          handleRefreshAll();
+        }}
+      />
+
+      {/* Modal Transaksi Terpadu Anak Perusahaan & Mitra (1 Transaksi) */}
+      <ModalTransaksiAnakPerusahaan
+        isOpen={Boolean(anakPerusahaanRekKode)}
+        onClose={() => setAnakPerusahaanRekKode(null)}
+        rekeningList={rekeningList}
+        targetRekeningKode={anakPerusahaanRekKode || 'REK-DPPARABO'}
+        onSuccess={(receipt) => {
+          setSuccessMsg('Transaksi terpadu Anak Perusahaan & Mitra berhasil disimpan sebagai 1 transaksi!');
+          setTimeout(() => setSuccessMsg(''), 8000);
+          handleRefreshAll();
+          if (receipt && onSuccessReceipt) {
+            onSuccessReceipt(receipt);
+          }
         }}
       />
     </div>

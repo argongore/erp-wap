@@ -1,5 +1,15 @@
-import React from 'react';
-import { Image as ImageIcon, X, Download, ExternalLink, Calendar, User, FileText } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Image as ImageIcon,
+  X,
+  Download,
+  ExternalLink,
+  Calendar,
+  User,
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+} from 'lucide-react';
 
 interface FotoNotaPreviewModalProps {
   isOpen: boolean;
@@ -28,15 +38,29 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
   nominalText,
   keterangan,
 }) => {
+  const [currentIndex, setCurrentIndex] = useState<number>(0);
+
   if (!isOpen || !imageUrl) return null;
+
+  // Split multiple images if separated by '|||'
+  const imageList = imageUrl.split('|||').map((s) => s.trim()).filter(Boolean);
+  const activeImage = imageList[currentIndex] || imageList[0] || imageUrl;
 
   const handleDownload = () => {
     const link = document.createElement('a');
-    link.href = imageUrl;
-    link.download = `bukti-nota-${nomorBukti || 'transaksi'}.jpg`;
+    link.href = activeImage;
+    link.download = `bukti-nota-${nomorBukti || 'transaksi'}-${currentIndex + 1}.jpg`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handlePrev = () => {
+    setCurrentIndex((prev) => (prev > 0 ? prev - 1 : imageList.length - 1));
+  };
+
+  const handleNext = () => {
+    setCurrentIndex((prev) => (prev < imageList.length - 1 ? prev + 1 : 0));
   };
 
   return (
@@ -53,7 +77,14 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
           <div className="flex items-center space-x-2">
             <ImageIcon className="w-5 h-5 text-amber-400" />
             <div>
-              <h3 className="text-sm font-bold text-zinc-100">{title}</h3>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-sm font-bold text-zinc-100">{title}</h3>
+                {imageList.length > 1 && (
+                  <span className="text-[10px] bg-amber-950 text-amber-300 font-bold px-2 py-0.5 rounded border border-amber-800">
+                    Foto {currentIndex + 1} dari {imageList.length}
+                  </span>
+                )}
+              </div>
               <div className="flex items-center space-x-2 text-[11px] text-zinc-400">
                 {nomorBukti && <span className="font-mono">No. Transaksi: {nomorBukti}</span>}
                 {driveFolderPath && (
@@ -126,17 +157,63 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
           </div>
         )}
 
-        {/* Image viewport */}
-        <div className="max-h-[68vh] overflow-auto rounded-xl bg-black/60 p-2 flex items-center justify-center border border-zinc-800">
+        {/* Image viewport with carousel if multiple */}
+        <div className="relative max-h-[65vh] overflow-hidden rounded-xl bg-black/60 p-2 flex items-center justify-center border border-zinc-800 group">
           <img
-            src={imageUrl}
-            alt="Foto Nota Fisik Penuh"
-            className="max-h-[64vh] w-auto max-w-full rounded-lg object-contain shadow-2xl"
+            src={activeImage}
+            alt={`Foto Bukti ${currentIndex + 1}`}
+            className="max-h-[60vh] w-auto max-w-full rounded-lg object-contain shadow-2xl transition-all"
           />
+
+          {imageList.length > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={handlePrev}
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/70 hover:bg-black/90 text-white flex items-center justify-center border border-zinc-600 transition-all cursor-pointer"
+                title="Foto Sebelumnya"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleNext}
+                className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/70 hover:bg-black/90 text-white flex items-center justify-center border border-zinc-600 transition-all cursor-pointer"
+                title="Foto Berikutnya"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </>
+          )}
         </div>
 
+        {/* Multi-image thumbnail bar if more than 1 image */}
+        {imageList.length > 1 && (
+          <div className="flex items-center gap-2 overflow-x-auto p-1.5 bg-zinc-800/60 rounded-lg">
+            {imageList.map((img, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setCurrentIndex(idx)}
+                className={`relative w-14 h-14 rounded-lg overflow-hidden border-2 shrink-0 transition-all cursor-pointer ${
+                  currentIndex === idx ? 'border-amber-400 scale-105 shadow-md' : 'border-zinc-700 opacity-60 hover:opacity-100'
+                }`}
+              >
+                <img src={img} alt={`Thumb ${idx + 1}`} className="w-full h-full object-cover" />
+                <span className="absolute bottom-0 right-0 bg-black/70 text-[9px] font-bold px-1 text-white">
+                  #{idx + 1}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1">
-          <span>Foto nota fisik tersimpan aman di database sistem ERP PT Wijaya Agro.</span>
+          <span>
+            {imageList.length > 1
+              ? `Terdapat total ${imageList.length} lembar bukti nota fisik tersimpan.`
+              : 'Foto nota fisik tersimpan aman di database sistem ERP PT Wijaya Agro.'}
+          </span>
           <button
             type="button"
             onClick={onClose}

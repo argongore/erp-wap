@@ -1,0 +1,14 @@
+{
+  "buildCommand": "npx esbuild src/server/vercelApp.ts --bundle --platform=node --format=esm --packages=external --outfile=api/index.js && npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
