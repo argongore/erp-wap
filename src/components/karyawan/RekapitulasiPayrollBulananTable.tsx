@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   Info,
   ExternalLink,
+  UserCog,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
@@ -44,6 +45,12 @@ import {
   Rekening,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
+import {
+  KaryawanAvatar,
+  ModalPreviewFotoKaryawan,
+  ModalProfilKaryawan,
+  ProfilKaryawanEditableData,
+} from './ModalProfilKaryawan.tsx';
 
 interface RekapitulasiPayrollBulananTableProps {
   rekeningList: Rekening[];
@@ -52,6 +59,7 @@ interface RekapitulasiPayrollBulananTableProps {
   onOpenStatement?: (mitraId: string) => void;
   onOpenKasbonUang?: (karyawanMitraId: string) => void;
   onOpenDetailKaryawan?: (idKaryawan: string) => void;
+  onOpenProfilKaryawan?: (item: ItemRekapPayrollBulanan) => void;
   onRefreshAll?: () => void;
   refreshTrigger?: number;
 }
@@ -89,6 +97,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
   onOpenStatement,
   onOpenKasbonUang,
   onOpenDetailKaryawan,
+  onOpenProfilKaryawan,
   onRefreshAll,
   refreshTrigger,
 }) => {
@@ -116,6 +125,31 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
   const [settleNominalKustom, setSettleNominalKustom] = useState<number>(0);
   const [settleSubmitting, setSettleSubmitting] = useState<boolean>(false);
   const [settleError, setSettleError] = useState<string>('');
+
+  // Employee Profile & Division Upgrade Modal
+  const [internalProfilKry, setInternalProfilKry] = useState<ProfilKaryawanEditableData | null>(null);
+  const [previewFoto, setPreviewFoto] = useState<{
+    nama: string;
+    jabatan?: string;
+    divisi?: string;
+    fotoUrl: string;
+  } | null>(null);
+
+  const handleOpenProfilItem = (item: ItemRekapPayrollBulanan) => {
+    if (onOpenProfilKaryawan) {
+      onOpenProfilKaryawan(item);
+      return;
+    }
+    setInternalProfilKry({
+      id: item.idKaryawan,
+      nik: item.nik,
+      nama: item.nama,
+      jabatan: item.jabatan,
+      divisi: item.divisiAktifSaatIni || item.divisiUtama,
+      fotoUrl: item.fotoUrl,
+      riwayatDivisi: item.riwayatDivisi,
+    });
+  };
 
   const loadRekap = async (silent = false) => {
     if (!silent && !rekapData) setLoading(true);
@@ -539,9 +573,26 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                 <ChevronDown className="w-4 h-4" />
                               )}
                             </button>
-                            <div className="w-8 h-8 rounded-full bg-amber-950 text-amber-300 border border-amber-800 flex items-center justify-center font-bold text-xs shrink-0">
-                              {item.nama.slice(0, 2).toUpperCase()}
-                            </div>
+                            <KaryawanAvatar
+                              nama={item.nama}
+                              fotoUrl={item.fotoUrl}
+                              size="sm"
+                              theme="dark"
+                              title={item.fotoUrl ? `Klik untuk memperbesar foto ${item.nama}` : `Profil & Foto ${item.nama}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (item.fotoUrl) {
+                                  setPreviewFoto({
+                                    nama: item.nama,
+                                    jabatan: item.jabatan,
+                                    divisi: item.divisiAktifSaatIni || item.divisiUtama,
+                                    fotoUrl: item.fotoUrl,
+                                  });
+                                } else {
+                                  handleOpenProfilItem(item);
+                                }
+                              }}
+                            />
                             <div>
                               <div className="font-bold text-zinc-100 flex items-center space-x-1.5">
                                 <span>{item.nama}</span>
@@ -550,7 +601,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                 </span>
                               </div>
                               <span className="text-[10px] text-zinc-400 block">
-                                {item.jabatan} · {item.departemen}
+                                {item.jabatan} · {item.divisiAktifSaatIni || item.departemen}
                               </span>
                               {(item.saldoTitipHasilPanenMitra || 0) > 0 && (
                                 <button
@@ -571,11 +622,27 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                           </div>
                         </td>
 
-                        {/* 2. Divisi */}
+                        {/* 2. Divisi & Riwayat Upgrade */}
                         <td className="py-3 px-3">
                           <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${badgeClass}`}>
                             {item.divisiUtama}
                           </span>
+                          {item.divisiAktifSaatIni && item.divisiAktifSaatIni !== item.divisiUtama && (
+                            <span className="text-[10px] text-emerald-300 font-semibold block mt-1">
+                              Aktif Kini: {item.divisiAktifSaatIni}
+                            </span>
+                          )}
+                          {item.riwayatDivisi && item.riwayatDivisi.length > 0 && (
+                            <span
+                              className="text-[9px] text-amber-300/90 block mt-0.5"
+                              title={`Riwayat mutasi/upgrade: ${
+                                item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiSebelumnya
+                              } → ${item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiBaru}`}
+                            >
+                              Upgrade: {item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiSebelumnya} →{' '}
+                              {item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiBaru}
+                            </span>
+                          )}
                           {item.daftarDivisiBekerja.length > 1 && (
                             <span className="text-[9px] text-zinc-400 block mt-0.5">
                               +{item.daftarDivisiBekerja.length - 1} divisi lain
@@ -665,7 +732,21 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                         <td className="py-3 px-3 text-center" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-center space-x-1.5">
                             <button
-                              onClick={() => onOpenInputPayrollHarian(item.idKaryawan, item.divisiUtama)}
+                              type="button"
+                              onClick={() => handleOpenProfilItem(item)}
+                              className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-sky-300 border border-zinc-700 rounded transition-colors cursor-pointer"
+                              title="Update Profil, Foto & Upgrade Divisi Karyawan"
+                            >
+                              <UserCog className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              onClick={() =>
+                                onOpenInputPayrollHarian(
+                                  item.idKaryawan,
+                                  (item.divisiAktifSaatIni as NamaDivisi) || item.divisiUtama
+                                )
+                              }
                               className="p-1.5 bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-800 rounded transition-colors cursor-pointer"
                               title="Input upah harian baru untuk karyawan ini"
                             >
@@ -696,18 +777,41 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                             {/* Sub-tab Navigation Header */}
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-800">
                               <div className="flex items-center space-x-3">
-                                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center justify-center font-bold text-sm">
-                                  {item.nama.charAt(0)}
-                                </div>
+                                <KaryawanAvatar
+                                  nama={item.nama}
+                                  fotoUrl={item.fotoUrl}
+                                  size="sm"
+                                  theme="dark"
+                                  onClick={() => {
+                                    if (item.fotoUrl) {
+                                      setPreviewFoto({
+                                        nama: item.nama,
+                                        jabatan: item.jabatan,
+                                        divisi: item.divisiAktifSaatIni || item.divisiUtama,
+                                        fotoUrl: item.fotoUrl,
+                                      });
+                                    } else {
+                                      handleOpenProfilItem(item);
+                                    }
+                                  }}
+                                />
                                 <div>
-                                  <h3 className="font-bold text-sm text-zinc-100 flex items-center space-x-2">
+                                  <h3 className="font-bold text-sm text-zinc-100 flex flex-wrap items-center gap-2">
                                     <span>Rincian Lengkap: {item.nama}</span>
                                     <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded">
                                       {item.nik}
                                     </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenProfilItem(item)}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-sky-300 border border-zinc-700 text-[10px] font-semibold cursor-pointer"
+                                    >
+                                      <UserCog className="w-3 h-3" />
+                                      <span>Profil, Foto &amp; Upgrade Divisi</span>
+                                    </button>
                                   </h3>
                                   <p className="text-[11px] text-zinc-400">
-                                    {item.jabatan} • {item.departemen} • Divisi: <strong>{item.divisiUtama}</strong> • Periode: <strong className="text-amber-300">{rekapData?.periodeBulan}</strong>
+                                    {item.jabatan} · Divisi Aktif: <strong>{item.divisiAktifSaatIni || item.divisiUtama}</strong> · Periode: <strong className="text-amber-300">{rekapData?.periodeBulan}</strong>
                                   </p>
                                 </div>
                               </div>
@@ -1462,6 +1566,29 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
             </form>
           </div>
         </div>
+      )}
+
+      {internalProfilKry && (
+        <ModalProfilKaryawan
+          karyawan={internalProfilKry}
+          defaultPeriodeBulan={rekapData?.periodeBulan}
+          onClose={() => setInternalProfilKry(null)}
+          onSaved={() => {
+            setInternalProfilKry(null);
+            loadRekap(true);
+            onRefreshAll?.();
+          }}
+        />
+      )}
+
+      {previewFoto && (
+        <ModalPreviewFotoKaryawan
+          nama={previewFoto.nama}
+          jabatan={previewFoto.jabatan}
+          divisi={previewFoto.divisi}
+          fotoUrl={previewFoto.fotoUrl}
+          onClose={() => setPreviewFoto(null)}
+        />
       )}
     </div>
   );

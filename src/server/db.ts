@@ -7,6 +7,7 @@ import {
   KATEGORI_ALAT_DEFAULT_DESC,
   isKategoriAlatNonStok,
   isExcludedFromDivisi,
+  normalizeRoleMitra,
 } from './types.ts';
 import type {
   AuditLog,
@@ -1364,6 +1365,9 @@ class DatabaseManager {
     for (const kry of this.db.karyawan) {
       kry.gajiPokok = 0;
       kry.tunjanganTetap = 0;
+      if (!Array.isArray(kry.riwayatDivisi)) {
+        kry.riwayatDivisi = [];
+      }
       if (isExcludedFromDivisi(kry.divisi) || isExcludedFromDivisi(kry.departemen)) {
         kry.divisi = 'PT Wijaya Agro Perkasa';
         kry.departemen = 'PT Wijaya Agro Perkasa';
@@ -1439,9 +1443,10 @@ class DatabaseManager {
           telepon: kry.telepon || '-',
           alamat: kry.alamat || '-',
           status: kry.status || 'AKTIF',
+          fotoUrl: kry.fotoUrl,
           isKaryawan: true,
           idKaryawanTerkait: kry.id,
-          catatan: `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang'})`,
+          catatan: `Karyawan & Mitra: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang Wijaya Agro'})`,
         };
         this.db.mitra.push(mtr);
       } else {
@@ -1451,6 +1456,11 @@ class DatabaseManager {
         mtr.isKaryawan = true;
         mtr.idKaryawanTerkait = kry.id;
         mtr.status = kry.status || mtr.status || 'AKTIF';
+        if (kry.fotoUrl !== undefined) {
+          mtr.fotoUrl = kry.fotoUrl || undefined;
+        } else if (mtr.fotoUrl && !kry.fotoUrl) {
+          kry.fotoUrl = mtr.fotoUrl;
+        }
         if (kry.telepon && kry.telepon !== '-' && kry.telepon !== 'KARYAWAN') mtr.telepon = kry.telepon;
         if (kry.alamat && kry.alamat !== '-') mtr.alamat = kry.alamat;
       }
@@ -1500,11 +1510,19 @@ class DatabaseManager {
 
     for (const p of this.db.penjualan) syncTxMitra(p, 'CUSTOMER');
     for (const jhb of this.db.penjualanHasilBumi || []) syncTxMitra(jhb, 'CUSTOMER');
-    for (const pb of this.db.pembelianHasilBumi) syncTxMitra(pb, 'MITRA_TANI');
+    for (const pb of this.db.pembelianHasilBumi) syncTxMitra(pb, 'SUPPLIER_CUSTOMER');
     for (const pbb of this.db.pembelianBarang) syncTxMitra(pbb, 'SUPPLIER');
-    for (const k of this.db.kasbonUang) syncTxMitra(k, 'MITRA_TANI');
-    for (const b of this.db.bayarBon) syncTxMitra(b, 'MITRA_TANI');
-    for (const pt of this.db.pencairanTitipan) syncTxMitra(pt, 'MITRA_TANI');
+    for (const k of this.db.kasbonUang) syncTxMitra(k, 'SUPPLIER_CUSTOMER');
+    for (const b of this.db.bayarBon) syncTxMitra(b, 'SUPPLIER_CUSTOMER');
+    for (const pt of this.db.pencairanTitipan) syncTxMitra(pt, 'SUPPLIER_CUSTOMER');
+
+    // Standarisasi 5 Role Mitra: SUPPLIER, CUSTOMER, SUPPLIER_CUSTOMER, ANAK_PERUSAHAAN, KARYAWAN
+    for (const m of this.db.mitra) {
+      m.role = normalizeRoleMitra(m.role, {
+        isAnakPerusahaan: m.isAnakPerusahaan,
+        isKaryawan: m.isKaryawan,
+      });
+    }
   }
 
   /**

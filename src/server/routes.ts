@@ -6,6 +6,9 @@ import {
   KATEGORI_ALAT_DEFAULT_DESC,
   isKategoriAlatNonStok,
   isExcludedFromDivisi,
+  normalizeRoleMitra,
+  getRoleMitraLabel,
+  type RiwayatDivisiKaryawan,
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
 
@@ -300,8 +303,27 @@ apiRouter.post('/rekening/:kode/update-saldo', async (req, res) => {
 apiRouter.get('/mitra', (_req, res) => {
   try {
     const db = dbManager.get();
-    // Auto-heal / synchronize employees to mitra list with role KARYAWAN
+    // Auto-heal / synchronize employees to mitra list with role KARYAWAN & normalize 5 canonical roles
     let modified = false;
+    for (const mtr of db.mitra || []) {
+      const canonical = normalizeRoleMitra(mtr.role, {
+        isAnakPerusahaan: mtr.isAnakPerusahaan,
+        isKaryawan: mtr.isKaryawan,
+      });
+      if (mtr.role !== canonical) {
+        mtr.role = canonical;
+        modified = true;
+      }
+      if (canonical === 'ANAK_PERUSAHAAN' && !mtr.isAnakPerusahaan) {
+        mtr.isAnakPerusahaan = true;
+        modified = true;
+      }
+      if (canonical === 'KARYAWAN' && !mtr.isKaryawan) {
+        mtr.isKaryawan = true;
+        modified = true;
+      }
+    }
+
     for (const kry of db.karyawan || []) {
       const idMitra = kry.idMitraTerkait || `MTR-${kry.id}`;
       const cleanKryName = String(kry.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim();
@@ -324,9 +346,10 @@ apiRouter.get('/mitra', (_req, res) => {
           telepon: kry.telepon || '-',
           alamat: kry.alamat || '-',
           status: kry.status || 'AKTIF',
+          fotoUrl: kry.fotoUrl,
           isKaryawan: true,
           idKaryawanTerkait: kry.id,
-          catatan: `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang'})`,
+          catatan: `Karyawan: ${kry.jabatan || 'Staff'} (Divisi ${kry.divisi || kry.departemen || 'Gudang Wijaya Agro'})`,
         });
         modified = true;
       } else {
@@ -334,9 +357,17 @@ apiRouter.get('/mitra', (_req, res) => {
           kry.idMitraTerkait = existing.id;
           modified = true;
         }
-        if (!existing.isKaryawan || existing.idKaryawanTerkait !== kry.id) {
+        if (!existing.isKaryawan || existing.idKaryawanTerkait !== kry.id || existing.role !== 'KARYAWAN') {
           existing.isKaryawan = true;
           existing.idKaryawanTerkait = kry.id;
+          existing.role = 'KARYAWAN';
+          modified = true;
+        }
+        if (kry.fotoUrl && existing.fotoUrl !== kry.fotoUrl) {
+          existing.fotoUrl = kry.fotoUrl;
+          modified = true;
+        } else if (!kry.fotoUrl && existing.fotoUrl) {
+          kry.fotoUrl = existing.fotoUrl;
           modified = true;
         }
         if (existing.nama.endsWith(' (Karyawan)')) {
@@ -365,10 +396,12 @@ apiRouter.get('/mitra/rekap', (_req, res) => {
 
 apiRouter.post('/mitra', async (req, res) => {
   try {
-    const { kode, nama, role, telepon, alamat, catatan } = req.body;
+    const { kode, nama, role, telepon, alamat, catatan, fotoUrl } = req.body;
     if (!nama || !role) {
       return res.status(400).json({ success: false, message: 'Nama dan Role mitra wajib diisi' });
     }
+
+    const normalizedRole = normalizeRoleMitra(role);
 
     const created = await dbManager.executeTransaction((db) => {
       const cleanNama = String(nama).replace(/\s*\(Karyawan\)$/i, '').trim();
@@ -377,6 +410,7 @@ apiRouter.post('/mitra', async (req, res) => {
         (m) =>
           !m.isAnakPerusahaan &&
           m.role !== 'ANAK_PERUSAHAAN' &&
+          normalizedRole !== 'ANAK_PERUSAHAAN' &&
           String(m.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim().toLowerCase() ===
             cleanNama.toLowerCase()
       );
@@ -387,10 +421,17 @@ apiRouter.post('/mitra', async (req, res) => {
         if (alamat && alamat !== '-' && (!existingSamePerson.alamat || existingSamePerson.alamat === '-')) {
           existingSamePerson.alamat = alamat;
         }
+        if (fotoUrl !== undefined) {
+          existingSamePerson.fotoUrl = fotoUrl || undefined;
+        }
         if (catatan && !existingSamePerson.catatan?.includes(catatan)) {
           existingSamePerson.catatan = existingSamePerson.catatan
             ? `${existingSamePerson.catatan} · ${catatan}`
             : catatan;
+        }
+        if (!existingSamePerson.isKaryawan) {
+          existingSamePerson.role = normalizedRole;
+          existingSamePerson.isAnakPerusahaan = normalizedRole === 'ANAK_PERUSAHAAN';
         }
         existingSamePerson.status = 'AKTIF';
         return existingSamePerson;
@@ -400,17 +441,68 @@ apiRouter.post('/mitra', async (req, res) => {
       if (db.mitra.some((m) => m.kode === cleanKode)) {
         throw new Error(`Mitra dengan kode ${cleanKode} sudah ada`);
       }
+      const mitraId = `MTR-${Date.now().toString().slice(-4)}`;
       const newMitra: any = {
-        id: `MTR-${Date.now().toString().slice(-4)}`,
+        id: mitraId,
         kode: cleanKode,
         nama: cleanNama,
-        role,
+        role: normalizedRole,
         telepon: telepon || '-',
         alamat: alamat || '-',
         status: 'AKTIF',
         catatan: catatan || '',
+        ...(fotoUrl ? { fotoUrl: String(fotoUrl) } : {}),
+        isAnakPerusahaan: normalizedRole === 'ANAK_PERUSAHAAN',
+        isKaryawan: normalizedRole === 'KARYAWAN',
       };
       db.mitra.push(newMitra);
+
+      // Jika role adalah Karyawan dan Mitra, pastikan juga terdaftar di Master Karyawan (1 Akun Terpadu)
+      if (normalizedRole === 'KARYAWAN') {
+        if (!db.karyawan) db.karyawan = [];
+        const existingKry = db.karyawan.find(
+          (k) =>
+            k.idMitraTerkait === mitraId ||
+            k.nik === cleanKode ||
+            k.nama.trim().toLowerCase() === cleanNama.toLowerCase()
+        );
+        if (existingKry) {
+          existingKry.idMitraTerkait = mitraId;
+          newMitra.idKaryawanTerkait = existingKry.id;
+          if (fotoUrl) existingKry.fotoUrl = String(fotoUrl);
+        } else {
+          const kryId = `KRY-${Date.now().toString().slice(-4)}`;
+          const now = getWIBDateTime();
+          newMitra.idKaryawanTerkait = kryId;
+          db.karyawan.push({
+            id: kryId,
+            nik: cleanKode,
+            nama: cleanNama,
+            jabatan: 'Karyawan & Mitra',
+            divisi: 'Gudang Wijaya Agro',
+            departemen: 'Gudang Wijaya Agro',
+            gajiPokok: 0,
+            tunjanganTetap: 0,
+            telepon: telepon || '-',
+            alamat: alamat || '-',
+            tanggalMasuk: now.tanggal,
+            status: 'AKTIF',
+            fotoUrl: fotoUrl ? String(fotoUrl) : undefined,
+            riwayatDivisi: [
+              {
+                id: `RWD-${Date.now()}`,
+                tanggal: now.tanggal,
+                divisiBaru: 'Gudang Wijaya Agro',
+                jabatanBaru: 'Karyawan & Mitra',
+                catatan: 'Terdaftar melalui Master Mitra (Karyawan dan Mitra)',
+              },
+            ],
+            idMitraTerkait: mitraId,
+            catatan: catatan || '',
+          });
+        }
+      }
+
       return newMitra;
     });
 
@@ -471,29 +563,74 @@ apiRouter.delete('/mitra/:id', async (req, res) => {
 apiRouter.put('/mitra/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { nama, role, telepon, alamat, status, catatan } = req.body;
+    const { nama, role, telepon, alamat, status, catatan, fotoUrl } = req.body;
 
     const updated = await dbManager.executeTransaction((db) => {
       const mitra = db.mitra.find((m) => m.id === id);
       if (!mitra) throw new Error(`Mitra dengan ID ${id} tidak ditemukan`);
       if (nama) mitra.nama = String(nama).trim();
-      if (role) mitra.role = role;
-      if (telepon) mitra.telepon = telepon;
-      if (alamat) mitra.alamat = alamat;
+      if (role) {
+        const normalizedRole = normalizeRoleMitra(role);
+        mitra.role = normalizedRole;
+        mitra.isAnakPerusahaan = normalizedRole === 'ANAK_PERUSAHAAN';
+        mitra.isKaryawan = normalizedRole === 'KARYAWAN';
+      }
+      if (telepon !== undefined) mitra.telepon = telepon || '-';
+      if (alamat !== undefined) mitra.alamat = alamat || '-';
       if (status) mitra.status = status;
       if (catatan !== undefined) mitra.catatan = catatan;
+      if (fotoUrl !== undefined) mitra.fotoUrl = fotoUrl ? String(fotoUrl) : undefined;
 
-      // Sinkronkan balik ke Karyawan apabila mitra adalah akun karyawan terkait
-      if (mitra.role === 'KARYAWAN') {
-        const kry = (db.karyawan || []).find(
-          (k) => k.idMitraTerkait === mitra.id || `MTR-${k.id}` === mitra.id || k.nik === mitra.kode
+      // Sinkronkan dua arah ke Karyawan apabila mitra adalah akun Karyawan dan Mitra
+      if (mitra.role === 'KARYAWAN' || mitra.isKaryawan) {
+        if (!db.karyawan) db.karyawan = [];
+        const kry = db.karyawan.find(
+          (k) =>
+            k.id === mitra.idKaryawanTerkait ||
+            k.idMitraTerkait === mitra.id ||
+            `MTR-${k.id}` === mitra.id ||
+            k.nik === mitra.kode
         );
         if (kry) {
           if (nama) kry.nama = mitra.nama;
-          if (telepon) kry.telepon = mitra.telepon;
-          if (alamat) kry.alamat = mitra.alamat;
+          if (telepon !== undefined) kry.telepon = mitra.telepon;
+          if (alamat !== undefined) kry.alamat = mitra.alamat;
           if (status) kry.status = mitra.status;
+          if (fotoUrl !== undefined) kry.fotoUrl = mitra.fotoUrl;
           kry.idMitraTerkait = mitra.id;
+          mitra.idKaryawanTerkait = kry.id;
+          mitra.isKaryawan = true;
+        } else {
+          const kryId = `KRY-${Date.now().toString().slice(-4)}`;
+          const now = getWIBDateTime();
+          mitra.idKaryawanTerkait = kryId;
+          mitra.isKaryawan = true;
+          db.karyawan.push({
+            id: kryId,
+            nik: mitra.kode || kryId,
+            nama: mitra.nama,
+            jabatan: 'Karyawan & Mitra',
+            divisi: 'Gudang Wijaya Agro',
+            departemen: 'Gudang Wijaya Agro',
+            gajiPokok: 0,
+            tunjanganTetap: 0,
+            telepon: mitra.telepon || '-',
+            alamat: mitra.alamat || '-',
+            tanggalMasuk: now.tanggal,
+            status: mitra.status || 'AKTIF',
+            fotoUrl: mitra.fotoUrl,
+            riwayatDivisi: [
+              {
+                id: `RWD-${Date.now()}`,
+                tanggal: now.tanggal,
+                divisiBaru: 'Gudang Wijaya Agro',
+                jabatanBaru: 'Karyawan & Mitra',
+                catatan: 'Sinkronisasi role Karyawan dan Mitra',
+              },
+            ],
+            idMitraTerkait: mitra.id,
+            catatan: mitra.catatan || '',
+          });
         }
       }
 
@@ -2033,7 +2170,18 @@ apiRouter.post('/karyawan/:id/settle-gaji', async (req, res) => {
 
 apiRouter.post('/karyawan', async (req, res) => {
   try {
-    const { nik, nama, jabatan, divisi, departemen, gajiPokok, tunjanganTetap, telepon, alamat, tanggalMasuk, catatan } = req.body;
+    const {
+      nik,
+      nama,
+      jabatan,
+      divisi,
+      departemen,
+      telepon,
+      alamat,
+      tanggalMasuk,
+      catatan,
+      fotoUrl,
+    } = req.body;
     if (!nama || !jabatan) {
       return res.status(400).json({ success: false, message: 'Nama dan Jabatan karyawan wajib diisi' });
     }
@@ -2049,6 +2197,17 @@ apiRouter.post('/karyawan', async (req, res) => {
       const idMitra = `MTR-${id}`;
       const rawDiv = String(divisi || departemen || 'Gudang Wijaya Agro').trim();
       const selectedDivisi = isExcludedFromDivisi(rawDiv) ? 'PT Wijaya Agro Perkasa' : rawDiv;
+      const tglMasukVal = tanggalMasuk || getWIBDateTime().tanggal;
+
+      const initialRiwayat: RiwayatDivisiKaryawan[] = [
+        {
+          id: `RWD-${Date.now()}`,
+          tanggal: tglMasukVal,
+          divisiBaru: selectedDivisi,
+          jabatanBaru: String(jabatan).trim(),
+          catatan: 'Penempatan divisi awal karyawan',
+        },
+      ];
 
       const newKaryawan: any = {
         id,
@@ -2061,15 +2220,17 @@ apiRouter.post('/karyawan', async (req, res) => {
         tunjanganTetap: 0,
         telepon: telepon || '-',
         alamat: alamat || '-',
-        tanggalMasuk: tanggalMasuk || getWIBDateTime().tanggal,
+        tanggalMasuk: tglMasukVal,
         status: 'AKTIF',
+        fotoUrl: fotoUrl ? String(fotoUrl) : undefined,
+        riwayatDivisi: initialRiwayat,
         idMitraTerkait: idMitra,
         catatan: catatan || '',
       };
 
       db.karyawan.push(newKaryawan);
 
-      // Otomatis hubungkan ke entitas Mitra yang sudah ada (jika sebelumnya sudah jadi Petani/Mitra) atau buat baru (1 Akun Terpadu)
+      // Otomatis hubungkan ke entitas Mitra yang sudah ada atau buat baru (1 Akun Terpadu: Karyawan dan Mitra)
       const existingMitraIdx = db.mitra.findIndex(
         (m) =>
           m.id === idMitra ||
@@ -2085,6 +2246,9 @@ apiRouter.post('/karyawan', async (req, res) => {
         db.mitra[existingMitraIdx].role = 'KARYAWAN';
         db.mitra[existingMitraIdx].isKaryawan = true;
         db.mitra[existingMitraIdx].idKaryawanTerkait = newKaryawan.id;
+        if (newKaryawan.fotoUrl) {
+          db.mitra[existingMitraIdx].fotoUrl = newKaryawan.fotoUrl;
+        }
         if (newKaryawan.telepon && newKaryawan.telepon !== '-') {
           db.mitra[existingMitraIdx].telepon = newKaryawan.telepon;
         }
@@ -2102,6 +2266,7 @@ apiRouter.post('/karyawan', async (req, res) => {
           telepon: newKaryawan.telepon,
           alamat: newKaryawan.alamat,
           status: 'AKTIF',
+          fotoUrl: newKaryawan.fotoUrl,
           isKaryawan: true,
           idKaryawanTerkait: newKaryawan.id,
           catatan: `Karyawan: ${newKaryawan.jabatan} (Divisi ${newKaryawan.divisi})`,
@@ -2117,73 +2282,198 @@ apiRouter.post('/karyawan', async (req, res) => {
   }
 });
 
-apiRouter.put('/karyawan/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nama, jabatan, divisi, departemen, gajiPokok, tunjanganTetap, telepon, alamat, status, catatan } = req.body;
+async function executeUpdateProfilKaryawan(id: string, body: any) {
+  const {
+    nik,
+    nama,
+    jabatan,
+    divisi,
+    departemen,
+    telepon,
+    alamat,
+    tanggalMasuk,
+    status,
+    catatan,
+    fotoUrl,
+    catatanMutasiDivisi,
+    tanggalEfektifMutasi,
+    periodeBulanMutasi,
+  } = body || {};
 
-    const updated = await dbManager.executeTransaction((db) => {
-      const kry = db.karyawan.find((k) => k.id === id);
-      if (!kry) throw new Error(`Karyawan dengan ID ${id} tidak ditemukan`);
+  return dbManager.executeTransaction((db) => {
+    const kry = (db.karyawan || []).find((k) => k.id === id);
+    if (!kry) throw new Error(`Karyawan dengan ID ${id} tidak ditemukan`);
 
-      if (nama) kry.nama = String(nama).trim();
-      if (jabatan) kry.jabatan = String(jabatan).trim();
-      if (divisi) {
-        const cleanDiv = isExcludedFromDivisi(divisi) ? 'PT Wijaya Agro Perkasa' : String(divisi).trim();
-        kry.divisi = cleanDiv;
-        kry.departemen = cleanDiv;
-      } else if (departemen) {
-        const cleanDep = isExcludedFromDivisi(departemen) ? 'PT Wijaya Agro Perkasa' : String(departemen).trim();
-        kry.divisi = cleanDep;
-        kry.departemen = cleanDep;
+    const oldDivisi = String(kry.divisi || kry.departemen || 'Gudang Wijaya Agro').trim();
+    const oldJabatan = String(kry.jabatan || '').trim();
+    const oldNama = kry.nama;
+    const oldNik = kry.nik;
+
+    if (nik) {
+      const cleanNik = String(nik).trim().toUpperCase();
+      if (cleanNik !== kry.nik && db.karyawan.some((k) => k.id !== kry.id && k.nik === cleanNik)) {
+        throw new Error(`NIK ${cleanNik} sudah digunakan oleh karyawan lain`);
       }
-      kry.gajiPokok = 0;
-      kry.tunjanganTetap = 0;
-      if (telepon) kry.telepon = telepon;
-      if (alamat) kry.alamat = alamat;
-      if (status) kry.status = status;
-      if (catatan !== undefined) kry.catatan = catatan;
+      kry.nik = cleanNik;
+    }
+    if (nama) kry.nama = String(nama).trim();
+    if (jabatan) kry.jabatan = String(jabatan).trim();
 
-      // Sync ke entitas Mitra terpadu
-      const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
-      const mtr = db.mitra.find(
-        (m) =>
-          m.id === mitraId ||
-          m.idKaryawanTerkait === kry.id ||
-          m.kode === kry.nik ||
-          (!m.isAnakPerusahaan &&
-            m.role !== 'ANAK_PERUSAHAAN' &&
-            String(m.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim().toLowerCase() ===
-              kry.nama.toLowerCase())
-      );
-      if (mtr) {
-        kry.idMitraTerkait = mtr.id;
-        mtr.nama = kry.nama;
-        mtr.role = 'KARYAWAN';
-        mtr.isKaryawan = true;
-        mtr.idKaryawanTerkait = kry.id;
-        if (kry.telepon && kry.telepon !== '-') mtr.telepon = kry.telepon;
-        if (kry.alamat && kry.alamat !== '-') mtr.alamat = kry.alamat;
-        mtr.status = kry.status;
-        mtr.catatan = `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`;
-      } else {
-        db.mitra.push({
-          id: mitraId,
-          kode: kry.nik || kry.id,
-          nama: kry.nama,
-          role: 'KARYAWAN',
-          telepon: kry.telepon || '-',
-          alamat: kry.alamat || '-',
-          status: kry.status || 'AKTIF',
-          isKaryawan: true,
-          idKaryawanTerkait: kry.id,
-          catatan: `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`,
+    let newDivisi = oldDivisi;
+    if (divisi) {
+      newDivisi = isExcludedFromDivisi(divisi) ? 'PT Wijaya Agro Perkasa' : String(divisi).trim();
+      kry.divisi = newDivisi;
+      kry.departemen = newDivisi;
+    } else if (departemen) {
+      newDivisi = isExcludedFromDivisi(departemen) ? 'PT Wijaya Agro Perkasa' : String(departemen).trim();
+      kry.divisi = newDivisi;
+      kry.departemen = newDivisi;
+    }
+
+    kry.gajiPokok = 0;
+    kry.tunjanganTetap = 0;
+    if (telepon !== undefined) kry.telepon = telepon || '-';
+    if (alamat !== undefined) kry.alamat = alamat || '-';
+    if (tanggalMasuk) kry.tanggalMasuk = String(tanggalMasuk).trim();
+    if (status) kry.status = status;
+    if (catatan !== undefined) kry.catatan = catatan;
+    if (fotoUrl !== undefined) {
+      kry.fotoUrl = fotoUrl ? String(fotoUrl) : undefined;
+    }
+
+    // Rekam riwayat upgrade / mutasi divisi & jabatan lintas bulan
+    if (!Array.isArray(kry.riwayatDivisi)) {
+      kry.riwayatDivisi = [];
+    }
+    const newJabatan = String(kry.jabatan || '').trim();
+    const isDivisiChanged = newDivisi !== oldDivisi;
+    const isJabatanChanged = newJabatan !== oldJabatan;
+    const hasMutasiNote = Boolean(catatanMutasiDivisi && String(catatanMutasiDivisi).trim());
+
+    if (isDivisiChanged || isJabatanChanged || hasMutasiNote) {
+      const now = getWIBDateTime();
+      const tglMutasi = tanggalEfektifMutasi ? String(tanggalEfektifMutasi).trim() : now.tanggal;
+      const defaultNote = isDivisiChanged
+        ? `Upgrade / mutasi divisi dari ${oldDivisi} ke ${newDivisi}`
+        : isJabatanChanged
+        ? `Perubahan jabatan dari ${oldJabatan} menjadi ${newJabatan}`
+        : 'Pembaruan profil penempatan karyawan';
+
+      // Jika riwayat masih kosong, simpan juga jejak divisi asal agar histori bulan sebelumnya terlihat utuh
+      if (kry.riwayatDivisi.length === 0 && isDivisiChanged) {
+        kry.riwayatDivisi.push({
+          id: `RWD-INIT-${Date.now() - 1}`,
+          tanggal: kry.tanggalMasuk || now.tanggal,
+          divisiBaru: oldDivisi,
+          jabatanBaru: oldJabatan,
+          catatan: `Penempatan sebelumnya di ${oldDivisi}`,
         });
       }
 
-      return kry;
-    });
+      kry.riwayatDivisi.push({
+        id: `RWD-${Date.now()}`,
+        tanggal: tglMutasi,
+        periodeBulan: periodeBulanMutasi ? String(periodeBulanMutasi).trim() : undefined,
+        divisiSebelumnya: oldDivisi,
+        divisiBaru: newDivisi,
+        jabatanSebelumnya: oldJabatan,
+        jabatanBaru: newJabatan,
+        catatan: hasMutasiNote ? String(catatanMutasiDivisi).trim() : defaultNote,
+      });
 
+      if (!Array.isArray(db.auditLogs)) db.auditLogs = [];
+      db.auditLogs.unshift({
+        id: `AUD-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        tanggal: now.tanggal,
+        jam: now.jam,
+        user: 'BOS / ADMIN',
+        jenisTransaksi: 'UPDATE',
+        idTransaksi: kry.id,
+        detail: `[${isDivisiChanged ? 'UPGRADE DIVISI' : 'PROFIL KARYAWAN'}] ${kry.nama} (${kry.nik}): ${
+          hasMutasiNote ? String(catatanMutasiDivisi).trim() : defaultNote
+        }`,
+        nominal: 0,
+      });
+    }
+
+    // Sinkronkan perubahan nama/NIK di log upah harian & penggajian
+    if (kry.nama !== oldNama || kry.nik !== oldNik) {
+      for (const u of db.upahHarian || []) {
+        if (u.idKaryawan === kry.id) {
+          u.namaKaryawan = kry.nama;
+          u.nikKaryawan = kry.nik;
+        }
+      }
+      for (const g of db.penggajian || []) {
+        if (g.idKaryawan === kry.id) {
+          g.namaKaryawan = kry.nama;
+          g.nikKaryawan = kry.nik;
+        }
+      }
+    }
+
+    // Sync ke entitas Mitra terpadu (Role: Karyawan dan Mitra)
+    const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
+    const mtr = db.mitra.find(
+      (m) =>
+        m.id === mitraId ||
+        m.idKaryawanTerkait === kry.id ||
+        m.kode === oldNik ||
+        m.kode === kry.nik ||
+        (!m.isAnakPerusahaan &&
+          m.role !== 'ANAK_PERUSAHAAN' &&
+          String(m.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim().toLowerCase() ===
+            kry.nama.toLowerCase())
+    );
+    if (mtr) {
+      kry.idMitraTerkait = mtr.id;
+      mtr.nama = kry.nama;
+      mtr.kode = kry.nik || mtr.kode;
+      mtr.role = 'KARYAWAN';
+      mtr.isKaryawan = true;
+      mtr.idKaryawanTerkait = kry.id;
+      if (fotoUrl !== undefined) mtr.fotoUrl = kry.fotoUrl;
+      if (kry.telepon && kry.telepon !== '-') mtr.telepon = kry.telepon;
+      if (kry.alamat && kry.alamat !== '-') mtr.alamat = kry.alamat;
+      mtr.status = kry.status;
+      mtr.catatan = `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`;
+    } else {
+      db.mitra.push({
+        id: mitraId,
+        kode: kry.nik || kry.id,
+        nama: kry.nama,
+        role: 'KARYAWAN',
+        telepon: kry.telepon || '-',
+        alamat: kry.alamat || '-',
+        status: kry.status || 'AKTIF',
+        fotoUrl: kry.fotoUrl,
+        isKaryawan: true,
+        idKaryawanTerkait: kry.id,
+        catatan: `Karyawan: ${kry.jabatan} (Divisi ${kry.divisi || kry.departemen})`,
+      });
+    }
+
+    return kry;
+  });
+}
+
+apiRouter.post('/karyawan/update-profil', async (req, res) => {
+  try {
+    const id = String(req.body?.id || req.body?.idKaryawan || '').trim();
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'ID karyawan wajib disertakan' });
+    }
+    const updated = await executeUpdateProfilKaryawan(id, req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/karyawan/:id', async (req, res) => {
+  try {
+    const updated = await executeUpdateProfilKaryawan(req.params.id, req.body);
     res.json({ success: true, data: updated });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });

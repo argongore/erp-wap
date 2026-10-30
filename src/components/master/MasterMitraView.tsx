@@ -20,8 +20,20 @@ import {
   Database,
   Building2,
   RotateCcw,
+  Camera,
 } from 'lucide-react';
-import { Mitra, RoleMitra, RekapMasterMitraSummary, RekapMitraItem, FullErpModularDataset, Rekening } from '../../server/types.ts';
+import {
+  CanonicalRoleMitra,
+  DAFTAR_ROLE_MITRA,
+  FullErpModularDataset,
+  getRoleMitraLabel,
+  Mitra,
+  normalizeRoleMitra,
+  RekapMasterMitraSummary,
+  RekapMitraItem,
+  Rekening,
+  RoleMitra,
+} from '../../server/types.ts';
 import { api } from '../../api/client.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { InputNotaLaluModal } from '../common/InputNotaLaluModal.tsx';
@@ -31,6 +43,11 @@ import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusa
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { findSimilarMitra, useFuzzyMitraMatches } from '../../utils/nameSimilarity.ts';
 import { FuzzyNameWarningCard } from '../common/FuzzyNameWarningCard.tsx';
+import {
+  KaryawanAvatar,
+  ModalPreviewFotoKaryawan,
+  compressFotoProfilImage,
+} from '../karyawan/ModalProfilKaryawan.tsx';
 
 interface Props {
   mitraList: Mitra[];
@@ -43,7 +60,7 @@ interface Props {
   onSuccessReceipt?: (receipt: ReceiptData) => void;
 }
 
-type FilterTab = 'ALL' | 'ANAK_PERUSAHAAN' | 'EKSTERNAL' | 'KARYAWAN' | 'MITRA_TANI' | 'CUSTOMER' | 'SUPPLIER' | 'HUTANG_TITIP' | 'BON_AKTIF';
+type FilterTab = 'ALL' | CanonicalRoleMitra | 'HUTANG_TITIP' | 'BON_AKTIF';
 
 export const MasterMitraView: React.FC<Props> = ({
   mitraList,
@@ -80,10 +97,16 @@ export const MasterMitraView: React.FC<Props> = ({
   // Form State
   const [formKode, setFormKode] = useState('');
   const [formNama, setFormNama] = useState('');
-  const [formRole, setFormRole] = useState<RoleMitra>('MITRA_TANI');
+  const [formRole, setFormRole] = useState<RoleMitra>('SUPPLIER_CUSTOMER');
   const [formTelepon, setFormTelepon] = useState('');
   const [formAlamat, setFormAlamat] = useState('');
   const [formCatatan, setFormCatatan] = useState('');
+  const [formFotoUrl, setFormFotoUrl] = useState('');
+  const [previewFotoMitra, setPreviewFotoMitra] = useState<{
+    nama: string;
+    roleLabel?: string;
+    fotoUrl: string;
+  } | null>(null);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -180,14 +203,17 @@ export const MasterMitraView: React.FC<Props> = ({
         telepon: formTelepon,
         alamat: formAlamat,
         catatan: formCatatan,
+        fotoUrl: formFotoUrl,
       });
-      setSuccessMsg(`Mitra ${formNama} berhasil ditambahkan`);
+      setSuccessMsg(`Mitra ${formNama} (${getRoleMitraLabel(formRole)}) berhasil ditambahkan`);
       setShowAddModal(false);
       setFormKode('');
       setFormNama('');
+      setFormRole('SUPPLIER_CUSTOMER');
       setFormTelepon('');
       setFormAlamat('');
       setFormCatatan('');
+      setFormFotoUrl('');
       handleRefreshAll();
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal menambahkan mitra');
@@ -210,8 +236,9 @@ export const MasterMitraView: React.FC<Props> = ({
         alamat: formAlamat,
         status: editingMitra.status,
         catatan: formCatatan,
+        fotoUrl: formFotoUrl,
       });
-      setSuccessMsg(`Data mitra ${formNama} berhasil diperbarui`);
+      setSuccessMsg(`Data mitra ${formNama} (${getRoleMitraLabel(formRole)}) berhasil diperbarui`);
       setEditingMitra(null);
       handleRefreshAll();
     } catch (err: any) {
@@ -224,10 +251,16 @@ export const MasterMitraView: React.FC<Props> = ({
   const openEdit = (m: Mitra | RekapMitraItem) => {
     setEditingMitra(m as Mitra);
     setFormNama(m.nama);
-    setFormRole(m.role);
+    setFormRole(
+      normalizeRoleMitra(m.role, {
+        isAnakPerusahaan: m.isAnakPerusahaan,
+        isKaryawan: (m as RekapMitraItem).isKaryawan || Boolean(m.idKaryawanTerkait),
+      })
+    );
     setFormTelepon(m.telepon);
     setFormAlamat(m.alamat);
     setFormCatatan(m.catatan || '');
+    setFormFotoUrl(m.fotoUrl || '');
     setErrorMsg('');
     setSuccessMsg('');
   };
@@ -287,10 +320,14 @@ export const MasterMitraView: React.FC<Props> = ({
     id: m.id,
     kode: m.kode,
     nama: m.nama,
-    role: m.role,
+    role: normalizeRoleMitra(m.role, {
+      isAnakPerusahaan: m.isAnakPerusahaan,
+      isKaryawan: Boolean(m.idKaryawanTerkait),
+    }),
     telepon: m.telepon,
     alamat: m.alamat,
     status: m.status,
+    fotoUrl: m.fotoUrl,
     catatan: m.catatan,
     isAnakPerusahaan: m.isAnakPerusahaan || m.role === 'ANAK_PERUSAHAAN',
     kodeRekeningTerkait: m.kodeRekeningTerkait,
@@ -303,62 +340,43 @@ export const MasterMitraView: React.FC<Props> = ({
     totalTransaksiCount: 0,
   }));
 
-  // Category Counts (Karyawan yang juga menitip hasil panen ikut terhitung sebagai Mitra Tani & Eksternal)
-  const countAnakPerusahaan = items.filter((i) => i.isAnakPerusahaan || i.role === 'ANAK_PERUSAHAAN').length;
-  const countEksternal = items.filter(
-    (i) => i.role !== 'KARYAWAN' || Boolean(i.hasTransaksiMitraPanen || (i.totalTitipPanenMurni || 0) > 0)
-  ).length;
-  const countKaryawan = items.filter((i) => i.isKaryawan || i.role === 'KARYAWAN').length;
-  const countMitraTani = items.filter(
-    (i) =>
-      i.role === 'MITRA_TANI' ||
-      i.role === 'ALL' ||
-      Boolean(i.hasTransaksiMitraPanen || (i.totalTitipPanenMurni || 0) > 0)
-  ).length;
-  const countCustomer = items.filter((i) => i.role === 'CUSTOMER' || i.role === 'ALL').length;
-  const countSupplier = items.filter((i) => i.role === 'SUPPLIER' || i.role === 'ALL').length;
+  const getItemCanonicalRole = (i: RekapMitraItem): CanonicalRoleMitra =>
+    normalizeRoleMitra(i.role, {
+      isAnakPerusahaan: i.isAnakPerusahaan,
+      isKaryawan: i.isKaryawan || Boolean(i.idKaryawanTerkait),
+    });
+
+  // 5 Canonical Mitra Role Counts
+  const countSupplier = items.filter((i) => getItemCanonicalRole(i) === 'SUPPLIER').length;
+  const countCustomer = items.filter((i) => getItemCanonicalRole(i) === 'CUSTOMER').length;
+  const countSupplierCustomer = items.filter((i) => getItemCanonicalRole(i) === 'SUPPLIER_CUSTOMER').length;
+  const countAnakPerusahaan = items.filter((i) => getItemCanonicalRole(i) === 'ANAK_PERUSAHAAN').length;
+  const countKaryawanMitra = items.filter((i) => getItemCanonicalRole(i) === 'KARYAWAN').length;
 
   // Filtering
   const filteredItems = items.filter((item) => {
     const q = searchTerm.toLowerCase();
+    const roleLabel = getRoleMitraLabel(item.role, {
+      isAnakPerusahaan: item.isAnakPerusahaan,
+      isKaryawan: item.isKaryawan || Boolean(item.idKaryawanTerkait),
+    }).toLowerCase();
     const matchesSearch =
       item.nama.toLowerCase().includes(q) ||
       item.kode.toLowerCase().includes(q) ||
       item.telepon.toLowerCase().includes(q) ||
-      item.alamat.toLowerCase().includes(q);
+      item.alamat.toLowerCase().includes(q) ||
+      roleLabel.includes(q);
 
     if (!matchesSearch) return false;
 
-    if (activeFilter === 'ANAK_PERUSAHAAN') {
-      return Boolean(item.isAnakPerusahaan || item.role === 'ANAK_PERUSAHAAN');
-    }
-    if (activeFilter === 'EKSTERNAL') {
-      return (
-        item.role !== 'KARYAWAN' ||
-        Boolean(item.hasTransaksiMitraPanen || (item.totalTitipPanenMurni || 0) > 0)
-      );
-    }
-    if (activeFilter === 'KARYAWAN') {
-      return Boolean(item.isKaryawan || item.role === 'KARYAWAN');
-    }
     if (activeFilter === 'HUTANG_TITIP') {
       return item.totalHutangTitipPanen > 0;
     }
     if (activeFilter === 'BON_AKTIF') {
       return item.totalBonMitra > 0;
     }
-    if (activeFilter === 'MITRA_TANI') {
-      return (
-        item.role === 'MITRA_TANI' ||
-        item.role === 'ALL' ||
-        Boolean(item.hasTransaksiMitraPanen || (item.totalTitipPanenMurni || 0) > 0)
-      );
-    }
-    if (activeFilter === 'CUSTOMER') {
-      return item.role === 'CUSTOMER' || item.role === 'ALL';
-    }
-    if (activeFilter === 'SUPPLIER') {
-      return item.role === 'SUPPLIER' || item.role === 'ALL';
+    if (activeFilter !== 'ALL') {
+      return getItemCanonicalRole(item) === activeFilter;
     }
     return true;
   });
@@ -619,11 +637,11 @@ export const MasterMitraView: React.FC<Props> = ({
         <ShieldCheck className="w-4 h-4 text-sky-700 shrink-0 mt-0.5" />
         <div className="space-y-1">
           <div className="flex items-center space-x-2">
-            <strong className="text-sky-950 font-bold">Sinkronisasi Keuangan &amp; Akun Karyawan Terpadu:</strong>
+            <strong className="text-sky-950 font-bold">5 Klasifikasi Role Mitra Tersinkronisasi:</strong>
             <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-bold">Otomatis Terhubung</span>
           </div>
           <p className="text-[11px] text-zinc-600 leading-relaxed">
-            Di sistem ERP Wijaya Agro, setiap karyawan yang diinput di <strong>Master Karyawan</strong> otomatis dibuatkan akun di <strong>Database Mitra</strong> (Role: KARYAWAN) agar siap untuk transaksi <em>Kasbon Uang Tunai</em>, <em>Kasbon Barang Toko</em>, dan <em>Potong Gaji</em> di kasir. Anda dapat memfilter tampilan di bawah untuk melihat hanya mitra bisnis luar (<strong>Mitra Eksternal</strong>) atau akun kasbon staf (<strong>Internal Karyawan</strong>).
+            Seluruh akun mitra tersinkron penuh antara Tampilan Bos, Master Mitra, dan Rekening Koran dengan 5 klasifikasi role resmi: <strong>Supplier</strong>, <strong>Customer</strong>, <strong>Supplier dan Customer</strong>, <strong>Anak Perusahaan</strong>, serta <strong>Karyawan dan Mitra</strong> (terhubung langsung ke payroll harian, foto karyawan, &amp; kasbon).
           </p>
         </div>
       </div>
@@ -657,28 +675,48 @@ export const MasterMitraView: React.FC<Props> = ({
           </button>
 
           <button
+            onClick={() => setActiveFilter('SUPPLIER')}
+            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'SUPPLIER'
+                ? 'bg-amber-700 text-white shadow-2xs'
+                : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
+            }`}
+          >
+            Supplier ({countSupplier})
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('CUSTOMER')}
+            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'CUSTOMER'
+                ? 'bg-sky-700 text-white shadow-2xs'
+                : 'bg-sky-50 text-sky-800 hover:bg-sky-100 border border-sky-200'
+            }`}
+          >
+            Customer ({countCustomer})
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('SUPPLIER_CUSTOMER')}
+            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+              activeFilter === 'SUPPLIER_CUSTOMER'
+                ? 'bg-emerald-700 text-white shadow-2xs'
+                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+            }`}
+          >
+            Supplier dan Customer ({countSupplierCustomer})
+          </button>
+
+          <button
             onClick={() => setActiveFilter('ANAK_PERUSAHAAN')}
             className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
               activeFilter === 'ANAK_PERUSAHAAN'
                 ? 'bg-teal-700 text-white shadow-2xs'
                 : 'bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200'
             }`}
-            title="Anak perusahaan PT. Wijaya Agro Perkasa yang menyatu dengan Master Rekening (seperti DP Parabot)"
           >
             <Building2 className="w-3.5 h-3.5" />
             <span>Anak Perusahaan ({countAnakPerusahaan})</span>
-          </button>
-
-          <button
-            onClick={() => setActiveFilter('EKSTERNAL')}
-            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-              activeFilter === 'EKSTERNAL'
-                ? 'bg-emerald-700 text-white shadow-2xs'
-                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
-            }`}
-            title="Hanya mitra bisnis luar (Petani, Customer, Supplier, Anak Perusahaan)"
-          >
-            <span>Mitra Eksternal ({countEksternal})</span>
           </button>
 
           <button
@@ -688,42 +726,8 @@ export const MasterMitraView: React.FC<Props> = ({
                 ? 'bg-indigo-700 text-white shadow-2xs'
                 : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-200'
             }`}
-            title="Akun internal karyawan untuk pencatatan kasbon uang dan barang toko"
           >
-            <span>Internal Karyawan ({countKaryawan})</span>
-          </button>
-
-          <button
-            onClick={() => setActiveFilter('MITRA_TANI')}
-            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-              activeFilter === 'MITRA_TANI'
-                ? 'bg-emerald-800 text-white shadow-2xs'
-                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-            }`}
-          >
-            Petani ({countMitraTani})
-          </button>
-
-          <button
-            onClick={() => setActiveFilter('CUSTOMER')}
-            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-              activeFilter === 'CUSTOMER'
-                ? 'bg-sky-700 text-white shadow-2xs'
-                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-            }`}
-          >
-            Customer ({countCustomer})
-          </button>
-
-          <button
-            onClick={() => setActiveFilter('SUPPLIER')}
-            className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-              activeFilter === 'SUPPLIER'
-                ? 'bg-amber-700 text-white shadow-2xs'
-                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-            }`}
-          >
-            Supplier ({countSupplier})
+            <span>Karyawan dan Mitra ({countKaryawanMitra})</span>
           </button>
 
           <button
@@ -742,7 +746,7 @@ export const MasterMitraView: React.FC<Props> = ({
             onClick={() => setActiveFilter('BON_AKTIF')}
             className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
               activeFilter === 'BON_AKTIF'
-                ? 'bg-amber-700 text-white shadow-2xs'
+                ? 'bg-amber-800 text-white shadow-2xs'
                 : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
             }`}
           >
@@ -843,54 +847,67 @@ export const MasterMitraView: React.FC<Props> = ({
                     >
                       {/* Identity */}
                       <td className="py-3 px-4">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-mono font-bold text-zinc-900 bg-zinc-100 px-2 py-0.5 rounded border border-zinc-200">
-                            {m.kode}
-                          </span>
-                          <span className="font-bold text-zinc-900 text-sm">{m.nama}</span>
+                        <div className="flex items-center space-x-2.5">
+                          <KaryawanAvatar
+                            nama={m.nama}
+                            fotoUrl={m.fotoUrl}
+                            size="sm"
+                            onClick={
+                              m.fotoUrl
+                                ? () =>
+                                    setPreviewFotoMitra({
+                                      nama: m.nama,
+                                      roleLabel: getRoleMitraLabel(m.role, {
+                                        isAnakPerusahaan: m.isAnakPerusahaan,
+                                        isKaryawan: m.isKaryawan || Boolean(m.idKaryawanTerkait),
+                                      }),
+                                      fotoUrl: m.fotoUrl!,
+                                    })
+                                : undefined
+                            }
+                          />
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-mono font-bold text-zinc-900 bg-zinc-100 px-2 py-0.5 rounded border border-zinc-200">
+                                {m.kode}
+                              </span>
+                              <span className="font-bold text-zinc-900 text-sm">{m.nama}</span>
+                            </div>
+                            {isAnak && rekKode && (
+                              <div className="text-[11px] text-teal-800 font-semibold mt-0.5">
+                                Terintegrasi 1 Transaksi dengan Rekening <span className="font-mono">{rekKode}</span>
+                              </div>
+                            )}
+                            {m.alamat && (
+                              <div className="text-[10px] text-zinc-500 mt-0.5 truncate max-w-xs">
+                                {m.alamat}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        {isAnak && rekKode && (
-                          <div className="text-[11px] text-teal-800 font-semibold mt-0.5">
-                            Terintegrasi 1 Transaksi dengan Rekening <span className="font-mono">{rekKode}</span>
-                          </div>
-                        )}
-                        {m.alamat && (
-                          <div className="text-[10px] text-zinc-500 mt-0.5 truncate max-w-xs">
-                            {m.alamat}
-                          </div>
-                        )}
                       </td>
 
                       {/* Role & Telepon */}
                       <td className="py-3 px-4">
-                        <div className="text-[11px] font-bold">
-                          {isAnak ? (
-                            <span className="text-teal-900">
-                              ANAK PERUSAHAAN &amp; MITRA
-                            </span>
-                          ) : (m.isKaryawan || m.role === 'KARYAWAN') &&
-                            (m.hasTransaksiMitraPanen || (m.totalTitipPanenMurni || 0) > 0) ? (
-                            <span className="text-emerald-800">
-                              KARYAWAN &amp; MITRA PANEN
-                            </span>
-                          ) : (
-                            <span
-                              className={
-                                m.role === 'MITRA_TANI'
-                                  ? 'text-emerald-800'
-                                  : m.role === 'CUSTOMER'
-                                  ? 'text-sky-800'
-                                  : m.role === 'SUPPLIER'
-                                  ? 'text-amber-800'
-                                  : m.isKaryawan || m.role === 'KARYAWAN'
-                                  ? 'text-indigo-900'
-                                  : 'text-purple-800'
-                              }
-                            >
-                              {m.isKaryawan || m.role === 'KARYAWAN' ? 'KARYAWAN & MITRA' : m.role}
-                            </span>
-                          )}
-                        </div>
+                        {(() => {
+                          const canonRole = getItemCanonicalRole(m);
+                          const roleLabel = getRoleMitraLabel(canonRole);
+                          const roleColorClass =
+                            canonRole === 'ANAK_PERUSAHAAN'
+                              ? 'text-teal-900'
+                              : canonRole === 'KARYAWAN'
+                              ? 'text-indigo-900'
+                              : canonRole === 'SUPPLIER'
+                              ? 'text-amber-800'
+                              : canonRole === 'CUSTOMER'
+                              ? 'text-sky-800'
+                              : 'text-emerald-800';
+                          return (
+                            <div className={`text-[11px] font-bold ${roleColorClass}`}>
+                              {roleLabel}
+                            </div>
+                          );
+                        })()}
                         {isAnak && (
                           <div className="text-[10px] text-teal-700 font-medium mt-0.5">
                             Anak Perusahaan PT. Wijaya Agro Perkasa
@@ -1218,20 +1235,59 @@ export const MasterMitraView: React.FC<Props> = ({
                 />
               </div>
 
+              {/* Foto Profil Mitra (Opsional) */}
+              <div className="flex items-center space-x-3 p-3 bg-zinc-50 rounded-xl border border-zinc-200">
+                <KaryawanAvatar nama={formNama || 'MT'} fotoUrl={formFotoUrl} size="md" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-zinc-800">Foto Profil Mitra (Opsional)</div>
+                  <div className="text-[10px] text-zinc-500">Tersinkron otomatis jika role Karyawan dan Mitra</div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <label className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white hover:bg-zinc-100 text-sky-700 border border-zinc-300 rounded-lg text-[11px] font-semibold cursor-pointer">
+                      <Camera className="w-3 h-3" />
+                      <span>{formFotoUrl ? 'Ganti Foto' : 'Pilih Foto'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const compressed = await compressFotoProfilImage(file);
+                            setFormFotoUrl(compressed);
+                          } catch (err: any) {
+                            setErrorMsg(err.message || 'Gagal memuat foto');
+                          }
+                        }}
+                      />
+                    </label>
+                    {formFotoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setFormFotoUrl('')}
+                        className="px-2 py-1 text-rose-600 hover:bg-rose-50 rounded-lg text-[11px] font-medium cursor-pointer"
+                      >
+                        Hapus Foto
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Role / Klasifikasi Mitra <span className="text-rose-500">*</span>
+                  Role Mitra <span className="text-rose-500">*</span>
                 </label>
                 <select
                   value={formRole}
-                  onChange={(e) => setFormRole(e.target.value as any)}
+                  onChange={(e) => setFormRole(e.target.value as RoleMitra)}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-sky-600 font-semibold"
                 >
-                  <option value="MITRA_TANI">MITRA_TANI (Petani Binaan / Pemasok Komoditas)</option>
-                  <option value="CUSTOMER">CUSTOMER (Pembeli Sarana Produksi / Saprotan)</option>
-                  <option value="SUPPLIER">SUPPLIER (Pemasok Komoditas / Barang)</option>
-                  <option value="ANAK_PERUSAHAAN">ANAK_PERUSAHAAN (Anak Perusahaan PT &amp; Rekening Terpadu)</option>
-                  <option value="ALL">ALL (Pelanggan Sekaligus Pemasok)</option>
+                  {DAFTAR_ROLE_MITRA.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} — {opt.deskripsi}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -1322,18 +1378,56 @@ export const MasterMitraView: React.FC<Props> = ({
                 />
               </div>
 
+              {/* Foto Profil Mitra */}
+              <div className="flex items-center space-x-3 p-3 bg-zinc-50 rounded-xl border border-zinc-200">
+                <KaryawanAvatar nama={formNama || 'MT'} fotoUrl={formFotoUrl} size="md" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-zinc-800">Foto Profil Mitra</div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <label className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white hover:bg-zinc-100 text-sky-700 border border-zinc-300 rounded-lg text-[11px] font-semibold cursor-pointer">
+                      <Camera className="w-3 h-3" />
+                      <span>{formFotoUrl ? 'Ganti Foto' : 'Pilih Foto'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const compressed = await compressFotoProfilImage(file);
+                            setFormFotoUrl(compressed);
+                          } catch (err: any) {
+                            setErrorMsg(err.message || 'Gagal memuat foto');
+                          }
+                        }}
+                      />
+                    </label>
+                    {formFotoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setFormFotoUrl('')}
+                        className="px-2 py-1 text-rose-600 hover:bg-rose-50 rounded-lg text-[11px] font-medium cursor-pointer"
+                      >
+                        Hapus Foto
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div>
-                <label className="block font-semibold text-zinc-700 mb-1">Role / Klasifikasi</label>
+                <label className="block font-semibold text-zinc-700 mb-1">Role Mitra</label>
                 <select
                   value={formRole}
-                  onChange={(e) => setFormRole(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-sky-600"
+                  onChange={(e) => setFormRole(e.target.value as RoleMitra)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-sky-600 font-semibold"
                 >
-                  <option value="MITRA_TANI">MITRA_TANI</option>
-                  <option value="CUSTOMER">CUSTOMER</option>
-                  <option value="SUPPLIER">SUPPLIER</option>
-                  <option value="ANAK_PERUSAHAAN">ANAK_PERUSAHAAN</option>
-                  <option value="ALL">ALL</option>
+                  {DAFTAR_ROLE_MITRA.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} — {opt.deskripsi}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -1700,6 +1794,15 @@ export const MasterMitraView: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {previewFotoMitra && (
+        <ModalPreviewFotoKaryawan
+          nama={previewFotoMitra.nama}
+          jabatan={previewFotoMitra.roleLabel}
+          fotoUrl={previewFotoMitra.fotoUrl}
+          onClose={() => setPreviewFotoMitra(null)}
+        />
       )}
     </div>
   );

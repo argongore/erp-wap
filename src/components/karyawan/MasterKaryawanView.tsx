@@ -31,6 +31,9 @@ import {
   Zap,
   ArrowDownToLine,
   ExternalLink,
+  UserCog,
+  Camera,
+  Trash2,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
@@ -50,6 +53,13 @@ import { ProsesGajiModal } from './ProsesGajiModal.tsx';
 import { BatchGajiHarianModal } from './BatchGajiHarianModal.tsx';
 import { BayarGajiKaryawanModal } from './BayarGajiKaryawanModal.tsx';
 import { FullErpModularDataset } from '../../server/types.ts';
+import {
+  KaryawanAvatar,
+  ModalPreviewFotoKaryawan,
+  ModalProfilKaryawan,
+  ProfilKaryawanEditableData,
+  compressFotoProfilImage,
+} from './ModalProfilKaryawan.tsx';
 
 interface MasterKaryawanViewProps {
   rekeningList: Rekening[];
@@ -251,8 +261,18 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [formAlamat, setFormAlamat] = useState('');
   const [formTanggalMasuk, setFormTanggalMasuk] = useState('');
   const [formCatatan, setFormCatatan] = useState('');
+  const [formFotoUrl, setFormFotoUrl] = useState('');
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+
+  // Unified Employee Profile, Photo & Division Upgrade Modal
+  const [profilModalKaryawan, setProfilModalKaryawan] = useState<ProfilKaryawanEditableData | null>(null);
+  const [previewFotoKry, setPreviewFotoKry] = useState<{
+    nama: string;
+    jabatan?: string;
+    divisi?: string;
+    fotoUrl: string;
+  } | null>(null);
 
   const loadData = async (silent = false) => {
     if (!silent && karyawanList.length === 0) setLoading(true);
@@ -393,24 +413,26 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     setFormAlamat('');
     setFormTanggalMasuk(new Date().toLocaleDateString('id-ID'));
     setFormCatatan('');
+    setFormFotoUrl('');
     setFormError('');
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (k: Karyawan) => {
-    setEditingKaryawan(k);
-    setFormNik(k.nik);
-    setFormNama(k.nama);
-    setFormJabatan(k.jabatan);
-    setFormDivisi(k.divisi || k.departemen || availableDivisiList[0] || 'Gudang Wijaya Agro');
-    setFormGajiPokok(k.gajiPokok || 0);
-    setFormTunjangan(k.tunjanganTetap || 0);
-    setFormTelepon(k.telepon || '');
-    setFormAlamat(k.alamat || '');
-    setFormTanggalMasuk(k.tanggalMasuk || '');
-    setFormCatatan(k.catatan || '');
-    setFormError('');
-    setIsModalOpen(true);
+    setProfilModalKaryawan({
+      id: k.id,
+      nik: k.nik,
+      nama: k.nama,
+      jabatan: k.jabatan,
+      divisi: k.divisi || k.departemen || availableDivisiList[0] || 'Gudang Wijaya Agro',
+      telepon: k.telepon,
+      alamat: k.alamat,
+      tanggalMasuk: k.tanggalMasuk,
+      status: k.status,
+      fotoUrl: k.fotoUrl,
+      catatan: k.catatan,
+      riwayatDivisi: k.riwayatDivisi,
+    });
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -436,6 +458,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           telepon: formTelepon,
           alamat: formAlamat,
           catatan: formCatatan,
+          fotoUrl: formFotoUrl,
         });
         setSuccessBanner(`Data karyawan "${namaSaved}" berhasil diperbarui dan disinkronkan ke Rekening Mitra.`);
       } else {
@@ -451,6 +474,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           alamat: formAlamat,
           tanggalMasuk: formTanggalMasuk,
           catatan: formCatatan,
+          fotoUrl: formFotoUrl,
         });
         setSuccessBanner(`Karyawan baru "${namaSaved}" (${nikSaved}) berhasil disimpan dan terhubung ke Rekening Mitra.`);
       }
@@ -848,12 +872,40 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                     return (
                       <tr key={k.id} className="hover:bg-zinc-800/40 transition-colors">
                         <td className="py-3.5 px-3">
-                          <div className="font-bold text-zinc-100">{k.nama}</div>
-                          <div className="text-[11px] text-zinc-400 font-mono">{k.nik}</div>
+                          <div className="flex items-center space-x-2.5">
+                            <KaryawanAvatar
+                              nama={k.nama}
+                              fotoUrl={k.fotoUrl}
+                              size="sm"
+                              theme="dark"
+                              onClick={() => {
+                                if (k.fotoUrl) {
+                                  setPreviewFotoKry({
+                                    nama: k.nama,
+                                    jabatan: k.jabatan,
+                                    divisi: k.divisi || k.departemen,
+                                    fotoUrl: k.fotoUrl,
+                                  });
+                                } else {
+                                  handleOpenEdit(k);
+                                }
+                              }}
+                            />
+                            <div>
+                              <div className="font-bold text-zinc-100">{k.nama}</div>
+                              <div className="text-[11px] text-zinc-400 font-mono">{k.nik}</div>
+                            </div>
+                          </div>
                         </td>
                         <td className="py-3.5 px-3">
                           <div className="text-zinc-200 font-medium">{k.jabatan}</div>
                           <div className="text-[11px] text-zinc-400">{k.divisi || k.departemen}</div>
+                          {k.riwayatDivisi && k.riwayatDivisi.length > 0 && (
+                            <div className="text-[10px] text-amber-300 mt-0.5">
+                              Upgrade: {k.riwayatDivisi[k.riwayatDivisi.length - 1].divisiSebelumnya} →{' '}
+                              {k.riwayatDivisi[k.riwayatDivisi.length - 1].divisiBaru}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3.5 px-3 text-right font-mono tabular-nums">
                           {unpaid > 0 ? (
@@ -1020,6 +1072,68 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                   />
                 </div>
               </div>
+
+              {/* Kartu Profil Karyawan Terpilih (Sinkron Foto & Upgrade Divisi Lintas Bulan) */}
+              {(() => {
+                const selectedKry = karyawanList.find((k) => k.id === inputKryId);
+                if (!selectedKry) return null;
+                const activeDiv = selectedKry.divisi || selectedKry.departemen || 'Gudang Wijaya Agro';
+                const latestMutasi =
+                  selectedKry.riwayatDivisi && selectedKry.riwayatDivisi.length > 0
+                    ? selectedKry.riwayatDivisi[selectedKry.riwayatDivisi.length - 1]
+                    : null;
+
+                return (
+                  <div className="p-3 bg-zinc-800/80 border border-zinc-700 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <KaryawanAvatar
+                        nama={selectedKry.nama}
+                        fotoUrl={selectedKry.fotoUrl}
+                        size="md"
+                        theme="dark"
+                        onClick={() => {
+                          if (selectedKry.fotoUrl) {
+                            setPreviewFotoKry({
+                              nama: selectedKry.nama,
+                              jabatan: selectedKry.jabatan,
+                              divisi: activeDiv,
+                              fotoUrl: selectedKry.fotoUrl,
+                            });
+                          } else {
+                            handleOpenEdit(selectedKry);
+                          }
+                        }}
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-zinc-100 truncate">
+                          {selectedKry.nama}{' '}
+                          <span className="font-mono text-[10px] text-zinc-400">({selectedKry.nik})</span>
+                        </div>
+                        <div className="text-[11px] text-zinc-300 mt-0.5">
+                          {selectedKry.jabatan} · Divisi Aktif:{' '}
+                          <strong className="text-amber-300">{activeDiv}</strong>
+                        </div>
+                        {latestMutasi && (
+                          <div className="text-[10px] text-emerald-300 mt-0.5">
+                            Riwayat Upgrade ({latestMutasi.periodeBulan}): {latestMutasi.divisiSebelumnya} →{' '}
+                            {latestMutasi.divisiBaru}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(selectedKry)}
+                      className="inline-flex items-center justify-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-700 text-sky-300 border border-sky-700/60 text-[11px] font-bold transition-colors shrink-0 cursor-pointer"
+                      title="Update profil, upload foto karyawan, atau upgrade penempatan divisi (misal GWA ke CV Wijaya Agro / PT Wijaya Agro Perkasa)"
+                    >
+                      <UserCog className="w-3.5 h-3.5" />
+                      <span>Profil, Foto &amp; Upgrade Divisi</span>
+                    </button>
+                  </div>
+                );
+              })()}
 
               {/* Division assignment */}
               <div>
@@ -1546,9 +1660,24 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                         <tr key={k.id} className="hover:bg-zinc-800/40 transition-colors">
                           <td className="py-3.5 px-4 font-sans">
                             <div className="flex items-center space-x-3">
-                              <div className="w-8 h-8 rounded-full bg-amber-950 text-amber-300 border border-amber-800 flex items-center justify-center font-bold text-xs shrink-0">
-                                {k.nama.slice(0, 2).toUpperCase()}
-                              </div>
+                              <KaryawanAvatar
+                                nama={k.nama}
+                                fotoUrl={k.fotoUrl}
+                                size="sm"
+                                theme="dark"
+                                onClick={() => {
+                                  if (k.fotoUrl) {
+                                    setPreviewFotoKry({
+                                      nama: k.nama,
+                                      jabatan: k.jabatan,
+                                      divisi: empDivisi,
+                                      fotoUrl: k.fotoUrl,
+                                    });
+                                  } else {
+                                    handleOpenEdit(k);
+                                  }
+                                }}
+                              />
                               <div>
                                 <div className="font-bold text-zinc-100">{k.nama}</div>
                                 <div className="flex items-center space-x-1.5 mt-0.5">
@@ -1559,7 +1688,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                                     className="text-[9px] text-indigo-300 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-700/60 font-sans"
                                     title="Tersinkron otomatis ke Database Mitra untuk kasbon & transaksi kasir"
                                   >
-                                    ⚡ Mitra Kasbon Terhubung
+                                    Karyawan dan Mitra
                                   </span>
                                 </div>
                               </div>
@@ -1571,6 +1700,12 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                             <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full border mt-1 font-semibold ${getDivisiBadgeColor(empDivisi)}`}>
                               {empDivisi}
                             </span>
+                            {k.riwayatDivisi && k.riwayatDivisi.length > 0 && (
+                              <div className="text-[10px] text-amber-300 mt-1">
+                                Upgrade: {k.riwayatDivisi[k.riwayatDivisi.length - 1].divisiSebelumnya} →{' '}
+                                {k.riwayatDivisi[k.riwayatDivisi.length - 1].divisiBaru}
+                              </div>
+                            )}
                           </td>
 
                           <td className="py-3.5 px-4 font-sans">
@@ -1675,13 +1810,14 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                                 <FileText className="w-3.5 h-3.5" />
                               </button>
 
-                              {/* Edit Profile */}
+                              {/* Edit Profile, Foto & Upgrade Divisi */}
                               <button
                                 onClick={() => handleOpenEdit(k)}
-                                className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded border border-zinc-700 transition-colors"
-                                title="Edit Data Karyawan"
+                                className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-sky-300 rounded border border-zinc-700 transition-colors flex items-center space-x-1 text-xs font-semibold cursor-pointer"
+                                title="Update Profil, Foto Karyawan & Upgrade Divisi"
                               >
-                                <Edit className="w-3.5 h-3.5" />
+                                <UserCog className="w-3.5 h-3.5" />
+                                <span>Profil &amp; Divisi</span>
                               </button>
 
                               {/* Hapus Permanen */}
@@ -1868,6 +2004,46 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             )}
 
             <form onSubmit={handleFormSubmit} className="space-y-3 text-xs">
+              {/* Foto Karyawan (Opsional) */}
+              <div className="flex items-center space-x-3 p-2.5 bg-zinc-800/60 rounded-xl border border-zinc-700/80">
+                <KaryawanAvatar nama={formNama || 'KR'} fotoUrl={formFotoUrl} size="md" theme="dark" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-zinc-200">Foto Karyawan (Opsional)</div>
+                  <div className="text-[10px] text-zinc-400">JPG / PNG otomatis dikompresi rapi</div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <label className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-zinc-600 rounded-lg text-[11px] font-semibold cursor-pointer">
+                      <Camera className="w-3 h-3" />
+                      <span>{formFotoUrl ? 'Ganti Foto' : 'Pilih Foto'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const compressed = await compressFotoProfilImage(file);
+                            setFormFotoUrl(compressed);
+                          } catch (err: any) {
+                            setFormError(err.message || 'Gagal memuat foto');
+                          }
+                        }}
+                      />
+                    </label>
+                    {formFotoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setFormFotoUrl('')}
+                        className="inline-flex items-center space-x-1 px-2 py-1 text-rose-300 hover:bg-rose-950/60 rounded-lg text-[11px] cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Hapus</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-zinc-400 mb-1">NIK Karyawan</label>
@@ -2052,6 +2228,40 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal: Profil Lengkap, Foto & Upgrade Divisi Karyawan */}
+      {profilModalKaryawan && (
+        <ModalProfilKaryawan
+          karyawan={profilModalKaryawan}
+          availableDivisiList={availableDivisiList}
+          onClose={() => setProfilModalKaryawan(null)}
+          onSaved={(updated) => {
+            setProfilModalKaryawan(null);
+            if (updated.id === inputKryId && updated.divisi) {
+              setInputDivisi(updated.divisi as NamaDivisi);
+              const dObj = DAFTAR_DIVISI.find((d) => d.nama === updated.divisi);
+              if (dObj) setInputRekeningSumber(dObj.kodeRekening);
+            }
+            setSuccessBanner(
+              `Profil & penempatan divisi "${updated.nama}" (${updated.divisi || updated.departemen}) berhasil diperbarui dan tersinkron di seluruh tampilan.`
+            );
+            setTimeout(() => setSuccessBanner(''), 7000);
+            setRefreshTrigger((p) => p + 1);
+            loadData(true);
+            onRefreshAll?.();
+          }}
+        />
+      )}
+
+      {previewFotoKry && (
+        <ModalPreviewFotoKaryawan
+          nama={previewFotoKry.nama}
+          jabatan={previewFotoKry.jabatan}
+          divisi={previewFotoKry.divisi}
+          fotoUrl={previewFotoKry.fotoUrl}
+          onClose={() => setPreviewFotoKry(null)}
+        />
       )}
     </div>
   );

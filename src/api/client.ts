@@ -1134,13 +1134,20 @@ export const api = {
     return data.data;
   },
 
-  updateKaryawan: async (id: string, payload: Partial<Karyawan>): Promise<Karyawan> => {
-    const data = await requestJson(`/api/karyawan/${encodeURIComponent(id)}`, {
-      method: 'PUT',
+  updateKaryawan: async (
+    id: string,
+    payload: Partial<Karyawan> & {
+      catatanMutasiDivisi?: string;
+      tanggalEfektifMutasi?: string;
+      periodeBulanMutasi?: string;
+    }
+  ): Promise<Karyawan> => {
+    const data = await requestJson('/api/karyawan/update-profil', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, id }),
     });
-    if (!data.success) throw new Error(data.message || 'Gagal memperbarui karyawan');
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui profil karyawan');
     return data.data;
   },
 

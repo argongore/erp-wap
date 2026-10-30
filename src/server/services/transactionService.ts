@@ -1,17 +1,24 @@
 import { dbManager, getWIBDateTime } from '../db.ts';
-import { DAFTAR_DIVISI, isKategoriAlatNonStok, isExcludedFromDivisi } from '../types.ts';
+import {
+  DAFTAR_DIVISI,
+  isKategoriAlatNonStok,
+  isExcludedFromDivisi,
+  normalizeRoleMitra,
+} from '../types.ts';
 import type {
   AlokasiPembayaranBon,
   AuditLog,
   BukuRekeningKaryawanSummary,
   CatatanUpahHarian,
   ItemPenjualan,
+  Karyawan,
   Mitra,
   MutasiBukuRekeningKaryawan,
   MutasiKeuanganDivisi,
   NamaDivisi,
   Produk,
   Rekening,
+  RiwayatDivisiKaryawan,
   StokBarang,
   StokHasilBumi,
   PergerakanKeuanganDivisiSummary,
@@ -3749,9 +3756,8 @@ export class TransactionService {
       const upahSudahDibayar = Math.max(upahSudahDibayarLog, totalGajiSlipDibayar);
 
       const lastJob = allUpahKry[0];
-      const divisiTerakhir = lastJob
-        ? lastJob.divisi
-        : ((kry.divisi || kry.departemen || 'Gudang Wijaya Agro') as NamaDivisi);
+      const activeDiv = (kry.divisi || kry.departemen || 'Gudang Wijaya Agro') as NamaDivisi;
+      const divisiTerakhir = activeDiv || (lastJob ? lastJob.divisi : ('Gudang Wijaya Agro' as NamaDivisi));
 
       // Posisi Bersih Gaji: Hak Upah Belum Dibayar - Total Bon
       const saldoBersih = upahBelumDibayar - totalBon;
@@ -3770,6 +3776,10 @@ export class TransactionService {
       if (upahBelumDibayar > 0) karyawanDenganUpahPendingCount++;
       if (totalBon > 0) karyawanDenganBonCount++;
 
+      const linkedMtr = db.mitra.find(
+        (m) => m.id === mitraId || m.idKaryawanTerkait === kry.id || m.kode === kry.nik
+      );
+
       return {
         id: kry.id,
         nik: kry.nik,
@@ -3780,6 +3790,8 @@ export class TransactionService {
         telepon: kry.telepon,
         alamat: kry.alamat,
         status: kry.status,
+        fotoUrl: kry.fotoUrl || linkedMtr?.fotoUrl,
+        riwayatDivisi: Array.isArray(kry.riwayatDivisi) ? kry.riwayatDivisi : [],
         divisiTerakhir,
         standarGajiPokok: 0,
         tunjanganTetap: 0,
@@ -4195,7 +4207,20 @@ export class TransactionService {
         divisiSet.add(u.divisi);
         divisiCounts[u.divisi] = (divisiCounts[u.divisi] || 0) + 1;
       }
-      let divisiUtama: NamaDivisi = 'Gudang Wijaya Agro';
+
+      const activeDivisiProfil = String(
+        kry.divisi ||
+          (kry.departemen?.includes('Toko')
+            ? 'CV Wijaya Agro'
+            : kry.departemen?.includes('Transport')
+            ? 'Wijaya Transport'
+            : kry.departemen?.includes('Pabrik') || kry.departemen?.includes('Teknik')
+            ? 'Wijaya Karya'
+            : kry.departemen) ||
+          'Gudang Wijaya Agro'
+      ).trim() as NamaDivisi;
+
+      let divisiUtama: NamaDivisi = activeDivisiProfil;
       let maxCount = -1;
       for (const [div, count] of Object.entries(divisiCounts)) {
         if (count > maxCount) {
@@ -4203,10 +4228,15 @@ export class TransactionService {
           divisiUtama = div as NamaDivisi;
         }
       }
-      if (divisiSet.size === 0 && kry.departemen) {
-        if (kry.departemen.includes('Toko')) divisiUtama = 'CV Wijaya Agro';
-        else if (kry.departemen.includes('Transport')) divisiUtama = 'Wijaya Transport';
-        else if (kry.departemen.includes('Pabrik') || kry.departemen.includes('Teknik')) divisiUtama = 'Wijaya Karya';
+
+      // Jika ada filterDivisi spesifik: tampilkan karyawan apabila divisi aktifnya sesuai ATAU memiliki catatan kerja/gaji di divisi tersebut bulan ini
+      if (
+        filterDivisi &&
+        activeDivisiProfil !== filterDivisi &&
+        allUpahBulanIni.length === 0 &&
+        allGajiBulanIni.length === 0
+      ) {
+        continue;
       }
 
       // Detailed daily records
@@ -4297,6 +4327,10 @@ export class TransactionService {
       ).size;
       const hariTidakMasukBulanIni = Math.max(0, hariDalamBulan - hariMasukBulanIni);
 
+      const linkedMtr = db.mitra.find(
+        (m) => m.id === mitraId || m.idKaryawanTerkait === kry.id || m.kode === kry.nik
+      );
+
       // Add to overall totals
       totalHariKerja += hariMasukBulanIni;
       totalGajiKotor += gajiKotor;
@@ -4310,7 +4344,10 @@ export class TransactionService {
         nik: kry.nik,
         nama: kry.nama,
         jabatan: kry.jabatan,
-        departemen: kry.departemen,
+        departemen: kry.divisi || kry.departemen,
+        divisiAktifSaatIni: activeDivisiProfil,
+        fotoUrl: kry.fotoUrl || linkedMtr?.fotoUrl,
+        riwayatDivisi: Array.isArray(kry.riwayatDivisi) ? kry.riwayatDivisi : [],
         divisiUtama,
         daftarDivisiBekerja: Array.from(divisiSet),
         totalHariKerja: hariMasukBulanIni,
@@ -5646,10 +5683,14 @@ export class TransactionService {
       idMitra: mitra.id,
       kodeMitra: mitra.kode,
       namaMitra: mitra.nama,
-      role: mitra.role,
+      role: normalizeRoleMitra(mitra.role, {
+        isAnakPerusahaan,
+        isKaryawan: Boolean(linkedKaryawan || mitra.isKaryawan),
+      }),
       telepon: mitra.telepon,
       alamat: mitra.alamat,
       status: mitra.status,
+      fotoUrl: mitra.fotoUrl || linkedKaryawan?.fotoUrl,
       ...(linkedKaryawan
         ? {
             isKaryawan: true,
@@ -5831,11 +5872,15 @@ export class TransactionService {
         id: m.id,
         kode: m.kode,
         nama: m.nama,
-        role: m.role,
+        role: normalizeRoleMitra(m.role, {
+          isAnakPerusahaan,
+          isKaryawan: Boolean(linkedKry || m.isKaryawan),
+        }),
         telepon: m.telepon,
         alamat: m.alamat,
         status: m.status,
         catatan: m.catatan,
+        fotoUrl: m.fotoUrl || linkedKry?.fotoUrl,
         ...(linkedKry
           ? {
               isKaryawan: true,

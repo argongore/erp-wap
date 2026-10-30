@@ -2,7 +2,96 @@
 
 export type StatusAktif = 'AKTIF' | 'NONAKTIF';
 
-export type RoleMitra = 'CUSTOMER' | 'SUPPLIER' | 'MITRA_TANI' | 'KARYAWAN' | 'ANAK_PERUSAHAAN' | 'ALL';
+export type RoleMitra =
+  | 'SUPPLIER'
+  | 'CUSTOMER'
+  | 'SUPPLIER_CUSTOMER'
+  | 'ANAK_PERUSAHAAN'
+  | 'KARYAWAN'
+  | 'MITRA_TANI'
+  | 'ALL';
+
+export type CanonicalRoleMitra =
+  | 'SUPPLIER'
+  | 'CUSTOMER'
+  | 'SUPPLIER_CUSTOMER'
+  | 'ANAK_PERUSAHAAN'
+  | 'KARYAWAN';
+
+export const DAFTAR_ROLE_MITRA: Array<{
+  value: CanonicalRoleMitra;
+  label: string;
+  deskripsi: string;
+}> = [
+  {
+    value: 'SUPPLIER',
+    label: 'Supplier',
+    deskripsi: 'Pemasok hasil bumi atau barang dagangan ke PT',
+  },
+  {
+    value: 'CUSTOMER',
+    label: 'Customer',
+    deskripsi: 'Pelanggan pembeli barang toko atau komoditas',
+  },
+  {
+    value: 'SUPPLIER_CUSTOMER',
+    label: 'Supplier dan Customer',
+    deskripsi: 'Mitra dua arah (pemasok panen sekaligus pelanggan toko/bon)',
+  },
+  {
+    value: 'ANAK_PERUSAHAAN',
+    label: 'Anak Perusahaan',
+    deskripsi: 'Unit afiliasi / anak perusahaan terintegrasi (mis. DP Parabot)',
+  },
+  {
+    value: 'KARYAWAN',
+    label: 'Karyawan dan Mitra',
+    deskripsi: 'Karyawan PT sekaligus akun mitra terpadu (upah, kasbon, & titipan)',
+  },
+];
+
+export function normalizeRoleMitra(
+  role?: string | null,
+  opts?: { isAnakPerusahaan?: boolean; isKaryawan?: boolean }
+): CanonicalRoleMitra {
+  if (opts?.isAnakPerusahaan || role === 'ANAK_PERUSAHAAN') return 'ANAK_PERUSAHAAN';
+  if (opts?.isKaryawan || role === 'KARYAWAN' || role === 'KARYAWAN_MITRA') return 'KARYAWAN';
+  const r = String(role || '').trim().toUpperCase();
+  if (r === 'SUPPLIER') return 'SUPPLIER';
+  if (r === 'CUSTOMER') return 'CUSTOMER';
+  if (r === 'SUPPLIER_CUSTOMER' || r === 'ALL' || r === 'MITRA_TANI') return 'SUPPLIER_CUSTOMER';
+  return 'SUPPLIER_CUSTOMER';
+}
+
+export function getRoleMitraLabel(
+  role?: string | null,
+  opts?: { isAnakPerusahaan?: boolean; isKaryawan?: boolean }
+): string {
+  const canonical = normalizeRoleMitra(role, opts);
+  switch (canonical) {
+    case 'SUPPLIER':
+      return 'Supplier';
+    case 'CUSTOMER':
+      return 'Customer';
+    case 'SUPPLIER_CUSTOMER':
+      return 'Supplier dan Customer';
+    case 'ANAK_PERUSAHAAN':
+      return 'Anak Perusahaan';
+    case 'KARYAWAN':
+      return 'Karyawan dan Mitra';
+  }
+}
+
+export interface RiwayatDivisiKaryawan {
+  id: string;
+  tanggal: string; // DD/MM/YYYY
+  periodeBulan?: string; // e.g. "Oktober 2026"
+  divisiSebelumnya?: string;
+  divisiBaru: string;
+  jabatanSebelumnya?: string;
+  jabatanBaru?: string;
+  catatan?: string;
+}
 
 export type MetodePembayaran = 'TUNAI' | 'TRANSFER' | 'KASBON' | 'TITIP';
 
@@ -34,6 +123,7 @@ export interface Mitra {
   alamat: string;
   status: StatusAktif;
   catatan?: string;
+  fotoUrl?: string;             // Foto profil mitra / karyawan terhubung
   isAnakPerusahaan?: boolean;   // true jika merupakan Anak Perusahaan PT. Wijaya Agro Perkasa (misal DP Parabot)
   kodeRekeningTerkait?: string; // Relasi 1-ke-1 ke Master Rekening (misal "REK-DPPARABO")
   isKaryawan?: boolean;         // true jika Mitra ini juga terdaftar sebagai Karyawan PT
@@ -49,6 +139,7 @@ export interface RekapMitraItem {
   alamat: string;
   status: StatusAktif;
   catatan?: string;
+  fotoUrl?: string;
   isAnakPerusahaan?: boolean;
   kodeRekeningTerkait?: string;
   namaRekeningTerkait?: string;
@@ -104,6 +195,8 @@ export interface RekapKaryawanItem {
   telepon: string;
   alamat: string;
   status: StatusAktif;
+  fotoUrl?: string;
+  riwayatDivisi?: RiwayatDivisiKaryawan[];
   divisiTerakhir: NamaDivisi;
   standarGajiPokok: number;
   tunjanganTetap: number;
@@ -202,6 +295,9 @@ export interface ItemRekapPayrollBulanan {
   nama: string;
   jabatan: string;
   departemen: string;
+  divisiAktifSaatIni?: string;
+  fotoUrl?: string;
+  riwayatDivisi?: RiwayatDivisiKaryawan[];
   divisiUtama: NamaDivisi;
   daftarDivisiBekerja: NamaDivisi[];
   totalHariKerja: number;
@@ -733,6 +829,8 @@ export interface Karyawan {
   namaBank?: string;       // e.g. "BCA", "BRI", "Mandiri", "BNI"
   noRekeningBank?: string; // No rekening karyawan untuk transfer
   atasNamaRekening?: string; // Nama pemilik rekening bank
+  fotoUrl?: string;        // Foto profil karyawan (Data URL terkompresi / URL)
+  riwayatDivisi?: RiwayatDivisiKaryawan[]; // Riwayat mutasi / upgrade divisi & jabatan lintas bulan
   catatan?: string;
 }
 
@@ -1000,6 +1098,7 @@ export interface RekeningKoranMitraSummary {
   telepon: string;
   alamat: string;
   status: StatusAktif;
+  fotoUrl?: string;
   isKaryawan?: boolean;
   idKaryawanTerkait?: string;
   nikKaryawan?: string;

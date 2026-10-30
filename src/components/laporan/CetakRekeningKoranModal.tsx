@@ -19,7 +19,11 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { ProfilPerusahaan, RekeningKoranMitraSummary } from '../../server/types.ts';
+import {
+  getRoleMitraLabel,
+  ProfilPerusahaan,
+  RekeningKoranMitraSummary,
+} from '../../server/types.ts';
 import { formatRupiah, formatTanggalIndo } from '../../utils/format.ts';
 import { ShareLinkModal } from '../public/ShareLinkModal.tsx';
 
@@ -189,7 +193,11 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
       doc.setTextColor(60, 60, 60);
-      doc.text(`Peran: ${statement.role}  |  Status: ${statement.status}`, 18, 54);
+      const roleLabelPdf = getRoleMitraLabel(statement.role, {
+        isAnakPerusahaan: statement.isAnakPerusahaan,
+        isKaryawan: statement.isKaryawan,
+      });
+      doc.text(`Peran: ${roleLabelPdf}  |  Status: ${statement.status}`, 18, 54);
       doc.text(`No. HP / WA : ${statement.telepon || '-'}`, pageWidth / 2 + 5, 49);
       doc.text(`Alamat           : ${statement.alamat || '-'}`, pageWidth / 2 + 5, 54);
 
@@ -731,7 +739,13 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                     <span className="text-xs font-normal text-zinc-500">({statement.kodeMitra})</span>
                   </div>
                   <div className="text-zinc-600">
-                    Peran / Kategori: <strong className="text-zinc-900">{statement.role}</strong>
+                    Peran / Kategori:{' '}
+                    <strong className="text-zinc-900">
+                      {getRoleMitraLabel(statement.role, {
+                        isAnakPerusahaan: statement.isAnakPerusahaan,
+                        isKaryawan: statement.isKaryawan,
+                      })}
+                    </strong>
                   </div>
                   <div>
                     Status Akun:{' '}

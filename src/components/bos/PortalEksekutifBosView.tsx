@@ -17,12 +17,20 @@ import {
   ChevronUp,
   ArrowLeft,
   Printer,
+  UserCog,
+  Plus,
+  ArrowRight,
 } from 'lucide-react';
-import { api } from '../../api/client.ts';
+import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
+  CanonicalRoleMitra,
   DAFTAR_DIVISI,
+  DAFTAR_ROLE_MITRA,
   DEFAULT_PT_LOGO_URL,
+  getRoleMitraLabel,
   isKategoriAlatNonStok,
+  NamaDivisi,
+  normalizeRoleMitra,
   ProfilPerusahaan,
   Rekening,
   StokBarang,
@@ -42,6 +50,13 @@ import { RekapSemuaTransaksiHarianView } from '../laporan/RekapSemuaTransaksiHar
 import { LabaRugiProdukView } from '../laporan/LabaRugiProdukView.tsx';
 import { CetakRekeningKoranModal } from '../laporan/CetakRekeningKoranModal.tsx';
 import { SlipGajiModal } from '../karyawan/SlipGajiModal.tsx';
+import { InputPayrollHarianDivisiModal } from '../karyawan/InputPayrollHarianDivisiModal.tsx';
+import {
+  KaryawanAvatar,
+  ModalPreviewFotoKaryawan,
+  ModalProfilKaryawan,
+  ProfilKaryawanEditableData,
+} from '../karyawan/ModalProfilKaryawan.tsx';
 import { DivisiLogoAvatar, resolveDivisiLogoUrl } from '../common/DivisiLogoAvatar.tsx';
 import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 
@@ -146,9 +161,24 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   const [rekapKaryawan, setRekapKaryawan] = useState<RekapMasterKaryawanSummary | null>(null);
   const [rekapPayroll, setRekapPayroll] = useState<RekapPayrollBulananSummary | null>(null);
   const [penggajianList, setPenggajianList] = useState<TransaksiPenggajian[]>([]);
+  const [karyawanMasterList, setKaryawanMasterList] = useState<KaryawanWithBon[]>([]);
   const [loadingKaryawan, setLoadingKaryawan] = useState(false);
   const [expandedKaryawanId, setExpandedKaryawanId] = useState<string | null>(null);
   const [activeSlip, setActiveSlip] = useState<TransaksiPenggajian | null>(null);
+
+  // Employee Profile / Division Upgrade & Daily Wage Input Modals (Synchronized with Kasir)
+  const [editingProfilKaryawan, setEditingProfilKaryawan] = useState<ProfilKaryawanEditableData | null>(null);
+  const [previewFotoKry, setPreviewFotoKry] = useState<{
+    nama: string;
+    jabatan?: string;
+    divisi?: string;
+    fotoUrl: string;
+  } | null>(null);
+  const [inputUpahModalConfig, setInputUpahModalConfig] = useState<{
+    open: boolean;
+    idKaryawan?: string;
+    divisi?: NamaDivisi;
+  }>({ open: false });
 
   // Mitra summary & read-only statement modal
   const [rekapMitra, setRekapMitra] = useState<RekapMasterMitraSummary | null>(null);
@@ -156,6 +186,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   const [mitraSearch, setMitraSearch] = useState('');
   const deferredMitraSearch = useDeferredValue(mitraSearch);
   const [mitraFilter, setMitraFilter] = useState<'ALL' | 'BON' | 'TITIP'>('ALL');
+  const [mitraRoleFilter, setMitraRoleFilter] = useState<'ALL' | CanonicalRoleMitra>('ALL');
   const [mitraVisibleLimit, setMitraVisibleLimit] = useState<number>(60);
   const [selectedStatement, setSelectedStatement] = useState<RekeningKoranMitraSummary | null>(null);
   const [loadingStatementId, setLoadingStatementId] = useState<string | null>(null);
@@ -183,7 +214,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     async (silent = false) => {
       if (!silent) setLoadingKaryawan(true);
       try {
-        const [rekapMasterRes, payrollRes, slipRes] = await Promise.all([
+        const [rekapMasterRes, payrollRes, slipRes, kryListRes] = await Promise.all([
           api.getRekapKaryawan().catch(() => null),
           api
             .getRekapPayrollBulanan({
@@ -193,10 +224,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
             })
             .catch(() => null),
           api.getPenggajian().catch(() => [] as TransaksiPenggajian[]),
+          api.getKaryawan().catch(() => [] as KaryawanWithBon[]),
         ]);
         if (rekapMasterRes) setRekapKaryawan(rekapMasterRes);
         if (payrollRes) setRekapPayroll(payrollRes);
         setPenggajianList(Array.isArray(slipRes) ? slipRes : []);
+        setKaryawanMasterList(Array.isArray(kryListRes) ? kryListRes : []);
         loadedTabsRef.current.karyawan = true;
       } finally {
         setLoadingKaryawan(false);
@@ -250,7 +283,39 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
 
   useEffect(() => {
     setMitraVisibleLimit(60);
-  }, [deferredMitraSearch, mitraFilter]);
+  }, [deferredMitraSearch, mitraFilter, mitraRoleFilter]);
+
+  const openProfilKaryawanModalById = useCallback(
+    (idKry: string) => {
+      const fullKry = karyawanMasterList.find((k) => k.id === idKry);
+      const rekapItem = rekapKaryawan?.items.find((k) => k.id === idKry);
+      const payrollItem = rekapPayroll?.items.find((k) => k.idKaryawan === idKry);
+
+      if (!fullKry && !rekapItem && !payrollItem) return;
+
+      setEditingProfilKaryawan({
+        id: idKry,
+        nik: fullKry?.nik || rekapItem?.nik || payrollItem?.nik || '',
+        nama: fullKry?.nama || rekapItem?.nama || payrollItem?.nama || '',
+        jabatan: fullKry?.jabatan || rekapItem?.jabatan || payrollItem?.jabatan || '',
+        divisi:
+          fullKry?.divisi ||
+          payrollItem?.divisiAktifSaatIni ||
+          rekapItem?.divisi ||
+          payrollItem?.divisiUtama ||
+          'Gudang Wijaya Agro',
+        telepon: fullKry?.telepon || rekapItem?.telepon || '-',
+        alamat: fullKry?.alamat || rekapItem?.alamat || '-',
+        tanggalMasuk: fullKry?.tanggalMasuk,
+        status: fullKry?.status || rekapItem?.status || 'AKTIF',
+        fotoUrl: fullKry?.fotoUrl || payrollItem?.fotoUrl || rekapItem?.fotoUrl,
+        catatan: fullKry?.catatan,
+        riwayatDivisi:
+          fullKry?.riwayatDivisi || payrollItem?.riwayatDivisi || rekapItem?.riwayatDivisi || [],
+      });
+    },
+    [karyawanMasterList, rekapKaryawan, rekapPayroll]
+  );
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
@@ -372,17 +437,44 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     const items = rekapMitra?.items || [];
     const q = deferredMitraSearch.trim().toLowerCase();
     return items.filter((m) => {
+      const canonicalRole = normalizeRoleMitra(m.role, {
+        isAnakPerusahaan: m.isAnakPerusahaan,
+        isKaryawan: m.isKaryawan,
+      });
+      if (mitraRoleFilter !== 'ALL' && canonicalRole !== mitraRoleFilter) return false;
       if (mitraFilter === 'BON' && (m.sisaBonBersih ?? m.totalBonMitra) <= 0) return false;
       if (mitraFilter === 'TITIP' && (m.sisaTitipanBersih ?? m.totalHutangTitipPanen) <= 0) return false;
       if (!q) return true;
+      const roleLabel = getRoleMitraLabel(m.role, {
+        isAnakPerusahaan: m.isAnakPerusahaan,
+        isKaryawan: m.isKaryawan,
+      }).toLowerCase();
       return (
         m.nama.toLowerCase().includes(q) ||
         m.kode.toLowerCase().includes(q) ||
         (m.alamat || '').toLowerCase().includes(q) ||
-        (m.role || '').toLowerCase().includes(q)
+        roleLabel.includes(q)
       );
     });
-  }, [rekapMitra, deferredMitraSearch, mitraFilter]);
+  }, [rekapMitra, deferredMitraSearch, mitraFilter, mitraRoleFilter]);
+
+  const mitraRoleCounts = useMemo(() => {
+    const counts: Record<CanonicalRoleMitra, number> = {
+      SUPPLIER: 0,
+      CUSTOMER: 0,
+      SUPPLIER_CUSTOMER: 0,
+      ANAK_PERUSAHAAN: 0,
+      KARYAWAN: 0,
+    };
+    for (const m of rekapMitra?.items || []) {
+      const c = normalizeRoleMitra(m.role, {
+        isAnakPerusahaan: m.isAnakPerusahaan,
+        isKaryawan: m.isKaryawan,
+      });
+      counts[c] = (counts[c] || 0) + 1;
+    }
+    return counts;
+  }, [rekapMitra]);
 
   const displayedMitraItems = useMemo(
     () => filteredMitraItems.slice(0, mitraVisibleLimit),
@@ -1056,16 +1148,35 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                   </div>
                 </div>
 
-                {/* Search Input */}
-                <div className="relative max-w-md">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={karyawanSearch}
-                    onChange={(e) => setKaryawanSearch(e.target.value)}
-                    placeholder="Cari nama karyawan, NIK, jabatan, atau divisi..."
-                    className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                  />
+                {/* Search Input + Direct Input Gaji Action */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={karyawanSearch}
+                      onChange={(e) => setKaryawanSearch(e.target.value)}
+                      placeholder="Cari nama karyawan, NIK, jabatan, atau divisi..."
+                      className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setInputUpahModalConfig({
+                        open: true,
+                        divisi:
+                          selectedDivisiKaryawan !== 'ALL'
+                            ? (selectedDivisiKaryawan as NamaDivisi)
+                            : 'Gudang Wijaya Agro',
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer self-start sm:self-auto"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Input Gaji Harian Karyawan</span>
+                  </button>
                 </div>
               </div>
             </section>
@@ -1080,7 +1191,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                       {rekapPayroll?.periodeBulan || `${BULAN_OPTIONS[selectedBulan - 1]?.label} ${selectedTahun}`}
                     </h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Klik nama karyawan untuk membuka rincian absensi kerja harian serta detail bon uang &amp; barang
+                      Klik baris karyawan untuk rincian absensi, atau klik <strong>Profil &amp; Divisi</strong> untuk update foto serta upgrade unit divisi (mis. Gudang → CV Wijaya Agro / PT Wijaya Agro Perkasa)
                     </p>
                   </div>
                 </div>
@@ -1098,19 +1209,25 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                     <table className="w-full text-left border-collapse text-xs sm:text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
-                          <th className="py-3 px-5 font-semibold">Nama Karyawan &amp; Divisi</th>
-                          <th className="py-3 px-3 font-semibold text-right">Hari Kerja</th>
+                          <th className="py-3 px-5 font-semibold">Profil Karyawan &amp; Unit Divisi</th>
+                          <th className="py-3 px-3 font-semibold text-right">Kehadiran</th>
                           <th className="py-3 px-4 font-semibold text-right">Total Upah Kotor</th>
                           <th className="py-3 px-4 font-semibold text-right">Sisa Bon Aktif</th>
                           <th className="py-3 px-4 font-semibold text-right">Sudah Dibayar</th>
-                          <th className="py-3 px-5 font-semibold text-right">Upah Belum Cair</th>
+                          <th className="py-3 px-4 font-semibold text-right">Upah Belum Cair</th>
+                          <th className="py-3 px-5 font-semibold text-right">Profil &amp; Gaji</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredPayrollItems.map((item) => {
                           const isExpanded = expandedKaryawanId === item.idKaryawan;
-                          const mitraId = karyawanMitraMap.get(item.idKaryawan);
+                          const mitraId = item.idMitraTerkait || karyawanMitraMap.get(item.idKaryawan);
                           const isOpeningStmt = mitraId ? loadingStatementId === mitraId : false;
+                          const divisiAktif = item.divisiAktifSaatIni || item.departemen || item.divisiUtama;
+                          const hasUpgradedDivisi = divisiAktif !== item.divisiUtama;
+                          const riwayatDivisi = item.riwayatDivisi || [];
+                          const latestUpgrade =
+                            riwayatDivisi.length > 0 ? riwayatDivisi[riwayatDivisi.length - 1] : undefined;
 
                           return (
                             <React.Fragment key={item.idKaryawan}>
@@ -1121,17 +1238,31 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                 className="hover:bg-slate-50/80 transition-colors cursor-pointer"
                               >
                                 <td className="py-3.5 px-5">
-                                  <div className="flex items-center gap-2.5">
-                                    <DivisiLogoAvatar
-                                      namaDivisi={item.divisiUtama}
-                                      logoUrl={resolveDivisiLogoUrl(
-                                        item.divisiUtama,
-                                        undefined,
-                                        divisiData.length > 0 ? divisiData : divisiMasterList
-                                      )}
+                                  <div className="flex items-center gap-3">
+                                    <KaryawanAvatar
+                                      nama={item.nama}
+                                      fotoUrl={item.fotoUrl}
                                       size="sm"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (item.fotoUrl) {
+                                          setPreviewFotoKry({
+                                            nama: item.nama,
+                                            jabatan: item.jabatan,
+                                            divisi: divisiAktif,
+                                            fotoUrl: item.fotoUrl,
+                                          });
+                                        } else {
+                                          openProfilKaryawanModalById(item.idKaryawan);
+                                        }
+                                      }}
+                                      title={
+                                        item.fotoUrl
+                                          ? `Lihat foto ${item.nama}`
+                                          : `Upload foto & update profil ${item.nama}`
+                                      }
                                     />
-                                    <div>
+                                    <div className="min-w-0">
                                       <div className="flex items-center gap-2">
                                         <span className="font-semibold text-slate-900">{item.nama}</span>
                                         {isExpanded ? (
@@ -1141,18 +1272,44 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                         )}
                                       </div>
                                       <div className="text-xs text-slate-500">
-                                        {item.nik} · {item.jabatan} · {item.divisiUtama}
+                                        {item.nik} · {item.jabatan} ·{' '}
+                                        <strong className="font-semibold text-slate-700">
+                                          {item.divisiUtama}
+                                        </strong>
                                         {(item.saldoTitipHasilPanenMitra || 0) > 0 && (
                                           <span className="text-amber-700 font-semibold font-mono tabular-nums">
                                             {' '}· Titip Panen: {formatRupiah(item.saldoTitipHasilPanenMitra || 0)}
                                           </span>
                                         )}
                                       </div>
+                                      {hasUpgradedDivisi ? (
+                                        <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
+                                          Unit aktif saat ini: <strong>{divisiAktif}</strong>
+                                        </div>
+                                      ) : latestUpgrade?.divisiSebelumnya &&
+                                        latestUpgrade.divisiSebelumnya !== latestUpgrade.divisiBaru ? (
+                                        <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
+                                          Upgrade divisi: {latestUpgrade.divisiSebelumnya} →{' '}
+                                          <strong>{latestUpgrade.divisiBaru}</strong>
+                                          {latestUpgrade.periodeBulan ? ` (${latestUpgrade.periodeBulan})` : ''}
+                                        </div>
+                                      ) : null}
                                     </div>
                                   </div>
                                 </td>
-                                <td className="py-3.5 px-3 text-right font-mono font-semibold text-slate-800 tabular-nums whitespace-nowrap">
-                                  {item.totalHariKerja} Hari
+                                <td className="py-3.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                                  <div className="font-semibold text-slate-800">
+                                    {item.totalHariKerja} Hari Masuk
+                                  </div>
+                                  <div className="text-[11px] text-slate-400">
+                                    {item.totalHariTidakMasuk ??
+                                      Math.max(
+                                        0,
+                                        new Date(selectedTahun, selectedBulan, 0).getDate() -
+                                          item.totalHariKerja
+                                      )}{' '}
+                                    Tidak Masuk
+                                  </div>
                                 </td>
                                 <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
                                   {item.totalGajiKotor > 0 ? formatRupiah(item.totalGajiKotor) : '-'}
@@ -1167,18 +1324,75 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                     ? formatRupiah(item.totalGajiBersihDibayar)
                                     : '-'}
                                 </td>
-                                <td className="py-3.5 px-5 text-right font-mono font-bold text-emerald-700 tabular-nums whitespace-nowrap">
+                                <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-700 tabular-nums whitespace-nowrap">
                                   {item.totalHakUpahPending > 0
                                     ? formatRupiah(item.totalHakUpahPending)
                                     : '-'}
+                                </td>
+                                <td
+                                  className="py-3.5 px-5 text-right whitespace-nowrap"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setInputUpahModalConfig({
+                                          open: true,
+                                          idKaryawan: item.idKaryawan,
+                                          divisi: divisiAktif as NamaDivisi,
+                                        })
+                                      }
+                                      className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-700 text-emerald-800 hover:text-white border border-emerald-200 text-xs font-semibold transition-colors cursor-pointer"
+                                      title="Input Gaji Harian Karyawan Ini"
+                                    >
+                                      + Gaji
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openProfilKaryawanModalById(item.idKaryawan)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-900 text-slate-800 hover:text-white text-xs font-semibold transition-colors cursor-pointer"
+                                      title="Update Profil, Foto & Upgrade Unit Divisi Karyawan"
+                                    >
+                                      <UserCog className="w-3.5 h-3.5" />
+                                      <span>Profil &amp; Divisi</span>
+                                    </button>
+                                  </div>
                                 </td>
                               </tr>
 
                               {isExpanded && (
                                 <tr className="bg-slate-50/70">
-                                  <td colSpan={6} className="px-5 py-4 space-y-4">
-                                    {/* Breakdown Summary Strip */}
-                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl p-3.5 text-xs">
+                                  <td colSpan={7} className="px-5 py-4 space-y-4">
+                                    {/* Breakdown Summary Strip + Profile Card */}
+                                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl p-3.5 text-xs">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <KaryawanAvatar
+                                          nama={item.nama}
+                                          fotoUrl={item.fotoUrl}
+                                          size="md"
+                                          onClick={() => {
+                                            if (item.fotoUrl) {
+                                              setPreviewFotoKry({
+                                                nama: item.nama,
+                                                jabatan: item.jabatan,
+                                                divisi: divisiAktif,
+                                                fotoUrl: item.fotoUrl,
+                                              });
+                                            } else {
+                                              openProfilKaryawanModalById(item.idKaryawan);
+                                            }
+                                          }}
+                                        />
+                                        <div className="min-w-0">
+                                          <div className="font-bold text-slate-900 text-sm">{item.nama}</div>
+                                          <div className="text-slate-600">
+                                            {item.nik} · {item.jabatan} · Unit Aktif:{' '}
+                                            <strong className="text-emerald-800">{divisiAktif}</strong>
+                                          </div>
+                                        </div>
+                                      </div>
+
                                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-1">
                                         <div>
                                           <span className="text-slate-500">Upah Pokok</span>
@@ -1210,23 +1424,76 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                         </div>
                                       </div>
 
-                                      {mitraId && (
+                                      <div className="flex flex-wrap items-center gap-2 shrink-0">
                                         <button
                                           type="button"
-                                          disabled={isOpeningStmt}
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            void handleOpenStatement(mitraId);
+                                            openProfilKaryawanModalById(item.idKaryawan);
                                           }}
-                                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+                                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition-colors cursor-pointer"
                                         >
-                                          <span>
-                                            {isOpeningStmt ? 'Memuat...' : 'Rekening Koran Bon & PDF'}
-                                          </span>
-                                          <ArrowUpRight className="w-3.5 h-3.5" />
+                                          <UserCog className="w-3.5 h-3.5" />
+                                          <span>Update Profil, Foto &amp; Divisi</span>
                                         </button>
-                                      )}
+
+                                        {mitraId && (
+                                          <button
+                                            type="button"
+                                            disabled={isOpeningStmt}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              void handleOpenStatement(mitraId);
+                                            }}
+                                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer"
+                                          >
+                                            <span>
+                                              {isOpeningStmt ? 'Memuat...' : 'Rekening Koran Bon & PDF'}
+                                            </span>
+                                            <ArrowUpRight className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
+
+                                    {/* Riwayat Upgrade / Mutasi Divisi Karyawan */}
+                                    {riwayatDivisi.length > 0 && (
+                                      <div className="bg-white border border-slate-200 rounded-xl p-3.5 space-y-2 text-xs">
+                                        <div className="font-bold text-slate-800">
+                                          Riwayat Penempatan &amp; Upgrade Divisi Lintas Bulan
+                                        </div>
+                                        <div className="divide-y divide-slate-100">
+                                          {[...riwayatDivisi].reverse().map((rw) => (
+                                            <div
+                                              key={rw.id}
+                                              className="py-1.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1"
+                                            >
+                                              <div className="flex flex-wrap items-center gap-1.5 text-slate-800 font-medium">
+                                                {rw.divisiSebelumnya && rw.divisiSebelumnya !== rw.divisiBaru ? (
+                                                  <>
+                                                    <span className="text-slate-500">{rw.divisiSebelumnya}</span>
+                                                    <ArrowRight className="w-3 h-3 text-emerald-600" />
+                                                    <span className="font-bold text-emerald-800">{rw.divisiBaru}</span>
+                                                  </>
+                                                ) : (
+                                                  <span className="font-semibold text-slate-900">{rw.divisiBaru}</span>
+                                                )}
+                                                {rw.jabatanBaru && (
+                                                  <span className="text-slate-500">· {rw.jabatanBaru}</span>
+                                                )}
+                                                {rw.catatan && (
+                                                  <span className="text-slate-500">({rw.catatan})</span>
+                                                )}
+                                              </div>
+                                              <div className="font-mono text-[11px] text-slate-500">
+                                                {rw.periodeBulan ? `${rw.periodeBulan} · ` : ''}
+                                                {rw.tanggal}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {/* Rincian Hari Kerja & Tugas Harian */}
                                     <div className="space-y-1.5">
@@ -1235,7 +1502,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                       </div>
                                       {item.rincianHarian.length === 0 ? (
                                         <div className="text-xs text-slate-500 bg-white border border-slate-200 rounded-xl p-3">
-                                          Belum ada catatan kerja harian pada periode bulan ini.
+                                          Belum ada catatan kerja harian pada periode bulan ini (terhitung belum ada hari masuk).
                                         </div>
                                       ) : (
                                         <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl">
@@ -1388,37 +1655,70 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                     <table className="w-full text-left border-collapse text-xs sm:text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
-                          <th className="py-3 px-5 font-semibold">Nama Karyawan</th>
+                          <th className="py-3 px-5 font-semibold">Profil Karyawan</th>
                           <th className="py-3 px-3 font-semibold text-right">Total Kerja</th>
                           <th className="py-3 px-4 font-semibold text-right">Upah Belum Cair</th>
                           <th className="py-3 px-4 font-semibold text-right">Total Bon Aktif</th>
                           <th className="py-3 px-4 font-semibold text-right">Posisi Bersih</th>
-                          <th className="py-3 px-5 font-semibold text-right">Rekening Koran</th>
+                          <th className="py-3 px-5 font-semibold text-right">Profil &amp; Rekening</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredSaldoKaryawanItems.map((k) => {
                           const isLoadingStmt = loadingStatementId === k.idMitraTerkait;
+                          const rw = k.riwayatDivisi || [];
+                          const latestRw = rw.length > 0 ? rw[rw.length - 1] : undefined;
                           return (
                             <tr key={k.id} className="hover:bg-slate-50/70">
                               <td className="py-3.5 px-5">
-                                <div className="font-semibold text-slate-900">{k.nama}</div>
-                                <div className="text-xs text-slate-500">
-                                  {k.nik} · {k.jabatan} · {k.divisi || k.divisiTerakhir}
+                                <div className="flex items-center gap-3">
+                                  <KaryawanAvatar
+                                    nama={k.nama}
+                                    fotoUrl={k.fotoUrl}
+                                    size="sm"
+                                    onClick={() => {
+                                      if (k.fotoUrl) {
+                                        setPreviewFotoKry({
+                                          nama: k.nama,
+                                          jabatan: k.jabatan,
+                                          divisi: k.divisi || k.divisiTerakhir,
+                                          fotoUrl: k.fotoUrl,
+                                        });
+                                      } else {
+                                        openProfilKaryawanModalById(k.id);
+                                      }
+                                    }}
+                                  />
+                                  <div>
+                                    <div className="font-semibold text-slate-900">{k.nama}</div>
+                                    <div className="text-xs text-slate-500">
+                                      {k.nik} · {k.jabatan} ·{' '}
+                                      <strong className="font-semibold text-slate-700">
+                                        {k.divisi || k.divisiTerakhir}
+                                      </strong>
+                                    </div>
+                                    {latestRw?.divisiSebelumnya &&
+                                      latestRw.divisiSebelumnya !== latestRw.divisiBaru && (
+                                        <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
+                                          Upgrade divisi: {latestRw.divisiSebelumnya} →{' '}
+                                          <strong>{latestRw.divisiBaru}</strong>
+                                        </div>
+                                      )}
+                                    {((k.totalTitipHasilPanen || 0) > 0 || (k.totalGajiSudahDibayar || 0) > 0) && (
+                                      <div className="text-[11px] text-slate-600 font-mono tabular-nums mt-0.5">
+                                        {(k.totalGajiSudahDibayar || 0) > 0 ? `Gaji Cair: ${formatRupiah(k.totalGajiSudahDibayar || 0)}` : ''}
+                                        {(k.totalGajiSudahDibayar || 0) > 0 && (k.totalTitipHasilPanen || 0) > 0 ? ' · ' : ''}
+                                        {(k.totalTitipHasilPanen || 0) > 0 ? `Titip Panen Mitra: ${formatRupiah(k.totalTitipHasilPanen || 0)}` : ''}
+                                      </div>
+                                    )}
+                                    {k.tanggalKerjaTerakhir && (
+                                      <div className="text-[11px] text-slate-400 mt-0.5">
+                                        Terakhir kerja: {k.tanggalKerjaTerakhir}
+                                        {k.pekerjaanHarianTerakhir ? ` — ${k.pekerjaanHarianTerakhir}` : ''}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                                {((k.totalTitipHasilPanen || 0) > 0 || (k.totalGajiSudahDibayar || 0) > 0) && (
-                                  <div className="text-[11px] text-slate-600 font-mono tabular-nums mt-0.5">
-                                    {(k.totalGajiSudahDibayar || 0) > 0 ? `Gaji Cair: ${formatRupiah(k.totalGajiSudahDibayar || 0)}` : ''}
-                                    {(k.totalGajiSudahDibayar || 0) > 0 && (k.totalTitipHasilPanen || 0) > 0 ? ' · ' : ''}
-                                    {(k.totalTitipHasilPanen || 0) > 0 ? `Titip Panen Mitra: ${formatRupiah(k.totalTitipHasilPanen || 0)}` : ''}
-                                  </div>
-                                )}
-                                {k.tanggalKerjaTerakhir && (
-                                  <div className="text-[11px] text-slate-400 mt-0.5">
-                                    Terakhir kerja: {k.tanggalKerjaTerakhir}
-                                    {k.pekerjaanHarianTerakhir ? ` — ${k.pekerjaanHarianTerakhir}` : ''}
-                                  </div>
-                                )}
                               </td>
                               <td className="py-3.5 px-3 text-right font-mono text-slate-700 tabular-nums whitespace-nowrap">
                                 {k.totalHariKerja} Hari
@@ -1450,19 +1750,27 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                 </div>
                               </td>
                               <td className="py-3.5 px-5 text-right whitespace-nowrap">
-                                {k.idMitraTerkait ? (
+                                <div className="inline-flex items-center gap-1.5">
                                   <button
                                     type="button"
-                                    disabled={isLoadingStmt}
-                                    onClick={() => void handleOpenStatement(k.idMitraTerkait)}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                                    onClick={() => openProfilKaryawanModalById(k.id)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-900 hover:text-white text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
                                   >
-                                    <span>{isLoadingStmt ? 'Memuat...' : 'Buku Bon & PDF'}</span>
-                                    <ArrowUpRight className="w-3.5 h-3.5" />
+                                    <UserCog className="w-3.5 h-3.5" />
+                                    <span>Profil</span>
                                   </button>
-                                ) : (
-                                  <span className="text-xs text-slate-400">-</span>
-                                )}
+                                  {k.idMitraTerkait ? (
+                                    <button
+                                      type="button"
+                                      disabled={isLoadingStmt}
+                                      onClick={() => void handleOpenStatement(k.idMitraTerkait)}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                                    >
+                                      <span>{isLoadingStmt ? 'Memuat...' : 'Buku Bon & PDF'}</span>
+                                      <ArrowUpRight className="w-3.5 h-3.5" />
+                                    </button>
+                                  ) : null}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1586,53 +1894,84 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                 </div>
               </div>
 
-              {/* Search & Segmented Filter */}
-              <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="relative flex-1 max-w-md">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={mitraSearch}
-                    onChange={(e) => setMitraSearch(e.target.value)}
-                    placeholder="Cari nama mitra, petani, supplier, atau karyawan..."
-                    className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                  />
+              {/* Search, 5 Role Mitra Filter & Balance Filter */}
+              <div className="pt-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={mitraSearch}
+                      onChange={(e) => setMitraSearch(e.target.value)}
+                      placeholder="Cari nama mitra, role, kode, atau alamat..."
+                      className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => setMitraFilter('ALL')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                        mitraFilter === 'ALL'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Semua Saldo ({rekapMitra?.items.length || 0})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMitraFilter('BON')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                        mitraFilter === 'BON'
+                          ? 'bg-white text-amber-800 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Punya Bon ({rekapMitra?.mitraDenganBonCount || 0})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMitraFilter('TITIP')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                        mitraFilter === 'TITIP'
+                          ? 'bg-white text-rose-800 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Punya Titipan ({rekapMitra?.mitraDenganHutangTitipCount || 0})
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl self-start sm:self-auto">
+                {/* 5 Canonical Mitra Role Filters */}
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <button
                     type="button"
-                    onClick={() => setMitraFilter('ALL')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                      mitraFilter === 'ALL'
-                        ? 'bg-white text-slate-900 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
+                    onClick={() => setMitraRoleFilter('ALL')}
+                    className={`px-3 py-1.5 rounded-lg font-semibold transition-colors cursor-pointer ${
+                      mitraRoleFilter === 'ALL'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    Semua ({rekapMitra?.items.length || 0})
+                    Semua Role ({rekapMitra?.items.length || 0})
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setMitraFilter('BON')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                      mitraFilter === 'BON'
-                        ? 'bg-white text-amber-800 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Punya Bon ({rekapMitra?.mitraDenganBonCount || 0})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMitraFilter('TITIP')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                      mitraFilter === 'TITIP'
-                        ? 'bg-white text-rose-800 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Punya Titipan ({rekapMitra?.mitraDenganHutangTitipCount || 0})
-                  </button>
+                  {DAFTAR_ROLE_MITRA.map((r) => (
+                    <button
+                      key={r.value}
+                      type="button"
+                      onClick={() => setMitraRoleFilter(r.value)}
+                      className={`px-3 py-1.5 rounded-lg font-semibold transition-colors cursor-pointer ${
+                        mitraRoleFilter === r.value
+                          ? 'bg-emerald-700 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {r.label} ({mitraRoleCounts[r.value] || 0})
+                    </button>
+                  ))}
                 </div>
               </div>
             </section>
@@ -1644,7 +1983,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                 </div>
               ) : filteredMitraItems.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-500">
-                  Tidak ada mitra yang sesuai dengan pencarian.
+                  Tidak ada mitra yang sesuai dengan pencarian atau filter role.
                 </div>
               ) : (
                 <>
@@ -1652,7 +1991,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                     <table className="w-full text-left border-collapse text-xs sm:text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
-                          <th className="py-3 px-5 font-semibold">Nama Mitra</th>
+                          <th className="py-3 px-5 font-semibold">Nama &amp; Role Mitra</th>
                           <th className="py-3 px-4 font-semibold text-right">Sisa Bon ke PT</th>
                           <th className="py-3 px-4 font-semibold text-right">Saldo Titip di PT</th>
                           <th className="py-3 px-5 font-semibold text-right">Rekening Koran</th>
@@ -1663,31 +2002,53 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           const bonBersih = m.sisaBonBersih ?? m.totalBonMitra;
                           const titipBersih = m.sisaTitipanBersih ?? m.totalHutangTitipPanen;
                           const isLoadingThis = loadingStatementId === m.id;
+                          const roleLabel = getRoleMitraLabel(m.role, {
+                            isAnakPerusahaan: m.isAnakPerusahaan,
+                            isKaryawan: m.isKaryawan,
+                          });
                           return (
                             <tr key={m.id} className="hover:bg-slate-50/70">
                               <td className="py-3.5 px-5">
-                                <div className="font-semibold text-slate-900">{m.nama}</div>
-                                <div className="text-xs text-slate-500">
-                                  {m.kode} ·{' '}
-                                  {(m.isKaryawan || m.role === 'KARYAWAN') &&
-                                  (m.hasTransaksiMitraPanen || (m.totalTitipPanenMurni || 0) > 0)
-                                    ? 'KARYAWAN & MITRA PANEN'
-                                    : m.role.replace(/_/g, ' ')}
-                                  {m.alamat && m.alamat !== '-' ? ` · ${m.alamat}` : ''}
-                                </div>
-                                {((m.totalGajiSudahDibayar || 0) > 0 || (m.totalUpahBelumDibayar || 0) > 0) && (
-                                  <div className="text-[11px] text-emerald-700 font-mono tabular-nums mt-0.5">
-                                    {(m.totalUpahBelumDibayar || 0) > 0
-                                      ? `Upah Belum Cair: ${formatRupiah(m.totalUpahBelumDibayar || 0)}`
-                                      : ''}
-                                    {(m.totalUpahBelumDibayar || 0) > 0 && (m.totalGajiSudahDibayar || 0) > 0
-                                      ? ' · '
-                                      : ''}
-                                    {(m.totalGajiSudahDibayar || 0) > 0
-                                      ? `Gaji Cair: ${formatRupiah(m.totalGajiSudahDibayar || 0)}`
-                                      : ''}
+                                <div className="flex items-center gap-3">
+                                  <KaryawanAvatar
+                                    nama={m.nama}
+                                    fotoUrl={m.fotoUrl}
+                                    size="sm"
+                                    onClick={
+                                      m.fotoUrl
+                                        ? () =>
+                                            setPreviewFotoKry({
+                                              nama: m.nama,
+                                              jabatan: roleLabel,
+                                              divisi: m.divisiKaryawan,
+                                              fotoUrl: m.fotoUrl!,
+                                            })
+                                        : undefined
+                                    }
+                                  />
+                                  <div>
+                                    <div className="font-semibold text-slate-900">{m.nama}</div>
+                                    <div className="text-xs text-slate-500">
+                                      {m.kode} ·{' '}
+                                      <strong className="font-semibold text-slate-700">{roleLabel}</strong>
+                                      {m.divisiKaryawan ? ` · ${m.divisiKaryawan}` : ''}
+                                      {m.alamat && m.alamat !== '-' ? ` · ${m.alamat}` : ''}
+                                    </div>
+                                    {((m.totalGajiSudahDibayar || 0) > 0 || (m.totalUpahBelumDibayar || 0) > 0) && (
+                                      <div className="text-[11px] text-emerald-700 font-mono tabular-nums mt-0.5">
+                                        {(m.totalUpahBelumDibayar || 0) > 0
+                                          ? `Upah Belum Cair: ${formatRupiah(m.totalUpahBelumDibayar || 0)}`
+                                          : ''}
+                                        {(m.totalUpahBelumDibayar || 0) > 0 && (m.totalGajiSudahDibayar || 0) > 0
+                                          ? ' · '
+                                          : ''}
+                                        {(m.totalGajiSudahDibayar || 0) > 0
+                                          ? `Gaji Cair: ${formatRupiah(m.totalGajiSudahDibayar || 0)}`
+                                          : ''}
+                                      </div>
+                                    )}
                                   </div>
-                                )}
+                                </div>
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-amber-700 whitespace-nowrap">
                                 {bonBersih > 0 ? formatRupiah(bonBersih) : '-'}
@@ -1891,6 +2252,53 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
 
       {/* Read-Only Slip Gaji Karyawan Modal */}
       {activeSlip && <SlipGajiModal slip={activeSlip} onClose={() => setActiveSlip(null)} />}
+
+      {/* Modal Update Profil, Foto & Upgrade Divisi Karyawan */}
+      {editingProfilKaryawan && (
+        <ModalProfilKaryawan
+          karyawan={editingProfilKaryawan}
+          availableDivisiList={(divisiMasterList.length > 0 ? divisiMasterList : DAFTAR_DIVISI).map(
+            (d) => d.nama
+          )}
+          defaultPeriodeBulan={`${BULAN_OPTIONS[selectedBulan - 1]?.label || ''} ${selectedTahun}`}
+          onClose={() => setEditingProfilKaryawan(null)}
+          onSaved={() => {
+            setEditingProfilKaryawan(null);
+            void loadKaryawanTab(true);
+            void loadMitraTab(true);
+            onRefreshAll();
+          }}
+        />
+      )}
+
+      {/* Modal Input Gaji Harian Karyawan langsung dari Tampilan Bos */}
+      {inputUpahModalConfig.open && karyawanMasterList.length > 0 && (
+        <InputPayrollHarianDivisiModal
+          karyawanList={karyawanMasterList}
+          initialKaryawanId={inputUpahModalConfig.idKaryawan}
+          initialDivisi={inputUpahModalConfig.divisi || 'Gudang Wijaya Agro'}
+          rekeningList={safeRekening}
+          onClose={() => setInputUpahModalConfig({ open: false })}
+          onSuccess={(slip) => {
+            setInputUpahModalConfig({ open: false });
+            void loadKaryawanTab(true);
+            void loadMitraTab(true);
+            onRefreshAll();
+            if (slip) setActiveSlip(slip);
+          }}
+        />
+      )}
+
+      {/* Preview Foto Karyawan / Mitra */}
+      {previewFotoKry && (
+        <ModalPreviewFotoKaryawan
+          nama={previewFotoKry.nama}
+          jabatan={previewFotoKry.jabatan}
+          divisi={previewFotoKry.divisi}
+          fotoUrl={previewFotoKry.fotoUrl}
+          onClose={() => setPreviewFotoKry(null)}
+        />
+      )}
     </div>
   );
 };

@@ -18,10 +18,16 @@ import {
   Info,
   Clock,
   FileSpreadsheet,
+  UserCog,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
-import { DAFTAR_DIVISI, NamaDivisi, Rekening, TransaksiPenggajian } from '../../server/types.ts';
+import { DAFTAR_DIVISI, Karyawan, NamaDivisi, Rekening, TransaksiPenggajian } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
+import {
+  KaryawanAvatar,
+  ModalPreviewFotoKaryawan,
+  ModalProfilKaryawan,
+} from './ModalProfilKaryawan.tsx';
 
 interface InputPayrollHarianDivisiModalProps {
   karyawanList: KaryawanWithBon[];
@@ -102,8 +108,15 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
   const [ketStatus, setKetStatus] = useState<'BON' | 'LUNAS'>('BON');
   const [catatanKhusus, setCatatanKhusus] = useState<string>('');
 
-  // Selected Employee Details
-  const activeKry = activeKaryawanList.find((k) => k.id === selectedKryId);
+  const [localKryOverrides, setLocalKryOverrides] = useState<Record<string, Karyawan>>({});
+  const [showProfilModal, setShowProfilModal] = useState(false);
+  const [showPhotoZoom, setShowPhotoZoom] = useState(false);
+
+  // Selected Employee Details (merged with any live profile/division update)
+  const rawActiveKry = activeKaryawanList.find((k) => k.id === selectedKryId);
+  const activeKry = rawActiveKry
+    ? { ...rawActiveKry, ...(localKryOverrides[rawActiveKry.id] || {}) }
+    : undefined;
 
   // Dynamic wage defaults from standard
   const defaultUpah = activeKry?.gajiPokok
@@ -126,13 +139,20 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Update default wage whenever selected employee changes
+  // Update default wage & active division whenever selected employee changes
   const handleSelectEmployee = (id: string) => {
     setSelectedKryId(id);
-    const kry = activeKaryawanList.find((k) => k.id === id);
+    const baseKry = activeKaryawanList.find((k) => k.id === id);
+    const kry = baseKry ? { ...baseKry, ...(localKryOverrides[id] || {}) } : undefined;
     if (kry) {
       const estHarian = kry.gajiPokok ? Math.round(kry.gajiPokok / 25) : 135000;
       setUpahHarianInput(String(estHarian));
+      const kryDiv = (kry.divisi || kry.departemen) as NamaDivisi | undefined;
+      if (kryDiv) {
+        setDivisi(kryDiv);
+        const foundDiv = DAFTAR_DIVISI.find((d) => d.nama === kryDiv);
+        if (foundDiv) setRekeningSumber(foundDiv.kodeRekening);
+      }
     }
   };
 
@@ -282,26 +302,57 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
             </div>
           </div>
 
-          {/* Employee Status Card */}
+          {/* Employee Profile, Photo & Division Upgrade Card */}
           {activeKry && (
-            <div className="p-3 bg-zinc-800/80 border border-zinc-700/80 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div>
-                <span className="font-bold text-zinc-100">{activeKry.nama}</span>{' '}
-                <span className="text-[11px] text-zinc-400">
-                  ({activeKry.jabatan} - Divisi: {activeKry.divisi || activeKry.departemen})
-                </span>
+            <div className="p-3.5 bg-zinc-800/80 border border-zinc-700/80 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3 min-w-0">
+                <KaryawanAvatar
+                  nama={activeKry.nama}
+                  fotoUrl={activeKry.fotoUrl}
+                  size="md"
+                  theme="dark"
+                  onClick={() => {
+                    if (activeKry.fotoUrl) setShowPhotoZoom(true);
+                    else setShowProfilModal(true);
+                  }}
+                />
+                <div className="min-w-0">
+                  <div className="font-bold text-zinc-100 truncate">
+                    {activeKry.nama}{' '}
+                    <span className="font-mono text-[10px] text-zinc-400">({activeKry.nik})</span>
+                  </div>
+                  <div className="text-[11px] text-zinc-300">
+                    {activeKry.jabatan} · Unit Aktif:{' '}
+                    <strong className="text-amber-300">
+                      {activeKry.divisi || activeKry.departemen || 'Gudang Wijaya Agro'}
+                    </strong>
+                  </div>
+                  {activeKry.riwayatDivisi && activeKry.riwayatDivisi.length > 0 && (() => {
+                    const lastRw = activeKry.riwayatDivisi[activeKry.riwayatDivisi.length - 1];
+                    return lastRw?.divisiSebelumnya && lastRw.divisiSebelumnya !== lastRw.divisiBaru ? (
+                      <div className="text-[10px] text-emerald-400 mt-0.5">
+                        Riwayat upgrade: {lastRw.divisiSebelumnya} → {lastRw.divisiBaru}
+                      </div>
+                    ) : null;
+                  })()}
+                  <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                    Total Bon Aktif:{' '}
+                    <strong className="text-rose-400">
+                      {formatRupiah(activeKry.totalKasbonAktif || 0)}
+                    </strong>{' '}
+                    (Brg {formatRupiah(activeKry.kasbonBarang || 0)} · Uang {formatRupiah(activeKry.kasbonUang || 0)})
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center space-x-3">
-                <span className="text-[11px] text-zinc-300">
-                  Total Bon Saat Ini:{' '}
-                  <strong className="text-rose-400 font-mono">
-                    {formatRupiah(activeKry.totalKasbonAktif || 0)}
-                  </strong>
-                </span>
-                <span className="text-[10px] text-zinc-500">
-                  (Barang: {formatRupiah(activeKry.kasbonBarang || 0)} | Uang: {formatRupiah(activeKry.kasbonUang || 0)})
-                </span>
-              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowProfilModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600 text-amber-200 hover:text-white border border-amber-500/40 font-semibold transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+              >
+                <UserCog className="w-3.5 h-3.5" />
+                <span>Profil, Foto &amp; Upgrade Divisi</span>
+              </button>
             </div>
           )}
 
@@ -651,6 +702,46 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
           </div>
         </form>
       </div>
+
+      {showProfilModal && activeKry && (
+        <ModalProfilKaryawan
+          karyawan={{
+            id: activeKry.id,
+            nik: activeKry.nik,
+            nama: activeKry.nama,
+            jabatan: activeKry.jabatan,
+            divisi: activeKry.divisi || activeKry.departemen || divisi,
+            telepon: activeKry.telepon,
+            alamat: activeKry.alamat,
+            tanggalMasuk: activeKry.tanggalMasuk,
+            status: activeKry.status,
+            fotoUrl: activeKry.fotoUrl,
+            catatan: activeKry.catatan,
+            riwayatDivisi: activeKry.riwayatDivisi,
+          }}
+          onClose={() => setShowProfilModal(false)}
+          onSaved={(updated) => {
+            setLocalKryOverrides((prev) => ({ ...prev, [updated.id]: updated }));
+            if (updated.divisi) {
+              setDivisi(updated.divisi as NamaDivisi);
+              const dObj = DAFTAR_DIVISI.find((d) => d.nama === updated.divisi);
+              if (dObj) setRekeningSumber(dObj.kodeRekening);
+            }
+            setShowProfilModal(false);
+            window.dispatchEvent(new CustomEvent('erp:data-updated'));
+          }}
+        />
+      )}
+
+      {showPhotoZoom && activeKry?.fotoUrl && (
+        <ModalPreviewFotoKaryawan
+          nama={activeKry.nama}
+          jabatan={activeKry.jabatan}
+          divisi={activeKry.divisi || activeKry.departemen}
+          fotoUrl={activeKry.fotoUrl}
+          onClose={() => setShowPhotoZoom(false)}
+        />
+      )}
     </div>
   );
 };

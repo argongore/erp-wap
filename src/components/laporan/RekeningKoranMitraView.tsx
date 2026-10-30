@@ -41,7 +41,13 @@ import {
   Area,
   AreaChart,
 } from 'recharts';
-import { Mitra, ProfilPerusahaan, Rekening, RekeningKoranMitraSummary } from '../../server/types.ts';
+import {
+  getRoleMitraLabel,
+  Mitra,
+  ProfilPerusahaan,
+  Rekening,
+  RekeningKoranMitraSummary,
+} from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat, formatTanggalIndo } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { CetakRekeningKoranModal } from './CetakRekeningKoranModal.tsx';
@@ -647,7 +653,12 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           >
             {mitraList.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.nama} ({m.kode}) - {m.role} - {m.telepon}
+                {m.nama} ({m.kode}) -{' '}
+                {getRoleMitraLabel(m.role, {
+                  isAnakPerusahaan: m.isAnakPerusahaan,
+                  isKaryawan: m.isKaryawan,
+                })}{' '}
+                - {m.telepon}
               </option>
             ))}
           </select>
@@ -657,7 +668,12 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           <div className="flex flex-col sm:items-end gap-2">
             <div className="text-xs text-zinc-600 sm:text-right space-y-0.5">
               <div>
-                Status: <strong className="text-emerald-700 font-bold">{statement.status}</strong> ({statement.role})
+                Status: <strong className="text-emerald-700 font-bold">{statement.status}</strong> (
+                {getRoleMitraLabel(statement.role, {
+                  isAnakPerusahaan: statement.isAnakPerusahaan,
+                  isKaryawan: statement.isKaryawan,
+                })}
+                )
               </div>
               <div>
                 Alamat: <span className="text-zinc-800 font-medium">{statement.alamat || '-'}</span>
