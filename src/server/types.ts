@@ -205,6 +205,8 @@ export interface ItemRekapPayrollBulanan {
   divisiUtama: NamaDivisi;
   daftarDivisiBekerja: NamaDivisi[];
   totalHariKerja: number;
+  totalHariDalamBulan?: number;
+  totalHariTidakMasuk?: number;
   totalUpahPokok: number;
   totalUangMakanLembur: number;
   totalGajiKotor: number;
@@ -247,6 +249,48 @@ export interface ItemKategoriProduk {
   createdAt?: string;
 }
 
+export const KATEGORI_ALAT_DEFAULT_DESC =
+  'Sewa alat & jasa operasional tanpa stok fisik (contoh: Sewa Exca, Sewa Truck)';
+
+export function isKategoriAlatNonStok(kategori?: string | null): boolean {
+  const norm = String(kategori || '')
+    .trim()
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+  if (!norm) return false;
+  // ALAT PERTANIAN pada katalog merujuk ke material/barang fisik yang memiliki stok gudang
+  if (norm === 'ALAT PERTANIAN') return false;
+  return (
+    norm === 'ALAT' ||
+    norm === 'SEWA ALAT' ||
+    norm === 'ALAT SEWA' ||
+    norm === 'ALAT BERAT' ||
+    norm === 'SEWA ALAT BERAT' ||
+    norm === 'JASA SEWA' ||
+    norm === 'SEWA JASA' ||
+    norm === 'JASA'
+  );
+}
+
+export function isExcludedFromDivisi(rawNama?: string | null): boolean {
+  const norm = String(rawNama || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  if (!norm) return false;
+  const compact = norm.replace(/[^a-z0-9]/g, '');
+  return (
+    norm.includes('dp parabot') ||
+    compact === 'dpparabot' ||
+    compact === 'divdpparabo' ||
+    compact === 'divdpparabot' ||
+    compact === 'rekdpparabo' ||
+    compact === 'rekdpparabot' ||
+    compact === 'afiliasidpparabot'
+  );
+}
+
 export interface Produk {
   kode: string;
   kategori: string;
@@ -262,6 +306,7 @@ export interface StokBarang {
   kode: string;
   namaProduk: string;
   satuan: string;
+  kategori?: string;
   stok: number;
   minimum: number;
   updateTerakhir: string;
@@ -363,6 +408,84 @@ export interface LabaRugiProdukItem {
   hargaKhususRekanan?: number;
 }
 
+export interface LabaRugiDivisiTransaksiRingkas {
+  id: string;
+  tanggal: string;
+  jam: string;
+  arus?: 'MASUK' | 'KELUAR';
+  kategori:
+    | 'PENJUALAN'
+    | 'PELUNASAN_PIUTANG'
+    | 'MODAL_PEMBELIAN'
+    | 'BEBAN_PENGELUARAN'
+    | 'GAJI_UPAH';
+  keterangan: string;
+  pihakTerkait?: string;
+  metode?: string;
+  nominal: number;
+  hppModal?: number;
+  labaKotor?: number;
+}
+
+export interface LabaRugiDivisiItem {
+  idDivisi: string;
+  divisi: string;
+  kodeRekening: string;
+  namaRekening: string;
+  penanggungJawab?: string;
+  deskripsi?: string;
+  logoUrl?: string;
+  // Ringkasan Utama Laba Rugi Divisi: Uang Masuk (+), Uang Keluar (-), Laba / Rugi
+  uangMasuk: number;
+  uangKeluar: number;
+  jumlahTransaksiMasuk: number;
+  jumlahTransaksiKeluar: number;
+  // Detail Pendukung (tetap disediakan untuk kompatibilitas)
+  omzetPenjualanToko: number;
+  omzetPenjualanHasilBumi: number;
+  totalOmzetPenjualan: number;
+  penjualanKasMasuk: number;
+  piutangPenjualanAktif: number;
+  jumlahNotaPenjualan: number;
+  modalPembelianBarang: number;
+  modalPembelianHasilBumi: number;
+  totalModalPembelian: number;
+  pembelianKasKeluar: number;
+  modalTerpakaiHpp: number;
+  sisaModalStokBerjalan: number;
+  jumlahNotaPembelian: number;
+  labaKotorDagang: number;
+  marginKotorPersen: number;
+  biayaPengeluaranOperasional: number;
+  biayaGajiKaryawan: number;
+  totalBebanPengeluaran: number;
+  jumlahTransaksiPengeluaran: number;
+  labaRugiBersih: number;
+  marginBersihPersen: number;
+  saldoNilaiBerjalanDivisi: number;
+  saldoKasTunaiDivisi: number;
+  rincianTransaksi: LabaRugiDivisiTransaksiRingkas[];
+}
+
+export interface LabaRugiDivisiSummary {
+  periode: string;
+  totalDivisi: number;
+  totalUangMasukSemuaDivisi: number;
+  totalUangKeluarSemuaDivisi: number;
+  totalOmzetSemuaDivisi: number;
+  totalModalPembelianSemuaDivisi: number;
+  totalModalTerpakaiHppSemuaDivisi: number;
+  totalSisaModalStokBerjalanSemuaDivisi: number;
+  totalLabaKotorSemuaDivisi: number;
+  totalPengeluaranOperasionalSemuaDivisi: number;
+  totalGajiSemuaDivisi: number;
+  totalBebanPengeluaranSemuaDivisi: number;
+  totalLabaRugiBersihSemuaDivisi: number;
+  marginBersihRataRata: number;
+  divisiTeruntung: string;
+  items: LabaRugiDivisiItem[];
+}
+
 export interface LabaRugiSummary {
   periode: string;
   totalPenjualanTransaksi: number;
@@ -373,6 +496,7 @@ export interface LabaRugiSummary {
   produkTerlaris: string;
   totalPembelianBarangMasuk: number;
   items: LabaRugiProdukItem[];
+  perDivisi?: LabaRugiDivisiSummary;
 }
 
 export interface TransaksiPembelianHasilBumi {
@@ -839,11 +963,19 @@ export interface PergerakanKeuanganDivisiSummary {
   deskripsi?: string;
   logoUrl?: string;
   saldoSaatIni: number;
+  saldoKasTunaiDivisi?: number;
   totalPenjualanMasuk: number;
+  totalOmzetPenjualan?: number;
   totalPembelianKeluar: number;
+  totalModalPembelian?: number;
+  modalTerpakaiHpp?: number;
+  sisaModalStokBerjalan?: number;
+  labaKotorDagang?: number;
   totalPengeluaranOperasional: number;
   totalDroppingMasuk: number;
   totalGajiKeluar: number;
+  totalBebanPengeluaran?: number;
+  labaRugiBersih?: number;
   totalTransferKeluar: number;
   totalArusMasuk: number;
   totalArusKeluar: number;

@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { dbManager, getWIBDateTime } from './db.ts';
 import { TransactionService } from './services/transactionService.ts';
-import { DAFTAR_DIVISI } from './types.ts';
+import {
+  DAFTAR_DIVISI,
+  KATEGORI_ALAT_DEFAULT_DESC,
+  isKategoriAlatNonStok,
+  isExcludedFromDivisi,
+} from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
 
 export const apiRouter = Router();
@@ -415,6 +420,54 @@ apiRouter.post('/mitra', async (req, res) => {
   }
 });
 
+apiRouter.post('/mitra/reset-semua-saldo', async (req, res) => {
+  try {
+    const hanyaMitra = Boolean(req.body?.hanyaMitra);
+    const result = await TransactionService.resetSemuaSaldoSistem({ hanyaMitra });
+    res.json({ success: true, data: result, message: result.message });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/mitra/reset-saldo', async (req, res) => {
+  try {
+    const idMitra = String(req.body?.idMitra || req.body?.id || '').trim();
+    const result = await TransactionService.resetSaldoMitra(idMitra);
+    res.json({ success: true, data: result, message: result.message });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/mitra/:id/reset-saldo', async (req, res) => {
+  try {
+    const result = await TransactionService.resetSaldoMitra(req.params.id);
+    res.json({ success: true, data: result, message: result.message });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/mitra/delete', async (req, res) => {
+  try {
+    const idMitra = String(req.body?.idMitra || req.body?.id || '').trim();
+    const result = await TransactionService.deleteMitra(idMitra);
+    res.json({ success: true, data: result, message: result.message });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/mitra/:id', async (req, res) => {
+  try {
+    const result = await TransactionService.deleteMitra(req.params.id);
+    res.json({ success: true, data: result, message: result.message });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.put('/mitra/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -520,6 +573,18 @@ apiRouter.get('/kategori-produk', (_req, res) => {
       }
     }
 
+    if (!map.has('ALAT')) {
+      map.set('ALAT', {
+        nama: 'ALAT',
+        deskripsi: KATEGORI_ALAT_DEFAULT_DESC,
+        jumlahProduk: 0,
+        isSaved: true,
+      });
+    } else {
+      const alatEntry = map.get('ALAT')!;
+      if (!alatEntry.deskripsi) alatEntry.deskripsi = KATEGORI_ALAT_DEFAULT_DESC;
+    }
+
     const result = Array.from(map.values()).sort((a, b) => {
       if (b.jumlahProduk !== a.jumlahProduk) return b.jumlahProduk - a.jumlahProduk;
       return a.nama.localeCompare(b.nama, 'id');
@@ -606,10 +671,16 @@ apiRouter.put('/kategori-produk/rename', async (req, res) => {
 
       // Update all matching products
       let affectedCount = 0;
+      const isNewAlatNonStok = isKategoriAlatNonStok(newNorm);
       for (const p of db.produk) {
         if (normalizeKategoriName(p.kategori) === oldNorm) {
           p.kategori = newNorm;
           affectedCount += 1;
+          const st = db.stokBarang.find((s) => s.kode === p.kode);
+          if (st) {
+            st.kategori = newNorm;
+            if (isNewAlatNonStok) st.minimum = 0;
+          }
         }
       }
 
@@ -709,10 +780,16 @@ apiRouter.post('/produk/bulk-kategori', async (req, res) => {
       const targetCodes = new Set(kodeProdukList.map((c: any) => String(c).trim().toUpperCase()));
       let updatedCount = 0;
 
+      const isNewAlatNonStok = isKategoriAlatNonStok(newNorm);
       for (const p of db.produk) {
         if (targetCodes.has(p.kode.toUpperCase())) {
           p.kategori = newNorm;
           updatedCount += 1;
+          const st = db.stokBarang.find((s) => s.kode.toUpperCase() === p.kode.toUpperCase());
+          if (st) {
+            st.kategori = newNorm;
+            if (isNewAlatNonStok) st.minimum = 0;
+          }
         }
       }
 
@@ -761,8 +838,13 @@ apiRouter.post('/produk', async (req, res) => {
       if (db.produk.some((p) => p.kode === cleanKode)) {
         throw new Error(`Produk dengan kode ${cleanKode} sudah terdaftar`);
       }
-      ensureKategoriRegistered(db, cleanKategori);
+      ensureKategoriRegistered(
+        db,
+        cleanKategori,
+        cleanKategori === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : undefined
+      );
 
+      const isAlatNonStok = isKategoriAlatNonStok(cleanKategori);
       const buyVal = Math.max(0, Number(hargaBeli) || 0);
       const rawSell = Math.max(0, Number(hargaJual) || 0);
       const sellVal = rawSell > 0 ? rawSell : buyVal;
@@ -787,8 +869,9 @@ apiRouter.post('/produk', async (req, res) => {
         kode: cleanKode,
         namaProduk: newProd.nama,
         satuan: newProd.satuan,
-        stok: Number(stokAwal) || 0,
-        minimum: Number(minimum) || 5,
+        kategori: cleanKategori,
+        stok: isAlatNonStok ? 0 : Math.max(0, Number(stokAwal) || 0),
+        minimum: isAlatNonStok ? 0 : minimum !== undefined ? Math.max(0, Number(minimum) || 0) : 5,
         updateTerakhir: iso,
       };
       db.stokBarang.push(newStok);
@@ -816,7 +899,11 @@ apiRouter.put('/produk/:kode', async (req, res) => {
       if (kategori && String(kategori).trim()) {
         const cleanKategori = normalizeKategoriName(kategori);
         prod.kategori = cleanKategori;
-        ensureKategoriRegistered(db, cleanKategori);
+        ensureKategoriRegistered(
+          db,
+          cleanKategori,
+          cleanKategori === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : undefined
+        );
       }
       if (satuan) prod.satuan = String(satuan).trim();
       if (hargaBeli !== undefined) prod.hargaBeli = Math.max(0, Number(hargaBeli) || 0);
@@ -824,20 +911,33 @@ apiRouter.put('/produk/:kode', async (req, res) => {
       if (hargaKhususRekanan !== undefined) prod.hargaKhususRekanan = Math.max(0, Number(hargaKhususRekanan) || 0);
       if (status) prod.status = status;
 
-      // Sync name, unit & minimum to stokBarang (or create if missing)
+      const isAlatNonStok = isKategoriAlatNonStok(prod.kategori);
+
+      // Sync name, unit, category & minimum to stokBarang (or create if missing)
       let stok = db.stokBarang.find((s) => s.kode === kode);
       if (stok) {
         stok.namaProduk = prod.nama;
         stok.satuan = prod.satuan;
-        if (minimum !== undefined) stok.minimum = Math.max(0, Number(minimum) || 0);
+        stok.kategori = prod.kategori;
+        if (isAlatNonStok) {
+          stok.stok = 0;
+          stok.minimum = 0;
+        } else if (minimum !== undefined) {
+          stok.minimum = Math.max(0, Number(minimum) || 0);
+        }
         stok.updateTerakhir = iso;
       } else {
         stok = {
           kode: prod.kode,
           namaProduk: prod.nama,
           satuan: prod.satuan,
+          kategori: prod.kategori,
           stok: 0,
-          minimum: minimum !== undefined ? Math.max(0, Number(minimum) || 0) : 5,
+          minimum: isAlatNonStok
+            ? 0
+            : minimum !== undefined
+            ? Math.max(0, Number(minimum) || 0)
+            : 5,
           updateTerakhir: iso,
         };
         db.stokBarang.push(stok);
@@ -864,10 +964,15 @@ apiRouter.put('/produk/:kode', async (req, res) => {
   }
 });
 
-apiRouter.get('/stok', (req, res) => {
+apiRouter.get('/stok', (_req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.stokBarang });
+    const prodMap = new Map((db.produk || []).map((p) => [p.kode, p]));
+    const enriched = (db.stokBarang || []).map((s) => ({
+      ...s,
+      kategori: prodMap.get(s.kode)?.kategori || s.kategori || 'LAINNYA',
+    }));
+    res.json({ success: true, data: enriched });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -881,6 +986,12 @@ apiRouter.post('/stok/adjust', async (req, res) => {
     const result = await dbManager.executeTransaction((db) => {
       const stokItem = db.stokBarang.find((s) => s.kode === kode);
       if (!stokItem) throw new Error('Item stok tidak ditemukan');
+      const prod = db.produk.find((p) => p.kode === kode);
+      if (isKategoriAlatNonStok(prod?.kategori || stokItem.kategori)) {
+        throw new Error(
+          `Item "${stokItem.namaProduk}" berkategori ALAT (sewa jasa) sehingga tidak menggunakan stok fisik gudang.`
+        );
+      }
       const qty = Number(penyesuaianQty);
       if (isNaN(qty)) throw new Error('Qty penyesuaian tidak valid');
       if (stokItem.stok + qty < 0) {
@@ -1149,7 +1260,16 @@ apiRouter.delete('/transaksi/pembelian-barang/:noPembelian', async (req, res) =>
   }
 });
 
-// Laporan Laba Rugi Produk Penjualan
+// Laporan Laba Rugi Per Divisi & Referensi Produk
+apiRouter.get('/laporan/laba-rugi-divisi', (_req, res) => {
+  try {
+    const summary = TransactionService.getLabaRugiDivisiSummary();
+    res.json({ success: true, data: summary });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.get('/laporan/laba-rugi-produk', (_req, res) => {
   try {
     const summary = TransactionService.getLabaRugiSummary();
@@ -1927,7 +2047,8 @@ apiRouter.post('/karyawan', async (req, res) => {
 
       const id = `KRY-${Date.now().toString().slice(-4)}`;
       const idMitra = `MTR-${id}`;
-      const selectedDivisi = String(divisi || departemen || 'Gudang Wijaya Agro').trim();
+      const rawDiv = String(divisi || departemen || 'Gudang Wijaya Agro').trim();
+      const selectedDivisi = isExcludedFromDivisi(rawDiv) ? 'PT Wijaya Agro Perkasa' : rawDiv;
 
       const newKaryawan: any = {
         id,
@@ -1936,8 +2057,8 @@ apiRouter.post('/karyawan', async (req, res) => {
         jabatan: String(jabatan).trim(),
         divisi: selectedDivisi,
         departemen: selectedDivisi,
-        gajiPokok: Math.max(0, Number(gajiPokok) || 0),
-        tunjanganTetap: Math.max(0, Number(tunjanganTetap) || 0),
+        gajiPokok: 0,
+        tunjanganTetap: 0,
         telepon: telepon || '-',
         alamat: alamat || '-',
         tanggalMasuk: tanggalMasuk || getWIBDateTime().tanggal,
@@ -2008,14 +2129,16 @@ apiRouter.put('/karyawan/:id', async (req, res) => {
       if (nama) kry.nama = String(nama).trim();
       if (jabatan) kry.jabatan = String(jabatan).trim();
       if (divisi) {
-        kry.divisi = String(divisi).trim();
-        kry.departemen = String(divisi).trim();
+        const cleanDiv = isExcludedFromDivisi(divisi) ? 'PT Wijaya Agro Perkasa' : String(divisi).trim();
+        kry.divisi = cleanDiv;
+        kry.departemen = cleanDiv;
       } else if (departemen) {
-        kry.divisi = String(departemen).trim();
-        kry.departemen = String(departemen).trim();
+        const cleanDep = isExcludedFromDivisi(departemen) ? 'PT Wijaya Agro Perkasa' : String(departemen).trim();
+        kry.divisi = cleanDep;
+        kry.departemen = cleanDep;
       }
-      if (gajiPokok !== undefined) kry.gajiPokok = Math.max(0, Number(gajiPokok) || 0);
-      if (tunjanganTetap !== undefined) kry.tunjanganTetap = Math.max(0, Number(tunjanganTetap) || 0);
+      kry.gajiPokok = 0;
+      kry.tunjanganTetap = 0;
       if (telepon) kry.telepon = telepon;
       if (alamat) kry.alamat = alamat;
       if (status) kry.status = status;

@@ -61,21 +61,14 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
       ? allKaryawan.find((k) => k.id === selectedKaryawanId)
       : propKaryawan) || propKaryawan;
 
-  // Form states
+  // Form states (Murni Harian per Hari Kerja — Hari Tanpa Input = Tidak Masuk)
   const todayStr = new Date().toISOString().split('T')[0];
   const [tanggalKerja, setTanggalKerja] = useState<string>(todayStr);
-  const [tipeGaji, setTipeGaji] = useState<'HARIAN' | 'BULANAN'>('HARIAN');
+  const tipeGaji = 'HARIAN' as const;
   const [divisi, setDivisi] = useState<NamaDivisi>(initialDivisi || 'Gudang Wijaya Agro');
 
-  // Nominal gaji manual
-  const defaultUpah =
-    tipeGaji === 'HARIAN'
-      ? activeKaryawan?.gajiPokok
-        ? Math.round(activeKaryawan.gajiPokok / 25)
-        : 120000
-      : activeKaryawan?.gajiPokok || 3000000;
-
-  const [gajiNominal, setGajiNominal] = useState<number>(defaultUpah);
+  // Nominal gaji harian manual
+  const [gajiNominal, setGajiNominal] = useState<number>(120000);
   const [bonus, setBonus] = useState<number>(0);
 
   // Default month name in Indonesian
@@ -104,18 +97,6 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
     }
   }, [divisi]);
 
-  // Update default upah when changing tipe gaji or active employee
-  useEffect(() => {
-    if (activeKaryawan) {
-      if (tipeGaji === 'HARIAN') {
-        const estHarian = activeKaryawan.gajiPokok ? Math.round(activeKaryawan.gajiPokok / 25) : 120000;
-        setGajiNominal(estHarian);
-      } else {
-        setGajiNominal(activeKaryawan.gajiPokok || 3000000);
-      }
-    }
-  }, [activeKaryawan?.id, tipeGaji]);
-
   if (!activeKaryawan) return null;
 
   const validRekening = rekeningList.filter(
@@ -123,7 +104,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
   );
 
   const totalBon = activeKaryawan.totalKasbonAktif || 0;
-  const tunjangan = tipeGaji === 'BULANAN' ? (activeKaryawan.tunjanganTetap || 0) : 0;
+  const tunjangan = 0;
   const upahPokok = Number(gajiNominal) || 0;
   const lemburBonus = Number(bonus) || 0;
   const gajiKotor = upahPokok + tunjangan + lemburBonus;
@@ -238,13 +219,10 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
             </div>
             <div>
               <h2 className="font-bold text-sm text-zinc-100 flex items-center space-x-2">
-                <span>Input Upah & Payroll Karyawan</span>
-                <span className="text-[10px] bg-amber-950 text-amber-300 font-semibold px-2 py-0.5 rounded-full border border-amber-800">
-                  {tipeGaji === 'HARIAN' ? 'Harian (Bebas Divisi)' : 'Bulanan'}
-                </span>
+                <span>Input Gaji per Hari Kerja Karyawan</span>
               </h2>
               <p className="text-[11px] text-zinc-400">
-                Pilih divisi penugasan hari ini, tentukan nominal upah secara manual, dan kelola potongan kasbon
+                Gaji dihitung per hari kerja yang di-input. Hari tanpa input gaji otomatis terhitung Tidak Masuk.
               </p>
             </div>
           </div>
@@ -264,35 +242,6 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
               <span>{errorMsg}</span>
             </div>
           )}
-
-          {/* Switch Tipe Penggajian: Harian vs Bulanan */}
-          <div className="flex items-center justify-between bg-zinc-950/60 p-2.5 rounded-lg border border-zinc-800">
-            <span className="text-[11px] font-semibold text-zinc-300">Tipe Pembayaran:</span>
-            <div className="flex space-x-2">
-              <button
-                type="button"
-                onClick={() => setTipeGaji('HARIAN')}
-                className={`px-3 py-1.5 rounded-md font-semibold text-xs border transition-colors ${
-                  tipeGaji === 'HARIAN'
-                    ? 'bg-amber-600 text-white border-amber-500 shadow-xs'
-                    : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
-                }`}
-              >
-                Upah Harian (Manual Tiap Hari)
-              </button>
-              <button
-                type="button"
-                onClick={() => setTipeGaji('BULANAN')}
-                className={`px-3 py-1.5 rounded-md font-semibold text-xs border transition-colors ${
-                  tipeGaji === 'BULANAN'
-                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
-                    : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
-                }`}
-              >
-                Gaji Bulanan
-              </button>
-            </div>
-          </div>
 
           {/* Karyawan Selector */}
           <div>

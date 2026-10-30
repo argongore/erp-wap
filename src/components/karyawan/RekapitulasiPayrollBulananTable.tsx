@@ -202,7 +202,8 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
       'Jabatan',
       'Departemen',
       'Divisi Utama',
-      'Total Hari Kerja',
+      'Hari Masuk',
+      'Hari Tidak Masuk',
       'Upah Pokok Harian',
       'Lembur & Makan',
       'Total Gaji Kotor',
@@ -216,6 +217,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
       'Status Neraca',
     ];
 
+    const hariDalamBulanExport = new Date(rekapData.tahun, rekapData.bulan, 0).getDate();
     const rows = rekapData.items.map((item) => [
       item.nik,
       `"${item.nama}"`,
@@ -223,6 +225,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
       `"${item.departemen}"`,
       `"${item.divisiUtama}"`,
       item.totalHariKerja,
+      item.totalHariTidakMasuk ?? Math.max(0, hariDalamBulanExport - item.totalHariKerja),
       item.totalUpahPokok,
       item.totalUangMakanLembur,
       item.totalGajiKotor,
@@ -276,13 +279,13 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
           <div>
             <h2 className="text-sm font-bold text-zinc-100 flex items-center space-x-2">
               <Users className="w-4 h-4 text-amber-400" />
-              <span>Daftar Karyawan &amp; Rekapitulasi Gaji Bulanan</span>
-              <span className="text-[10px] bg-amber-950 text-amber-300 font-bold px-2 py-0.5 rounded border border-amber-800">
-                TOTAL GAJI KOTOR = AKUMULASI HARIAN
+              <span>Daftar Karyawan &amp; Rekapitulasi Gaji per Hari Kerja</span>
+              <span className="text-[10px] text-amber-300 font-semibold">
+                · Tanpa Input Harian = Tidak Masuk
               </span>
             </h2>
             <p className="text-[11px] text-zinc-400 mt-0.5">
-              Total gaji bulanan kotor dihitung dari akumulasi input gaji harian. Hak upah belum dicairkan = Total Gaji - Total Bon, dengan pemotongan bon bersifat <strong>fleksibel/kondisional</strong> (karyawan dapat memilih tunda bayar bon 0%, potong sebagian, atau lunasi penuh).
+              Gaji dihitung murni per hari kerja karyawan (tanpa standar gaji bulanan tetap). Tanggal tanpa input gaji karyawan otomatis dihitung <strong>Tidak Masuk</strong>. Pemotongan bon bersifat fleksibel saat pencairan gaji.
             </p>
           </div>
 
@@ -477,7 +480,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
               <tr>
                 <th className="py-2.5 px-3">Nama Karyawan</th>
                 <th className="py-2.5 px-3">Divisi Utama</th>
-                <th className="py-2.5 px-2 text-center">Hari Kerja</th>
+                <th className="py-2.5 px-2 text-center">Kehadiran (Masuk / Tidak Masuk)</th>
                 <th className="py-2.5 px-3 text-right">Upah Pokok</th>
                 <th className="py-2.5 px-3 text-right">Lembur/Makan</th>
                 <th className="py-2.5 px-3 text-right" title="Total akumulasi seluruh input gaji harian bulan ini">
@@ -522,7 +525,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                     <React.Fragment key={item.idKaryawan}>
                       <tr
                         className={`hover:bg-zinc-800/50 transition-colors cursor-pointer ${
-                          isExpanded ? 'bg-zinc-800/40 border-l-4 border-l-amber-500' : ''
+                          isExpanded ? 'bg-zinc-800/50' : ''
                         }`}
                         onClick={() => handleToggleExpand(item.idKaryawan)}
                       >
@@ -580,11 +583,20 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                           )}
                         </td>
 
-                        {/* 3. Total Hari Kerja */}
-                        <td className="py-3 px-2 text-center font-mono font-bold text-zinc-200">
-                          <span className="px-2 py-0.5 bg-zinc-800 rounded border border-zinc-700">
-                            {item.totalHariKerja} Hari
-                          </span>
+                        {/* 3. Total Hari Kerja & Tidak Masuk */}
+                        <td className="py-3 px-2 text-center font-mono tabular-nums">
+                          <div className="font-bold text-cyan-300">
+                            {item.totalHariKerja} Hari Masuk
+                          </div>
+                          <div className="text-[10px] text-zinc-400 mt-0.5">
+                            {item.totalHariTidakMasuk ??
+                              Math.max(
+                                0,
+                                new Date(selectedTahun, selectedBulan, 0).getDate() -
+                                  item.totalHariKerja
+                              )}{' '}
+                            Tidak Masuk
+                          </div>
                         </td>
 
                         {/* 4. Upah Pokok */}

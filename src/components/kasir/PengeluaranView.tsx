@@ -40,6 +40,7 @@ import {
   KATEGORI_INVENTARIS_LABELS,
   getPajakStatusInfo,
 } from '../master/MasterInventarisView.tsx';
+import { resolveDivisiAccount } from '../common/DoubleCheckVerifikasiPanel.tsx';
 
 interface Props {
   rekeningList: Rekening[];
@@ -538,8 +539,8 @@ export const PengeluaranView: React.FC<Props> = ({
               PT. WIJAYA AGRO PERKASA
             </span>
           </div>
-          <p className="text-xs text-zinc-500 mt-0.5">
-            Pencatatan rincian biaya kebutuhan setiap unit: armada &amp; servis dandan (Wijaya Transport), konsumsi/gorengan (Gudang GWA), material (Wijaya Karya), admin tarik cash (BRILink), timbangan (Okussa).
+          <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">
+            Khusus <strong>pengeluaran murni pengurang saldo &amp; laba divisi</strong> (servis armada, BBM, konsumsi, material habis pakai). Untuk pembelian beras/barang yang akan dijual kembali (hitungan Modal Dagang), gunakan menu <strong>Pembelian Stok Pemasok / Hasil Bumi</strong>.
           </p>
         </div>
 
@@ -757,6 +758,49 @@ export const PengeluaranView: React.FC<Props> = ({
                   + Tambah Divisi Baru...
                 </option>
               </select>
+
+              {(() => {
+                const divAcc = resolveDivisiAccount(divisiInput, rekeningList);
+                const nom = Math.max(0, Number(nominalInput) || 0);
+                const saldoAkhirDivisi = divAcc.saldoSaatIni - nom;
+                return (
+                  <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2.5 space-y-1.5 text-[11px]">
+                    <div className="grid grid-cols-3 gap-2 font-mono tabular-nums">
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-sans text-zinc-500 truncate">
+                          Saldo {divAcc.kode}
+                        </div>
+                        <div className="font-semibold text-zinc-800 truncate">
+                          {formatRupiah(divAcc.saldoSaatIni)}
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-sans text-zinc-500 truncate">
+                          Pengeluaran (−)
+                        </div>
+                        <div className="font-bold text-rose-700 truncate">
+                          −{formatRupiah(nom)}
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-sans text-zinc-500 truncate">
+                          Saldo Divisi Akhir
+                        </div>
+                        <div
+                          className={`font-bold truncate ${
+                            saldoAkhirDivisi < 0 ? 'text-rose-700' : 'text-zinc-900'
+                          }`}
+                        >
+                          {formatRupiah(saldoAkhirDivisi)}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-zinc-600 leading-snug">
+                      <strong>Pengeluaran Operasional</strong> pasti mengurangi saldo berjalan &amp; laba bersih divisi <strong>{divisiInput}</strong> (berbeda dengan <em>Pembelian Barang/Beras</em> yang dihitung sebagai modal stok dagang).
+                    </p>
+                  </div>
+                );
+              })()}
             </div>
 
             <div>

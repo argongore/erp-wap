@@ -272,7 +272,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
       if (!inputKryId && kRes.length > 0) {
         const firstActive = kRes.find((k) => k.status === 'AKTIF') || kRes[0];
         setInputKryId(firstActive.id);
-        setInputUpahHarian(firstActive.gajiPokok || 135000);
+        setInputUpahHarian(135000);
         if (firstActive.divisi) {
           setInputDivisi(firstActive.divisi as NamaDivisi);
         } else if (firstActive.departemen) {
@@ -301,7 +301,6 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     setInputKryId(id);
     const k = karyawanList.find((item) => item.id === id);
     if (k) {
-      setInputUpahHarian(k.gajiPokok || 135000);
       if (k.divisi) {
         setInputDivisi(k.divisi as NamaDivisi);
       } else if (k.departemen) {
@@ -803,10 +802,10 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             <div className="space-y-1">
               <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
                 <HandCoins className="w-5 h-5 text-emerald-400" />
-                <span>Menu Pembayaran Gaji Karyawan (Bulanan &amp; Akumulasi Upah)</span>
+                <span>Menu Pencairan Gaji Karyawan (Akumulasi Hari Kerja)</span>
               </h3>
               <p className="text-xs text-zinc-400 leading-relaxed max-w-3xl">
-                Pilih karyawan untuk mencairkan akumulasi upah kerja selama 1 bulan penuh atau membayar gaji bulanan tetap, sekaligus potong kasbon fleksibel. Setiap karyawan terhubung langsung ke satu <strong>Rekening Mitra</strong> yang sama — sehingga jika karyawan juga menitip hasil panen (seperti Kopi/Lada), saldo titip panennya tetap aman &amp; terekap bersama histori gajinya di Rekening Mitra.
+                Pilih karyawan untuk mencairkan akumulasi upah kerja harian sekaligus potong kasbon secara fleksibel. Gaji dihitung murni per hari kerja yang di-input (hari tanpa input gaji karyawan otomatis dihitung <strong>Tidak Masuk</strong>). Setiap karyawan terhubung langsung ke satu <strong>Rekening Mitra</strong> yang sama.
               </p>
             </div>
             <button
@@ -826,7 +825,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                   <th className="py-3 px-3">Karyawan / Mitra</th>
                   <th className="py-3 px-3">Divisi &amp; Jabatan</th>
                   <th className="py-3 px-3 text-right">Upah Kerja Belum Cair</th>
-                  <th className="py-3 px-3 text-right">Standar Gaji Bulanan</th>
+                  <th className="py-3 px-3">Kehadiran Kerja</th>
                   <th className="py-3 px-3 text-right">Gaji Sudah Cair</th>
                   <th className="py-3 px-3 text-right">Kasbon Aktif</th>
                   <th className="py-3 px-3 text-right">Saldo Titip Panen (Mitra)</th>
@@ -868,8 +867,13 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                             <span className="text-zinc-500">Rp 0</span>
                           )}
                         </td>
-                        <td className="py-3.5 px-3 text-right font-mono tabular-nums text-zinc-300">
-                          {k.gajiPokok && k.gajiPokok > 0 ? formatRupiah(k.gajiPokok) : '-'}
+                        <td className="py-3.5 px-3 text-zinc-300">
+                          <div className="font-mono tabular-nums font-semibold text-cyan-300">
+                            {k.totalHariBelumDibayar || 0} hari belum cair
+                          </div>
+                          <div className="text-[10px] text-zinc-400">
+                            Tanpa input harian = Tidak Masuk
+                          </div>
                         </td>
                         <td className="py-3.5 px-3 text-right font-mono tabular-nums">
                           {paid > 0 ? (
@@ -1347,11 +1351,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                     </div>
                     <div className="flex justify-between gap-2 min-w-0">
                       <span className="text-zinc-400 shrink-0">Sistem Upah:</span>
-                      <span
-                        className="text-zinc-200 font-mono tabular-nums truncate whitespace-nowrap"
-                        title={activeKry.gajiPokok ? formatRupiah(activeKry.gajiPokok) : undefined}
-                      >
-                        {activeKry.gajiPokok ? formatRupiahSingkat(activeKry.gajiPokok) : 'Fleksibel per Penugasan'}
+                      <span className="text-zinc-200 font-medium truncate whitespace-nowrap">
+                        Per Hari Kerja (Tanpa Input = Tidak Masuk)
                       </span>
                     </div>
                     <div className="flex justify-between gap-2 min-w-0">
@@ -1593,9 +1594,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                                 (k.totalGajiSudahDibayar || 0) === 0 &&
                                 (k.totalTitipHasilPanen || 0) === 0 && (
                                   <span className="text-zinc-400 text-[11px]">
-                                    {k.gajiPokok && k.gajiPokok > 0
-                                      ? `Gaji Pokok: ${formatRupiah(k.gajiPokok)}`
-                                      : 'Upah Harian / Bulanan Fleksibel'}
+                                    Input per Hari Kerja (Tanpa Input = Tidak Masuk)
                                   </span>
                                 )}
                             </div>
@@ -1955,31 +1954,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-zinc-400 mb-1">Gaji Pokok Bulanan (Opsional)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="50000"
-                    value={formGajiPokok || ''}
-                    onChange={(e) => setFormGajiPokok(Number(e.target.value) || 0)}
-                    placeholder="0 jika harian fleksibel"
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-zinc-400 mb-1">Tunjangan Tetap Bulanan (Opsional)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="25000"
-                    value={formTunjangan || ''}
-                    onChange={(e) => setFormTunjangan(Number(e.target.value) || 0)}
-                    placeholder="0"
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2.5 py-1.5 text-zinc-100 font-mono"
-                  />
-                </div>
+              <div className="p-2.5 bg-zinc-800/80 rounded-lg border border-zinc-700 text-[11px] text-zinc-300">
+                <strong>Sistem Gaji Harian Murni:</strong> Tidak menggunakan standar gaji bulanan tetap. Gaji karyawan dihitung berdasarkan input gaji per hari kerja; hari tanpa input gaji otomatis terhitung <strong>Tidak Masuk</strong>.
               </div>
 
               <div className="p-2.5 bg-indigo-950/60 rounded-lg border border-indigo-700/60 text-[11px] text-indigo-200 flex items-start space-x-2">

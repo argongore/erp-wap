@@ -30,6 +30,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Truck,
+  LogOut,
 } from 'lucide-react';
 
 export type ActiveTab =
@@ -86,7 +87,7 @@ export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   'menu-divisi': 'Divisi & Kas Operasional',
   'stok-barang': 'Stok Barang Toko',
   'stok-hasil-bumi': 'Stok & Rekap Hasil Bumi',
-  'laba-rugi-produk': 'Laba & Rugi Produk',
+  'laba-rugi-produk': 'Laba & Rugi Per Divisi',
   'rekening-koran-mitra': 'Rekening Koran Mitra',
   'laporan-transaksi': 'Rekap Semua Transaksi',
   'audit-log': 'Audit Log Transaksi',
@@ -135,6 +136,7 @@ interface SidebarProps {
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   onOpenFullLinkModal?: () => void;
+  onLogout?: () => void;
 }
 
 interface NavItemConfig {
@@ -168,6 +170,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   collapsed = false,
   onToggleCollapse,
   onOpenFullLinkModal,
+  onLogout,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [flowFilter, setFlowFilter] = useState<'ALL' | 'MASUK' | 'KELUAR'>('ALL');
@@ -273,8 +276,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {
             id: 'kasir-pembelian',
             label: 'Pembelian Hasil Bumi',
-            sublabel: 'Bayar timbangan panen',
-            keywords: 'beli pembelian hasil bumi panen jagung kopi lada timbangan uang keluar kas out',
+            sublabel: 'Modal panen komoditas divisi',
+            keywords: 'beli pembelian hasil bumi panen jagung kopi lada timbangan modal uang keluar kas out',
             icon: Wheat,
             flow: 'KELUAR',
             tab: 'kasir-pembelian',
@@ -309,8 +312,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {
             id: 'kasir-pembelian-barang',
             label: 'Pembelian Stok Pemasok',
-            sublabel: 'Bayar kulakan distributor',
-            keywords: 'kulakan distributor pemasok beli stok barang hpp uang keluar kas out',
+            sublabel: 'Modal stok dagang (potensi untung)',
+            keywords: 'kulakan distributor pemasok beli stok barang beras modal hpp uang keluar kas out',
             icon: PackagePlus,
             flow: 'KELUAR',
             tab: 'kasir-pembelian-barang',
@@ -318,8 +321,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {
             id: 'kasir-pengeluaran',
             label: 'Pengeluaran & Biaya',
-            sublabel: 'Biaya operasional & divisi',
-            keywords: 'pengeluaran biaya operasional bensin makan listrik divisi uang keluar kas out',
+            sublabel: 'Beban pengurang saldo divisi',
+            keywords: 'pengeluaran biaya operasional bensin makan listrik divisi beban uang keluar kas out',
             icon: FileText,
             flow: 'KELUAR',
             tab: 'kasir-pengeluaran',
@@ -442,8 +445,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         items: [
           {
             id: 'laba-rugi-produk',
-            label: 'Laba & Rugi Produk',
-            keywords: 'laba rugi margin profit keuntungan produk',
+            label: 'Laba & Rugi Divisi',
+            sublabel: 'Untung rugi, modal & biaya divisi',
+            keywords: 'laba rugi margin profit keuntungan per divisi modal pembelian pengeluaran',
             icon: TrendingUp,
             tab: 'laba-rugi-produk',
           },
@@ -793,23 +797,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </nav>
 
-        {/* Bottom Quick Full-Screen Link Helper */}
-        {!isNarrow && onOpenFullLinkModal && (
-          <div className="p-2.5 border-t border-slate-100 bg-slate-50/60 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                onOpenFullLinkModal();
-                onCloseMobile?.();
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white hover:bg-emerald-50/60 border border-slate-200/90 hover:border-emerald-300 text-xs font-semibold text-slate-700 hover:text-emerald-900 transition-all shadow-2xs cursor-pointer"
-            >
-              <span className="flex items-center space-x-2 truncate">
-                <ExternalLink className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <span className="truncate">Link Akses Full Tampilan</span>
-              </span>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            </button>
+        {/* Bottom Quick Full-Screen Link & Logout Footer */}
+        {(onOpenFullLinkModal || onLogout) && (
+          <div className="p-2.5 border-t border-slate-100 bg-slate-50/60 shrink-0 space-y-1.5">
+            {!isNarrow && onOpenFullLinkModal && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenFullLinkModal();
+                  onCloseMobile?.();
+                }}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white hover:bg-emerald-50/60 border border-slate-200/90 hover:border-emerald-300 text-xs font-semibold text-slate-700 hover:text-emerald-900 transition-all shadow-2xs cursor-pointer"
+              >
+                <span className="flex items-center space-x-2 truncate">
+                  <ExternalLink className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="truncate">Link Akses Full Tampilan</span>
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              </button>
+            )}
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={() => {
+                  onCloseMobile?.();
+                  onLogout();
+                }}
+                title="Keluar Aplikasi & Kembali ke Layar Sandi"
+                className={`w-full flex items-center ${
+                  isNarrow ? 'justify-center p-2.5' : 'justify-between px-3 py-2'
+                } rounded-xl bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 text-xs font-semibold text-rose-700 hover:text-white transition-colors cursor-pointer`}
+              >
+                <span className={`flex items-center ${isNarrow ? '' : 'space-x-2 truncate'}`}>
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
+                  {!isNarrow && <span className="truncate">Keluar Aplikasi</span>}
+                </span>
+                {!isNarrow && <span className="text-[10px] opacity-80 whitespace-nowrap">Tutup Sesi</span>}
+              </button>
+            )}
           </div>
         )}
       </div>

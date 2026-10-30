@@ -9,6 +9,7 @@ import {
   Plus,
   TrendingUp,
   TrendingDown,
+  Boxes,
 } from 'lucide-react';
 import { Rekening } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
@@ -122,6 +123,7 @@ export function useDivisiOptions(): string[] {
 
 export interface ArusKasDivisiSelectorCardProps {
   direction: 'MASUK' | 'KELUAR';
+  transactionKind?: 'PENJUALAN' | 'MODAL_PEMBELIAN' | 'BEBAN_PENGELUARAN';
   metode: string;
   nominal: number;
   divisi: string;
@@ -139,6 +141,7 @@ export interface ArusKasDivisiSelectorCardProps {
  */
 export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps> = ({
   direction,
+  transactionKind,
   metode,
   nominal,
   divisi,
@@ -172,12 +175,24 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
     metode === 'HUTANG' ||
     metode === 'INTERNAL_PT';
 
+  const effectiveKind =
+    transactionKind ?? (direction === 'MASUK' ? 'PENJUALAN' : 'MODAL_PEMBELIAN');
+  const isModalPembelian = direction === 'KELUAR' && effectiveKind === 'MODAL_PEMBELIAN';
+
   const activeDivisiAcc = useMemo(
     () => resolveDivisiAccount(divisi, rekeningList),
     [divisi, rekeningList]
   );
 
-  const deltaDivisi = isNonTunai ? 0 : direction === 'MASUK' ? nominal : -nominal;
+  // Pembelian barang/komoditas untuk dijual kembali adalah MODAL DAGANG (uang berubah menjadi stok berjalan divisi),
+  // sehingga tidak mengurangi Nilai Saldo Berjalan Divisi seperti beban pengeluaran murni.
+  const deltaDivisi = isNonTunai
+    ? 0
+    : direction === 'MASUK'
+    ? nominal
+    : isModalPembelian
+    ? 0
+    : -nominal;
   const estimasiSaldoDivisi = activeDivisiAcc.saldoSaatIni + deltaDivisi;
 
   const handleCreateNewDivisi = async () => {
@@ -259,6 +274,17 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
               <TrendingUp className="w-3 h-3" />
               <span>Otomatis +Saldo Divisi</span>
             </span>
+          ) : isModalPembelian ? (
+            <span
+              className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border ${
+                isDark
+                  ? 'bg-sky-950 text-sky-300 border-sky-800'
+                  : 'bg-sky-100 text-sky-900 border-sky-300'
+              }`}
+            >
+              <Boxes className="w-3 h-3" />
+              <span>Modal Dagang (+Stok Divisi)</span>
+            </span>
           ) : (
             <span
               className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border ${
@@ -268,7 +294,7 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
               }`}
             >
               <TrendingDown className="w-3 h-3" />
-              <span>Otomatis -Saldo Divisi</span>
+              <span>Pengeluaran (−Saldo Divisi)</span>
             </span>
           )}
 
@@ -393,7 +419,9 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
               ? 'Mutasi Kas Divisi'
               : direction === 'MASUK'
               ? 'Arus Masuk (+)'
-              : 'Arus Keluar (-)'}
+              : isModalPembelian
+              ? 'Alokasi Modal Stok'
+              : 'Pengeluaran (−)'}
           </div>
           <div
             className={`font-bold truncate ${
@@ -405,14 +433,20 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
                 ? isDark
                   ? 'text-emerald-400'
                   : 'text-emerald-700'
+                : isModalPembelian
+                ? isDark
+                  ? 'text-sky-300'
+                  : 'text-sky-700'
                 : isDark
                 ? 'text-rose-400'
                 : 'text-rose-700'
             }`}
-            title={formatRupiah(Math.abs(deltaDivisi))}
+            title={formatRupiah(nominal)}
           >
             {isNonTunai
               ? 'Rp 0'
+              : isModalPembelian
+              ? formatRupiah(nominal)
               : `${direction === 'MASUK' ? '+' : '-'}${formatRupiah(nominal)}`}
           </div>
         </div>
@@ -423,7 +457,7 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
               isDark ? 'text-zinc-400' : 'text-zinc-500'
             }`}
           >
-            Saldo Baru Divisi
+            Nilai Saldo Divisi
           </div>
           <div
             className={`font-bold truncate ${
@@ -449,15 +483,19 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
       >
         {isNonTunai ? (
           <>
-            Karena metode <strong>{isBelumPutusHarga ? 'BELUM PUTUS HARGA' : metode}</strong> (non-tunai), saldo arus kas divisi <strong>{divisi}</strong> belum berubah sekarang dan otomatis bertambah saat piutang dilunasi tunai/transfer.
+            Karena metode <strong>{isBelumPutusHarga ? 'BELUM PUTUS HARGA' : metode}</strong> (non-tunai), nilai saldo divisi <strong>{divisi}</strong> dicatat non-tunai dan disesuaikan otomatis saat penyelesaian kas/transfer.
           </>
         ) : direction === 'MASUK' ? (
           <>
-            Penjualan ini menggerakkan arus kas masuk di divisi <strong>{divisi} ({activeDivisiAcc.kode})</strong> dan otomatis menambah saldo divisi tersebut sebesar <strong>+{formatRupiah(nominal)}</strong>.
+            Penjualan ini menggerakkan arus kas masuk di divisi <strong>{divisi} ({activeDivisiAcc.kode})</strong> dan otomatis menambah nilai saldo divisi sebesar <strong>+{formatRupiah(nominal)}</strong>.
+          </>
+        ) : isModalPembelian ? (
+          <>
+            Pembelian ini dihitung sebagai <strong>MODAL DAGANG</strong> divisi <strong>{divisi} ({activeDivisiAcc.kode})</strong>: uang kas berubah wujud menjadi stok barang/komoditas senilai <strong>{formatRupiah(nominal)}</strong> yang berpotensi kembali &amp; untung saat terjual (berbeda dengan <em>Pengeluaran</em> yang memotong saldo divisi).
           </>
         ) : (
           <>
-            Pembelian ini menggerakkan arus kas keluar di divisi <strong>{divisi} ({activeDivisiAcc.kode})</strong> dan otomatis memotong saldo divisi tersebut sebesar <strong>-{formatRupiah(nominal)}</strong>.
+            Pengeluaran ini memotong langsung nilai saldo berjalan divisi <strong>{divisi} ({activeDivisiAcc.kode})</strong> sebesar <strong>-{formatRupiah(nominal)}</strong>.
           </>
         )}
       </p>
@@ -467,6 +505,7 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
 
 export interface DoubleCheckVerifikasiPanelProps {
   direction: 'MASUK' | 'KELUAR';
+  transactionKind?: 'PENJUALAN' | 'MODAL_PEMBELIAN' | 'BEBAN_PENGELUARAN';
   metode: string;
   nominal: number;
   rekeningList: Rekening[];
@@ -483,6 +522,7 @@ export interface DoubleCheckVerifikasiPanelProps {
 
 export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProps> = ({
   direction,
+  transactionKind,
   metode,
   nominal,
   rekeningList,
@@ -512,6 +552,10 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
     metode === 'INTERNAL_PT' ||
     nominal === 0;
 
+  const effectiveKind =
+    transactionKind ?? (direction === 'MASUK' ? 'PENJUALAN' : 'MODAL_PEMBELIAN');
+  const isModalPembelian = direction === 'KELUAR' && effectiveKind === 'MODAL_PEMBELIAN';
+
   const activeRealAccount: Rekening | undefined = useMemo(() => {
     if (isNonTunai) return undefined;
     if (metode === 'TUNAI') {
@@ -535,7 +579,13 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
     () => resolveDivisiAccount(divisi, rekeningList),
     [divisi, rekeningList]
   );
-  const deltaDivisi = isNonTunai ? 0 : direction === 'MASUK' ? nominal : -nominal;
+  const deltaDivisi = isNonTunai
+    ? 0
+    : direction === 'MASUK'
+    ? nominal
+    : isModalPembelian
+    ? 0
+    : -nominal;
   const estimasiSaldoDivisiAkhir = activeDivisiAcc.saldoSaatIni + deltaDivisi;
 
   const isAnakPerusahaan = Boolean(
@@ -858,7 +908,9 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
                 ? 'Mutasi Arus Kas'
                 : direction === 'MASUK'
                 ? 'Arus Masuk Divisi (+)'
-                : 'Arus Keluar Divisi (-)'}
+                : isModalPembelian
+                ? 'Modal Stok Divisi'
+                : 'Pengeluaran Divisi (−)'}
             </div>
             <div
               className={`font-bold ${
@@ -870,6 +922,10 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
                   ? isDark
                     ? 'text-emerald-400'
                     : 'text-emerald-700'
+                  : isModalPembelian
+                  ? isDark
+                    ? 'text-sky-300'
+                    : 'text-sky-700'
                   : isDark
                   ? 'text-rose-400'
                   : 'text-rose-700'
@@ -877,12 +933,14 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
             >
               {isNonTunai
                 ? 'Rp 0'
+                : isModalPembelian
+                ? formatRupiah(nominal)
                 : `${direction === 'MASUK' ? '+' : '-'}${formatRupiah(nominal)}`}
             </div>
           </div>
           <div>
             <div className={`text-[10px] font-sans ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-              Saldo Divisi Akhir
+              Nilai Saldo Divisi
             </div>
             <div
               className={`font-bold ${
@@ -902,10 +960,12 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
 
         <p className={`text-[10px] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
           {isNonTunai
-            ? `Dicatat pada Divisi ${divisi} (${activeDivisiAcc.kode}). Saldo arus kas divisi akan bergerak otomatis saat tagihan dilunasi tunai/transfer.`
+            ? `Dicatat pada Divisi ${divisi} (${activeDivisiAcc.kode}). Nilai saldo berjalan divisi menyesuaikan otomatis saat penyelesaian kas/transfer.`
             : direction === 'MASUK'
-            ? `Otomatis menambah saldo arus kas Divisi ${divisi} (${activeDivisiAcc.kode}) sebesar +${formatRupiah(nominal)}.`
-            : `Otomatis memotong saldo arus kas Divisi ${divisi} (${activeDivisiAcc.kode}) sebesar -${formatRupiah(nominal)}.`}
+            ? `Otomatis menambah nilai saldo Divisi ${divisi} (${activeDivisiAcc.kode}) sebesar +${formatRupiah(nominal)}.`
+            : isModalPembelian
+            ? `Pembelian dicatat sebagai MODAL DAGANG Divisi ${divisi} (${activeDivisiAcc.kode}) senilai ${formatRupiah(nominal)} (uang berubah menjadi stok barang yang berpotensi kembali & untung saat terjual, sehingga nilai saldo berjalan divisi tetap utuh).`
+            : `Pengeluaran operasional langsung mengurangi saldo Divisi ${divisi} (${activeDivisiAcc.kode}) sebesar -${formatRupiah(nominal)}.`}
         </p>
       </div>
 

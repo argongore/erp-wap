@@ -18,7 +18,12 @@ import {
   Square,
   FolderEdit,
 } from 'lucide-react';
-import { Produk, StokBarang } from '../../server/types.ts';
+import {
+  Produk,
+  StokBarang,
+  KATEGORI_ALAT_DEFAULT_DESC,
+  isKategoriAlatNonStok,
+} from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 
@@ -48,6 +53,7 @@ function formatKategoriLabel(raw: string | undefined | null): string {
 }
 
 const DEFAULT_DESCRIPTIONS: Record<string, string> = {
+  ALAT: KATEGORI_ALAT_DEFAULT_DESC,
   PUPUK: 'Pupuk kimia, organik, dan nutrisi tanaman',
   PESTISIDA: 'Obat pertanian, insektisida, fungisida, dan herbisida',
   BENIH: 'Bibit dan benih tanaman',
@@ -109,10 +115,15 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Preset Satuan
+  // Preset Satuan (termasuk satuan sewa jasa alat: Jam, Hari, Rit, Trip, Paket)
   const commonSatuanList = [
     'Sak',
     'Kg',
+    'Jam',
+    'Hari',
+    'Rit',
+    'Trip',
+    'Paket',
     'Kemasan',
     'Botol',
     'Liter',
@@ -228,13 +239,14 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
     }
 
     const cleanKategori = normalizeKategoriKey(formKategori);
+    const isAlatJasa = isKategoriAlatNonStok(cleanKategori);
     const buyPrice = Math.max(0, Number(formHargaBeli) || 0);
     const sellPrice = Math.max(0, Number(formHargaJual) || 0);
     const rekananPrice = formHargaRekanan ? Math.max(0, Number(formHargaRekanan) || 0) : sellPrice;
-    const minThreshold = Math.max(0, Number(formMinimum) || 0);
+    const minThreshold = isAlatJasa ? 0 : Math.max(0, Number(formMinimum) || 0);
 
     if (sellPrice <= 0) {
-      setErrorMsg('Harga jual kasir harus lebih dari Rp 0');
+      setErrorMsg('Harga jual / tarif sewa kasir harus lebih dari Rp 0');
       return;
     }
 
@@ -288,6 +300,7 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
 
     const cleanKode = formKode.trim().toUpperCase();
     const cleanKategori = normalizeKategoriKey(formKategori);
+    const isAlatJasa = isKategoriAlatNonStok(cleanKategori);
     const buyPrice = Math.max(0, Number(formHargaBeli) || 0);
     const rawSellPrice = Math.max(0, Number(formHargaJual) || 0);
     const sellPrice = rawSellPrice > 0 ? rawSellPrice : buyPrice;
@@ -303,8 +316,8 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
         hargaBeli: buyPrice,
         hargaJual: sellPrice,
         hargaKhususRekanan: rekananPrice,
-        stokAwal: Number(formStokAwal) || 0,
-        minimum: Number(formMinimum) || 5,
+        stokAwal: isAlatJasa ? 0 : Number(formStokAwal) || 0,
+        minimum: isAlatJasa ? 0 : Number(formMinimum) || 5,
       });
 
       setSuccessMsg(
@@ -1020,7 +1033,11 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
 
                       {/* Stok Gudang */}
                       <td className="py-3 px-3 text-center">
-                        {stokItem ? (
+                        {isKategoriAlatNonStok(p.kategori) ? (
+                          <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-50 text-sky-800 border border-sky-200 whitespace-nowrap">
+                            Tanpa Stok (Sewa Jasa)
+                          </span>
+                        ) : stokItem ? (
                           <span
                             className={`font-mono font-bold px-2 py-0.5 rounded tabular-nums ${
                               stokItem.stok <= stokItem.minimum
@@ -1583,18 +1600,30 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                   />
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-zinc-700 mb-1">
-                    Batas Peringatan Stok Minimum <span className="text-zinc-400 font-normal">({formSatuan})</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formMinimum}
-                    onChange={(e) => setFormMinimum(e.target.value)}
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums text-zinc-800 focus:ring-1 focus:ring-emerald-600"
-                  />
-                </div>
+                {isKategoriAlatNonStok(formKategori) ? (
+                  <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg text-[11px] text-sky-900 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-sky-700 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold block">Sewa Jasa (Tanpa Stok Fisik)</span>
+                      <span className="text-sky-800">
+                        Kategori ALAT tidak menggunakan stok gudang dan selalu siap dipakai di Kasir.
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block font-semibold text-zinc-700 mb-1">
+                      Batas Peringatan Stok Minimum <span className="text-zinc-400 font-normal">({formSatuan})</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formMinimum}
+                      onChange={(e) => setFormMinimum(e.target.value)}
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums text-zinc-800 focus:ring-1 focus:ring-emerald-600"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Live Margin Calculation Card */}
@@ -1684,7 +1713,7 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                 </div>
               )}
 
-              {/* Row 1: Kode Produk */}
+              {/* Row 1: Kode Produk & Stok Awal */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-zinc-700 mb-1">
@@ -1698,20 +1727,32 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                     onChange={(e) => setFormKode(e.target.value.toUpperCase())}
                     className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-emerald-600 font-mono font-bold"
                   />
-                  <span className="text-[10px] text-zinc-400 mt-0.5 block">Kode unik produk / SKU</span>
+                  <span className="text-[10px] text-zinc-400 mt-0.5 block">Kode unik produk / jasa</span>
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-zinc-700 mb-1">Stok Awal di Gudang</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formStokAwal}
-                    onChange={(e) => setFormStokAwal(e.target.value)}
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-emerald-600 font-mono tabular-nums"
-                  />
-                  <span className="text-[10px] text-zinc-400 mt-0.5 block">Jumlah fisik awal saat didaftarkan</span>
-                </div>
+                {isKategoriAlatNonStok(formKategori) ? (
+                  <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg text-[11px] text-sky-900 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-sky-700 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold block">Tanpa Stok (Sewa Jasa)</span>
+                      <span className="text-sky-800">
+                        Contoh: Sewa Exca / Sewa Truck langsung siap ditransaksikan tanpa perlu stok fisik.
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block font-semibold text-zinc-700 mb-1">Stok Awal di Gudang</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formStokAwal}
+                      onChange={(e) => setFormStokAwal(e.target.value)}
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-emerald-600 font-mono tabular-nums"
+                    />
+                    <span className="text-[10px] text-zinc-400 mt-0.5 block">Jumlah fisik awal saat didaftarkan</span>
+                  </div>
+                )}
               </div>
 
               {/* Row 2: Kategori Produk (Bebas Ketik Sendiri) */}
@@ -1721,14 +1762,14 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                     Kategori Produk <span className="text-rose-500">*</span>
                   </label>
                   <span className="text-[10px] text-emerald-700 font-semibold">
-                    Ketik kategori baru atau klik pilihan di bawah
+                    Pilih ALAT untuk sewa jasa tanpa stok (Exca / Truck)
                   </span>
                 </div>
                 <input
                   type="text"
                   required
                   list="daftar-kategori-produk-datalist"
-                  placeholder="Ketik kategori sesuai data riil (contoh: MATERIAL BANGUNAN, KOPI OLAHAN, BBM)..."
+                  placeholder="Ketik kategori (contoh: ALAT, MATERIAL BANGUNAN, PUPUK)..."
                   value={formKategori}
                   onChange={(e) => setFormKategori(e.target.value)}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-emerald-600 font-semibold text-zinc-900"
@@ -1743,7 +1784,12 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                         <button
                           key={kat.nama}
                           type="button"
-                          onClick={() => setFormKategori(label)}
+                          onClick={() => {
+                            setFormKategori(label);
+                            if (isKategoriAlatNonStok(label) && formSatuan === 'Sak') {
+                              setFormSatuan('Jam');
+                            }
+                          }}
                           className={`text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
                             isMatch
                               ? 'bg-emerald-700 text-white border-emerald-700 font-bold'
@@ -1761,12 +1807,16 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
               {/* Row 3: Nama Produk */}
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Nama Produk Lengkap <span className="text-rose-500">*</span>
+                  Nama Produk / Jasa Sewa <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="Contoh: Semen Baturaja 50 Kg / Kopi Bubuk Premium 250g"
+                  placeholder={
+                    isKategoriAlatNonStok(formKategori)
+                      ? 'Contoh: Sewa Exca / Sewa Truck Angkut'
+                      : 'Contoh: Semen Baturaja 50 Kg / Kopi Bubuk Premium 250g'
+                  }
                   value={formNama}
                   onChange={(e) => setFormNama(e.target.value)}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-emerald-600 font-semibold"
@@ -1776,12 +1826,12 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
               {/* Row 4: Satuan */}
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Satuan Kemasan <span className="text-rose-500">*</span>
+                  Satuan Transaksi <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="Ketik satuan sendiri (Sak / Kg / Kemasan / Meter Kubik...)"
+                  placeholder="Ketik satuan sendiri (Jam / Hari / Rit / Sak / Kg...)"
                   value={formSatuan}
                   onChange={(e) => setFormSatuan(e.target.value)}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-emerald-600 font-medium"
@@ -1808,7 +1858,11 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
               {/* Row 5: Harga Beli & Harga Jual */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-zinc-700 mb-1">Harga Beli / HPP Modal (Rp)</label>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    {isKategoriAlatNonStok(formKategori)
+                      ? 'Modal Operasional Dasar (Opsional, Rp)'
+                      : 'Harga Beli / HPP Modal (Rp)'}
+                  </label>
                   <input
                     type="number"
                     min="0"
@@ -1821,7 +1875,10 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
 
                 <div>
                   <label className="block font-semibold text-zinc-700 mb-1">
-                    Harga Jual Kasir (Umum) <span className="text-rose-500">*</span>
+                    {isKategoriAlatNonStok(formKategori)
+                      ? 'Tarif Sewa Kasir (Umum)'
+                      : 'Harga Jual Kasir (Umum)'}{' '}
+                    <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -1849,16 +1906,18 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                   />
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-zinc-700 mb-1">Peringatan Minimum Stok ({formSatuan})</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formMinimum}
-                    onChange={(e) => setFormMinimum(e.target.value)}
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums focus:ring-1 focus:ring-emerald-600"
-                  />
-                </div>
+                {!isKategoriAlatNonStok(formKategori) && (
+                  <div>
+                    <label className="block font-semibold text-zinc-700 mb-1">Peringatan Minimum Stok ({formSatuan})</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formMinimum}
+                      onChange={(e) => setFormMinimum(e.target.value)}
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums focus:ring-1 focus:ring-emerald-600"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}

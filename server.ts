@@ -1,5 +1,6 @@
 import express from 'express';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -8,6 +9,7 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
   const distPath = path.resolve(__dirname, 'dist');
   const distIndexPath = path.resolve(distPath, 'index.html');
@@ -93,8 +95,19 @@ async function startServer() {
       .then(({ createServer }) =>
         createServer({
           server: {
-            middlewareMode: true,
-            hmr: process.env.DISABLE_HMR !== 'true',
+            middlewareMode: {
+              server: httpServer,
+            },
+            ws: {
+              server: httpServer,
+            },
+            hmr:
+              process.env.DISABLE_HMR === 'true'
+                ? false
+                : {
+                    server: httpServer,
+                    overlay: false,
+                  },
             watch:
               process.env.DISABLE_HMR === 'true'
                 ? null
@@ -142,7 +155,7 @@ async function startServer() {
     next(err);
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[ERP Wijaya Agro] Server started on port ${PORT} (isProd: ${isProduction})`);
   });
 }

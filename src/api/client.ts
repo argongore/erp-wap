@@ -17,6 +17,7 @@ import {
   ItemRekapPayrollBulanan,
   RekapPayrollBulananSummary,
   ItemRincianHarianPayroll,
+  LabaRugiDivisiSummary,
   LabaRugiSummary,
   StokBarang,
   StokHasilBumi,
@@ -303,6 +304,42 @@ export const api = {
     return data.data;
   },
 
+  resetSaldoMitra: async (
+    idMitra: string
+  ): Promise<{ idMitra: string; namaMitra: string; message: string }> => {
+    const data = await requestJson('/api/mitra/reset-saldo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idMitra }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mengosongkan saldo mitra');
+    return data.data;
+  },
+
+  deleteMitra: async (
+    idMitra: string
+  ): Promise<{ deletedId: string; deletedNama: string; message: string }> => {
+    const data = await requestJson('/api/mitra/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idMitra }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus data mitra');
+    return data.data;
+  },
+
+  resetSemuaSaldoSistem: async (
+    hanyaMitra: boolean = false
+  ): Promise<{ hanyaMitra: boolean; totalMitra: number; totalRekening: number; message: string }> => {
+    const data = await requestJson('/api/mitra/reset-semua-saldo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hanyaMitra }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mengosongkan nominal saldo sistem');
+    return data.data;
+  },
+
   // Master Produk, Kategori Kustom & Stok
   getKategoriProduk: async (): Promise<
     Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>
@@ -530,10 +567,16 @@ export const api = {
     return data.data;
   },
 
-  // Laba Rugi Produk
+  // Laba Rugi Per Divisi & Produk
+  getLabaRugiDivisi: async (): Promise<LabaRugiDivisiSummary> => {
+    const data = await requestJson('/api/laporan/laba-rugi-divisi');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat laporan laba rugi divisi');
+    return data.data;
+  },
+
   getLabaRugiProduk: async (): Promise<LabaRugiSummary> => {
     const data = await requestJson('/api/laporan/laba-rugi-produk');
-    if (!data.success) throw new Error(data.message || 'Gagal memuat laporan laba rugi produk');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat laporan laba rugi');
     return data.data;
   },
 

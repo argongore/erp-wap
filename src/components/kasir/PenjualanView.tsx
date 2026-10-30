@@ -24,7 +24,14 @@ import {
   Pencil,
   History,
 } from 'lucide-react';
-import { Mitra, Produk, Rekening, StokBarang, TransaksiPenjualan } from '../../server/types.ts';
+import {
+  Mitra,
+  Produk,
+  Rekening,
+  StokBarang,
+  TransaksiPenjualan,
+  isKategoriAlatNonStok,
+} from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
@@ -61,6 +68,7 @@ interface CartItem {
   subtotal: number;
   labaKotor: number;
   stokTersedia: number;
+  isNonStokAlat?: boolean;
 }
 
 export const PenjualanView: React.FC<Props> = ({
@@ -94,18 +102,18 @@ export const PenjualanView: React.FC<Props> = ({
 
   const activeProducts = React.useMemo(() => {
     const list = produkList.filter((p) => p.status === 'AKTIF');
-    // Urutkan produk yang sudah memiliki stok pembelian (> 0) di bagian paling atas agar langsung siap dijual
+    // Urutkan produk siap jual (stok > 0 atau jasa sewa ALAT tanpa stok) di bagian paling atas
     return [...list].sort((a, b) => {
-      const sa = getStokQty(a.kode);
-      const sb = getStokQty(b.kode);
-      if (sa > 0 && sb === 0) return -1;
-      if (sa === 0 && sb > 0) return 1;
+      const readyA = getStokQty(a.kode) > 0 || isKategoriAlatNonStok(a.kategori);
+      const readyB = getStokQty(b.kode) > 0 || isKategoriAlatNonStok(b.kategori);
+      if (readyA && !readyB) return -1;
+      if (!readyA && readyB) return 1;
       return a.nama.localeCompare(b.nama, 'id');
     });
   }, [produkList, getStokQty]);
 
   const inStockProducts = React.useMemo(
-    () => activeProducts.filter((p) => getStokQty(p.kode) > 0),
+    () => activeProducts.filter((p) => getStokQty(p.kode) > 0 || isKategoriAlatNonStok(p.kategori)),
     [activeProducts, getStokQty]
   );
 
@@ -179,17 +187,23 @@ export const PenjualanView: React.FC<Props> = ({
     }
   }, [rekeningList, rekeningTujuan]);
 
-  // Auto-select an in-stock purchased product if current selection has 0 stock and in-stock products exist
+  // Auto-select a ready product (in-stock or ALAT service) if current selection has 0 stock
   useEffect(() => {
     const currentCodeNorm = String(selectedProductCode || '').trim().toUpperCase();
-    const exists = activeProducts.some((p) => String(p.kode || '').trim().toUpperCase() === currentCodeNorm);
-    const currentQty = getStokQty(selectedProductCode);
+    const currentObj = activeProducts.find(
+      (p) => String(p.kode || '').trim().toUpperCase() === currentCodeNorm
+    );
+    const currentIsReady = currentObj
+      ? getStokQty(currentObj.kode) > 0 || isKategoriAlatNonStok(currentObj.kategori)
+      : false;
 
-    if (!exists && (inStockProducts[0] || activeProducts[0])) {
+    if (!currentObj && (inStockProducts[0] || activeProducts[0])) {
       setSelectedProductCode((inStockProducts[0] || activeProducts[0]).kode);
-    } else if (currentQty === 0 && inStockProducts.length > 0 && cart.length === 0) {
+    } else if (!currentIsReady && inStockProducts.length > 0 && cart.length === 0) {
       const inCurrentFilter = inStockProducts.find(
-        (p) => kasirKategoriFilter === 'ALL' || String(p.kategori || '').trim().toUpperCase() === kasirKategoriFilter
+        (p) =>
+          kasirKategoriFilter === 'ALL' ||
+          String(p.kategori || '').trim().toUpperCase() === kasirKategoriFilter
       );
       if (inCurrentFilter && inCurrentFilter.kode !== selectedProductCode) {
         setSelectedProductCode(inCurrentFilter.kode);
@@ -207,6 +221,7 @@ export const PenjualanView: React.FC<Props> = ({
   const currentStok = currentProduct
     ? stokByKode.get(String(currentProduct.kode || '').trim().toUpperCase())
     : undefined;
+  const isCurrentAlatJasa = isKategoriAlatNonStok(currentProduct?.kategori);
   const stokTersediaCurrent = Math.max(0, Number(currentStok?.stok) || 0);
 
   // Suggested price strictly from purchase capital (HPP) & catalog (zero invented numbers)
@@ -282,7 +297,8 @@ export const PenjualanView: React.FC<Props> = ({
 
   const buildPendingSaleItem = (): CartItem | null => {
     if (!currentProduct || qtyInput <= 0 || hargaNegoInput < 0) return null;
-    if (stokTersediaCurrent <= 0 || qtyInput > stokTersediaCurrent) return null;
+    const isAlatJasa = isKategoriAlatNonStok(currentProduct.kategori);
+    if (!isAlatJasa && (stokTersediaCurrent <= 0 || qtyInput > stokTersediaCurrent)) return null;
     const modalHpp = Math.max(0, Number(currentProduct.hargaBeli) || 0);
     return {
       kodeProduk: currentProduct.kode,
@@ -295,6 +311,7 @@ export const PenjualanView: React.FC<Props> = ({
       subtotal: qtyInput * hargaNegoInput,
       labaKotor: (hargaNegoInput - modalHpp) * qtyInput,
       stokTersedia: stokTersediaCurrent,
+      isNonStokAlat: isAlatJasa,
     };
   };
 
@@ -306,10 +323,11 @@ export const PenjualanView: React.FC<Props> = ({
       return;
     }
     if (hargaNegoInput < 0) {
-      setErrorMsg('Harga jual tidak boleh bernilai negatif');
+      setErrorMsg('Harga jual / tarif sewa tidak boleh bernilai negatif');
       return;
     }
 
+    const isAlatJasa = isKategoriAlatNonStok(currentProduct.kategori);
     const stokTersedia = stokTersediaCurrent;
     const existingCartItem = cart.find(
       (i) => String(i.kodeProduk).trim().toUpperCase() === String(currentProduct.kode).trim().toUpperCase()
@@ -317,7 +335,7 @@ export const PenjualanView: React.FC<Props> = ({
     const existingQty = existingCartItem ? existingCartItem.qty : 0;
     const totalRequestedQty = existingQty + qtyInput;
 
-    if (totalRequestedQty > stokTersedia) {
+    if (!isAlatJasa && totalRequestedQty > stokTersedia) {
       setErrorMsg(
         `Stok tidak mencukupi untuk "${currentProduct.nama}". Stok tersedia dari pembelian: ${stokTersedia} ${currentProduct.satuan}, diminta: ${totalRequestedQty} ${currentProduct.satuan}`
       );
@@ -339,6 +357,7 @@ export const PenjualanView: React.FC<Props> = ({
                 subtotal,
                 labaKotor,
                 stokTersedia,
+                isNonStokAlat: isAlatJasa,
               }
             : item
         )
@@ -357,6 +376,7 @@ export const PenjualanView: React.FC<Props> = ({
           subtotal: qtyInput * hargaNegoInput,
           labaKotor: (hargaNegoInput - modalHpp) * qtyInput,
           stokTersedia,
+          isNonStokAlat: isAlatJasa,
         },
       ]);
     }
@@ -390,7 +410,7 @@ export const PenjualanView: React.FC<Props> = ({
     setCart(
       cart.map((item) => {
         if (item.kodeProduk === kode) {
-          if (newQty > item.stokTersedia) {
+          if (!item.isNonStokAlat && newQty > item.stokTersedia) {
             setErrorMsg(`Maksimal stok tersedia untuk ${item.nama}: ${item.stokTersedia} ${item.satuan}`);
             return item;
           }
@@ -433,12 +453,12 @@ export const PenjualanView: React.FC<Props> = ({
     if (cart.length === 0) {
       const autoSale = buildPendingSaleItem();
       if (!autoSale) {
-        if (stokTersediaCurrent <= 0) {
+        if (!isCurrentAlatJasa && stokTersediaCurrent <= 0) {
           setErrorMsg(
             `Stok "${currentProduct?.nama || 'Produk'}" masih 0. Lakukan Pembelian Barang dari Pemasok terlebih dahulu agar stok tersedia.`
           );
         } else {
-          setErrorMsg('Masukkan barang ke keranjang atau periksa jumlah Qty penjualan melebihi stok.');
+          setErrorMsg('Masukkan item ke keranjang atau periksa jumlah Qty transaksi.');
         }
         return;
       }
@@ -897,18 +917,19 @@ export const PenjualanView: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* Quick-pick Barang Siap Jual (hasil pembelian dari pemasok) */}
+              {/* Quick-pick Barang & Jasa Sewa Siap Transaksi */}
               {inStockProducts.length > 0 ? (
                 <div className="p-2.5 bg-emerald-950/35 border border-emerald-800/70 rounded-lg space-y-1.5">
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="font-bold text-emerald-300">
-                      Barang Tersedia Siap Jual ({inStockProducts.length} Produk):
+                      Barang &amp; Jasa Sewa Siap Transaksi ({inStockProducts.length} Item):
                     </span>
-                    <span className="text-[10px] text-zinc-400">Klik cepat produk hasil pembelian</span>
+                    <span className="text-[10px] text-zinc-400">Klik cepat produk / sewa alat</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {inStockProducts.map((p) => {
                       const sq = getStokQty(p.kode);
+                      const isAlat = isKategoriAlatNonStok(p.kategori);
                       const isSel = currentProduct?.kode === p.kode;
                       return (
                         <button
@@ -918,10 +939,12 @@ export const PenjualanView: React.FC<Props> = ({
                           className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-all cursor-pointer ${
                             isSel
                               ? 'bg-emerald-600 text-white border-emerald-400 shadow-xs'
+                              : isAlat
+                              ? 'bg-zinc-900 text-sky-200 border-sky-800 hover:bg-sky-950'
                               : 'bg-zinc-900 text-emerald-200 border-emerald-800 hover:bg-emerald-950'
                           }`}
                         >
-                          {p.nama} ({sq} {p.satuan})
+                          {p.nama} ({isAlat ? `Sewa / ${p.satuan}` : `${sq} ${p.satuan}`})
                         </button>
                       );
                     })}
@@ -929,7 +952,7 @@ export const PenjualanView: React.FC<Props> = ({
                 </div>
               ) : (
                 <div className="p-2.5 bg-amber-950/40 border border-amber-800/70 rounded-lg flex items-center justify-between gap-2 text-xs text-amber-200">
-                  <span>Belum ada barang dengan stok &gt; 0. Lakukan Pembelian Barang dari Pemasok terlebih dahulu.</span>
+                  <span>Belum ada barang dengan stok &gt; 0 atau item sewa jasa ALAT.</span>
                   {onNavigateToKulakan && (
                     <button
                       type="button"
@@ -943,7 +966,7 @@ export const PenjualanView: React.FC<Props> = ({
               )}
 
               <div>
-                <label className="block text-[11px] text-zinc-400 mb-1">Daftar Produk Toko</label>
+                <label className="block text-[11px] text-zinc-400 mb-1">Daftar Produk &amp; Jasa Sewa Alat</label>
                 <select
                   value={currentProduct?.kode || selectedProductCode}
                   onChange={(e) => setSelectedProductCode(e.target.value)}
@@ -951,11 +974,16 @@ export const PenjualanView: React.FC<Props> = ({
                 >
                   {filteredKasirProducts.map((p) => {
                     const stQty = getStokQty(p.kode);
+                    const isAlat = isKategoriAlatNonStok(p.kategori);
                     const cleanKat = String(p.kategori || 'LAINNYA').replace(/_/g, ' ');
                     const sugestiOpt = p.hargaJual > 0 ? p.hargaJual : p.hargaBeli || 0;
                     return (
                       <option key={p.kode} value={p.kode}>
-                        {stQty > 0 ? `[SIAP JUAL: ${stQty} ${p.satuan}] ` : '[STOK 0] '}
+                        {isAlat
+                          ? `[SEWA JASA - TANPA STOK] `
+                          : stQty > 0
+                          ? `[SIAP JUAL: ${stQty} ${p.satuan}] `
+                          : '[STOK 0] '}
                         [{cleanKat}] {p.nama} | HPP: {formatRupiah(p.hargaBeli || 0)} | Sugesti: {formatRupiah(sugestiOpt)}
                       </option>
                     );
@@ -969,19 +997,35 @@ export const PenjualanView: React.FC<Props> = ({
               <div className="bg-zinc-800/80 border border-zinc-700/80 rounded-lg p-3 space-y-2 text-xs">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <div>
-                    <span className="text-zinc-500 text-[10px] block">Stok Tersedia (Dari Pembelian)</span>
-                    <span className={`font-bold font-mono ${stokTersediaCurrent === 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                      {stokTersediaCurrent} {currentProduct.satuan}
+                    <span className="text-zinc-500 text-[10px] block">
+                      {isCurrentAlatJasa ? 'Jenis Layanan' : 'Stok Tersedia (Dari Pembelian)'}
                     </span>
+                    {isCurrentAlatJasa ? (
+                      <span className="font-bold text-sky-400">
+                        Tanpa Stok (Sewa Jasa)
+                      </span>
+                    ) : (
+                      <span className={`font-bold font-mono ${stokTersediaCurrent === 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {stokTersediaCurrent} {currentProduct.satuan}
+                      </span>
+                    )}
                   </div>
                   <div>
-                    <span className="text-zinc-500 text-[10px] block">Modal HPP Pembelian</span>
+                    <span className="text-zinc-500 text-[10px] block">
+                      {isCurrentAlatJasa ? 'Modal Dasar' : 'Modal HPP Pembelian'}
+                    </span>
                     <span className="font-semibold text-zinc-300 font-mono">
-                      {baseModalCurrent > 0 ? formatRupiah(baseModalCurrent) : 'Rp 0 (Belum Kulak)'}
+                      {baseModalCurrent > 0
+                        ? formatRupiah(baseModalCurrent)
+                        : isCurrentAlatJasa
+                        ? 'Rp 0 (Jasa Sewa)'
+                        : 'Rp 0 (Belum Kulak)'}
                     </span>
                   </div>
                   <div>
-                    <span className="text-zinc-500 text-[10px] block">Sugesti Eceran</span>
+                    <span className="text-zinc-500 text-[10px] block">
+                      {isCurrentAlatJasa ? 'Tarif Sewa Umum' : 'Sugesti Eceran'}
+                    </span>
                     <span className="font-semibold text-zinc-300 font-mono">
                       {formatRupiah(baseUmumCurrent)}
                     </span>
@@ -993,7 +1037,7 @@ export const PenjualanView: React.FC<Props> = ({
                     </span>
                   </div>
                 </div>
-                {stokTersediaCurrent > 0 && qtyInput > 0 && (
+                {!isCurrentAlatJasa && stokTersediaCurrent > 0 && qtyInput > 0 && (
                   <div className="pt-1.5 border-t border-zinc-700/70 text-[11px] flex items-center justify-between text-zinc-300">
                     <span>Mutasi Stok Penjualan Ini:</span>
                     <span className="font-mono font-semibold">
@@ -1012,12 +1056,12 @@ export const PenjualanView: React.FC<Props> = ({
               {/* Qty Input (4 cols) */}
               <div className="sm:col-span-4">
                 <label className="block text-xs font-medium text-zinc-300 mb-1">
-                  Qty ({currentProduct?.satuan})
+                  Qty / Durasi ({currentProduct?.satuan})
                 </label>
                 <input
                   type="number"
                   min="1"
-                  max={stokTersediaCurrent > 0 ? stokTersediaCurrent : undefined}
+                  max={!isCurrentAlatJasa && stokTersediaCurrent > 0 ? stokTersediaCurrent : undefined}
                   value={qtyInput === 0 ? '' : qtyInput}
                   onChange={(e) => setQtyInput(e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value, 10) || 0))}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-emerald-500"
@@ -1170,7 +1214,11 @@ export const PenjualanView: React.FC<Props> = ({
                 <div className="p-2.5 bg-emerald-950/35 border border-emerald-800/70 rounded-lg space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-bold text-emerald-400 uppercase">
                     <span>Siap Disimpan Langsung</span>
-                    <span>Stok: {pendingSalePreview.stokTersedia} → {pendingSalePreview.stokTersedia - pendingSalePreview.qty} {pendingSalePreview.satuan}</span>
+                    <span>
+                      {pendingSalePreview.isNonStokAlat
+                        ? 'Sewa Jasa (Tanpa Stok)'
+                        : `Stok: ${pendingSalePreview.stokTersedia} → ${pendingSalePreview.stokTersedia - pendingSalePreview.qty} ${pendingSalePreview.satuan}`}
+                    </span>
                   </div>
                   <div className="font-semibold text-zinc-100">{pendingSalePreview.nama}</div>
                   <div className="font-mono text-[11px] text-zinc-300">
@@ -1178,7 +1226,8 @@ export const PenjualanView: React.FC<Props> = ({
                     <strong className="text-amber-400">{formatRupiah(pendingSalePreview.subtotal)}</strong>
                   </div>
                   <div className="text-[10px] text-zinc-400">
-                    Modal HPP Pembelian: {formatRupiah(pendingSalePreview.hargaBeli)} / {pendingSalePreview.satuan}
+                    {pendingSalePreview.isNonStokAlat ? 'Modal Dasar' : 'Modal HPP Pembelian'}:{' '}
+                    {formatRupiah(pendingSalePreview.hargaBeli)} / {pendingSalePreview.satuan}
                   </div>
                 </div>
               ) : cart.length === 0 ? (

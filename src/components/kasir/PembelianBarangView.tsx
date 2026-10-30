@@ -1036,6 +1036,7 @@ export const PembelianBarangView: React.FC<Props> = ({
               <div className="mt-3">
                 <ArusKasDivisiSelectorCard
                   direction="KELUAR"
+                  transactionKind="MODAL_PEMBELIAN"
                   metode={metode}
                   nominal={totalBelanjaKulakan}
                   divisi={divisi}
@@ -1613,6 +1614,7 @@ export const PembelianBarangView: React.FC<Props> = ({
             {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
             <DoubleCheckVerifikasiPanel
               direction="KELUAR"
+              transactionKind="MODAL_PEMBELIAN"
               metode={metode}
               nominal={totalBelanjaKulakan}
               rekeningList={rekeningList}

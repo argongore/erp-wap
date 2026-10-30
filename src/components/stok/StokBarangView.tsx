@@ -10,7 +10,7 @@ import {
   TrendingUp,
   Search,
 } from 'lucide-react';
-import { StokBarang, Produk } from '../../server/types.ts';
+import { StokBarang, Produk, isKategoriAlatNonStok } from '../../server/types.ts';
 import { formatTanggalIndo, formatJamIndo, formatRupiah } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 
@@ -34,6 +34,7 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
     hargaJual: number;
     hargaBeli: number;
     minimum: number;
+    isAlatJasa?: boolean;
   } | null>(null);
   const [formHargaJual, setFormHargaJual] = useState<string>('');
   const [formHargaBeli, setFormHargaBeli] = useState<string>('');
@@ -90,9 +91,10 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
 
   const handleOpenPriceModal = (item: StokBarang) => {
     const prod = productMap.get(item.kode);
+    const isAlatJasa = isKategoriAlatNonStok(prod?.kategori || item.kategori);
     const hargaJual = prod?.hargaJual || 0;
     const hargaBeli = prod?.hargaBeli || 0;
-    const minimum = item.minimum || 5;
+    const minimum = isAlatJasa ? 0 : item.minimum || 5;
 
     setEditingPriceItem({
       kode: item.kode,
@@ -101,6 +103,7 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
       hargaJual,
       hargaBeli,
       minimum,
+      isAlatJasa,
     });
     setFormHargaJual(String(hargaJual));
     setFormHargaBeli(String(hargaBeli));
@@ -128,7 +131,7 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
       await api.updateProduk(editingPriceItem.kode, {
         hargaJual: hj,
         hargaBeli: hb >= 0 ? hb : 0,
-        minimum: min >= 0 ? min : 5,
+        minimum: editingPriceItem.isAlatJasa ? 0 : min >= 0 ? min : 5,
       });
 
       setSuccessMsg(`Harga ${editingPriceItem.nama} berhasil diperbarui menjadi ${formatRupiah(hj)}!`);
@@ -215,8 +218,9 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                 </tr>
               ) : (
                 filteredStok.map((item) => {
-                  const isLow = item.stok <= item.minimum;
                   const prod = productMap.get(item.kode);
+                  const isAlatJasa = isKategoriAlatNonStok(prod?.kategori || item.kategori);
+                  const isLow = !isAlatJasa && item.stok <= item.minimum;
                   const hj = prod?.hargaJual || 0;
                   const hb = prod?.hargaBeli || 0;
 
@@ -226,9 +230,13 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                       <td className="py-3 px-4 font-semibold text-zinc-900">{item.namaProduk}</td>
                       <td className="py-3 px-4 text-center text-zinc-600">{item.satuan}</td>
                       <td className="py-3 px-4 text-right font-bold text-sm">
-                        <span className={isLow ? 'text-amber-700' : 'text-zinc-900'}>
-                          {item.stok.toLocaleString('id-ID')}
-                        </span>
+                        {isAlatJasa ? (
+                          <span className="text-xs font-semibold text-sky-700">Tanpa Stok</span>
+                        ) : (
+                          <span className={isLow ? 'text-amber-700 font-mono tabular-nums' : 'text-zinc-900 font-mono tabular-nums'}>
+                            {item.stok.toLocaleString('id-ID')}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-emerald-800 whitespace-nowrap">
                         {formatRupiah(hj)}
@@ -237,7 +245,11 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                         {formatRupiah(hb)}
                       </td>
                       <td className="py-3 px-4 text-center">
-                        {isLow ? (
+                        {isAlatJasa ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-50 text-sky-800 border border-sky-200 whitespace-nowrap">
+                            SEWA JASA
+                          </span>
+                        ) : isLow ? (
                           <span className="inline-flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
                             <AlertTriangle className="w-3 h-3" />
                             <span>MENIPIS</span>
@@ -257,26 +269,28 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                             type="button"
                             onClick={() => handleOpenPriceModal(item)}
                             className="flex items-center space-x-1 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors cursor-pointer shadow-2xs"
-                            title="Ubah harga jual kasir dan harga beli HPP secara fleksibel"
+                            title="Ubah harga jual / tarif sewa kasir secara fleksibel"
                           >
                             <Tag className="w-3 h-3 text-emerald-600" />
                             <span>Ubah Harga</span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedItem(item);
-                              setErrorMsg('');
-                              setSuccessMsg('');
-                              setAdjustQty('');
-                              setAdjustReason('');
-                            }}
-                            className="flex items-center space-x-1 px-2 py-1 text-[11px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded border border-teal-200 transition-colors cursor-pointer shadow-2xs"
-                            title="Koreksi jumlah stok fisik"
-                          >
-                            <ArrowUpDown className="w-3 h-3" />
-                            <span>Koreksi</span>
-                          </button>
+                          {!isAlatJasa && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedItem(item);
+                                setErrorMsg('');
+                                setSuccessMsg('');
+                                setAdjustQty('');
+                                setAdjustReason('');
+                              }}
+                              className="flex items-center space-x-1 px-2 py-1 text-[11px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded border border-teal-200 transition-colors cursor-pointer shadow-2xs"
+                              title="Koreksi jumlah stok fisik"
+                            >
+                              <ArrowUpDown className="w-3 h-3" />
+                              <span>Koreksi</span>
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -460,16 +474,18 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                 </div>
               )}
 
-              <div>
-                <label className="block font-semibold text-zinc-700 mb-1">Batas Minimum Stok Aman</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={formMinimum}
-                  onChange={(e) => setFormMinimum(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono"
-                />
-              </div>
+              {!editingPriceItem.isAlatJasa && (
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">Batas Minimum Stok Aman</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={formMinimum}
+                    onChange={(e) => setFormMinimum(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono"
+                  />
+                </div>
+              )}
 
               <div className="flex justify-end space-x-2 pt-3 border-t border-zinc-200">
                 <button

@@ -94,17 +94,12 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
   const [detailData, setDetailData] = useState<DetailHarianKaryawanResponse | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
-  const [modeGaji, setModeGaji] = useState<'AKUMULASI_UPAH' | 'GAJI_TETAP'>('AKUMULASI_UPAH');
   const [filterScope, setFilterScope] = useState<'BULAN_INI' | 'SEMUA_BELUM_CAIR'>('SEMUA_BELUM_CAIR');
   const [bulan, setBulan] = useState<number>(initialBulan || now.getMonth() + 1);
   const [tahun, setTahun] = useState<number>(initialTahun || now.getFullYear());
 
   const [selectedUpahIds, setSelectedUpahIds] = useState<string[]>([]);
-
-  const [gajiPokokInput, setGajiPokokInput] = useState<number>(0);
-  const [tunjanganInput, setTunjanganInput] = useState<number>(0);
   const [bonusInput, setBonusInput] = useState<number>(0);
-  const [lunasiUpahPendingSaatGajiTetap, setLunasiUpahPendingSaatGajiTetap] = useState<boolean>(true);
 
   const [persentasePotong, setPersentasePotong] = useState<number>(0);
   const [nominalPotongKustom, setNominalPotongKustom] = useState<number>(0);
@@ -142,21 +137,6 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
         const res = await api.getDetailHarianKaryawan(selectedKaryawanId);
         if (cancelled) return;
         setDetailData(res);
-
-        const unpaidAll = (res.logHarian || []).filter((u) => u.status === 'TERCATAT');
-        if (unpaidAll.length > 0) {
-          setModeGaji('AKUMULASI_UPAH');
-          setGajiPokokInput(0);
-          setTunjanganInput(res.karyawan.tunjanganTetap || 0);
-        } else {
-          setModeGaji('GAJI_TETAP');
-          setGajiPokokInput(
-            res.karyawan.standarGajiPokok && res.karyawan.standarGajiPokok > 0
-              ? res.karyawan.standarGajiPokok
-              : 1000000
-          );
-          setTunjanganInput(res.karyawan.tunjanganTetap || 0);
-        }
         setBonusInput(0);
 
         const empDiv = (res.karyawan.divisi || res.karyawan.departemen || 'Gudang Wijaya Agro') as NamaDivisi;
@@ -204,10 +184,19 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
     [selectedUnpaidRows]
   );
 
-  const totalGajiKotor =
-    modeGaji === 'AKUMULASI_UPAH'
-      ? totalUpahHarianTerpilih + Math.max(0, gajiPokokInput) + Math.max(0, tunjanganInput) + Math.max(0, bonusInput)
-      : Math.max(0, gajiPokokInput) + Math.max(0, tunjanganInput) + Math.max(0, bonusInput);
+  const hariDalamBulanTerpilih = useMemo(() => new Date(tahun, bulan, 0).getDate(), [tahun, bulan]);
+  const hariMasukBulanTerpilih = useMemo(() => {
+    const logs = (detailData?.logHarian || []).filter((u) => {
+      if ((u.totalUpahHarian || 0) <= 0) return false;
+      const parts = (u.tanggalKerja || '').split('/');
+      if (parts.length < 3) return false;
+      return Number(parts[1]) === bulan && Number(parts[2]) === tahun;
+    });
+    return new Set(logs.map((u) => u.tanggalKerja)).size;
+  }, [detailData, bulan, tahun]);
+  const hariTidakMasukBulanTerpilih = Math.max(0, hariDalamBulanTerpilih - hariMasukBulanTerpilih);
+
+  const totalGajiKotor = totalUpahHarianTerpilih + Math.max(0, bonusInput);
 
   const kasbonBarang = detailData?.karyawan.totalKasbonBarang ?? selectedKaryawan?.kasbonBarang ?? 0;
   const kasbonUang = detailData?.karyawan.totalKasbonUang ?? selectedKaryawan?.kasbonUang ?? 0;
@@ -265,48 +254,27 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
     setSubmitting(true);
     setErrorMsg('');
     try {
-      let slip: TransaksiPenggajian;
-      if (modeGaji === 'AKUMULASI_UPAH') {
-        if (selectedUnpaidRows.length === 0 && gajiPokokInput <= 0) {
-          throw new Error('Pilih minimal 1 catatan upah harian belum cair atau beralih ke mode Gaji Bulanan Tetap.');
-        }
-        slip = await api.settleHakUpahKaryawan(selectedKaryawanId, {
-          divisi,
-          tipeGaji: 'BULANAN',
-          periodeBulan: filterScope === 'BULAN_INI' ? periodeLabel : `Akumulasi s/d ${periodeLabel}`,
-          upahHarianIds: selectedUpahIds,
-          gajiPokokTambahan: gajiPokokInput > 0 ? gajiPokokInput : 0,
-          tunjangan: tunjanganInput > 0 ? tunjanganInput : 0,
-          bonus: bonusInput > 0 ? bonusInput : 0,
-          rekeningSumber,
-          metodePembayaran,
-          persentasePotongKasbon: persentasePotong === -1 ? 0 : persentasePotong,
-          nominalPotongKustom: persentasePotong === -1 ? nominalPotongKustom : undefined,
-          keterangan:
-            keterangan.trim() ||
-            `Pembayaran Gaji Karyawan (${selectedUnpaidRows.length} catatan kerja) - ${periodeLabel}`,
-        });
-      } else {
-        const allUnpaidIds = (detailData?.logHarian || [])
-          .filter((u) => u.status === 'TERCATAT')
-          .map((u) => u.id);
-        slip = await api.processPenggajian({
-          idKaryawan: selectedKaryawanId,
-          divisi,
-          tipeGaji: 'BULANAN',
-          periodeBulan: periodeLabel,
-          gajiNominal: gajiPokokInput,
-          tunjanganNominal: tunjanganInput,
-          bonus: bonusInput,
-          lunasiUpahHarianPending: lunasiUpahPendingSaatGajiTetap && allUnpaidIds.length > 0,
-          upahHarianIds: lunasiUpahPendingSaatGajiTetap ? allUnpaidIds : undefined,
-          persentasePotongKasbon: persentasePotong === -1 ? 0 : persentasePotong,
-          nominalPotongKustom: persentasePotong === -1 ? nominalPotongKustom : undefined,
-          metodePembayaran,
-          rekeningSumber,
-          keterangan: keterangan.trim() || `Pembayaran Gaji Bulanan Karyawan - ${periodeLabel}`,
-        });
+      if (selectedUnpaidRows.length === 0) {
+        throw new Error(
+          'Belum ada input gaji per hari kerja yang belum dicairkan. Silakan input gaji harian karyawan terlebih dahulu (hari tanpa input gaji dihitung Tidak Masuk).'
+        );
       }
+      const slip: TransaksiPenggajian = await api.settleHakUpahKaryawan(selectedKaryawanId, {
+        divisi,
+        tipeGaji: 'HARIAN',
+        periodeBulan: filterScope === 'BULAN_INI' ? periodeLabel : `Akumulasi s/d ${periodeLabel}`,
+        upahHarianIds: selectedUpahIds,
+        gajiPokokTambahan: 0,
+        tunjangan: 0,
+        bonus: bonusInput > 0 ? bonusInput : 0,
+        rekeningSumber,
+        metodePembayaran,
+        persentasePotongKasbon: persentasePotong === -1 ? 0 : persentasePotong,
+        nominalPotongKustom: persentasePotong === -1 ? nominalPotongKustom : undefined,
+        keterangan:
+          keterangan.trim() ||
+          `Pencairan Gaji Hari Kerja (${selectedUnpaidRows.length} hari masuk) - ${periodeLabel}`,
+      });
 
       onSuccess(slip);
     } catch (err: any) {
@@ -329,10 +297,10 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-base sm:text-lg leading-tight">
-                Bayar Gaji Karyawan (1 Bulan Penuh / Pencairan Upah)
+                Pencairan Gaji Karyawan (Per Hari Kerja)
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
-                Tersinkronisasi otomatis ke Kas/Bank PT, Slip Gaji Resmi, dan Rekening Koran Mitra
+                Dihitung murni per hari kerja karyawan · Hari tanpa input gaji terhitung Tidak Masuk
               </p>
             </div>
           </div>
@@ -449,260 +417,134 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
             </div>
           )}
 
-          {/* 2. Pilih Metode Perhitungan Gaji 1 Bulan */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-              Skema Penggajian Bulanan / Pencairan Upah
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setModeGaji('AKUMULASI_UPAH')}
-                className={`p-3.5 rounded-xl border text-left transition-all ${
-                  modeGaji === 'AKUMULASI_UPAH'
-                    ? 'bg-emerald-50 border-emerald-600 ring-1 ring-emerald-600'
-                    : 'bg-white border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-slate-900">
-                    1. Cairkan Akumulasi Upah Kerja
-                  </span>
-                  <span className="text-xs font-mono tabular-nums font-bold text-emerald-700">
-                    {unpaidAllCount} Hari Belum Cair
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600 mt-1">
-                  Rekap otomatis seluruh absensi/upah kerja harian yang tercatat selama 1 bulan penuh lalu lunasi sekaligus.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setModeGaji('GAJI_TETAP');
-                  if (gajiPokokInput <= 0) {
-                    setGajiPokokInput(
-                      selectedKaryawan?.gajiPokok && selectedKaryawan.gajiPokok > 0
-                        ? selectedKaryawan.gajiPokok
-                        : 1000000
-                    );
-                  }
-                }}
-                className={`p-3.5 rounded-xl border text-left transition-all ${
-                  modeGaji === 'GAJI_TETAP'
-                    ? 'bg-emerald-50 border-emerald-600 ring-1 ring-emerald-600'
-                    : 'bg-white border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-slate-900">
-                    2. Gaji Bulanan Tetap / Nominal Langsung
-                  </span>
-                  {selectedKaryawan?.gajiPokok ? (
-                    <span className="text-xs font-mono tabular-nums font-bold text-slate-700">
-                      Pokok: {formatRp(selectedKaryawan.gajiPokok)}
-                    </span>
-                  ) : null}
-                </div>
-                <p className="text-xs text-slate-600 mt-1">
-                  Bayar gaji bulanan tetap (misal Rp 1.000.000 / Rp 3.000.000) untuk karyawan bulanan tanpa harus input harian satu per satu.
-                </p>
-              </button>
+          {/* 2. Ringkasan Kehadiran Periode & Daftar Catatan Upah Kerja */}
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div>
+              <div className="font-bold text-slate-800">
+                Rekap Kehadiran Periode {periodeLabel}
+              </div>
+              <p className="text-slate-600 mt-0.5">
+                Sistem tidak menggunakan standar gaji bulanan tetap. Tanggal tanpa input gaji karyawan otomatis dihitung <strong>Tidak Masuk</strong>.
+              </p>
+            </div>
+            <div className="flex items-center gap-4 font-mono tabular-nums">
+              <div>
+                <span className="text-slate-500 font-sans block text-[10px]">Hari Masuk</span>
+                <span className="font-bold text-emerald-700 text-sm">{hariMasukBulanTerpilih} Hari</span>
+              </div>
+              <div>
+                <span className="text-slate-500 font-sans block text-[10px]">Tidak Masuk</span>
+                <span className="font-bold text-slate-700 text-sm">{hariTidakMasukBulanTerpilih} Hari</span>
+              </div>
+              <div>
+                <span className="text-slate-500 font-sans block text-[10px]">Belum Cair</span>
+                <span className="font-bold text-amber-700 text-sm">{unpaidAllCount} Hari</span>
+              </div>
             </div>
           </div>
 
-          {/* 3. Detail Perhitungan Sesuai Mode */}
-          {modeGaji === 'AKUMULASI_UPAH' ? (
-            <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Daftar Catatan Upah Kerja Belum Cair
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setFilterScope('SEMUA_BELUM_CAIR')}
-                    className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
-                      filterScope === 'SEMUA_BELUM_CAIR'
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    Semua Belum Cair
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFilterScope('BULAN_INI')}
-                    className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
-                      filterScope === 'BULAN_INI'
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    Hanya {periodeLabel}
-                  </button>
-                </div>
+          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  Daftar Input Gaji per Hari Kerja Belum Cair
+                </span>
               </div>
+              <div className="flex items-center gap-1.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setFilterScope('SEMUA_BELUM_CAIR')}
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                    filterScope === 'SEMUA_BELUM_CAIR'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Semua Belum Cair
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterScope('BULAN_INI')}
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                    filterScope === 'BULAN_INI'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Hanya {periodeLabel}
+                </button>
+              </div>
+            </div>
 
-              {loadingDetail ? (
-                <div className="p-6 text-center text-xs text-slate-500">Memuat rincian hari kerja...</div>
-              ) : unpaidRowsFiltered.length === 0 ? (
-                <div className="p-6 text-center space-y-2">
-                  <p className="text-sm font-semibold text-slate-700">
-                    Tidak ada tunggakan upah harian yang belum cair{' '}
-                    {filterScope === 'BULAN_INI' ? `pada periode ${periodeLabel}` : 'untuk karyawan ini'}.
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    Jika ingin membayar gaji bulanan tetap, klik tab <strong>"2. Gaji Bulanan Tetap / Nominal Langsung"</strong> di atas.
-                  </p>
-                </div>
-              ) : (
-                <div className="max-h-52 overflow-y-auto divide-y divide-slate-100">
-                  {unpaidRowsFiltered.map((u) => {
-                    const checked = selectedUpahIds.includes(u.id);
-                    return (
-                      <label
-                        key={u.id}
-                        className="px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-slate-50 cursor-pointer text-xs"
-                      >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleRow(u.id)}
-                            className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                          />
-                          <div>
-                            <div className="font-bold text-slate-800">
-                              {u.tanggalKerja} · {u.item || u.keterangan || 'Kerja Harian'}
-                            </div>
-                            <div className="text-slate-500">
-                              Divisi {u.divisi}
-                              {u.uangMakanLembur > 0 ? ` · Termasuk Lembur/Makan ${formatRp(u.uangMakanLembur)}` : ''}
-                            </div>
+            {loadingDetail ? (
+              <div className="p-6 text-center text-xs text-slate-500">Memuat rincian hari kerja...</div>
+            ) : unpaidRowsFiltered.length === 0 ? (
+              <div className="p-6 text-center space-y-1.5">
+                <p className="text-sm font-semibold text-slate-700">
+                  Belum ada input gaji per hari kerja yang belum cair{' '}
+                  {filterScope === 'BULAN_INI' ? `pada periode ${periodeLabel}` : 'untuk karyawan ini'}.
+                </p>
+                <p className="text-xs text-slate-500">
+                  Silakan input gaji pada tanggal karyawan masuk bekerja di tab Input Gaji Harian. Hari tanpa input otomatis dihitung Tidak Masuk.
+                </p>
+              </div>
+            ) : (
+              <div className="max-h-52 overflow-y-auto divide-y divide-slate-100">
+                {unpaidRowsFiltered.map((u) => {
+                  const checked = selectedUpahIds.includes(u.id);
+                  return (
+                    <label
+                      key={u.id}
+                      className="px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-slate-50 cursor-pointer text-xs"
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleRow(u.id)}
+                          className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <div>
+                          <div className="font-bold text-slate-800">
+                            {u.tanggalKerja} · {u.item || u.keterangan || 'Kerja Harian'}
+                          </div>
+                          <div className="text-slate-500">
+                            Divisi {u.divisi}
+                            {u.uangMakanLembur > 0 ? ` · Termasuk Lembur/Makan ${formatRp(u.uangMakanLembur)}` : ''}
                           </div>
                         </div>
-                        <span className="font-mono tabular-nums font-bold text-emerald-700">
-                          {formatRp(u.totalUpahHarian)}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div className="p-4 bg-slate-50 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Tambahan Gaji Pokok (Opsional)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="10000"
-                    value={gajiPokokInput || ''}
-                    onChange={(e) => setGajiPokokInput(Number(e.target.value) || 0)}
-                    placeholder="0"
-                    className="w-full px-3 py-2 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Tunjangan Bulanan (Opsional)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="10000"
-                    value={tunjanganInput || ''}
-                    onChange={(e) => setTunjanganInput(Number(e.target.value) || 0)}
-                    placeholder="0"
-                    className="w-full px-3 py-2 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Bonus / Lembur Tambahan
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="10000"
-                    value={bonusInput || ''}
-                    onChange={(e) => setBonusInput(Number(e.target.value) || 0)}
-                    placeholder="0"
-                    className="w-full px-3 py-2 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
+                      </div>
+                      <span className="font-mono tabular-nums font-bold text-emerald-700">
+                        {formatRp(u.totalUpahHarian)}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
-            </div>
-          ) : (
-            <div className="p-4 border border-slate-200 rounded-xl bg-slate-50/70 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Gaji Pokok 1 Bulan (Rp)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="50000"
-                    required
-                    value={gajiPokokInput || ''}
-                    onChange={(e) => setGajiPokokInput(Number(e.target.value) || 0)}
-                    className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-xl bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Tunjangan Tetap (Rp)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="25000"
-                    value={tunjanganInput || ''}
-                    onChange={(e) => setTunjanganInput(Number(e.target.value) || 0)}
-                    placeholder="0"
-                    className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-xl bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Bonus / Insentif (Rp)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="25000"
-                    value={bonusInput || ''}
-                    onChange={(e) => setBonusInput(Number(e.target.value) || 0)}
-                    placeholder="0"
-                    className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-xl bg-white"
-                  />
-                </div>
-              </div>
+            )}
 
-              {unpaidAllCount > 0 && (
-                <label className="flex items-start gap-2.5 pt-2 text-xs text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={lunasiUpahPendingSaatGajiTetap}
-                    onChange={(e) => setLunasiUpahPendingSaatGajiTetap(e.target.checked)}
-                    className="mt-0.5 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span>
-                    Sekaligus tandai lunas{' '}
-                    <strong>{unpaidAllCount} catatan upah harian belum cair</strong> agar tidak terhitung ganda di Rekening Mitra.
-                  </span>
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-slate-600">
+                Total Upah Hari Kerja Terpilih ({selectedUnpaidRows.length} hari):{' '}
+                <strong className="font-mono tabular-nums text-slate-900">{formatRp(totalUpahHarianTerpilih)}</strong>
+              </div>
+              <div className="w-full sm:w-64">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Bonus / Lembur Tambahan (Opsional)
                 </label>
-              )}
+                <input
+                  type="number"
+                  min="0"
+                  step="10000"
+                  value={bonusInput || ''}
+                  onChange={(e) => setBonusInput(Number(e.target.value) || 0)}
+                  placeholder="0"
+                  className="w-full px-3 py-2 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-lg bg-white"
+                />
+              </div>
             </div>
-          )}
+          </div>
 
           {/* 4. Potong Kasbon Fleksibel */}
           <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">

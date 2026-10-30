@@ -1,7 +1,13 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { DAFTAR_DIVISI, DEFAULT_PT_LOGO_URL } from './types.ts';
+import {
+  DAFTAR_DIVISI,
+  DEFAULT_PT_LOGO_URL,
+  KATEGORI_ALAT_DEFAULT_DESC,
+  isKategoriAlatNonStok,
+  isExcludedFromDivisi,
+} from './types.ts';
 import type {
   AuditLog,
   CatatanUpahHarian,
@@ -103,8 +109,8 @@ export function getDefaultRekeningList(): Rekening[] {
       nama: 'Kas Utama Kasir (Brankas Fisik)',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: 'KAS-01-OPERASIONAL',
-      saldoAwal: 25000000,
-      saldoSaatIni: 25000000,
+      saldoAwal: 0,
+      saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: false,
       kategori: 'PERUSAHAAN',
@@ -115,8 +121,8 @@ export function getDefaultRekeningList(): Rekening[] {
       nama: 'Bank BNI Operasional Pusat',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: '1827401928',
-      saldoAwal: 75000000,
-      saldoSaatIni: 75000000,
+      saldoAwal: 0,
+      saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: false,
       kategori: 'PERUSAHAAN',
@@ -127,8 +133,8 @@ export function getDefaultRekeningList(): Rekening[] {
       nama: 'Bank BCA Bisnis Agro',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: '8201948291',
-      saldoAwal: 120000000,
-      saldoSaatIni: 120000000,
+      saldoAwal: 0,
+      saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: false,
       kategori: 'PERUSAHAAN',
@@ -139,8 +145,8 @@ export function getDefaultRekeningList(): Rekening[] {
       nama: 'Bank Mandiri Agro',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: '137001928374',
-      saldoAwal: 50000000,
-      saldoSaatIni: 50000000,
+      saldoAwal: 0,
+      saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: false,
       kategori: 'PERUSAHAAN',
@@ -151,8 +157,8 @@ export function getDefaultRekeningList(): Rekening[] {
       nama: 'Bank BRI Unit Agro',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: '0192837461829',
-      saldoAwal: 35000000,
-      saldoSaatIni: 35000000,
+      saldoAwal: 0,
+      saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: false,
       kategori: 'PERUSAHAAN',
@@ -163,8 +169,8 @@ export function getDefaultRekeningList(): Rekening[] {
       nama: 'Bank BSI Berkah Tani',
       atasNama: 'PT Wijaya Agro',
       nomorRekening: '7182938491',
-      saldoAwal: 15000000,
-      saldoSaatIni: 15000000,
+      saldoAwal: 0,
+      saldoSaatIni: 0,
       status: 'AKTIF',
       isVirtual: false,
       kategori: 'PERUSAHAAN',
@@ -924,9 +930,9 @@ class DatabaseManager {
     if (!Array.isArray(this.db.cashOpnameLogs)) this.db.cashOpnameLogs = [];
     if (!Array.isArray(this.db.inventaris)) this.db.inventaris = [];
 
-    // Ensure BON01, TIT01, SINKRON, KAS01, and REK-DPPARABO (DP Parabot Anak Perusahaan) always exist in rekening
+    // Ensure BON01, TIT01, SINKRON, and KAS01 always exist in rekening
     const defaultRekening = getDefaultRekeningList();
-    for (const reqCode of ['KAS01', 'BON01', 'TIT01', 'SINKRON', 'REK-DPPARABO']) {
+    for (const reqCode of ['KAS01', 'BON01', 'TIT01', 'SINKRON']) {
       if (!this.db.rekening.some((r) => r.kode === reqCode)) {
         const def = defaultRekening.find((r) => r.kode === reqCode);
         if (def) this.db.rekening.push({ ...def });
@@ -938,6 +944,33 @@ class DatabaseManager {
       sinkronAcc.kategori = 'VIRTUAL_SISTEM';
       sinkronAcc.status = 'AKTIF';
     }
+
+    // Pastikan DP Parabot bukan Divisi dan tidak memiliki akun OPERASIONAL_DIVISI
+    this.db.divisi = (this.db.divisi || []).filter(
+      (d) => !isExcludedFromDivisi(d.nama) && !isExcludedFromDivisi(d.id)
+    );
+    this.db.rekening = (this.db.rekening || []).filter(
+      (r) =>
+        !(
+          r.kategori === 'OPERASIONAL_DIVISI' &&
+          !r.isAnakPerusahaan &&
+          (isExcludedFromDivisi(r.nama) || isExcludedFromDivisi(r.kode))
+        )
+    );
+    const normalizeExcludedDivisi = <T extends { divisi?: string }>(list?: T[]) => {
+      for (const tx of list || []) {
+        if (tx.divisi && isExcludedFromDivisi(tx.divisi)) {
+          tx.divisi = 'PT Wijaya Agro Perkasa';
+        }
+      }
+    };
+    normalizeExcludedDivisi(this.db.penjualan);
+    normalizeExcludedDivisi(this.db.penjualanHasilBumi);
+    normalizeExcludedDivisi(this.db.pembelianBarang);
+    normalizeExcludedDivisi(this.db.pembelianHasilBumi);
+    normalizeExcludedDivisi(this.db.pengeluaran);
+    normalizeExcludedDivisi(this.db.upahHarian);
+    normalizeExcludedDivisi(this.db.penggajian);
 
     // Strip untouched legacy dummy seed balances (Rp 15jt - Rp 50jt) on OPERASIONAL_DIVISI tracking books
     const usedRekCodes = new Set<string>();
@@ -1110,12 +1143,29 @@ class DatabaseManager {
         katSet.add(clean);
         this.db.kategoriProduk!.push({
           nama: clean,
-          deskripsi: '',
+          deskripsi: clean === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : '',
           createdAt: nowIso,
         });
       }
       return clean;
     };
+
+    // Pastikan kategori bawaan ALAT (sewa jasa tanpa stok) selalu tersedia di Master Produk & Kasir
+    if (!katSet.has('ALAT')) {
+      katSet.add('ALAT');
+      this.db.kategoriProduk.push({
+        nama: 'ALAT',
+        deskripsi: KATEGORI_ALAT_DEFAULT_DESC,
+        createdAt: nowIso,
+      });
+    } else {
+      const alatKat = this.db.kategoriProduk.find(
+        (k) => String(k.nama || '').trim().replace(/\s+/g, ' ').toUpperCase() === 'ALAT'
+      );
+      if (alatKat && !alatKat.deskripsi) {
+        alatKat.deskripsi = KATEGORI_ALAT_DEFAULT_DESC;
+      }
+    }
 
     // Normalize product & stock codes to uppercase trimmed canonical form
     for (const p of this.db.produk) {
@@ -1175,14 +1225,16 @@ class DatabaseManager {
     // Sync every Produk -> KategoriProduk & StokBarang
     for (const p of this.db.produk) {
       p.kategori = ensureKat(p.kategori);
+      const isNonStokAlat = isKategoriAlatNonStok(p.kategori);
       const s = stokMap.get(p.kode);
       if (!s) {
-        const createdStok = {
+        const createdStok: StokBarang = {
           kode: p.kode,
           namaProduk: p.nama,
           satuan: p.satuan,
+          kategori: p.kategori,
           stok: 0,
-          minimum: 10,
+          minimum: isNonStokAlat ? 0 : 10,
           updateTerakhir: nowIso,
         };
         this.db.stokBarang.push(createdStok);
@@ -1190,6 +1242,10 @@ class DatabaseManager {
       } else {
         s.namaProduk = p.nama;
         s.satuan = p.satuan;
+        s.kategori = p.kategori;
+        if (isNonStokAlat) {
+          s.minimum = 0;
+        }
       }
     }
 
@@ -1306,6 +1362,12 @@ class DatabaseManager {
         .toLowerCase();
 
     for (const kry of this.db.karyawan) {
+      kry.gajiPokok = 0;
+      kry.tunjanganTetap = 0;
+      if (isExcludedFromDivisi(kry.divisi) || isExcludedFromDivisi(kry.departemen)) {
+        kry.divisi = 'PT Wijaya Agro Perkasa';
+        kry.departemen = 'PT Wijaya Agro Perkasa';
+      }
       const expectedMitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
       const cleanNama = String(kry.nama || '').replace(/\s*\(Karyawan\)$/i, '').trim();
       kry.nama = cleanNama;
@@ -1525,7 +1587,7 @@ class DatabaseManager {
    */
   public ensureDivisiRegisteredInMemory(rawNama?: string): ItemDivisi | null {
     const trimmed = String(rawNama || '').trim();
-    if (!trimmed) return null;
+    if (!trimmed || isExcludedFromDivisi(trimmed)) return null;
 
     if (!Array.isArray(this.db.divisi)) this.db.divisi = [];
 
@@ -1567,12 +1629,14 @@ class DatabaseManager {
   }
 
   /**
-   * Synchronize Operational Division Cashflow Accounts (OPERASIONAL_DIVISI):
-   * Otomatis menambah saldo divisi saat Penjualan (Tunai/Transfer) & Pelunasan Bon Barang (Tunai/Transfer),
-   * serta mengurangi saldo divisi saat Pembelian/Kulakan (Tunai/Transfer), Biaya Operasional, dan Upah Karyawan.
+   * Synchronize Operational Division Accounts (OPERASIONAL_DIVISI):
+   * Membedakan secara tegas antara:
+   * - PEMBELIAN (Barang Dagang / Beras / Hasil Bumi) = MODAL DAGANG (uang berubah wujud menjadi stok yang berpotensi kembali & menghasilkan untung saat terjual), sehingga sisa modal stok belum terjual tetap dihitung dalam Nilai/Saldo Berjalan Divisi.
+   * - PENGELUARAN (Biaya Operasional & Gaji/Upah Karyawan) = BEBAN PENGURANG MURNI yang pasti langsung mengurangi Saldo & Laba Divisi.
    */
   public synchronizeDivisiAccounts() {
     const norm = (s?: string) => String(s || '').trim().toLowerCase();
+    const produkMap = new Map((this.db.produk || []).map((p) => [p.kode, p]));
 
     // Pastikan divisi standar tambahan seperti BRILink dan seluruh divisi yang dipakai di transaksi terdaftar
     this.ensureDivisiRegisteredInMemory('BRILink');
@@ -1595,93 +1659,135 @@ class DatabaseManager {
       if (gj.divisi) this.ensureDivisiRegisteredInMemory(gj.divisi);
     }
 
-    // Lookup map untuk melacak divisi asal nota saat pelunasan bon barang secara Tunai/Transfer
-    const penjualanDivisiMap = new Map<string, string>();
+    const allDivisi = this.getDivisiList();
+    const divisiByRekKode = new Map(allDivisi.map((d) => [d.kodeRekening.toUpperCase(), norm(d.nama)]));
+
+    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) =>
+      norm(divisi || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
+    const resolvePembelianBarangDivNorm = (divisi?: string) => norm(divisi || 'CV Wijaya Agro');
+    const resolveHasilBumiDivNorm = (divisi?: string) => norm(divisi || 'Gudang Wijaya Agro');
+    const resolveBebanDivNorm = (divisi?: string, rekeningSumber?: string) => {
+      if (divisi && String(divisi).trim()) return norm(divisi);
+      if (rekeningSumber) {
+        const mapped = divisiByRekKode.get(String(rekeningSumber).toUpperCase());
+        if (mapped) return mapped;
+      }
+      return norm('PT Wijaya Agro Perkasa');
+    };
+
+    // Lookup map untuk melacak divisi asal nota & rasio HPP saat pelunasan bon barang secara Tunai/Transfer
+    const penjualanNotaMetaMap = new Map<string, { divisiNorm: string; totalNominal: number; totalHpp: number }>();
     for (const p of this.db.penjualan || []) {
-      if (p.noPenjualan && p.divisi) {
-        penjualanDivisiMap.set(p.noPenjualan, norm(p.divisi));
+      if (p.noPenjualan) {
+        const notaHpp = (p.items || []).reduce((s, it) => {
+          const prod = produkMap.get(it.kodeProduk);
+          const hppUnit = it.hargaBeli !== undefined ? Number(it.hargaBeli) : Number(prod?.hargaBeli || 0);
+          return s + (Number(it.qty) || 0) * hppUnit;
+        }, 0);
+        penjualanNotaMetaMap.set(p.noPenjualan, {
+          divisiNorm: resolvePenjualanDivNorm(p.divisi, p.metode),
+          totalNominal: Number(p.totalNominal) || 0,
+          totalHpp: notaHpp,
+        });
       }
     }
     for (const j of this.db.penjualanHasilBumi || []) {
-      if (j.noPenjualan && j.divisi) {
-        penjualanDivisiMap.set(j.noPenjualan, norm(j.divisi));
+      if (j.noPenjualan) {
+        const notaHpp =
+          Number(j.totalModalHpp) || (Number(j.beratBersih) || 0) * (Number(j.modalRataRataPerKg) || 0);
+        penjualanNotaMetaMap.set(j.noPenjualan, {
+          divisiNorm: resolveHasilBumiDivNorm(j.divisi),
+          totalNominal: Number(j.totalNominal) || 0,
+          totalHpp: notaHpp,
+        });
       }
     }
-
-    const allDivisi = this.getDivisiList();
 
     for (const div of allDivisi) {
       const targetNorm = norm(div.nama);
       const rek = this.db.rekening.find((r) => r.kode === div.kodeRekening);
       if (!rek) continue;
 
-      // 1. ARUS MASUK DIVISI (+)
-      // a) Penjualan Kasir / Toko (misal: Beras, Pupuk, Sembako) via TUNAI atau TRANSFER
-      const masukPenjualanToko = (this.db.penjualan || [])
-        .filter(
-          (p) =>
-            p.divisi &&
-            norm(p.divisi) === targetNorm &&
-            (p.metode === 'TUNAI' || p.metode === 'TRANSFER') &&
-            (p.totalNominal || 0) > 0
-        )
-        .reduce((sum, p) => sum + (Number(p.totalNominal) || 0), 0);
+      // 1. ARUS PENJUALAN & DROPPING MASUK DIVISI (+)
+      const penjualanTokoTunai = (this.db.penjualan || []).filter(
+        (p) =>
+          resolvePenjualanDivNorm(p.divisi, p.metode) === targetNorm &&
+          (p.metode === 'TUNAI' || p.metode === 'TRANSFER') &&
+          (p.totalNominal || 0) > 0
+      );
+      const masukPenjualanToko = penjualanTokoTunai.reduce(
+        (sum, p) => sum + (Number(p.totalNominal) || 0),
+        0
+      );
+      let hppTerjualKas = penjualanTokoTunai.reduce((sum, p) => {
+        const hppNota = (p.items || []).reduce((s, it) => {
+          const prod = produkMap.get(it.kodeProduk);
+          const hppUnit = it.hargaBeli !== undefined ? Number(it.hargaBeli) : Number(prod?.hargaBeli || 0);
+          return s + (Number(it.qty) || 0) * hppUnit;
+        }, 0);
+        return sum + hppNota;
+      }, 0);
 
-      // b) Penjualan Hasil Bumi ke Pabrik / Pembeli via TUNAI atau TRANSFER
-      const masukPenjualanHasilBumi = (this.db.penjualanHasilBumi || [])
-        .filter(
-          (j) =>
-            j.divisi &&
-            norm(j.divisi) === targetNorm &&
-            (j.metodePembayaran === 'TUNAI' || j.metodePembayaran === 'TRANSFER') &&
-            (j.totalNominal || 0) > 0
-        )
-        .reduce((sum, j) => sum + (Number(j.totalNominal) || 0), 0);
+      const penjualanHbTunai = (this.db.penjualanHasilBumi || []).filter(
+        (j) =>
+          resolveHasilBumiDivNorm(j.divisi) === targetNorm &&
+          (j.metodePembayaran === 'TUNAI' || j.metodePembayaran === 'TRANSFER') &&
+          (j.totalNominal || 0) > 0
+      );
+      const masukPenjualanHasilBumi = penjualanHbTunai.reduce(
+        (sum, j) => sum + (Number(j.totalNominal) || 0),
+        0
+      );
+      hppTerjualKas += penjualanHbTunai.reduce(
+        (sum, j) =>
+          sum +
+          (Number(j.totalModalHpp) ||
+            (Number(j.beratBersih) || 0) * (Number(j.modalRataRataPerKg) || 0)),
+        0
+      );
 
-      // c) Pelunasan Bon / Piutang Barang via TUNAI atau TRANSFER atas nota milik divisi ini
       let masukPelunasanPiutangDivisi = 0;
       for (const b of this.db.bayarBon || []) {
         if (b.metode !== 'TUNAI' && b.metode !== 'TRANSFER') continue;
         if (b.isKompensasiTitipan || b.isPotongGaji) continue;
         for (const alok of b.alokasi || []) {
           if (alok.jenis === 'KASBON_BARANG' && (alok.nominalDibayar || 0) > 0) {
-            const asalDivisi = penjualanDivisiMap.get(alok.refId);
-            if (asalDivisi && asalDivisi === targetNorm) {
-              masukPelunasanPiutangDivisi += Number(alok.nominalDibayar) || 0;
+            const meta = penjualanNotaMetaMap.get(alok.refId);
+            if (meta && meta.divisiNorm === targetNorm) {
+              const dibayar = Number(alok.nominalDibayar) || 0;
+              masukPelunasanPiutangDivisi += dibayar;
+              if (meta.totalNominal > 0 && meta.totalHpp > 0) {
+                hppTerjualKas += (dibayar / meta.totalNominal) * meta.totalHpp;
+              }
             }
           }
         }
       }
 
-      // d) Dropping Kas / Transfer Masuk ke Rekening Divisi
+      const masukPenjualanKas =
+        masukPenjualanToko + masukPenjualanHasilBumi + masukPelunasanPiutangDivisi;
+
       const masukDropping = (this.db.transferRekening || [])
         .filter((t) => t.status === 'BERHASIL' && t.rekeningTujuan === div.kodeRekening)
         .reduce((sum, t) => sum + (Number(t.nominal) || 0), 0);
 
-      const totalMasukDivisi =
-        masukPenjualanToko +
-        masukPenjualanHasilBumi +
-        masukPelunasanPiutangDivisi +
-        masukDropping;
+      const totalMasukDivisi = masukPenjualanKas + masukDropping;
 
-      // 2. ARUS KELUAR DIVISI (-)
-      // a) Pembelian / Kulakan Barang Dagang via TUNAI atau TRANSFER
+      // 2. MODAL PEMBELIAN DIVISI (Barang Dagang + Hasil Bumi Putus Harga Tunai/Transfer)
+      // Hitungannya MODAL (berpotensi balik uang & untung), bukan beban pengeluaran hangus
       const keluarPembelianBarang = (this.db.pembelianBarang || [])
         .filter(
           (pb) =>
-            pb.divisi &&
-            norm(pb.divisi) === targetNorm &&
+            resolvePembelianBarangDivNorm(pb.divisi) === targetNorm &&
             (pb.metodePembayaran === 'TUNAI' || pb.metodePembayaran === 'TRANSFER') &&
             (pb.totalNominal || 0) > 0
         )
         .reduce((sum, pb) => sum + (Number(pb.totalNominal) || 0), 0);
 
-      // b) Pembelian Hasil Bumi dari Petani (sudah putus harga & dibayar TUNAI / TRANSFER)
       const keluarPembelianHasilBumi = (this.db.pembelianHasilBumi || [])
         .filter(
           (phb) =>
-            phb.divisi &&
-            norm(phb.divisi) === targetNorm &&
+            resolveHasilBumiDivNorm(phb.divisi) === targetNorm &&
             phb.komoditasKode !== 'PINJAMAN_DANA' &&
             phb.komoditasKode !== 'TITIP_DANA' &&
             !String(phb.komoditasNama || '').toLowerCase().includes('pinjaman uang') &&
@@ -1693,35 +1799,40 @@ class DatabaseManager {
         )
         .reduce((sum, phb) => sum + (Number(phb.totalNominal) || 0), 0);
 
-      // c) Biaya Operasional Divisi
+      const totalModalPembelianKas = keluarPembelianBarang + keluarPembelianHasilBumi;
+      const effectiveModalTerpakaiKas =
+        hppTerjualKas > 0
+          ? hppTerjualKas
+          : masukPenjualanKas > 0 && totalModalPembelianKas > 0
+          ? Math.min(totalModalPembelianKas, masukPenjualanKas)
+          : 0;
+
+      // Sisa modal pembelian yang masih berwujud stok barang/komoditas siap jual di divisi ini
+      const sisaModalStokKas = Math.max(0, totalModalPembelianKas - effectiveModalTerpakaiKas);
+
+      // 3. PENGELUARAN & BEBAN DIVISI (-) — Pasti mengurangi Saldo & Nilai Uang Berjalan Divisi
       const keluarOperasional = (this.db.pengeluaran || [])
-        .filter((p) =>
-          p.divisi ? norm(p.divisi) === targetNorm : p.rekeningSumber === div.kodeRekening
-        )
+        .filter((p) => resolveBebanDivNorm(p.divisi, p.rekeningSumber) === targetNorm)
         .reduce((sum, p) => sum + (Number(p.nominal) || 0), 0);
 
-      // d) Pembayaran Gaji / Upah Karyawan Divisi
       const keluarGaji = (this.db.penggajian || [])
-        .filter((g) =>
-          g.divisi ? norm(g.divisi) === targetNorm : g.rekeningSumber === div.kodeRekening
-        )
+        .filter((g) => resolveBebanDivNorm(g.divisi, g.rekeningSumber) === targetNorm)
         .reduce((sum, g) => sum + (Number(g.gajiBersihDibayar) || 0), 0);
 
-      // e) Transfer Keluar dari Rekening Divisi
       const keluarTransfer = (this.db.transferRekening || [])
         .filter((t) => t.status === 'BERHASIL' && t.rekeningSumber === div.kodeRekening)
         .reduce((sum, t) => sum + (Number(t.nominal) || 0), 0);
 
-      const totalKeluarDivisi =
-        keluarPembelianBarang +
-        keluarPembelianHasilBumi +
-        keluarOperasional +
-        keluarGaji +
+      const saldoKasMurniDivisi =
+        (Number(rek.saldoAwal) || 0) +
+        totalMasukDivisi -
+        totalModalPembelianKas -
+        keluarOperasional -
+        keluarGaji -
         keluarTransfer;
 
-      rek.saldoSaatIni = Math.round(
-        (Number(rek.saldoAwal) || 0) + totalMasukDivisi - totalKeluarDivisi
-      );
+      // Saldo Nilai Berjalan Divisi = Kas Berjalan + Modal Pembelian Berjalan (sehingga Pembelian jadi Modal, Pengeluaran pasti mengurangi Saldo Divisi)
+      rek.saldoSaatIni = Math.round(saldoKasMurniDivisi + sisaModalStokKas);
     }
   }
 
@@ -1864,6 +1975,7 @@ class DatabaseManager {
 
     // 2. Saved profile overrides & custom divisions
     custom.forEach((c) => {
+      if (isExcludedFromDivisi(c.nama) || isExcludedFromDivisi(c.id)) return;
       const existingDefault = Array.from(map.values()).find(
         (d) => d.id === c.id || d.nama.toLowerCase() === c.nama.toLowerCase()
       );
@@ -1889,7 +2001,9 @@ class DatabaseManager {
       }
     });
 
-    return Array.from(map.values());
+    return Array.from(map.values()).filter(
+      (d) => !isExcludedFromDivisi(d.nama) && !isExcludedFromDivisi(d.id)
+    );
   }
 
   /**
@@ -1904,6 +2018,11 @@ class DatabaseManager {
     return await this.executeTransaction((db) => {
       if (!db.divisi) db.divisi = [];
       const trimmed = nama.trim();
+      if (isExcludedFromDivisi(trimmed)) {
+        throw new Error(
+          'DP Parabot merupakan entitas Mitra / Anak Perusahaan, sehingga tidak dimasukkan sebagai Divisi Laba Rugi.'
+        );
+      }
       const existing = this.getDivisiList().find(
         (d) => d.nama.toLowerCase() === trimmed.toLowerCase()
       );

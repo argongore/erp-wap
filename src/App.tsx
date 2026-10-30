@@ -240,6 +240,7 @@ export default function App() {
 
   const [authRole, setAuthRole] = useState<AuthenticatedRole | null>(initialSessionState.role);
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState<boolean>(initialSessionState.expired);
+  const [loggedOutNotice, setLoggedOutNotice] = useState<boolean>(false);
   const [forcePinGate, setForcePinGate] = useState<boolean>(false);
   const [previewBosView, setPreviewBosView] = useState<boolean>(initialSessionState.role === 'BOS');
 
@@ -444,6 +445,7 @@ export default function App() {
       const duration = Math.min(sessionDurationMs || SESSION_MAX_AGE_MS, SESSION_MAX_AGE_MS);
       setAuthRole(role);
       setSessionExpiredNotice(false);
+      setLoggedOutNotice(false);
       setForcePinGate(false);
       setPreviewBosView(role === 'BOS');
       try {
@@ -471,6 +473,8 @@ export default function App() {
     setAuthRole(null);
     setPreviewBosView(false);
     setSessionExpiredNotice(false);
+    setLoggedOutNotice(true);
+    setMobileSidebarOpen(false);
     setForcePinGate(true);
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -699,6 +703,7 @@ export default function App() {
         defaultLogoUrl={profilPerusahaan?.logoUrl || DEFAULT_PT_LOGO_URL}
         preferBosHint={isUrlBosMode}
         sessionExpiredNotice={sessionExpiredNotice}
+        loggedOutNotice={loggedOutNotice}
         onAuthenticated={handlePinAuthenticated}
       />
     );
@@ -767,6 +772,7 @@ export default function App() {
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
           onOpenFullLinkModal={() => setShowFullLinkModal(true)}
+          onLogout={handleLockPinScreen}
         />
 
         <main
@@ -860,7 +866,19 @@ export default function App() {
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-rose-800/90 mt-0.5">
-                      Pembayaran tunai/transfer pada halaman ini <strong>mengurangi saldo Kas Tunai (KAS01) atau Bank PT</strong>.
+                      {activeTab === 'kasir-pembelian' || activeTab === 'kasir-pembelian-barang' ? (
+                        <>
+                          Dihitung sebagai <strong>MODAL DAGANG / STOK DIVISI</strong>: kas fisik keluar saat pembelian namun <strong>menjaga nilai berjalan divisi</strong> serta berpotensi kembali menjadi uang &amp; keuntungan saat terjual.
+                        </>
+                      ) : activeTab === 'kasir-pengeluaran' || activeTab === 'kasir-bayar-gaji' ? (
+                        <>
+                          Dihitung sebagai <strong>PENGELUARAN MURNI (BEBAN)</strong>: langsung mengurangi saldo Kas/Bank PT sekaligus <strong>memotong saldo &amp; laba bersih divisi terkait</strong>.
+                        </>
+                      ) : (
+                        <>
+                          Pembayaran tunai/transfer pada halaman ini <strong>mengurangi saldo Kas Tunai (KAS01) atau Bank PT</strong>.
+                        </>
+                      )}
                     </p>
                   </div>
                 </div>
@@ -1227,6 +1245,9 @@ export default function App() {
                   onNavigateToKaryawan={() => {
                     setActiveTab('master-karyawan');
                   }}
+                  onOpenLabaRugiDivisi={() => {
+                    setActiveTab('laba-rugi-produk');
+                  }}
                   onRefreshAll={loadAllData}
                 />
               )}
@@ -1249,8 +1270,11 @@ export default function App() {
 
               {activeTab === 'laba-rugi-produk' && (
                 <LabaRugiProdukView
+                  divisiMasterList={divisiMasterList}
                   onNavigateToKasir={() => setActiveTab('kasir-penjualan')}
                   onNavigateToKulakan={() => setActiveTab('kasir-pembelian-barang')}
+                  onNavigateToPengeluaran={() => setActiveTab('kasir-pengeluaran')}
+                  onNavigateToDivisi={() => setActiveTab('menu-divisi')}
                 />
               )}
 

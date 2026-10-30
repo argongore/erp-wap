@@ -12,6 +12,7 @@ interface PinAccessGateProps {
   defaultLogoUrl?: string;
   preferBosHint?: boolean;
   sessionExpiredNotice?: boolean;
+  loggedOutNotice?: boolean;
   onAuthenticated: (role: AuthenticatedRole, sessionDurationMs?: number) => void;
 }
 
@@ -21,6 +22,7 @@ export const PinAccessGate: React.FC<PinAccessGateProps> = ({
   defaultLogoUrl = DEFAULT_PT_LOGO_URL,
   preferBosHint = false,
   sessionExpiredNotice = false,
+  loggedOutNotice = false,
   onAuthenticated,
 }) => {
   const [companyName, setCompanyName] = useState(defaultCompanyName);
@@ -177,6 +179,16 @@ export const PinAccessGate: React.FC<PinAccessGateProps> = ({
               <Clock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
               <span className="leading-relaxed">
                 Waktu akses sudah <strong>lebih dari 1 jam</strong>. Silakan masukkan sandi kembali untuk membuka tampilan.
+              </span>
+            </div>
+          )}
+
+          {/* Safe Logout Confirmation Banner */}
+          {loggedOutNotice && !sessionExpiredNotice && (
+            <div className="mt-4 px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">
+                Anda telah <strong>keluar dari aplikasi</strong> dengan aman. Silakan masukkan sandi untuk masuk kembali.
               </span>
             </div>
           )}

@@ -13,7 +13,7 @@ import {
   Check,
   RefreshCw,
   KeyRound,
-  Lock,
+  LogOut,
 } from 'lucide-react';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { DEFAULT_PT_LOGO_URL, ProfilPerusahaan, Rekening } from '../../server/types.ts';
@@ -280,11 +280,11 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={onLockScreen}
-              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
-              title="Kunci tampilan & kembali ke layar input sandi"
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 text-rose-700 hover:text-white text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              title="Keluar dari aplikasi & kembali ke gerbang sandi"
             >
-              <Lock className="w-3.5 h-3.5 text-slate-600" />
-              <span className="hidden md:inline">Kunci</span>
+              <LogOut className="w-3.5 h-3.5 shrink-0" />
+              <span>Keluar</span>
             </button>
           )}
 

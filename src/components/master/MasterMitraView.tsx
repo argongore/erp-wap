@@ -19,6 +19,7 @@ import {
   Trash2,
   Database,
   Building2,
+  RotateCcw,
 } from 'lucide-react';
 import { Mitra, RoleMitra, RekapMasterMitraSummary, RekapMitraItem, FullErpModularDataset, Rekening } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
@@ -88,6 +89,14 @@ export const MasterMitraView: React.FC<Props> = ({
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [dismissedAddWarning, setDismissedAddWarning] = useState<string>('');
+
+  // Reset Saldo & Delete Mitra states
+  const [resetTargetMitra, setResetTargetMitra] = useState<RekapMitraItem | null>(null);
+  const [deleteTargetMitra, setDeleteTargetMitra] = useState<RekapMitraItem | null>(null);
+  const [showResetGlobalModal, setShowResetGlobalModal] = useState(false);
+  const [resetGlobalMode, setResetGlobalMode] = useState<'SEMUA_SISTEM' | 'HANYA_MITRA'>('SEMUA_SISTEM');
+  const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [actionErrorMsg, setActionErrorMsg] = useState('');
 
   // Non-blocking fuzzy name matching & duplicate prevention (lag-free typing)
   const similarMitrasInAdd = useFuzzyMitraMatches(formNama, mitraList);
@@ -221,6 +230,56 @@ export const MasterMitraView: React.FC<Props> = ({
     setFormCatatan(m.catatan || '');
     setErrorMsg('');
     setSuccessMsg('');
+  };
+
+  const handleConfirmResetMitra = async () => {
+    if (!resetTargetMitra) return;
+    setActionErrorMsg('');
+    setActionSubmitting(true);
+    try {
+      const res = await api.resetSaldoMitra(resetTargetMitra.id);
+      setSuccessMsg(res.message);
+      setResetTargetMitra(null);
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      handleRefreshAll();
+    } catch (err: any) {
+      setActionErrorMsg(err.message || 'Gagal mengosongkan saldo mitra');
+    } finally {
+      setActionSubmitting(false);
+    }
+  };
+
+  const handleConfirmDeleteMitra = async () => {
+    if (!deleteTargetMitra) return;
+    setActionErrorMsg('');
+    setActionSubmitting(true);
+    try {
+      const res = await api.deleteMitra(deleteTargetMitra.id);
+      setSuccessMsg(res.message);
+      setDeleteTargetMitra(null);
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      handleRefreshAll();
+    } catch (err: any) {
+      setActionErrorMsg(err.message || 'Gagal menghapus mitra');
+    } finally {
+      setActionSubmitting(false);
+    }
+  };
+
+  const handleConfirmResetGlobal = async () => {
+    setActionErrorMsg('');
+    setActionSubmitting(true);
+    try {
+      const res = await api.resetSemuaSaldoSistem(resetGlobalMode === 'HANYA_MITRA');
+      setSuccessMsg(res.message);
+      setShowResetGlobalModal(false);
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      handleRefreshAll();
+    } catch (err: any) {
+      setActionErrorMsg(err.message || 'Gagal mengosongkan nominal saldo');
+    } finally {
+      setActionSubmitting(false);
+    }
   };
 
   // Merge items
@@ -371,6 +430,19 @@ export const MasterMitraView: React.FC<Props> = ({
           >
             <Trash2 className="w-4 h-4 text-rose-600" />
             <span>Bersihkan Bukti Nota</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActionErrorMsg('');
+              setShowResetGlobalModal(true);
+            }}
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg shadow-xs transition-colors cursor-pointer"
+            title="Kosongkan seluruh nominal saldo, piutang, bon, dan titipan mitra ke Rp 0"
+          >
+            <RotateCcw className="w-4 h-4 text-amber-700" />
+            <span>Kosongkan Saldo &amp; Bon</span>
           </button>
 
           <button
@@ -1037,11 +1109,36 @@ export const MasterMitraView: React.FC<Props> = ({
                           </button>
 
                           <button
+                            type="button"
+                            onClick={() => {
+                              setActionErrorMsg('');
+                              setResetTargetMitra(m);
+                            }}
+                            className="flex items-center space-x-1 px-2 py-1.5 text-[10px] font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 rounded-lg border border-amber-300 transition-colors shadow-2xs cursor-pointer"
+                            title="Kosongkan Saldo, Bon, Piutang & Titipan Mitra Ini ke Rp 0"
+                          >
+                            <RotateCcw className="w-3 h-3 text-amber-700" />
+                            <span>Kosongkan Saldo</span>
+                          </button>
+
+                          <button
                             onClick={() => openEdit(m)}
                             className="p-1.5 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-lg transition-colors cursor-pointer"
                             title="Edit Data Mitra"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActionErrorMsg('');
+                              setDeleteTargetMitra(m);
+                            }}
+                            className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg border border-transparent hover:border-rose-200 transition-colors cursor-pointer"
+                            title="Hapus Data Mitra Secara Permanen"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </td>
@@ -1361,6 +1458,250 @@ export const MasterMitraView: React.FC<Props> = ({
           }
         }}
       />
+
+      {/* Modal Konfirmasi Kosongkan Saldo 1 Mitra */}
+      {resetTargetMitra && (
+        <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-zinc-200 overflow-hidden">
+            <div className="p-4 bg-amber-700 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <RotateCcw className="w-4 h-4" />
+                <span>Kosongkan Saldo Mitra</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetTargetMitra(null)}
+                disabled={actionSubmitting}
+                className="text-amber-100 hover:text-white cursor-pointer px-1"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-xs text-zinc-700">
+              {actionErrorMsg && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 font-semibold">
+                  {actionErrorMsg}
+                </div>
+              )}
+              <p className="leading-relaxed">
+                Anda akan mengosongkan seluruh nominal saldo berjalan milik mitra{' '}
+                <strong className="text-zinc-900">{resetTargetMitra.nama}</strong> (
+                <span className="font-mono">{resetTargetMitra.kode}</span>) menjadi{' '}
+                <strong className="font-mono text-zinc-900">Rp 0</strong>:
+              </p>
+              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl space-y-1.5 font-mono tabular-nums">
+                <div className="flex justify-between">
+                  <span className="font-sans text-zinc-500">Titipan Panen / Dana:</span>
+                  <span className="font-bold text-purple-900">
+                    {formatRupiah(resetTargetMitra.totalHutangTitipPanen || 0)} → Rp 0
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-sans text-zinc-500">Total Bon &amp; Piutang:</span>
+                  <span className="font-bold text-amber-900">
+                    {formatRupiah(resetTargetMitra.totalBonMitra || 0)} → Rp 0
+                  </span>
+                </div>
+                {(resetTargetMitra.isAnakPerusahaan || resetTargetMitra.role === 'ANAK_PERUSAHAAN') && (
+                  <div className="flex justify-between">
+                    <span className="font-sans text-zinc-500">Saldo Rekening Afiliasi:</span>
+                    <span className="font-bold text-teal-900">
+                      {formatRupiah(resetTargetMitra.saldoRekeningAnakPerusahaan || 0)} → Rp 0
+                    </span>
+                  </div>
+                )}
+              </div>
+              <p className="text-[11px] text-zinc-500">
+                Profil identitas mitra tetap tersimpan aman di sistem.
+              </p>
+              <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setResetTargetMitra(null)}
+                  disabled={actionSubmitting}
+                  className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmResetMitra}
+                  disabled={actionSubmitting}
+                  className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white rounded-lg font-bold shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {actionSubmitting ? 'Memproses...' : 'Ya, Kosongkan ke Rp 0'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Mitra Permanen */}
+      {deleteTargetMitra && (
+        <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-zinc-200 overflow-hidden">
+            <div className="p-4 bg-rose-700 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Trash2 className="w-4 h-4" />
+                <span>Hapus Data Mitra</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteTargetMitra(null)}
+                disabled={actionSubmitting}
+                className="text-rose-100 hover:text-white cursor-pointer px-1"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-xs text-zinc-700">
+              {actionErrorMsg && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 font-semibold">
+                  {actionErrorMsg}
+                </div>
+              )}
+              <p className="leading-relaxed">
+                Yakin ingin menghapus mitra{' '}
+                <strong className="text-zinc-900">{deleteTargetMitra.nama}</strong> (
+                <span className="font-mono">{deleteTargetMitra.kode}</span>) secara permanen dari sistem?
+              </p>
+              {(deleteTargetMitra.isKaryawan || deleteTargetMitra.role === 'KARYAWAN') && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900">
+                  Mitra ini terhubung sebagai <strong>Karyawan</strong>. Menghapus mitra ini juga akan menghapus profil karyawan terkait agar tidak muncul kembali secara otomatis.
+                </div>
+              )}
+              {(deleteTargetMitra.isAnakPerusahaan || deleteTargetMitra.role === 'ANAK_PERUSAHAAN') && (
+                <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-teal-900">
+                  Mitra ini terhubung ke rekening afiliasi{' '}
+                  <strong className="font-mono">{deleteTargetMitra.kodeRekeningTerkait}</strong>. Rekening afiliasi terkait juga akan ikut dihapus.
+                </div>
+              )}
+              <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setDeleteTargetMitra(null)}
+                  disabled={actionSubmitting}
+                  className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteMitra}
+                  disabled={actionSubmitting}
+                  className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {actionSubmitting ? 'Menghapus...' : 'Hapus Mitra Permanen'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Kosongkan Seluruh Saldo Sistem / Seluruh Mitra */}
+      {showResetGlobalModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg border border-zinc-200 overflow-hidden">
+            <div className="p-4 bg-zinc-900 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <RotateCcw className="w-4 h-4 text-amber-400" />
+                <span>Kosongkan Nominal Saldo, Piutang, Bon &amp; Titipan</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowResetGlobalModal(false)}
+                disabled={actionSubmitting}
+                className="text-zinc-400 hover:text-white cursor-pointer px-1"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-4 text-xs text-zinc-700">
+              {actionErrorMsg && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 font-semibold">
+                  {actionErrorMsg}
+                </div>
+              )}
+              <p className="leading-relaxed">
+                Pilih cakupan pengosongan nominal saldo ke <strong className="font-mono">Rp 0</strong>. Seluruh{' '}
+                <strong>Data Master</strong> (daftar mitra, karyawan, produk, rekening, dan divisi) tetap tersimpan utuh.
+              </p>
+
+              <div className="space-y-2.5">
+                <label
+                  className={`flex items-start space-x-3 p-3.5 rounded-xl border cursor-pointer transition-colors ${
+                    resetGlobalMode === 'SEMUA_SISTEM'
+                      ? 'bg-amber-50/70 border-amber-400'
+                      : 'bg-white border-zinc-200 hover:bg-zinc-50'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="resetGlobalMode"
+                    checked={resetGlobalMode === 'SEMUA_SISTEM'}
+                    onChange={() => setResetGlobalMode('SEMUA_SISTEM')}
+                    className="mt-0.5"
+                  />
+                  <div>
+                    <div className="font-bold text-zinc-900">
+                      Kosongkan Seluruh Nominal Saldo Sistem, Rekening, Piutang, Bon &amp; Titipan
+                    </div>
+                    <p className="text-[11px] text-zinc-600 mt-0.5 leading-relaxed">
+                      Mengosongkan seluruh saldo rekening kas/bank, saldo divisi, piutang, bon barang/uang, titipan mitra, serta riwayat transaksi uji coba ke Rp 0 agar siap berjalan bersih.
+                    </p>
+                  </div>
+                </label>
+
+                <label
+                  className={`flex items-start space-x-3 p-3.5 rounded-xl border cursor-pointer transition-colors ${
+                    resetGlobalMode === 'HANYA_MITRA'
+                      ? 'bg-amber-50/70 border-amber-400'
+                      : 'bg-white border-zinc-200 hover:bg-zinc-50'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="resetGlobalMode"
+                    checked={resetGlobalMode === 'HANYA_MITRA'}
+                    onChange={() => setResetGlobalMode('HANYA_MITRA')}
+                    className="mt-0.5"
+                  />
+                  <div>
+                    <div className="font-bold text-zinc-900">
+                      Kosongkan Saldo, Piutang, Bon &amp; Titipan Seluruh Mitra Saja
+                    </div>
+                    <p className="text-[11px] text-zinc-600 mt-0.5 leading-relaxed">
+                      Mengosongkan bon barang, kasbon uang, piutang, dan titipan panen seluruh mitra ke Rp 0 tanpa mengubah saldo kas/bank utama perusahaan.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setShowResetGlobalModal(false)}
+                  disabled={actionSubmitting}
+                  className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmResetGlobal}
+                  disabled={actionSubmitting}
+                  className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white rounded-lg font-bold shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {actionSubmitting ? 'Mengosongkan...' : 'Eksekusi Pengosongan ke Rp 0'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

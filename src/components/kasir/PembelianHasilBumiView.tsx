@@ -1022,6 +1022,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             <div className="pt-2 border-t border-zinc-200">
               <ArusKasDivisiSelectorCard
                 direction="KELUAR"
+                transactionKind="MODAL_PEMBELIAN"
                 metode={metode}
                 nominal={totalTagihan}
                 divisi={divisi}
@@ -1335,6 +1336,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
               <DoubleCheckVerifikasiPanel
                 direction="KELUAR"
+                transactionKind="MODAL_PEMBELIAN"
                 metode={isBelumPutusHarga ? 'TITIP' : metode}
                 nominal={totalTagihan}
                 rekeningList={rekeningList}
@@ -1600,6 +1602,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
               <DoubleCheckVerifikasiPanel
                 direction="KELUAR"
+                transactionKind="MODAL_PEMBELIAN"
                 metode={putusHargaModal.metode}
                 nominal={Math.round(
                   (Number(putusHargaModal.hargaDeal) || 0) * putusHargaModal.tx.beratBersih

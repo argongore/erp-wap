@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useDeferredValue, use
 import {
   Sprout,
   RefreshCw,
-  Lock,
+  LogOut,
   Search,
   FileText,
   ArrowUpRight,
@@ -22,6 +22,7 @@ import { api } from '../../api/client.ts';
 import {
   DAFTAR_DIVISI,
   DEFAULT_PT_LOGO_URL,
+  isKategoriAlatNonStok,
   ProfilPerusahaan,
   Rekening,
   StokBarang,
@@ -389,7 +390,13 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   );
 
   const sortedStokBarang = useMemo(
-    () => [...stokBarangList].sort((a, b) => (a.stok || 0) - (b.stok || 0)),
+    () =>
+      [...stokBarangList].sort((a, b) => {
+        const alatA = isKategoriAlatNonStok(a.kategori) ? 1 : 0;
+        const alatB = isKategoriAlatNonStok(b.kategori) ? 1 : 0;
+        if (alatA !== alatB) return alatA - alatB;
+        return (a.stok || 0) - (b.stok || 0);
+      }),
     [stokBarangList]
   );
 
@@ -417,7 +424,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
       { id: 'karyawan', label: 'Rekap Karyawan', icon: Briefcase },
       { id: 'mitra', label: 'Rekening Mitra', icon: Users },
       { id: 'jurnal', label: 'Jurnal & Bukti Nota', icon: FileText },
-      { id: 'stok', label: 'Stok & Laba Rugi', icon: Boxes },
+      { id: 'stok', label: 'Stok & Laba Rugi Divisi', icon: Boxes },
     ],
     []
   );
@@ -481,11 +488,11 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
             <button
               type="button"
               onClick={onLockScreen}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer"
-              title="Kunci layar kembali dengan PIN"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 text-rose-700 hover:text-white text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              title="Keluar dari aplikasi dan kembali ke layar sandi PIN"
             >
-              <Lock className="w-3.5 h-3.5" />
-              <span>Kunci PIN</span>
+              <LogOut className="w-3.5 h-3.5 shrink-0" />
+              <span>Keluar</span>
             </button>
           </div>
         </div>
@@ -715,19 +722,35 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                 <span>Kode {d.kodeRekening}</span>
                                 <span>·</span>
                                 <span className="text-emerald-700">
-                                  Masuk +{formatRupiahSingkat(d.totalArusMasuk)}
+                                  Uang Masuk +{formatRupiahSingkat(d.totalPenjualanMasuk || 0)}
                                 </span>
                                 <span>·</span>
                                 <span className="text-rose-700">
-                                  Keluar −{formatRupiahSingkat(d.totalArusKeluar)}
+                                  Uang Keluar −
+                                  {formatRupiahSingkat(
+                                    (d.totalPembelianKeluar || 0) +
+                                      (d.totalPengeluaranOperasional || 0) +
+                                      (d.totalGajiKeluar || 0)
+                                  )}
                                 </span>
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                          <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
                             <div className="text-left sm:text-right">
-                              <div className="text-[11px] text-slate-400">Saldo Buku Divisi</div>
+                              <div className="text-[11px] text-slate-400">Laba / Rugi Divisi</div>
+                              <div
+                                className={`font-mono text-xs sm:text-sm font-bold tabular-nums ${
+                                  (d.labaRugiBersih ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                                }`}
+                              >
+                                {(d.labaRugiBersih ?? 0) >= 0 ? '+' : ''}
+                                {formatRupiah(d.labaRugiBersih ?? 0)}
+                              </div>
+                            </div>
+                            <div className="text-left sm:text-right">
+                              <div className="text-[11px] text-slate-400">Nilai &amp; Saldo Divisi</div>
                               <div
                                 className={`font-mono text-sm sm:text-base font-bold tabular-nums ${
                                   d.saldoSaatIni >= 0 ? 'text-slate-900' : 'text-rose-700'
@@ -745,30 +768,34 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                         </button>
 
                         {isOpen && (
-                          <div className="px-5 pb-5 pt-2 bg-slate-50/60 border-t border-slate-100 space-y-3">
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                          <div className="px-5 pb-5 pt-3 bg-slate-50/60 border-t border-slate-100 space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                               <div>
-                                <span className="text-slate-500">Penjualan Masuk</span>
+                                <span className="text-slate-500">Uang Masuk (+)</span>
                                 <div className="font-mono font-bold text-emerald-700 tabular-nums mt-0.5">
-                                  {formatRupiah(d.totalPenjualanMasuk)}
+                                  +{formatRupiah(d.totalPenjualanMasuk || 0)}
                                 </div>
                               </div>
                               <div>
-                                <span className="text-slate-500">Pembelian Stok/Panen</span>
+                                <span className="text-slate-500">Uang Keluar (−)</span>
                                 <div className="font-mono font-bold text-rose-700 tabular-nums mt-0.5">
-                                  {formatRupiah(d.totalPembelianKeluar)}
+                                  −
+                                  {formatRupiah(
+                                    (d.totalPembelianKeluar || 0) +
+                                      (d.totalPengeluaranOperasional || 0) +
+                                      (d.totalGajiKeluar || 0)
+                                  )}
                                 </div>
                               </div>
                               <div>
-                                <span className="text-slate-500">Biaya Operasional</span>
-                                <div className="font-mono font-bold text-rose-700 tabular-nums mt-0.5">
-                                  {formatRupiah(d.totalPengeluaranOperasional)}
-                                </div>
-                              </div>
-                              <div>
-                                <span className="text-slate-500">Gaji &amp; Upah</span>
-                                <div className="font-mono font-bold text-rose-700 tabular-nums mt-0.5">
-                                  {formatRupiah(d.totalGajiKeluar)}
+                                <span className="text-slate-500">Laba / Rugi Divisi</span>
+                                <div
+                                  className={`font-mono font-bold tabular-nums mt-0.5 ${
+                                    (d.labaRugiBersih ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                                  }`}
+                                >
+                                  {(d.labaRugiBersih ?? 0) >= 0 ? '+' : ''}
+                                  {formatRupiah(d.labaRugiBersih ?? 0)}
                                 </div>
                               </div>
                             </div>
@@ -1792,23 +1819,36 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {displayedStokBarang.map((sb) => {
-                        const isLow = (sb.stok || 0) <= (sb.minimum || 5);
+                        const isAlatJasa = isKategoriAlatNonStok(sb.kategori);
+                        const isLow = !isAlatJasa && (sb.stok || 0) <= (sb.minimum || 5);
                         return (
                           <tr key={sb.kode}>
                             <td className="py-2.5 px-4">
                               <div className="font-medium text-slate-900">{sb.namaProduk}</div>
-                              {isLow && (
-                                <div className="text-[11px] text-rose-700">
-                                  Stok menipis (min. {sb.minimum || 5} {sb.satuan})
+                              {isAlatJasa ? (
+                                <div className="text-[11px] text-sky-700">
+                                  Sewa jasa ({sb.satuan}) — tanpa stok fisik
                                 </div>
+                              ) : (
+                                isLow && (
+                                  <div className="text-[11px] text-rose-700">
+                                    Stok menipis (min. {sb.minimum || 5} {sb.satuan})
+                                  </div>
+                                )
                               )}
                             </td>
                             <td
                               className={`py-2.5 px-4 text-right font-mono font-bold tabular-nums ${
-                                isLow ? 'text-rose-700' : 'text-slate-900'
+                                isAlatJasa
+                                  ? 'text-sky-700'
+                                  : isLow
+                                  ? 'text-rose-700'
+                                  : 'text-slate-900'
                               }`}
                             >
-                              {Number(sb.stok || 0).toLocaleString('id-ID')} {sb.satuan}
+                              {isAlatJasa
+                                ? 'Tanpa Stok'
+                                : `${Number(sb.stok || 0).toLocaleString('id-ID')} ${sb.satuan}`}
                             </td>
                           </tr>
                         );
@@ -1833,8 +1873,8 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
               </section>
             </div>
 
-            {/* Laba & Rugi Produk */}
-            <LabaRugiProdukView />
+            {/* Laba & Rugi Per Divisi */}
+            <LabaRugiProdukView readOnly divisiMasterList={divisiMasterList} />
           </div>
         )}
       </main>

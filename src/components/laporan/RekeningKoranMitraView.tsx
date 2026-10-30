@@ -27,6 +27,7 @@ import {
   TrendingDown,
   Trash2,
   ArrowRightLeft,
+  RotateCcw,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -108,6 +109,9 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [editSuccessMsg, setEditSuccessMsg] = useState<string>('');
   const [editErrorMsg, setEditErrorMsg] = useState<string>('');
   const [universalEditId, setUniversalEditId] = useState<string | null>(null);
+  const [confirmResetOpen, setConfirmResetOpen] = useState<boolean>(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState<boolean>(false);
+  const [partnerActionBusy, setPartnerActionBusy] = useState<boolean>(false);
 
   const [previewPhoto, setPreviewPhoto] = useState<{
     imageUrl: string;
@@ -224,6 +228,47 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     const lastSaldo = titipChartData[titipChartData.length - 1]?.saldoTitip || 0;
     return { maxTitip: max, minTitip: min, totalTitipMutasi: titipMutasiCount, lastSaldo };
   }, [titipChartData]);
+
+  const handleResetCurrentMitra = async () => {
+    if (!currentMitraId) return;
+    setPartnerActionBusy(true);
+    setErrorMsg('');
+    try {
+      const res = await api.resetSaldoMitra(currentMitraId);
+      setConfirmResetOpen(false);
+      setEditSuccessMsg(res.message);
+      setTimeout(() => setEditSuccessMsg(''), 7000);
+      await loadStatementData(currentMitraId, true);
+      onRefreshParent?.();
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal mengosongkan saldo mitra');
+    } finally {
+      setPartnerActionBusy(false);
+    }
+  };
+
+  const handleDeleteCurrentMitra = async () => {
+    if (!currentMitraId) return;
+    setPartnerActionBusy(true);
+    setErrorMsg('');
+    try {
+      const nextMitra = mitraList.find((m) => m.id !== currentMitraId);
+      await api.deleteMitra(currentMitraId);
+      setConfirmDeleteOpen(false);
+      onRefreshParent?.();
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      if (nextMitra) {
+        onSelectMitra(nextMitra.id);
+      } else {
+        setStatement(null);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal menghapus mitra');
+    } finally {
+      setPartnerActionBusy(false);
+    }
+  };
 
   const loadStatementData = async (id: string, silent = false) => {
     if (!id) return;
@@ -609,15 +654,37 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
         </div>
 
         {statement && (
-          <div className="text-xs text-zinc-600 sm:text-right space-y-0.5">
-            <div>
-              Status: <strong className="text-emerald-700 font-bold">{statement.status}</strong> ({statement.role})
+          <div className="flex flex-col sm:items-end gap-2">
+            <div className="text-xs text-zinc-600 sm:text-right space-y-0.5">
+              <div>
+                Status: <strong className="text-emerald-700 font-bold">{statement.status}</strong> ({statement.role})
+              </div>
+              <div>
+                Alamat: <span className="text-zinc-800 font-medium">{statement.alamat || '-'}</span>
+              </div>
+              <div>
+                Kontak HP/WA: <span className="font-mono text-zinc-800">{statement.telepon || '-'}</span>
+              </div>
             </div>
-            <div>
-              Alamat: <span className="text-zinc-800 font-medium">{statement.alamat || '-'}</span>
-            </div>
-            <div>
-              Kontak HP/WA: <span className="font-mono text-zinc-800">{statement.telepon || '-'}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmResetOpen(true)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors cursor-pointer"
+                title="Kosongkan seluruh saldo, bon, piutang & titipan mitra ini ke Rp 0"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                <span>Kosongkan Saldo Mitra</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteOpen(true)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 rounded-lg transition-colors cursor-pointer"
+                title="Hapus data mitra ini dari sistem"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Hapus Mitra</span>
+              </button>
             </div>
           </div>
         )}
@@ -1933,6 +2000,102 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           onRefreshParent?.();
         }}
       />
+
+      {/* Modal Konfirmasi Kosongkan Saldo Mitra */}
+      {confirmResetOpen && statement && (
+        <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-zinc-200 overflow-hidden">
+            <div className="p-4 bg-amber-700 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <RotateCcw className="w-4 h-4" />
+                <span>Kosongkan Saldo {statement.namaMitra}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmResetOpen(false)}
+                disabled={partnerActionBusy}
+                className="text-amber-100 hover:text-white cursor-pointer px-1"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-xs text-zinc-700">
+              <p className="leading-relaxed">
+                Seluruh nominal bon barang, kasbon uang, piutang, dan titipan panen/dana milik{' '}
+                <strong className="text-zinc-900">{statement.namaMitra}</strong> (
+                <span className="font-mono">{statement.kodeMitra}</span>) akan dikosongkan ke{' '}
+                <strong className="font-mono text-zinc-900">Rp 0</strong>. Data profil mitra tetap utuh.
+              </p>
+              <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetOpen(false)}
+                  disabled={partnerActionBusy}
+                  className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetCurrentMitra}
+                  disabled={partnerActionBusy}
+                  className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white rounded-lg font-bold shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {partnerActionBusy ? 'Memproses...' : 'Ya, Kosongkan ke Rp 0'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Mitra */}
+      {confirmDeleteOpen && statement && (
+        <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-zinc-200 overflow-hidden">
+            <div className="p-4 bg-rose-700 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Trash2 className="w-4 h-4" />
+                <span>Hapus Mitra {statement.namaMitra}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteOpen(false)}
+                disabled={partnerActionBusy}
+                className="text-rose-100 hover:text-white cursor-pointer px-1"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-xs text-zinc-700">
+              <p className="leading-relaxed">
+                Yakin ingin menghapus mitra{' '}
+                <strong className="text-zinc-900">{statement.namaMitra}</strong> (
+                <span className="font-mono">{statement.kodeMitra}</span>) secara permanen dari sistem?
+              </p>
+              <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteOpen(false)}
+                  disabled={partnerActionBusy}
+                  className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-medium cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteCurrentMitra}
+                  disabled={partnerActionBusy}
+                  className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {partnerActionBusy ? 'Menghapus...' : 'Hapus Mitra Permanen'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
