@@ -336,7 +336,7 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
                 <input
                   type="number"
                   min="0"
-                  step="5000"
+                  step="any"
                   required
                   value={upahHarianInput}
                   onChange={(e) => setUpahHarianInput(e.target.value)}
@@ -354,7 +354,7 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
                 <input
                   type="number"
                   min="0"
-                  step="5000"
+                  step="any"
                   value={uangMakanInput}
                   onChange={(e) => setUangMakanInput(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-zinc-300 rounded-lg text-xs font-mono font-bold focus:ring-1 focus:ring-emerald-600"

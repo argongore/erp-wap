@@ -553,7 +553,7 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                 <input
                   type="number"
                   min="0"
-                  step="5000"
+                  step="any"
                   required
                   value={upahHarianInput}
                   onChange={(e) => setUpahHarianInput(e.target.value)}
@@ -571,7 +571,7 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                 <input
                   type="number"
                   min="0"
-                  step="5000"
+                  step="any"
                   value={uangMakanInput}
                   onChange={(e) => setUangMakanInput(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-emerald-500"

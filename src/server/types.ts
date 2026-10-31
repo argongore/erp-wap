@@ -114,6 +114,33 @@ export interface Rekening {
   rekeningIndukPenyimpan?: string; // Rekening perusahaan tempat fisik uang disimpan (untuk OPERASIONAL_DIVISI)
 }
 
+export type StatusNotaRekapMitra =
+  | 'NOTA_NGUNCI'
+  | 'NOTA_AKTIF'
+  | 'NOTA_SUPPLIER'
+  | 'LUNAS_IMPAS';
+
+export interface NotaNgunciDetailItem {
+  idNota: string;
+  noNota: string;
+  tanggal: string;
+  idMitra: string;
+  kodeMitra: string;
+  namaMitra: string;
+  roleMitra: CanonicalRoleMitra;
+  alamat: string;
+  telepon: string;
+  fotoMitra?: string;
+  jenisNota: 'NOTA_LALU_PIUTANG' | 'KASBON_UANG' | 'KASBON_BARANG' | 'PIUTANG_HASIL_BUMI';
+  jenisNotaLabel: string;
+  rincian: string;
+  catatanNgunci?: string;
+  tanggalNgunci?: string;
+  fotoNota?: string;
+  nominalAwal: number;
+  sisaNominalNgunci: number;
+}
+
 export interface Mitra {
   id: string;
   kode: string;
@@ -128,6 +155,9 @@ export interface Mitra {
   kodeRekeningTerkait?: string; // Relasi 1-ke-1 ke Master Rekening (misal "REK-DPPARABO")
   isKaryawan?: boolean;         // true jika Mitra ini juga terdaftar sebagai Karyawan PT
   idKaryawanTerkait?: string;   // Relasi 1-ke-1 ke Master Karyawan (misal "KRY-001")
+  isNotaNgunci?: boolean;       // true jika piutang mitra berstatus NOTA NGUNCI (tidak ada respon & kepastian bayar)
+  tanggalNgunci?: string;
+  catatanNgunci?: string;
 }
 
 export interface RekapMitraItem {
@@ -164,10 +194,19 @@ export interface RekapMitraItem {
   totalKasbonBarang: number;
   totalKasbonUang: number;
   totalBonMitra: number;
+  // Status & Rincian Nota Ngunci (Piutang Macet / Uang Tidak Bisa Kembali)
+  isNotaNgunci?: boolean;
+  catatanNgunci?: string;
+  tanggalNgunci?: string;
+  statusNotaLabel?: StatusNotaRekapMitra;
+  nominalPiutangAktif?: number;       // Piutang berjalan di luar nota ngunci
+  nominalNotaNgunci?: number;         // Piutang macet (uang tidak bisa kembali)
+  jumlahNotaNgunci?: number;          // Banyaknya lembar nota ngunci pada mitra ini
   // Posisi Bersih: totalHutangTitipPanen - totalBonMitra
   potonganSilangOtomatis?: number;
   sisaBonBersih?: number;
   sisaTitipanBersih?: number;
+  uangKitaDiMitraIndividu?: number;   // totalBonMitra - totalHutangTitipPanen (+ uang kita di mitra, - hutang kita ke mitra)
   saldoBersih: number;
   posisiStatus: 'KITA_BERHUTANG' | 'MITRA_BERHUTANG' | 'LUNAS_IMPAS';
   totalTransaksiCount: number;
@@ -178,10 +217,20 @@ export interface RekapMasterMitraSummary {
   totalHutangPerusahaanKeMitra: number; // Total hak mitra belum cair (Titip Hasil Panen + Upah Kerja Belum Cair)
   totalTitipPanenMurni?: number;        // Khusus saldo titip panen/pinjaman murni (sinkron ke TIT01)
   totalUpahKaryawanBelumDibayar?: number; // Khusus saldo hak gaji/upah karyawan belum cair
-  totalBonMitra: number;                // Total kasbon barang + uang mitra
+  totalBonMitra: number;                // Total seluruh piutang mitra (Aktif + Nota Ngunci)
   saldoBersihKemitraan: number;         // Total hak mitra - Total bon
   mitraDenganHutangTitipCount: number;  // Jumlah mitra yang punya saldo hak belum cair
   mitraDenganBonCount: number;          // Jumlah mitra yang memiliki kewajiban bon aktif
+  // Rekap Khusus Posisi Uang Kita di Mitra & Nota Ngunci
+  totalSeluruhPiutangMitra?: number;       // Total seluruh piutang mitra (Piutang Aktif + Nota Ngunci)
+  totalPiutangAktifMitra?: number;         // Piutang mitra yang masih aktif / dapat ditagih
+  totalNominalNotaNgunci?: number;         // Total nominal uang tidak bisa kembali (Status Nota Ngunci)
+  mitraNotaNgunciCount?: number;           // Jumlah mitra berstatus Nota Ngunci
+  totalLembarNotaNgunci?: number;          // Jumlah lembar nota berstatus Ngunci
+  totalNotaSupplierRekeningMitra?: number; // Total dari Nota Supplier / Rekening Mitra (Total Hutang Kita ke Mitra)
+  uangKitaDiMitra?: number;                // Rumus: Total Seluruh Piutang Mitra - Total Hutang Kita ke Mitra
+  uangKitaDiMitraEfektif?: number;         // Rumus di luar Nota Ngunci: Total Piutang Aktif - Total Hutang Kita ke Mitra
+  daftarNotaNgunci?: NotaNgunciDetailItem[];
   items: RekapMitraItem[];
 }
 
@@ -453,6 +502,9 @@ export interface TransaksiPenjualan {
   totalLabaKotor?: number; // totalNominal - totalModalHpp
   statusPembayaran: 'LUNAS' | 'BELUM_BAYAR';
   sisaPiutang: number;   // outstanding balance for KASBON
+  isNotaNgunci?: boolean;
+  tanggalNgunci?: string;
+  catatanNgunci?: string;
   keterangan: string;
   createdAt: string;
 }
@@ -649,6 +701,9 @@ export interface TransaksiPenjualanHasilBumi {
   rekeningTujuan: string; // KAS01 for TUNAI, bank for TRANSFER, BON01 for PIUTANG
   statusPembayaran: 'LUNAS' | 'BELUM_BAYAR';
   sisaPiutang: number;
+  isNotaNgunci?: boolean;
+  tanggalNgunci?: string;
+  catatanNgunci?: string;
   noSuratJalan?: string; // Nomor DO / Surat Jalan / Plat Truk
   stokGudangSebelum: number;
   stokGudangSetelah: number;
@@ -750,6 +805,9 @@ export interface TransaksiKasbonUang {
   noNotaLalu?: string;   // Nomor nota manual lama
   tanggalNotaLalu?: string;
   rincianBarangNotaLalu?: string;
+  isNotaNgunci?: boolean; // Status NOTA NGUNCI (piutang macet / tidak ada respon & kepastian bayar)
+  tanggalNgunci?: string;
+  catatanNgunci?: string;
   createdAt: string;
 }
 
@@ -759,6 +817,7 @@ export interface AlokasiPembayaranBon {
   nominalSebelum: number;
   nominalDibayar: number;
   nominalSisa: number;
+  isNotaNgunci?: boolean;
 }
 
 export interface TransaksiBayarBon {
@@ -772,6 +831,10 @@ export interface TransaksiBayarBon {
   nominalPotongTitipanOtomatis?: number;
   nominalBayar: number;
   sisaBonSetelah: number;
+  idNotaTarget?: string;
+  sisaNotaNgunciSebelum?: number;
+  nominalPengurangNotaNgunci?: number;
+  sisaNotaNgunciSetelah?: number;
   metode: 'TUNAI' | 'TRANSFER' | 'SINKRON' | 'KOMPENSASI_TITIP' | 'POTONG_GAJI';
   rekeningTujuan: string; // KAS01, chosen bank, SINKRON, KOMPENSASI_TITIP, or POTONG_GAJI
   isKompensasiTitipan?: boolean;
@@ -1132,6 +1195,10 @@ export interface RekeningKoranMitraSummary {
   potonganTitipanOtomatis?: number; // min(totalBonKeseluruhan, totalTitip)
   sisaBonBersih?: number;           // max(0, totalBonKeseluruhan - totalTitip) -> bon bersih wajib dibayar mitra
   sisaTitipanBersih?: number;       // max(0, totalTitip - totalBonKeseluruhan) -> sisa bersih wajib dibayar PT ke mitra
+  isNotaNgunci?: boolean;
+  catatanNgunci?: string;
+  nominalNotaNgunci?: number;
+  nominalPiutangAktif?: number;
   history: Array<{
     id: string;
     tanggal: string;
@@ -1149,6 +1216,9 @@ export interface RekeningKoranMitraSummary {
     fotoNota?: string;
     isNotaLalu?: boolean;
     noNotaLalu?: string;
+    isNotaNgunci?: boolean;
+    catatanNgunci?: string;
+    sisaPiutangNota?: number;
   }>;
 }
 

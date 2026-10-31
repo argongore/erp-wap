@@ -551,6 +551,21 @@ apiRouter.post('/mitra/delete', async (req, res) => {
   }
 });
 
+apiRouter.post('/mitra/status-nota-ngunci', async (req, res) => {
+  try {
+    const { idMitra, idNota, isNotaNgunci, catatanNgunci } = req.body || {};
+    const result = await TransactionService.setStatusNotaNgunci({
+      idMitra: String(idMitra || '').trim(),
+      idNota: idNota ? String(idNota).trim() : undefined,
+      isNotaNgunci: Boolean(isNotaNgunci),
+      catatanNgunci: catatanNgunci ? String(catatanNgunci) : undefined,
+    });
+    res.json({ success: true, data: result, message: result.message });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.delete('/mitra/:id', async (req, res) => {
   try {
     const result = await TransactionService.deleteMitra(req.params.id);

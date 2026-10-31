@@ -536,7 +536,7 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                 <input
                   type="number"
                   min="0"
-                  step="10000"
+                  step="any"
                   value={bonusInput || ''}
                   onChange={(e) => setBonusInput(Number(e.target.value) || 0)}
                   placeholder="0"
@@ -604,7 +604,7 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                       type="number"
                       min="0"
                       max={Math.min(totalKasbonAktif, totalGajiKotor)}
-                      step="10000"
+                      step="any"
                       value={nominalPotongKustom || ''}
                       onChange={(e) => setNominalPotongKustom(Number(e.target.value) || 0)}
                       placeholder="Contoh: 100000"

@@ -28,6 +28,9 @@ import {
   Trash2,
   ArrowRightLeft,
   RotateCcw,
+  Lock,
+  Unlock,
+  RefreshCw,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -58,6 +61,7 @@ import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { ModalToggleNotaNgunci } from '../master/RekapKhususMitraNgunciSection.tsx';
 
 // Generated authentic visual preview mockup
 import rekeningKoranMockupImg from '../../assets/images/rekening_koran_preview_1790406863342.jpg';
@@ -118,6 +122,33 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [confirmResetOpen, setConfirmResetOpen] = useState<boolean>(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState<boolean>(false);
   const [partnerActionBusy, setPartnerActionBusy] = useState<boolean>(false);
+
+  // Modal Ubah Status Nota Piutang <-> Nota Kunci (dengan catatan kronologi)
+  const [toggleNgunciTarget, setToggleNgunciTarget] = useState<{
+    idMitra: string;
+    namaMitra: string;
+    idNota?: string;
+    noNota?: string;
+    nominal: number;
+    targetNgunci: boolean;
+    currentCatatan?: string;
+  } | null>(null);
+  const [toggleNgunciError, setToggleNgunciError] = useState<string>('');
+
+  // Modal Terima Pembayaran Cepat Piutang / Nota Kunci langsung dari Rekening Mitra
+  const [quickPayModal, setQuickPayModal] = useState<{
+    open: boolean;
+    idNotaTarget?: string;
+    noNotaLabel?: string;
+    sisaNotaTarget?: number;
+    isTargetNgunci?: boolean;
+  } | null>(null);
+  const [quickPayMetode, setQuickPayMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
+  const [quickPayRekening, setQuickPayRekening] = useState<string>('BNI01');
+  const [quickPayNominalInput, setQuickPayNominalInput] = useState<string>('');
+  const [quickPayKeterangan, setQuickPayKeterangan] = useState<string>('');
+  const [quickPayBusy, setQuickPayBusy] = useState<boolean>(false);
+  const [quickPayError, setQuickPayError] = useState<string>('');
 
   const [previewPhoto, setPreviewPhoto] = useState<{
     imageUrl: string;
@@ -273,6 +304,199 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
       setErrorMsg(err.message || 'Gagal menghapus mitra');
     } finally {
       setPartnerActionBusy(false);
+    }
+  };
+
+  const availableBanks = useMemo(
+    () => rekeningList.filter((r) => !r.isVirtual && r.kode !== 'KAS01' && r.status === 'AKTIF'),
+    [rekeningList]
+  );
+
+  const openModalUbahStatusNota = (opts: {
+    idNota?: string;
+    noNota?: string;
+    nominal: number;
+    targetNgunci: boolean;
+    currentCatatan?: string;
+  }) => {
+    if (!statement) return;
+    setToggleNgunciError('');
+    setToggleNgunciTarget({
+      idMitra: statement.idMitra,
+      namaMitra: statement.namaMitra,
+      idNota: opts.idNota,
+      noNota: opts.noNota,
+      nominal: opts.nominal,
+      targetNgunci: opts.targetNgunci,
+      currentCatatan: opts.currentCatatan ?? statement.catatanNgunci,
+    });
+  };
+
+  const handleConfirmToggleNotaNgunci = async (catatanNgunci: string) => {
+    if (!toggleNgunciTarget) return;
+    setPartnerActionBusy(true);
+    setToggleNgunciError('');
+    setErrorMsg('');
+    try {
+      const res = await api.setStatusNotaNgunci({
+        idMitra: toggleNgunciTarget.idMitra,
+        idNota: toggleNgunciTarget.idNota,
+        isNotaNgunci: toggleNgunciTarget.targetNgunci,
+        catatanNgunci: catatanNgunci.trim() || undefined,
+      });
+      setToggleNgunciTarget(null);
+      setEditSuccessMsg(res.message);
+      setTimeout(() => setEditSuccessMsg(''), 6000);
+      await loadStatementData(toggleNgunciTarget.idMitra, true);
+      onRefreshParent?.();
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+    } catch (err: any) {
+      setToggleNgunciError(err.message || 'Gagal memperbarui status Nota Kunci');
+    } finally {
+      setPartnerActionBusy(false);
+    }
+  };
+
+  const openQuickPayModal = (opts?: {
+    idNotaTarget?: string;
+    noNotaLabel?: string;
+    sisaNotaTarget?: number;
+    isTargetNgunci?: boolean;
+  }) => {
+    if (!statement) return;
+    const bonKotor = statement.totalBonKeseluruhan || 0;
+    const titipAktif = statement.totalTitip || 0;
+    const maksSinkron = Math.min(bonKotor, titipAktif);
+    const sisaFisik = statement.sisaBonBersih ?? Math.max(0, bonKotor - titipAktif);
+
+    let defaultMetode: 'TUNAI' | 'TRANSFER' | 'SINKRON' = 'TUNAI';
+    let defaultMax = sisaFisik;
+    if (sisaFisik <= 0 && maksSinkron > 0) {
+      defaultMetode = 'SINKRON';
+      defaultMax = maksSinkron;
+    }
+
+    const suggestedNominal =
+      opts?.sisaNotaTarget && opts.sisaNotaTarget > 0
+        ? Math.min(opts.sisaNotaTarget, defaultMax)
+        : defaultMax;
+
+    setQuickPayMetode(defaultMetode);
+    setQuickPayRekening(availableBanks[0]?.kode || 'BNI01');
+    setQuickPayNominalInput(suggestedNominal > 0 ? String(suggestedNominal) : '');
+    setQuickPayKeterangan(
+      opts?.noNotaLabel
+        ? `Pembayaran piutang nota ${opts.noNotaLabel}${opts.isTargetNgunci ? ' (Nota Kunci)' : ''}`
+        : (statement.nominalNotaNgunci || 0) > 0
+        ? `Pembayaran cicilan/pelunasan Nota Kunci mitra ${statement.namaMitra}`
+        : `Pembayaran pelunasan piutang mitra ${statement.namaMitra}`
+    );
+    setQuickPayError('');
+    setQuickPayModal({
+      open: true,
+      idNotaTarget: opts?.idNotaTarget,
+      noNotaLabel: opts?.noNotaLabel,
+      sisaNotaTarget: opts?.sisaNotaTarget,
+      isTargetNgunci: opts?.isTargetNgunci,
+    });
+  };
+
+  const handleSubmitQuickPay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!statement || !quickPayModal) return;
+    const nominal = Math.round(Number(quickPayNominalInput) || 0);
+    if (nominal <= 0) {
+      setQuickPayError('Nominal pembayaran harus lebih dari Rp 0');
+      return;
+    }
+
+    setQuickPayBusy(true);
+    setQuickPayError('');
+    try {
+      const result = await api.processBayarBon({
+        idMitra: statement.idMitra,
+        nominalBayar: nominal,
+        metode: quickPayMetode,
+        rekeningTujuan:
+          quickPayMetode === 'SINKRON'
+            ? 'SINKRON'
+            : quickPayMetode === 'TRANSFER'
+            ? quickPayRekening
+            : 'KAS01',
+        keterangan: quickPayKeterangan.trim() || undefined,
+        idNotaTarget: quickPayModal.idNotaTarget,
+      });
+
+      setQuickPayModal(null);
+      await loadStatementData(statement.idMitra, true);
+      onRefreshParent?.();
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+
+      const pengurangKunci = result.nominalPengurangNotaNgunci || 0;
+      const msgKunci =
+        pengurangKunci > 0
+          ? ` · Otomatis mengurangi Nominal Tidak Bisa Kembali sebesar ${formatRupiah(pengurangKunci)} (Sisa Nota Kunci: ${formatRupiah(result.sisaNotaNgunciSetelah || 0)})`
+          : '';
+      setEditSuccessMsg(
+        `Pembayaran ${formatRupiah(result.nominalBayar)} berhasil dicatat (${result.idTransaksi})${msgKunci}`
+      );
+      setTimeout(() => setEditSuccessMsg(''), 8000);
+
+      if (onSuccessReceipt) {
+        const isResultSinkron = result.metode === 'SINKRON' || result.rekeningTujuan === 'SINKRON';
+        const detailRows: ReceiptData['detailRows'] = [
+          { label: 'Nama Mitra', value: result.namaMitra },
+          {
+            label: 'Metode Pembayaran',
+            value: isResultSinkron
+              ? 'SINKRON (Potong Titipan / Uang Hasil Bumi)'
+              : `${result.metode} (${result.rekeningTujuan})`,
+          },
+          { label: 'Total Piutang Sebelum Bayar', value: result.totalBonSebelum },
+          { label: 'Nominal Pembayaran Diterima', value: result.nominalBayar, isTotal: true },
+          {
+            label: 'Sisa Piutang Setelah Bayar',
+            value: result.sisaBonSetelah,
+            highlight: result.sisaBonSetelah > 0,
+          },
+        ];
+        if (pengurangKunci > 0) {
+          detailRows.push({
+            label: 'Nominal Nota Kunci Sebelum Bayar',
+            value: result.sisaNotaNgunciSebelum || pengurangKunci,
+          });
+          detailRows.push({
+            label: 'Otomatis Mengurangi Uang Tidak Bisa Kembali',
+            value: `- ${formatRupiah(pengurangKunci)}`,
+          });
+          detailRows.push({
+            label: 'Sisa Nominal Nota Kunci Setelah Bayar',
+            value: result.sisaNotaNgunciSetelah || 0,
+          });
+        }
+        onSuccessReceipt({
+          title: 'KUITANSI PEMBAYARAN PIUTANG MITRA',
+          subtitle:
+            pengurangKunci > 0
+              ? 'Pembayaran Mitra Berstatus Nota Kunci — Otomatis Mengurangi Uang Tidak Bisa Kembali'
+              : result.sisaBonSetelah === 0
+              ? 'Status: LUNAS PENUH'
+              : 'Status: PEMBAYARAN SEBAGIAN (ANGSURAN)',
+          nomorTransaksi: result.idTransaksi,
+          tanggal: result.tanggal,
+          jam: result.jam,
+          mitra: result.namaMitra,
+          rekening: result.rekeningTujuan,
+          kategori: 'BAYAR_BON',
+          detailRows,
+          catatan: result.keterangan,
+          kasir: 'Kasir Wijaya Agro',
+        });
+      }
+    } catch (err: any) {
+      setQuickPayError(err.message || 'Gagal memproses pembayaran piutang');
+    } finally {
+      setQuickPayBusy(false);
     }
   };
 
@@ -706,6 +930,22 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
         )}
       </div>
 
+      {editSuccessMsg && !editingEntry && (
+        <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between gap-2 font-medium">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{editSuccessMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditSuccessMsg('')}
+            className="text-emerald-700 hover:text-emerald-950 px-1.5 cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {errorMsg && (
         <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center space-x-2">
           <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -722,6 +962,132 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
       {statement && !loading && (
         <div className="space-y-6">
+          {/* Panel Kontrol Status Nota Piutang <-> Status Nota Kunci & Terima Pembayaran di Rekening Mitra */}
+          {(statement.totalBonKeseluruhan > 0 || statement.isNotaNgunci || (statement.nominalNotaNgunci || 0) > 0) && (() => {
+            const nomKunci = statement.nominalNotaNgunci || 0;
+            const nomAktif = statement.nominalPiutangAktif ?? Math.max(0, statement.totalBonKeseluruhan - nomKunci);
+            const hasKunci = nomKunci > 0 || Boolean(statement.isNotaNgunci);
+            const hasAktif = nomAktif > 0;
+
+            return (
+              <div
+                className={`rounded-xl p-4 sm:p-5 border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
+                  hasKunci
+                    ? 'bg-rose-50/75 border-rose-200'
+                    : 'bg-amber-50/60 border-amber-200'
+                }`}
+              >
+                <div className="space-y-1.5 min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold">
+                    {hasKunci ? (
+                      <>
+                        <Lock className="w-4 h-4 text-rose-700 shrink-0" />
+                        <span className="text-rose-900">
+                          {hasAktif
+                            ? 'STATUS NOTA CAMPURAN (NOTA KUNCI + PIUTANG AKTIF)'
+                            : 'STATUS NOTA KUNCI (NGUNCI)'}
+                        </span>
+                        <span className="text-rose-300" aria-hidden="true">·</span>
+                        <span className="text-rose-800">
+                          Uang Tidak Bisa Kembali:{' '}
+                          <strong className="font-mono tabular-nums">{formatRupiah(nomKunci)}</strong>
+                        </span>
+                        {hasAktif && (
+                          <>
+                            <span className="text-rose-300" aria-hidden="true">·</span>
+                            <span className="text-amber-900">
+                              Piutang Aktif:{' '}
+                              <strong className="font-mono tabular-nums">{formatRupiah(nomAktif)}</strong>
+                            </span>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <Unlock className="w-4 h-4 text-amber-700 shrink-0" />
+                        <span className="text-amber-950">STATUS NOTA PIUTANG (AKTIF)</span>
+                        <span className="text-amber-300" aria-hidden="true">·</span>
+                        <span className="text-amber-900">
+                          Total Piutang Aktif:{' '}
+                          <strong className="font-mono tabular-nums">{formatRupiah(nomAktif)}</strong>
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  <p className={`text-[11px] leading-relaxed ${hasKunci ? 'text-rose-900/90' : 'text-zinc-600'}`}>
+                    {hasKunci ? (
+                      <>
+                        Mitra ini tercatat memiliki <strong>Nota Kunci</strong> (tidak ada respon/kepastian membayar). Apabila mitra melakukan pembayaran cicilan atau lunas, nominal uang tidak bisa kembali otomatis langsung berkurang.
+                        {statement.catatanNgunci ? ` Kronologi: ${statement.catatanNgunci}` : ''}
+                      </>
+                    ) : (
+                      <>
+                        Apabila mitra sudah tidak ada respon dan tidak ada kepastian membayar, Anda dapat mengubah status piutang ini menjadi <strong>Nota Kunci</strong> langsung dari Rekening Mitra atau per baris nota di bawah.
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {statement.totalBonKeseluruhan > 0 && (
+                    <button
+                      type="button"
+                      disabled={partnerActionBusy}
+                      onClick={() => openQuickPayModal()}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <HandCoins className="w-3.5 h-3.5" />
+                      <span>
+                        {hasKunci
+                          ? '+ Terima Pembayaran (Kurangi Nota Kunci)'
+                          : '+ Terima Pembayaran Piutang'}
+                      </span>
+                    </button>
+                  )}
+
+                  {hasAktif && (
+                    <button
+                      type="button"
+                      disabled={partnerActionBusy}
+                      onClick={() =>
+                        openModalUbahStatusNota({
+                          nominal: nomAktif,
+                          targetNgunci: true,
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>
+                        {hasKunci
+                          ? 'Ubah Sisa Piutang Jadi Kunci'
+                          : 'Ubah Status Piutang Jadi Kunci'}
+                      </span>
+                    </button>
+                  )}
+
+                  {hasKunci && (
+                    <button
+                      type="button"
+                      disabled={partnerActionBusy}
+                      onClick={() =>
+                        openModalUbahStatusNota({
+                          nominal: nomKunci,
+                          targetNgunci: false,
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      <span>Pulihkan ke Nota Piutang Aktif</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Summary Balance Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Total Kasbon Barang */}
@@ -1291,11 +1657,31 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                   <div className="flex items-center justify-between gap-1 flex-wrap">
                                     <div className="flex items-center space-x-1.5 flex-wrap">
                                       {row.isNotaLalu && (
-                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-200 text-amber-900 border border-amber-300">
-                                          NOTA LALU {row.noNotaLalu ? `(${row.noNotaLalu})` : ''}
+                                        <span className="text-[10px] font-bold text-amber-800">
+                                          [NOTA LALU{row.noNotaLalu ? `: ${row.noNotaLalu}` : ''}]
                                         </span>
                                       )}
+                                      {row.debet > 0 && (row.sisaPiutangNota ?? 0) > 0 ? (
+                                        row.isNotaNgunci ? (
+                                          <span className="text-[10px] font-bold text-rose-800">
+                                            [NOTA KUNCI · Sisa: <span className="font-mono tabular-nums">{formatRupiah(row.sisaPiutangNota || 0)}</span>]
+                                          </span>
+                                        ) : (
+                                          <span className="text-[10px] font-semibold text-amber-800">
+                                            [NOTA PIUTANG · Sisa: <span className="font-mono tabular-nums">{formatRupiah(row.sisaPiutangNota || 0)}</span>]
+                                          </span>
+                                        )
+                                      ) : row.debet > 0 && row.sisaPiutangNota === 0 ? (
+                                        <span className="text-[10px] font-semibold text-emerald-700">
+                                          [LUNAS]
+                                        </span>
+                                      ) : null}
                                       <span className="font-medium text-zinc-900">{row.keterangan || '-'}</span>
+                                      {row.catatanNgunci && (
+                                        <span className="text-[10px] text-rose-700 font-medium">
+                                          · Kronologi: {row.catatanNgunci}
+                                        </span>
+                                      )}
                                       {row.nominalMutasiHak && row.nominalMutasiHak > 0 ? (
                                         <span className="font-mono tabular-nums font-bold text-[11px] text-purple-800">
                                           · Nilai: {formatRupiah(row.nominalMutasiHak)}
@@ -1395,17 +1781,80 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                 {formatRupiah(row.saldoAkumulasi)}
                               </td>
 
-                              {/* Aksi Edit Detail / Nego Transaksi */}
+                              {/* Aksi Edit Detail / Nego Transaksi, Ubah Status Nota Kunci & Bayar */}
                               <td className="py-3 px-3 text-center whitespace-nowrap">
-                                <button
-                                  type="button"
-                                  onClick={() => setUniversalEditId(row.id)}
-                                  className="inline-flex items-center space-x-1 px-2.5 py-1 text-[10px] font-bold text-zinc-800 hover:text-white bg-zinc-100 hover:bg-zinc-900 rounded border border-zinc-300 hover:border-zinc-900 transition-colors cursor-pointer shadow-2xs"
-                                  title="Edit detail nominal, tonase, qty, harga satuan, rekening, atau tanggal transaksi"
-                                >
-                                  <Pencil className="w-3 h-3" />
-                                  <span>Edit Detail</span>
-                                </button>
+                                <div className="inline-flex items-center gap-1">
+                                  {row.debet > 0 && (row.sisaPiutangNota ?? 0) > 0 && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={partnerActionBusy}
+                                        onClick={() =>
+                                          openQuickPayModal({
+                                            idNotaTarget: row.id,
+                                            noNotaLabel: row.noNotaLalu || row.id,
+                                            sisaNotaTarget: row.sisaPiutangNota || row.debet,
+                                            isTargetNgunci: Boolean(row.isNotaNgunci),
+                                          })
+                                        }
+                                        className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold rounded border text-emerald-800 bg-emerald-50 hover:bg-emerald-700 hover:text-white border-emerald-300 transition-colors cursor-pointer"
+                                        title={
+                                          row.isNotaNgunci
+                                            ? 'Terima pembayaran nota kunci ini (otomatis mengurangi nominal tidak bisa kembali)'
+                                            : 'Terima pembayaran piutang nota ini'
+                                        }
+                                      >
+                                        <HandCoins className="w-3 h-3" />
+                                        <span>Bayar</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        disabled={partnerActionBusy}
+                                        onClick={() =>
+                                          openModalUbahStatusNota({
+                                            idNota: row.id,
+                                            noNota: row.noNotaLalu || row.id,
+                                            nominal: row.sisaPiutangNota || row.debet,
+                                            targetNgunci: !row.isNotaNgunci,
+                                            currentCatatan: row.catatanNgunci,
+                                          })
+                                        }
+                                        className={`inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold rounded border transition-colors cursor-pointer ${
+                                          row.isNotaNgunci
+                                            ? 'text-emerald-800 bg-white hover:bg-emerald-50 border-emerald-300'
+                                            : 'text-rose-800 bg-rose-50 hover:bg-rose-100 border-rose-200'
+                                        }`}
+                                        title={
+                                          row.isNotaNgunci
+                                            ? 'Pulihkan nota kunci ini kembali menjadi Nota Piutang Aktif'
+                                            : 'Ubah status nota piutang ini menjadi Nota Kunci (uang tidak bisa kembali)'
+                                        }
+                                      >
+                                        {row.isNotaNgunci ? (
+                                          <>
+                                            <Unlock className="w-3 h-3" />
+                                            <span>Ke Aktif</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Lock className="w-3 h-3" />
+                                            <span>Jadi Kunci</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    </>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setUniversalEditId(row.id)}
+                                    className="inline-flex items-center space-x-1 px-2.5 py-1 text-[10px] font-bold text-zinc-800 hover:text-white bg-zinc-100 hover:bg-zinc-900 rounded border border-zinc-300 hover:border-zinc-900 transition-colors cursor-pointer shadow-2xs"
+                                    title="Edit detail nominal, tonase, qty, harga satuan, rekening, atau tanggal transaksi"
+                                  >
+                                    <Pencil className="w-3 h-3" />
+                                    <span>Edit Detail</span>
+                                  </button>
+                                </div>
                               </td>
                             </tr>
 
@@ -2111,6 +2560,292 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* Modal Ubah Status Nota Piutang <-> Nota Kunci */}
+      <ModalToggleNotaNgunci
+        target={toggleNgunciTarget}
+        submitting={partnerActionBusy}
+        errorMsg={toggleNgunciError}
+        onClose={() => setToggleNgunciTarget(null)}
+        onConfirm={(catatan) => void handleConfirmToggleNotaNgunci(catatan)}
+      />
+
+      {/* Modal Terima Pembayaran Cepat Piutang / Nota Kunci di Rekening Mitra */}
+      {quickPayModal?.open && statement && (() => {
+        const bonKotor = statement.totalBonKeseluruhan || 0;
+        const titipAktif = statement.totalTitip || 0;
+        const maksSinkron = Math.min(bonKotor, titipAktif);
+        const sisaFisik = statement.sisaBonBersih ?? Math.max(0, bonKotor - titipAktif);
+        const canSinkron = bonKotor > 0 && titipAktif > 0 && maksSinkron > 0;
+        const targetMaks = quickPayMetode === 'SINKRON' ? maksSinkron : sisaFisik;
+        const nomInput = Math.round(Number(quickPayNominalInput) || 0);
+        const isOver = targetMaks > 0 && nomInput > targetMaks;
+
+        const nomKunciAwal = statement.nominalNotaNgunci || 0;
+        const totalAlokasi =
+          quickPayMetode === 'SINKRON' ? nomInput : maksSinkron + nomInput;
+        let estPengurangKunci = 0;
+        if (nomInput > 0 && nomKunciAwal > 0) {
+          if (quickPayModal.idNotaTarget && quickPayModal.isTargetNgunci === false) {
+            const sisaTargetAktif = quickPayModal.sisaNotaTarget || 0;
+            const lebihanKeKunci = Math.max(0, totalAlokasi - sisaTargetAktif);
+            estPengurangKunci = Math.min(nomKunciAwal, lebihanKeKunci);
+          } else {
+            estPengurangKunci = Math.min(nomKunciAwal, totalAlokasi);
+          }
+        }
+        const estSisaKunci = Math.max(0, nomKunciAwal - estPengurangKunci);
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg border border-zinc-200 overflow-hidden">
+              <div className="p-4 bg-emerald-800 text-white font-bold text-sm flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <HandCoins className="w-4 h-4 text-emerald-200" />
+                  <span>
+                    {nomKunciAwal > 0
+                      ? `Terima Pembayaran Nota Kunci — ${statement.namaMitra}`
+                      : `Terima Pembayaran Piutang — ${statement.namaMitra}`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setQuickPayModal(null)}
+                  disabled={quickPayBusy}
+                  className="text-emerald-100 hover:text-white cursor-pointer px-1"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmitQuickPay} className="p-5 space-y-4 text-xs text-zinc-700">
+                {quickPayError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 flex items-center gap-2 font-semibold">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{quickPayError}</span>
+                  </div>
+                )}
+
+                <div className="p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Mitra:</span>
+                    <strong className="text-zinc-900">
+                      {statement.namaMitra} ({statement.kodeMitra})
+                    </strong>
+                  </div>
+                  {quickPayModal.noNotaLabel && (
+                    <div className="flex justify-between">
+                      <span className="text-zinc-500">Target Nota Prioritas:</span>
+                      <span className="font-mono font-bold text-zinc-900">
+                        {quickPayModal.noNotaLabel}
+                        {quickPayModal.sisaNotaTarget
+                          ? ` (Sisa: ${formatRupiah(quickPayModal.sisaNotaTarget)})`
+                          : ''}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Total Sisa Bon Mitra:</span>
+                    <span className="font-mono font-bold text-zinc-900 tabular-nums">
+                      {formatRupiah(bonKotor)}
+                    </span>
+                  </div>
+                  {titipAktif > 0 && (
+                    <div className="flex justify-between text-purple-900">
+                      <span>Saldo Titipan / Uang Hasil Bumi:</span>
+                      <span className="font-mono font-bold tabular-nums">
+                        {formatRupiah(titipAktif)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Pilih Metode */}
+                <div>
+                  <label className="block font-semibold text-zinc-800 mb-1.5">
+                    Metode Penerimaan Pembayaran <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      disabled={sisaFisik <= 0}
+                      onClick={() => {
+                        setQuickPayMetode('TUNAI');
+                        setQuickPayNominalInput(
+                          String(
+                            quickPayModal.sisaNotaTarget
+                              ? Math.min(quickPayModal.sisaNotaTarget, sisaFisik)
+                              : sisaFisik
+                          )
+                        );
+                      }}
+                      className={`py-2 px-2.5 rounded-lg font-bold border text-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        quickPayMetode === 'TUNAI'
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-zinc-50 text-zinc-700 border-zinc-300 hover:bg-zinc-100'
+                      }`}
+                    >
+                      Tunai (KAS01)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={sisaFisik <= 0}
+                      onClick={() => {
+                        setQuickPayMetode('TRANSFER');
+                        setQuickPayNominalInput(
+                          String(
+                            quickPayModal.sisaNotaTarget
+                              ? Math.min(quickPayModal.sisaNotaTarget, sisaFisik)
+                              : sisaFisik
+                          )
+                        );
+                      }}
+                      className={`py-2 px-2.5 rounded-lg font-bold border text-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        quickPayMetode === 'TRANSFER'
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-zinc-50 text-zinc-700 border-zinc-300 hover:bg-zinc-100'
+                      }`}
+                    >
+                      Transfer Bank
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canSinkron}
+                      onClick={() => {
+                        setQuickPayMetode('SINKRON');
+                        setQuickPayNominalInput(
+                          String(
+                            quickPayModal.sisaNotaTarget
+                              ? Math.min(quickPayModal.sisaNotaTarget, maksSinkron)
+                              : maksSinkron
+                          )
+                        );
+                      }}
+                      className={`py-2 px-2.5 rounded-lg font-bold border text-center flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        quickPayMetode === 'SINKRON'
+                          ? 'bg-cyan-700 text-white border-cyan-700'
+                          : 'bg-cyan-50 text-cyan-900 border-cyan-300 hover:bg-cyan-100'
+                      }`}
+                    >
+                      <RefreshCw className="w-3 h-3 shrink-0" />
+                      <span>Potong Titipan</span>
+                    </button>
+                  </div>
+                </div>
+
+                {quickPayMetode === 'TRANSFER' && (
+                  <div>
+                    <label className="block font-semibold text-zinc-800 mb-1">
+                      Rekening Bank Tujuan <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      value={quickPayRekening}
+                      onChange={(e) => setQuickPayRekening(e.target.value)}
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-medium bg-white"
+                    >
+                      {availableBanks.map((b) => (
+                        <option key={b.kode} value={b.kode}>
+                          {b.nama} ({b.kode}) — Saldo: {formatRupiah(b.saldoSaatIni)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-semibold text-zinc-800 mb-1">
+                    Nominal Pembayaran (Rp) <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      step="any"
+                      min={1}
+                      max={targetMaks || undefined}
+                      required
+                      value={quickPayNominalInput}
+                      onChange={(e) => setQuickPayNominalInput(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-zinc-300 rounded-lg font-mono font-bold text-sm text-zinc-900 focus:ring-1 focus:ring-emerald-600"
+                    />
+                    {targetMaks > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setQuickPayNominalInput(String(targetMaks))}
+                        className="px-3 py-2 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-bold cursor-pointer shrink-0"
+                      >
+                        Lunas ({formatRupiahSingkat(targetMaks)})
+                      </button>
+                    )}
+                  </div>
+                  {isOver && (
+                    <p className="text-[11px] text-rose-700 font-semibold mt-1">
+                      Nominal melebihi batas maksimal ({formatRupiah(targetMaks)}).
+                    </p>
+                  )}
+                </div>
+
+                {/* Live Preview Pengurangan Otomatis Nominal Tidak Bisa Kembali */}
+                {nomKunciAwal > 0 && (
+                  <div className="p-3.5 rounded-xl bg-rose-50/75 border border-rose-200 space-y-1 font-mono text-[11px] tabular-nums">
+                    <div className="font-sans font-bold text-rose-950 flex items-center gap-1.5 pb-1">
+                      <Lock className="w-3.5 h-3.5 text-rose-700" />
+                      <span>Otomatis Mengurangi Nominal Uang Tidak Bisa Kembali:</span>
+                    </div>
+                    <div className="flex justify-between text-zinc-600">
+                      <span className="font-sans">Nominal Nota Kunci Saat Ini:</span>
+                      <span className="font-bold text-rose-800">{formatRupiah(nomKunciAwal)}</span>
+                    </div>
+                    <div className="flex justify-between text-emerald-700">
+                      <span className="font-sans">Berkurang Otomatis dari Pembayaran Ini:</span>
+                      <span className="font-bold">- {formatRupiah(estPengurangKunci)}</span>
+                    </div>
+                    <div className="flex justify-between pt-1.5 border-t border-rose-200 text-zinc-900">
+                      <span className="font-sans font-bold">Sisa Nominal Tidak Bisa Kembali:</span>
+                      <span className={`font-extrabold ${estSisaKunci === 0 ? 'text-emerald-700' : 'text-rose-800'}`}>
+                        {formatRupiah(estSisaKunci)}
+                        {estSisaKunci === 0 ? ' (Lunas & Pulih)' : ''}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-semibold text-zinc-800 mb-1">
+                    Keterangan Pembayaran
+                  </label>
+                  <input
+                    type="text"
+                    value={quickPayKeterangan}
+                    onChange={(e) => setQuickPayKeterangan(e.target.value)}
+                    placeholder="Contoh: Cicilan pembayaran nota kunci"
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-zinc-800"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
+                  <button
+                    type="button"
+                    onClick={() => setQuickPayModal(null)}
+                    disabled={quickPayBusy}
+                    className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-semibold cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={quickPayBusy || nomInput <= 0 || isOver}
+                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    {quickPayBusy
+                      ? 'Memproses...'
+                      : `Simpan Pembayaran (${formatRupiah(nomInput)})`}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

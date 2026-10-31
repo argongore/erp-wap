@@ -7,7 +7,7 @@ import {
   ShieldAlert,
   Info,
 } from 'lucide-react';
-import { Mitra } from '../../server/types.ts';
+import { getRoleMitraLabel, Mitra } from '../../server/types.ts';
 import { NameMatchResult } from '../../utils/nameSimilarity.ts';
 
 interface FuzzyNameWarningCardProps {
@@ -39,20 +39,11 @@ const FuzzyNameWarningCardInner: React.FC<FuzzyNameWarningCardProps> = ({
     (m) => m.isHighRiskDuplicate || m.matchType === 'PHONETIC' || m.similarity >= 80
   );
 
-  const roleLabel = (role: string) => {
-    switch (role) {
-      case 'CUSTOMER':
-        return 'Customer';
-      case 'MITRA_TANI':
-        return 'Mitra Tani';
-      case 'SUPPLIER':
-        return 'Supplier';
-      case 'KARYAWAN':
-        return 'Karyawan';
-      default:
-        return 'Rekanan';
-    }
-  };
+  const roleLabel = (m: Mitra) =>
+    getRoleMitraLabel(m.role, {
+      isAnakPerusahaan: m.isAnakPerusahaan,
+      isKaryawan: Boolean(m.idKaryawanTerkait),
+    });
 
   const isDark = theme === 'dark';
 
@@ -151,7 +142,7 @@ const FuzzyNameWarningCardInner: React.FC<FuzzyNameWarningCardProps> = ({
                         isDark ? 'text-zinc-400' : 'text-slate-500'
                       }`}
                     >
-                      ({mitra.kode} · {roleLabel(mitra.role)} · {similarity}% cocok)
+                      ({mitra.kode} · {roleLabel(mitra)} · {similarity}% cocok)
                     </span>
                   </div>
 

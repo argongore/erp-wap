@@ -340,6 +340,29 @@ export const api = {
     return data.data;
   },
 
+  setStatusNotaNgunci: async (payload: {
+    idMitra: string;
+    idNota?: string;
+    isNotaNgunci: boolean;
+    catatanNgunci?: string;
+  }): Promise<{
+    idMitra: string;
+    namaMitra: string;
+    idNota?: string;
+    isNotaNgunci: boolean;
+    affectedCount: number;
+    affectedNominal: number;
+    message: string;
+  }> => {
+    const data = await requestJson('/api/mitra/status-nota-ngunci', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui status Nota Ngunci');
+    return data.data;
+  },
+
   // Master Produk, Kategori Kustom & Stok
   getKategoriProduk: async (): Promise<
     Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>
@@ -727,7 +750,9 @@ export const api = {
     driveFileId?: string;
     driveFolderPath?: string;
     keterangan?: string;
-  }): Promise<{ record: any; tipe: string; mitraNama: string; nominal: number }> => {
+    isNotaNgunci?: boolean;
+    catatanNgunci?: string;
+  }): Promise<{ record: any; tipe: string; mitraNama: string; nominal: number; isNotaNgunci?: boolean }> => {
     const data = await requestJson('/api/transaksi/nota-lalu', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -949,6 +974,7 @@ export const api = {
     metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningTujuan?: string;
     keterangan?: string;
+    idNotaTarget?: string;
   }): Promise<TransaksiBayarBon> => {
     const data = await requestJson('/api/transaksi/bayar-bon', {
       method: 'POST',

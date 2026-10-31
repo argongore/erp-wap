@@ -20,7 +20,14 @@ import {
   Pencil,
   Plus,
 } from 'lucide-react';
-import { Mitra, Rekening, StokHasilBumi, TransaksiPembelianHasilBumi } from '../../server/types.ts';
+import {
+  DAFTAR_ROLE_MITRA,
+  Mitra,
+  Rekening,
+  RoleMitra,
+  StokHasilBumi,
+  TransaksiPembelianHasilBumi,
+} from '../../server/types.ts';
 import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
@@ -97,7 +104,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   const [newMitraNama, setNewMitraNama] = useState<string>('');
   const [newMitraTelepon, setNewMitraTelepon] = useState<string>('');
   const [newMitraAlamat, setNewMitraAlamat] = useState<string>('');
-  const [newMitraRole, setNewMitraRole] = useState<'MITRA_TANI' | 'CUSTOMER' | 'SUPPLIER'>('MITRA_TANI');
+  const [newMitraRole, setNewMitraRole] = useState<RoleMitra>('SUPPLIER_CUSTOMER');
   const [isSavingMitra, setIsSavingMitra] = useState<boolean>(false);
 
   // Putus Harga Modal State
@@ -1432,15 +1439,17 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-bold text-zinc-700 mb-1">Role / Peran</label>
+                  <label className="block font-bold text-zinc-700 mb-1">Role Mitra</label>
                   <select
                     value={newMitraRole}
-                    onChange={(e: any) => setNewMitraRole(e.target.value)}
-                    className="w-full px-2.5 py-2 border border-zinc-300 rounded-lg text-xs"
+                    onChange={(e) => setNewMitraRole(e.target.value as RoleMitra)}
+                    className="w-full px-2.5 py-2 border border-zinc-300 rounded-lg text-xs font-semibold"
                   >
-                    <option value="MITRA_TANI">Petani (Hasil Bumi)</option>
-                    <option value="CUSTOMER">Customer / Mitra Toko</option>
-                    <option value="SUPPLIER">Pemasok / Distributor</option>
+                    {DAFTAR_ROLE_MITRA.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
 

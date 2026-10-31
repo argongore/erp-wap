@@ -13,6 +13,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import {
+  getRoleMitraLabel,
   Mitra,
   Rekening,
   TransaksiKasbonUang,
@@ -436,7 +437,10 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
           kategori: 'PEMBAYARAN PT KE MITRA',
           mitra: selectedMitra.nama,
           namaMitra: selectedMitra.nama,
-          roleMitra: selectedMitra.role,
+          roleMitra: getRoleMitraLabel(selectedMitra.role, {
+            isAnakPerusahaan: selectedMitra.isAnakPerusahaan,
+            isKaryawan: Boolean(selectedMitra.idKaryawanTerkait),
+          }),
           rekening: selectedRekening?.nama || rekeningSumber,
           detailRows,
           items: [
@@ -974,7 +978,15 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                                     kategori: 'PEMBAYARAN PT KE MITRA',
                                     mitra: pt.namaMitra,
                                     namaMitra: pt.namaMitra,
-                                    roleMitra: 'MITRA_TANI',
+                                    roleMitra: (() => {
+                                      const foundM = mitraList.find((m) => m.id === pt.idMitra);
+                                      return foundM
+                                        ? getRoleMitraLabel(foundM.role, {
+                                            isAnakPerusahaan: foundM.isAnakPerusahaan,
+                                            isKaryawan: Boolean(foundM.idKaryawanTerkait),
+                                          })
+                                        : 'Supplier dan Customer';
+                                    })(),
                                     rekening: pt.rekeningSumber,
                                     detailRows: [
                                       { label: 'Nomor Transaksi', value: pt.idPencairan },

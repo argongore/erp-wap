@@ -9,6 +9,7 @@ import {
   HandCoins,
   Wheat,
   RefreshCw,
+  Lock,
 } from 'lucide-react';
 import {
   Mitra,
@@ -221,6 +222,14 @@ export const BayarBonView: React.FC<Props> = ({
       ? Math.max(0, saldoTitipHasilBumi - nominalBayar)
       : Math.max(0, saldoTitipHasilBumi - maksPotongSinkron);
 
+  // Kalkulasi otomatis pengurangan Status Nota Kunci (Nominal Uang Tidak Bisa Kembali)
+  const nominalNotaNgunciAwal = statementData?.nominalNotaNgunci || 0;
+  const totalAlokasiKeBonSaatIni =
+    metode === 'SINKRON' ? nominalBayar : maksPotongSinkron + nominalBayar;
+  const estimasiPengurangNotaNgunci =
+    nominalBayar > 0 ? Math.min(nominalNotaNgunciAwal, totalAlokasiKeBonSaatIni) : 0;
+  const estimasiSisaNotaNgunci = Math.max(0, nominalNotaNgunciAwal - estimasiPengurangNotaNgunci);
+
   const handleSelectMetode = (nextMetode: 'SINKRON' | 'TUNAI' | 'TRANSFER') => {
     setErrorMsg('');
     setMetode(nextMetode);
@@ -365,6 +374,21 @@ export const BayarBonView: React.FC<Props> = ({
         });
       }
 
+      if ((result?.nominalPengurangNotaNgunci || 0) > 0) {
+        detailRows.push({
+          label: 'Nominal Nota Kunci Sebelum Bayar',
+          value: result?.sisaNotaNgunciSebelum ?? nominalNotaNgunciAwal,
+        });
+        detailRows.push({
+          label: 'Otomatis Mengurangi Uang Tidak Bisa Kembali',
+          value: `- ${formatRupiah(result.nominalPengurangNotaNgunci || 0)}`,
+        });
+        detailRows.push({
+          label: 'Sisa Nominal Nota Kunci Setelah Bayar',
+          value: result?.sisaNotaNgunciSetelah ?? 0,
+        });
+      }
+
       const receipt: ReceiptData = {
         title: isResultSinkron
           ? 'BUKTI SINKRON PELUNASAN BON MITRA'
@@ -456,13 +480,15 @@ export const BayarBonView: React.FC<Props> = ({
                   const r = rekapMap.get(m.id);
                   const bonKotor = r?.totalBonMitra || 0;
                   const titip = r?.totalHutangTitipPanen || 0;
+                  const ngunci = r?.nominalNotaNgunci || 0;
+                  const ngunciTag = ngunci > 0 ? ` · NOTA KUNCI: ${formatRupiah(ngunci)}` : '';
                   let statusSuffix = 'Sisa Bon: Rp 0 (Lunas)';
                   if (bonKotor > 0 && titip >= bonKotor) {
-                    statusSuffix = `Bon: ${formatRupiah(bonKotor)} · Titipan: ${formatRupiah(titip)} (Siap SINKRON)`;
+                    statusSuffix = `Bon: ${formatRupiah(bonKotor)} · Titipan: ${formatRupiah(titip)} (Siap SINKRON)${ngunciTag}`;
                   } else if (bonKotor > 0 && titip > 0) {
-                    statusSuffix = `Bon: ${formatRupiah(bonKotor)} · Titipan: ${formatRupiah(titip)} (Bisa SINKRON)`;
+                    statusSuffix = `Bon: ${formatRupiah(bonKotor)} · Titipan: ${formatRupiah(titip)} (Bisa SINKRON)${ngunciTag}`;
                   } else if (bonKotor > 0) {
-                    statusSuffix = `Sisa Bon: ${formatRupiah(bonKotor)}`;
+                    statusSuffix = `Sisa Bon: ${formatRupiah(bonKotor)}${ngunciTag}`;
                   }
                   return (
                     <option key={m.id} value={m.id}>
@@ -527,6 +553,41 @@ export const BayarBonView: React.FC<Props> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* Panel Pengurangan Otomatis Nominal Tidak Bisa Kembali (Mitra Berstatus Nota Kunci) */}
+                {nominalNotaNgunciAwal > 0 && (
+                  <div className="p-4 bg-rose-50/70 border border-rose-200 rounded-xl text-xs space-y-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <Lock className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                      <div className="space-y-1 flex-1">
+                        <div className="font-bold text-rose-950">
+                          Mitra Berstatus Nota Kunci — Pembayaran Otomatis Mengurangi Uang Tidak Bisa Kembali
+                        </div>
+                        <p className="text-rose-900/90 text-[11px] leading-relaxed">
+                          Sistem otomatis memprioritaskan pelunasan pada <strong>Nota Kunci</strong> terlebih dahulu sehingga total nominal uang yang tidak bisa kembali langsung berkurang saat transaksi disimpan.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-white border border-rose-200 space-y-1 font-mono text-[11px] tabular-nums">
+                      <div className="flex justify-between text-zinc-600">
+                        <span className="font-sans">Nominal Nota Kunci (Tidak Bisa Kembali) Saat Ini:</span>
+                        <span className="font-bold text-rose-800">{formatRupiah(nominalNotaNgunciAwal)}</span>
+                      </div>
+                      <div className="flex justify-between text-emerald-700">
+                        <span className="font-sans">Otomatis Berkurang dari Pembayaran Ini:</span>
+                        <span className="font-bold">- {formatRupiah(estimasiPengurangNotaNgunci)}</span>
+                      </div>
+                      <div className="flex justify-between pt-1.5 border-t border-zinc-200 text-zinc-900">
+                        <span className="font-sans font-bold">Sisa Nominal Tidak Bisa Kembali Setelah Bayar:</span>
+                        <span className={`font-extrabold ${estimasiSisaNotaNgunci === 0 ? 'text-emerald-700' : 'text-rose-800'}`}>
+                          {formatRupiah(estimasiSisaNotaNgunci)}
+                          {estimasiSisaNotaNgunci === 0 ? ' (Lunas & Pulih)' : ''}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Banner Siap SINKRON ketika Mitra punya Bon DAN punya Uang Hasil Bumi / Titipan */}
                 {canUseSinkron && (
@@ -861,6 +922,14 @@ export const BayarBonView: React.FC<Props> = ({
                           </strong>
                         </span>
                       </div>
+                      {(b.nominalPengurangNotaNgunci || 0) > 0 && (
+                        <div className="flex justify-between text-[10px] text-rose-800 bg-rose-50/80 px-2 py-1 rounded border border-rose-100 font-medium">
+                          <span>Pengurang Nota Kunci:</span>
+                          <span className="font-mono font-bold tabular-nums">
+                            - {formatRupiah(b.nominalPengurangNotaNgunci || 0)}
+                          </span>
+                        </div>
+                      )}
 
                       <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1">
                         <span className="truncate max-w-[180px]">{b.keterangan}</span>
@@ -992,6 +1061,23 @@ export const BayarBonView: React.FC<Props> = ({
                       </span>
                     </div>
                   </>
+                )}
+
+                {estimasiPengurangNotaNgunci > 0 && (
+                  <div className="pt-2 mt-2 border-t border-rose-200 space-y-1 text-[11px]">
+                    <div className="flex justify-between text-emerald-800 font-semibold">
+                      <span>Otomatis Mengurangi Nota Kunci:</span>
+                      <span className="font-mono font-bold tabular-nums">
+                        - {formatRupiah(estimasiPengurangNotaNgunci)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-rose-900">
+                      <span>Sisa Uang Tidak Bisa Kembali:</span>
+                      <span className="font-mono font-bold tabular-nums">
+                        {formatRupiah(estimasiSisaNotaNgunci)}
+                      </span>
+                    </div>
+                  </div>
                 )}
               </div>
 

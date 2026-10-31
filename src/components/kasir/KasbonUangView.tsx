@@ -58,20 +58,22 @@ export const KasbonUangView: React.FC<Props> = ({
   // State: Kasbon Uang Baru
   const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
   const [rekeningSumber, setRekeningSumber] = useState<string>('BNI01');
-  const [nominalInput, setNominalInput] = useState<string>('2000000');
-  const [keterangan, setKeterangan] = useState<string>('Kasbon uang operasional tanam');
+  const [nominalInput, setNominalInput] = useState<string>('');
+  const [keterangan, setKeterangan] = useState<string>('');
   const [fotoKasbonBaru, setFotoKasbonBaru] = useState<string>('');
 
   // State: Input Saldo Nota Lalu (Piutang Barang / Titip Uang Manual)
   const [subTipeNotaLalu, setSubTipeNotaLalu] = useState<'PIUTANG_BARANG_NOTA_LALU' | 'TITIP_UANG_NOTA_LALU'>(
     'PIUTANG_BARANG_NOTA_LALU'
   );
-  const [nominalNotaLaluInput, setNominalNotaLaluInput] = useState<string>('1500000');
+  const [nominalNotaLaluInput, setNominalNotaLaluInput] = useState<string>('');
   const [noNotaLalu, setNoNotaLalu] = useState<string>('');
   const [tanggalNotaLalu, setTanggalNotaLalu] = useState<string>(getWIBTodayString());
   const [rincianBarangNotaLalu, setRincianBarangNotaLalu] = useState<string>('');
   const [keteranganNotaLalu, setKeteranganNotaLalu] = useState<string>('');
   const [fotoNotaLalu, setFotoNotaLalu] = useState<string>('');
+  const [isNotaNgunci, setIsNotaNgunci] = useState<boolean>(false);
+  const [catatanNgunci, setCatatanNgunci] = useState<string>('');
 
   // History Tab Filter
   const [historyFilter, setHistoryFilter] = useState<'ALL' | 'NOTA_LALU' | 'KASBON_BARU'>('ALL');
@@ -208,6 +210,7 @@ export const KasbonUangView: React.FC<Props> = ({
           ? `Nota Lalu (Piutang Bon Barang): ${rincianBarangNotaLalu ? rincianBarangNotaLalu.trim() : 'Bon Barang Bertahun-Tahun Lalu'}`
           : `Nota Lalu (Titipan Uang / Hasil Panen): ${rincianBarangNotaLalu ? rincianBarangNotaLalu.trim() : 'Saldo Titip Panen Belum Diambil'}`;
 
+      const isNgunciEffective = subTipeNotaLalu === 'PIUTANG_BARANG_NOTA_LALU' && isNotaNgunci;
       const res = await api.processInputNotaLalu({
         idMitra: selectedMitraId,
         tipe: subTipeNotaLalu,
@@ -217,8 +220,16 @@ export const KasbonUangView: React.FC<Props> = ({
         rincianBarang: rincianBarangNotaLalu.trim() || undefined,
         fotoNota: fotoNotaLalu || undefined,
         keterangan: keteranganNotaLalu.trim() || defaultKet,
+        isNotaNgunci: isNgunciEffective,
+        catatanNgunci: isNgunciEffective ? catatanNgunci.trim() || undefined : undefined,
       });
 
+      setNominalNotaLaluInput('');
+      setNoNotaLalu('');
+      setRincianBarangNotaLalu('');
+      setKeteranganNotaLalu('');
+      setFotoNotaLalu('');
+      setCatatanNgunci('');
       onRefresh();
 
       const receipt: ReceiptData = {
@@ -476,9 +487,10 @@ export const KasbonUangView: React.FC<Props> = ({
                 </label>
                 <input
                   type="number"
-                  min="1000"
-                  step="1000"
+                  min="1"
+                  step="any"
                   required
+                  placeholder="Masukkan nominal rupiah..."
                   value={nominalInput}
                   onChange={(e) => setNominalInput(e.target.value)}
                   className="w-full px-3 py-2.5 border border-zinc-300 rounded-lg text-sm font-mono font-bold focus:ring-1 focus:ring-rose-600"
@@ -682,9 +694,10 @@ export const KasbonUangView: React.FC<Props> = ({
                   </label>
                   <input
                     type="number"
-                    min="1000"
-                    step="1000"
+                    min="1"
+                    step="any"
                     required
+                    placeholder="Masukkan nominal..."
                     value={nominalNotaLaluInput}
                     onChange={(e) => setNominalNotaLaluInput(e.target.value)}
                     className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-mono font-bold focus:ring-1 focus:ring-amber-600"
@@ -752,6 +765,55 @@ export const KasbonUangView: React.FC<Props> = ({
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs focus:ring-1 focus:ring-amber-600"
                 />
               </div>
+
+              {/* Status Nota Ngunci (khusus Piutang Barang Nota Lalu) */}
+              {subTipeNotaLalu === 'PIUTANG_BARANG_NOTA_LALU' && (
+                <div className="p-3 rounded-xl border border-zinc-200 bg-zinc-50/70 space-y-2.5">
+                  <label className="block text-[11px] font-bold text-zinc-800 uppercase tracking-wider">
+                    Status Penagihan Nota Lalu:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsNotaNgunci(false)}
+                      className={`p-2 rounded-lg border text-left text-xs font-bold transition-colors cursor-pointer ${
+                        !isNotaNgunci
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-900'
+                          : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                      }`}
+                    >
+                      <div>Nota Aktif (Normal)</div>
+                      <div className="text-[10px] font-normal text-zinc-500">Masih ada respon bayar</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsNotaNgunci(true)}
+                      className={`p-2 rounded-lg border text-left text-xs font-bold transition-colors cursor-pointer ${
+                        isNotaNgunci
+                          ? 'bg-rose-50 border-rose-500 text-rose-900'
+                          : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+                      }`}
+                    >
+                      <div>Status NOTA NGUNCI</div>
+                      <div className="text-[10px] font-normal text-zinc-500">Tak ada respon / macet</div>
+                    </button>
+                  </div>
+                  {isNotaNgunci && (
+                    <div>
+                      <label className="block text-[11px] font-semibold text-rose-800 mb-1">
+                        Catatan / Kronologi Nota Ngunci (Opsional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Misal: Sudah ditagih sejak 2023 tidak ada respon / pindah alamat..."
+                        value={catatanNgunci}
+                        onChange={(e) => setCatatanNgunci(e.target.value)}
+                        className="w-full px-3 py-2 border border-rose-300 bg-white rounded-lg text-xs focus:ring-1 focus:ring-rose-600"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Dasar Penguat: Capture Foto Fisik Nota Manual */}
               <div className="pt-2 border-t border-zinc-200">

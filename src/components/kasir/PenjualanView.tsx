@@ -1104,7 +1104,7 @@ export const PenjualanView: React.FC<Props> = ({
                   <input
                     type="number"
                     min="0"
-                    step="500"
+                    step="any"
                     value={hargaNegoInput}
                     onChange={(e) => setHargaNegoInput(Math.max(0, Number(e.target.value)))}
                     className="w-full bg-zinc-800 border border-amber-600/80 rounded-lg pl-9 pr-3 py-2 text-xs text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-amber-400"
@@ -1281,7 +1281,7 @@ export const PenjualanView: React.FC<Props> = ({
                             <input
                               type="number"
                               min="0"
-                              step="500"
+                              step="any"
                               value={item.harga}
                               onChange={(e) =>
                                 handleUpdateCartPrice(item.kodeProduk, Math.max(0, Number(e.target.value)))

@@ -15,8 +15,9 @@ import {
   ExternalLink,
   RefreshCw,
   Database,
+  Lock,
 } from 'lucide-react';
-import { Mitra } from '../../server/types.ts';
+import { getRoleMitraLabel, Mitra } from '../../server/types.ts';
 import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ImageUploadZone } from './ImageUploadZone.tsx';
@@ -28,6 +29,7 @@ interface InputNotaLaluModalProps {
   onClose: () => void;
   mitraList: Mitra[];
   preselectedMitraId?: string;
+  defaultNotaNgunci?: boolean;
   onSuccess: (result: any) => void;
 }
 
@@ -36,6 +38,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
   onClose,
   mitraList,
   preselectedMitraId,
+  defaultNotaNgunci = false,
   onSuccess,
 }) => {
   const activeMitras = React.useMemo(
@@ -56,13 +59,16 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
   );
   const [namaUmumManual, setNamaUmumManual] = useState<string>('');
   const [teleponUmumManual, setTeleponUmumManual] = useState<string>('');
+  const [alamatUmumManual, setAlamatUmumManual] = useState<string>('');
 
-  const [nominalInput, setNominalInput] = useState<string>('1500000');
+  const [nominalInput, setNominalInput] = useState<string>('');
   const [noNotaLalu, setNoNotaLalu] = useState<string>('');
   const [tanggalNotaLalu, setTanggalNotaLalu] = useState<string>(getWIBTodayString());
   const [rincianBarang, setRincianBarang] = useState<string>('');
   const [keterangan, setKeterangan] = useState<string>('');
   const [fotoNota, setFotoNota] = useState<string>('');
+  const [isNotaNgunci, setIsNotaNgunci] = useState<boolean>(defaultNotaNgunci);
+  const [catatanNgunci, setCatatanNgunci] = useState<string>('');
 
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitStep, setSubmitStep] = useState<string>('');
@@ -89,16 +95,24 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
   // Reset clean form state whenever modal opens so previous Mitra's photo/notes never carry over
   useEffect(() => {
     if (isOpen) {
-      const prefix = tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'NL-BRG' : 'NL-TTP';
+      const nextTipe = defaultNotaNgunci ? 'PIUTANG_BARANG_NOTA_LALU' : tipe;
+      if (defaultNotaNgunci) {
+        setTipe('PIUTANG_BARANG_NOTA_LALU');
+      }
+      const prefix = nextTipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'NL-BRG' : 'NL-TTP';
       setNoNotaLalu(`${prefix}-${Date.now().toString().slice(-4)}`);
+      setNominalInput('');
       setFotoNota('');
       setRincianBarang('');
       setKeterangan('');
       setNamaUmumManual('');
       setTeleponUmumManual('');
+      setAlamatUmumManual('');
+      setIsNotaNgunci(Boolean(defaultNotaNgunci));
+      setCatatanNgunci('');
       setErrorMsg('');
     }
-  }, [isOpen]);
+  }, [isOpen, defaultNotaNgunci]);
 
   // Update prefix when tipe changes if user hasn't typed custom note number
   useEffect(() => {
@@ -162,10 +176,13 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
           setSubmitStep(`Mendaftarkan ${trimmedNama} ke Master Mitra...`);
           const createdMitra = await api.createMitra({
             nama: trimmedNama,
-            role: tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'CUSTOMER' : 'MITRA_TANI',
+            role: tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'CUSTOMER' : 'SUPPLIER_CUSTOMER',
             telepon: teleponUmumManual.trim() || undefined,
-            alamat: 'Input Umum (Nota Lalu)',
-            catatan: 'Didaftarkan otomatis dari pencatatan Nota Lalu',
+            alamat: alamatUmumManual.trim() || '-',
+            catatan:
+              tipe === 'PIUTANG_BARANG_NOTA_LALU' && isNotaNgunci
+                ? 'Migrasi Nota Lalu [STATUS NOTA NGUNCI]'
+                : 'Didaftarkan otomatis dari pencatatan Nota Lalu',
           });
           finalMitraId = createdMitra.id;
           finalMitraNama = createdMitra.nama;
@@ -186,7 +203,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
       setSubmitStep('Mencatat transaksi ke rekening koran & buku pembukuan...');
       const defaultKet =
         tipe === 'PIUTANG_BARANG_NOTA_LALU'
-          ? `Nota Lalu (Piutang Bon Barang): ${rincianBarang ? rincianBarang.trim() : 'Bon Barang Bertahun-Tahun Lalu'}`
+          ? `Nota Lalu (Piutang Bon Barang)${isNotaNgunci ? ' [NOTA NGUNCI]' : ''}: ${rincianBarang ? rincianBarang.trim() : 'Bon Barang Bertahun-Tahun Lalu'}`
           : `Nota Lalu (Titipan Uang / Hasil Panen): ${rincianBarang ? rincianBarang.trim() : 'Saldo Titip Panen Belum Diambil'}`;
 
       const result = await api.processInputNotaLalu({
@@ -201,14 +218,22 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
         driveFileId: driveFileId || undefined,
         driveFolderPath,
         keterangan: keterangan.trim() || defaultKet,
+        isNotaNgunci: tipe === 'PIUTANG_BARANG_NOTA_LALU' ? isNotaNgunci : false,
+        catatanNgunci:
+          tipe === 'PIUTANG_BARANG_NOTA_LALU' && isNotaNgunci
+            ? catatanNgunci.trim() || undefined
+            : undefined,
       });
 
       setSubmitStep('Selesai!');
+      setNominalInput('');
       setFotoNota('');
       setRincianBarang('');
       setKeterangan('');
       setNamaUmumManual('');
       setTeleponUmumManual('');
+      setAlamatUmumManual('');
+      setCatatanNgunci('');
       setNoNotaLalu('');
       try {
         onSuccess(result);
@@ -409,7 +434,12 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
                 >
                   {activeMitras.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.nama} ({m.kode}) - {m.role} - Telp: {m.telepon || '-'}
+                      {m.nama} ({m.kode}) ·{' '}
+                      {getRoleMitraLabel(m.role, {
+                        isAnakPerusahaan: m.isAnakPerusahaan,
+                        isKaryawan: m.isKaryawan || Boolean(m.idKaryawanTerkait),
+                      })}{' '}
+                      · HP: {m.telepon || '-'}
                     </option>
                   ))}
                 </select>
@@ -427,15 +457,15 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
               )
             ) : (
               <div className="space-y-2 p-3 bg-zinc-50 border border-zinc-200 rounded-xl">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
                     <label className="block text-[10px] font-semibold text-zinc-600 mb-0.5">
-                      Nama Orang / Mitra Umum <span className="text-rose-500">*</span>
+                      Nama Orang / Mitra Baru <span className="text-rose-500">*</span>
                     </label>
                     <input
                       type="text"
                       required
-                      placeholder="Contoh: Pak Slamet, UD Jaya, Toko Berkah..."
+                      placeholder="Contoh: Pak Slamet, UD Jaya..."
                       value={namaUmumManual}
                       onChange={(e) => setNamaUmumManual(e.target.value)}
                       className="w-full px-3 py-1.5 border border-zinc-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-amber-600 bg-white"
@@ -443,13 +473,25 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
                   </div>
                   <div>
                     <label className="block text-[10px] font-semibold text-zinc-600 mb-0.5">
-                      No. Telepon / WhatsApp (Opsional)
+                      No. HP / WhatsApp
                     </label>
                     <input
                       type="tel"
                       placeholder="08xxxxxxxxxx"
                       value={teleponUmumManual}
                       onChange={(e) => setTeleponUmumManual(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-zinc-300 rounded-lg text-xs font-mono focus:ring-1 focus:ring-amber-600 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-zinc-600 mb-0.5">
+                      Alamat Domisili
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Desa / Kecamatan..."
+                      value={alamatUmumManual}
+                      onChange={(e) => setAlamatUmumManual(e.target.value)}
                       className="w-full px-3 py-1.5 border border-zinc-300 rounded-lg text-xs focus:ring-1 focus:ring-amber-600 bg-white"
                     />
                   </div>
@@ -478,13 +520,91 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
                   <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-[11px] text-emerald-900 flex items-center space-x-1.5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>
-                      Nama <strong>"{namaUmumManual}"</strong> belum ada di database. Saat disimpan, sistem akan otomatis mendaftarkannya sebagai akun Mitra baru.
+                      Nama <strong>"{namaUmumManual}"</strong> belum ada di database. Saat disimpan, sistem akan otomatis mendaftarkannya lengkap dengan alamat &amp; nomor HP ke Master Mitra.
                     </span>
                   </div>
                 )}
               </div>
             )}
           </div>
+
+          {/* Status Nota Lalu (Khusus Piutang: Nota Aktif vs Nota Ngunci) */}
+          {tipe === 'PIUTANG_BARANG_NOTA_LALU' && (
+            <div className="space-y-2.5 p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/70">
+              <div className="flex items-center justify-between gap-2">
+                <label className="block text-[11px] font-bold text-zinc-800 uppercase tracking-wider">
+                  Status Penagihan Nota Lalu: <span className="text-rose-500">*</span>
+                </label>
+                <span className="text-[10px] font-semibold text-zinc-500">
+                  Digunakan untuk rekap uang tidak bisa kembali
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsNotaNgunci(false)}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    !isNotaNgunci
+                      ? 'border-emerald-600 bg-white shadow-2xs ring-1 ring-emerald-600'
+                      : 'border-zinc-200 bg-white/70 hover:bg-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2
+                      className={`w-4 h-4 shrink-0 ${
+                        !isNotaNgunci ? 'text-emerald-600' : 'text-zinc-400'
+                      }`}
+                    />
+                    <span className="font-bold text-zinc-900 text-xs">
+                      Nota Aktif (Masih Berjalan)
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
+                    Mitra masih aktif berkomunikasi / bertransaksi dan piutang masih dapat ditagih.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsNotaNgunci(true)}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    isNotaNgunci
+                      ? 'border-rose-700 bg-rose-50/90 shadow-2xs ring-1 ring-rose-700'
+                      : 'border-zinc-200 bg-white/70 hover:bg-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Lock
+                      className={`w-4 h-4 shrink-0 ${
+                        isNotaNgunci ? 'text-rose-700' : 'text-zinc-400'
+                      }`}
+                    />
+                    <span className="font-bold text-rose-950 text-xs">
+                      Status NOTA NGUNCI (Piutang Macet)
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-rose-900/80 mt-1 leading-relaxed">
+                    Mitra punya piutang tapi sudah tidak ada respon &amp; tidak ada kepastian membayar (uang tidak bisa kembali).
+                  </p>
+                </button>
+              </div>
+
+              {isNotaNgunci && (
+                <div className="pt-1">
+                  <label className="block text-[11px] font-semibold text-rose-900 mb-1">
+                    Catatan / Kronologi Nota Ngunci (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: Nomor HP tidak aktif sejak 2024, sudah ditagih ke alamat tidak ada kepastian..."
+                    value={catatanNgunci}
+                    onChange={(e) => setCatatanNgunci(e.target.value)}
+                    className="w-full px-3 py-2 border border-rose-300 rounded-lg text-xs bg-white focus:ring-1 focus:ring-rose-600"
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Grid Nominal, Tanggal, No Nota */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -494,14 +614,17 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
               </label>
               <input
                 type="number"
-                min="1000"
-                step="1000"
+                min="1"
+                step="any"
                 required
+                placeholder="Masukkan nominal riil (Rp)"
                 value={nominalInput}
                 onChange={(e) => setNominalInput(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-mono font-bold focus:ring-1 focus:ring-amber-600"
+                className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-mono font-bold tabular-nums focus:ring-1 focus:ring-amber-600"
               />
-              <div className="text-[11px] font-bold text-amber-800 mt-1">{formatRupiah(nominal)}</div>
+              <div className="text-[11px] font-bold font-mono tabular-nums text-amber-800 mt-1">
+                {formatRupiah(nominal)}
+              </div>
             </div>
 
             <div>
@@ -620,7 +743,13 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
               <span>
                 {submitting
                   ? 'Menyimpan...'
-                  : `Simpan ${tipe === 'PIUTANG_BARANG_NOTA_LALU' ? 'Piutang Nota Lalu' : 'Titip Uang Nota Lalu'} (${formatRupiah(nominal)})`}
+                  : `Simpan ${
+                      tipe === 'PIUTANG_BARANG_NOTA_LALU'
+                        ? isNotaNgunci
+                          ? 'Piutang Nota Ngunci'
+                          : 'Piutang Nota Lalu'
+                        : 'Titip Uang Nota Lalu'
+                    } (${formatRupiah(nominal)})`}
               </span>
             </button>
           </div>

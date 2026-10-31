@@ -321,7 +321,7 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
                         <input
                           type="number"
                           min="0"
-                          step="5000"
+                          step="any"
                           value={row.gajiNominal || ''}
                           onChange={(e) =>
                             handleUpdateRow(idx, {
@@ -339,7 +339,7 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
                         <input
                           type="number"
                           min="0"
-                          step="5000"
+                          step="any"
                           value={row.bonus || ''}
                           onChange={(e) =>
                             handleUpdateRow(idx, {

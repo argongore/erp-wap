@@ -243,8 +243,8 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
                 </span>
                 <input
                   type="number"
-                  min="1000"
-                  step="1000"
+                  min="1"
+                  step="any"
                   value={nominalInput}
                   onChange={(e) => setNominalInput(e.target.value)}
                   placeholder="0"

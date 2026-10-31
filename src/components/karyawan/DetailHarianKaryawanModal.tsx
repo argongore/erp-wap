@@ -19,6 +19,7 @@ import {
   ArrowRight,
   Sparkles,
   Pencil,
+  UserCog,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import {
@@ -29,6 +30,11 @@ import {
 } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import {
+  KaryawanAvatar,
+  ModalPreviewFotoKaryawan,
+  ModalProfilKaryawan,
+} from './ModalProfilKaryawan.tsx';
 
 interface DetailHarianKaryawanModalProps {
   idKaryawan: string;
@@ -58,6 +64,8 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
   const [settleSubmitting, setSettleSubmitting] = useState(false);
   const [settleError, setSettleError] = useState('');
   const [editTarget, setEditTarget] = useState<{ id: string; jenis: string } | null>(null);
+  const [showProfilModal, setShowProfilModal] = useState(false);
+  const [showPhotoZoom, setShowPhotoZoom] = useState(false);
 
   const loadDetail = async () => {
     setLoading(true);
@@ -136,13 +144,20 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 overflow-y-auto">
       <div className="bg-white border border-zinc-200 w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden text-zinc-900 flex flex-col max-h-[94vh] animate-in fade-in">
         {/* Modal Top Header */}
-        <div className="p-4 bg-zinc-900 text-white flex items-center justify-between border-b border-zinc-800">
+        <div className="p-4 bg-zinc-900 text-white flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold font-mono">
-              {karyawan.nama.charAt(0)}
-            </div>
+            <KaryawanAvatar
+              nama={karyawan.nama}
+              fotoUrl={karyawan.fotoUrl}
+              size="md"
+              theme="dark"
+              onClick={() => {
+                if (karyawan.fotoUrl) setShowPhotoZoom(true);
+                else setShowProfilModal(true);
+              }}
+            />
             <div>
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="font-bold text-sm text-white">{karyawan.nama}</h2>
                 <span className="text-[10px] font-mono bg-zinc-800 px-2 py-0.5 rounded text-zinc-300 border border-zinc-700">
                   {karyawan.nik}
@@ -152,12 +167,31 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                 </span>
               </div>
               <p className="text-[11px] text-zinc-400">
-                {karyawan.jabatan} · {karyawan.departemen} · Divisi Terakhir: <strong>{karyawan.divisiTerakhir}</strong>
+                {karyawan.jabatan} · Divisi Aktif:{' '}
+                <strong className="text-amber-300">
+                  {karyawan.divisi || karyawan.departemen || karyawan.divisiTerakhir}
+                </strong>
               </p>
+              {karyawan.riwayatDivisi && karyawan.riwayatDivisi.length > 0 && (
+                <p className="text-[10px] text-emerald-300 mt-0.5">
+                  Upgrade ({karyawan.riwayatDivisi[karyawan.riwayatDivisi.length - 1].periodeBulan || karyawan.riwayatDivisi[karyawan.riwayatDivisi.length - 1].tanggal}):{' '}
+                  {karyawan.riwayatDivisi[karyawan.riwayatDivisi.length - 1].divisiSebelumnya} →{' '}
+                  {karyawan.riwayatDivisi[karyawan.riwayatDivisi.length - 1].divisiBaru}
+                </p>
+              )}
             </div>
           </div>
 
           <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setShowProfilModal(true)}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sky-300 border border-zinc-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+              title="Update Profil, Foto & Upgrade Divisi Karyawan"
+            >
+              <UserCog className="w-3.5 h-3.5" />
+              <span>Profil, Foto &amp; Divisi</span>
+            </button>
             <button
               onClick={() => window.print()}
               className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
@@ -718,6 +752,38 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
           onRefreshAll();
         }}
       />
+
+      {showProfilModal && (
+        <ModalProfilKaryawan
+          karyawan={{
+            id: karyawan.id,
+            nik: karyawan.nik,
+            nama: karyawan.nama,
+            jabatan: karyawan.jabatan,
+            divisi: karyawan.divisi || karyawan.departemen || karyawan.divisiTerakhir,
+            telepon: karyawan.telepon,
+            status: karyawan.status,
+            fotoUrl: karyawan.fotoUrl,
+            riwayatDivisi: karyawan.riwayatDivisi,
+          }}
+          onClose={() => setShowProfilModal(false)}
+          onSaved={() => {
+            setShowProfilModal(false);
+            loadDetail();
+            onRefreshAll();
+          }}
+        />
+      )}
+
+      {showPhotoZoom && karyawan.fotoUrl && (
+        <ModalPreviewFotoKaryawan
+          nama={karyawan.nama}
+          jabatan={karyawan.jabatan}
+          divisi={karyawan.divisi || karyawan.departemen || karyawan.divisiTerakhir}
+          fotoUrl={karyawan.fotoUrl}
+          onClose={() => setShowPhotoZoom(false)}
+        />
+      )}
     </div>
   );
 };

@@ -185,7 +185,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   const [loadingMitra, setLoadingMitra] = useState(false);
   const [mitraSearch, setMitraSearch] = useState('');
   const deferredMitraSearch = useDeferredValue(mitraSearch);
-  const [mitraFilter, setMitraFilter] = useState<'ALL' | 'BON' | 'TITIP'>('ALL');
+  const [mitraFilter, setMitraFilter] = useState<'ALL' | 'BON' | 'TITIP' | 'NGUNCI'>('ALL');
   const [mitraRoleFilter, setMitraRoleFilter] = useState<'ALL' | CanonicalRoleMitra>('ALL');
   const [mitraVisibleLimit, setMitraVisibleLimit] = useState<number>(60);
   const [selectedStatement, setSelectedStatement] = useState<RekeningKoranMitraSummary | null>(null);
@@ -444,6 +444,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
       if (mitraRoleFilter !== 'ALL' && canonicalRole !== mitraRoleFilter) return false;
       if (mitraFilter === 'BON' && (m.sisaBonBersih ?? m.totalBonMitra) <= 0) return false;
       if (mitraFilter === 'TITIP' && (m.sisaTitipanBersih ?? m.totalHutangTitipPanen) <= 0) return false;
+      if (mitraFilter === 'NGUNCI' && !(m.isNotaNgunci || (m.nominalNotaNgunci || 0) > 0)) return false;
       if (!q) return true;
       const roleLabel = getRoleMitraLabel(m.role, {
         isAnakPerusahaan: m.isAnakPerusahaan,
@@ -452,6 +453,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
       return (
         m.nama.toLowerCase().includes(q) ||
         m.kode.toLowerCase().includes(q) ||
+        (m.telepon || '').toLowerCase().includes(q) ||
         (m.alamat || '').toLowerCase().includes(q) ||
         roleLabel.includes(q)
       );
@@ -1864,32 +1866,81 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
         {activeTab === 'mitra' && (
           <div className="space-y-5">
             <section className="bg-white border border-slate-200 rounded-2xl p-5">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pb-5 border-b border-slate-100">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pb-5 border-b border-slate-100">
                 <div>
-                  <div className="text-xs text-slate-500">Total Piutang Bon Mitra ke PT</div>
+                  <div className="text-xs text-slate-500">Total Seluruh Piutang Mitra</div>
                   <div className="font-mono text-xl font-bold text-amber-700 tabular-nums mt-0.5">
-                    {formatRupiah(rekapMitra?.totalBonMitra || totalPiutangBon)}
+                    {formatRupiah(
+                      rekapMitra?.totalSeluruhPiutangMitra ?? rekapMitra?.totalBonMitra ?? totalPiutangBon
+                    )}
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    {rekapMitra?.mitraDenganBonCount || 0} mitra memiliki bon aktif
+                    {rekapMitra?.mitraDenganBonCount || 0} mitra memiliki piutang · Aktif:{' '}
+                    {formatRupiah(
+                      rekapMitra?.totalPiutangAktifMitra ??
+                        Math.max(
+                          0,
+                          (rekapMitra?.totalBonMitra || totalPiutangBon) -
+                            (rekapMitra?.totalNominalNotaNgunci || 0)
+                        )
+                    )}
                   </div>
                 </div>
                 <div className="sm:border-l sm:border-slate-100 sm:pl-4">
-                  <div className="text-xs text-slate-500">Total Kewajiban Titipan Panen Mitra</div>
+                  <div className="text-xs text-slate-500">Total Hutang Kita ke Mitra</div>
+                  <div className="font-mono text-xl font-bold text-purple-800 tabular-nums mt-0.5">
+                    {formatRupiah(
+                      rekapMitra?.totalNotaSupplierRekeningMitra ??
+                        rekapMitra?.totalHutangPerusahaanKeMitra ??
+                        totalTitipanMitra
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Nota supplier / rekening mitra ({rekapMitra?.mitraDenganHutangTitipCount || 0} mitra)
+                  </div>
+                </div>
+                <div className="lg:border-l lg:border-slate-100 lg:pl-4">
+                  <div className="text-xs text-slate-500">Uang Kita Masih di Mitra</div>
+                  {(() => {
+                    const totalPiutang =
+                      rekapMitra?.totalSeluruhPiutangMitra ?? rekapMitra?.totalBonMitra ?? totalPiutangBon;
+                    const totalHutangKita =
+                      rekapMitra?.totalNotaSupplierRekeningMitra ??
+                      rekapMitra?.totalHutangPerusahaanKeMitra ??
+                      totalTitipanMitra;
+                    const uangKita = rekapMitra?.uangKitaDiMitra ?? totalPiutang - totalHutangKita;
+                    const uangEfektif =
+                      rekapMitra?.uangKitaDiMitraEfektif ??
+                      uangKita - (rekapMitra?.totalNominalNotaNgunci || 0);
+                    return (
+                      <>
+                        <div
+                          className={`font-mono text-xl font-bold tabular-nums mt-0.5 ${
+                            uangKita >= 0 ? 'text-emerald-700' : 'text-purple-800'
+                          }`}
+                        >
+                          {uangKita < 0 ? `-${formatRupiah(Math.abs(uangKita))}` : formatRupiah(uangKita)}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          Piutang − Hutang Kita · Efektif:{' '}
+                          {uangEfektif < 0
+                            ? `-${formatRupiah(Math.abs(uangEfektif))}`
+                            : formatRupiah(uangEfektif)}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+                <div className="sm:border-l sm:border-slate-100 sm:pl-4">
+                  <div className="text-xs text-rose-700 font-semibold">
+                    Nota Ngunci (Uang Tak Kembali)
+                  </div>
                   <div className="font-mono text-xl font-bold text-rose-700 tabular-nums mt-0.5">
-                    {formatRupiah(rekapMitra?.totalHutangPerusahaanKeMitra || totalTitipanMitra)}
+                    {formatRupiah(rekapMitra?.totalNominalNotaNgunci || 0)}
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    {rekapMitra?.mitraDenganHutangTitipCount || 0} mitra memiliki saldo titip
-                  </div>
-                </div>
-                <div className="sm:border-l sm:border-slate-100 sm:pl-4">
-                  <div className="text-xs text-slate-500">Total Mitra Terdaftar</div>
-                  <div className="font-mono text-xl font-bold text-slate-900 tabular-nums mt-0.5">
-                    {rekapMitra?.totalMitra || 0} Mitra
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    Klik tombol Buka &amp; PDF untuk melihat Rekening Koran &amp; Bukti Nota
+                    {rekapMitra?.mitraNotaNgunciCount || 0} mitra ngunci ·{' '}
+                    {rekapMitra?.totalLembarNotaNgunci || 0} lembar nota
                   </div>
                 </div>
               </div>
@@ -1903,12 +1954,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                       type="text"
                       value={mitraSearch}
                       onChange={(e) => setMitraSearch(e.target.value)}
-                      placeholder="Cari nama mitra, role, kode, atau alamat..."
+                      placeholder="Cari nama mitra, role, nomor HP, kode, atau alamat..."
                       className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
                     />
                   </div>
 
-                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl self-start sm:self-auto">
+                  <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-xl self-start sm:self-auto">
                     <button
                       type="button"
                       onClick={() => setMitraFilter('ALL')}
@@ -1918,7 +1969,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Semua Saldo ({rekapMitra?.items.length || 0})
+                      Semua ({rekapMitra?.items.length || 0})
                     </button>
                     <button
                       type="button"
@@ -1929,18 +1980,29 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Punya Bon ({rekapMitra?.mitraDenganBonCount || 0})
+                      Piutang ({rekapMitra?.mitraDenganBonCount || 0})
                     </button>
                     <button
                       type="button"
                       onClick={() => setMitraFilter('TITIP')}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                         mitraFilter === 'TITIP'
-                          ? 'bg-white text-rose-800 shadow-2xs'
+                          ? 'bg-white text-purple-800 shadow-2xs'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Punya Titipan ({rekapMitra?.mitraDenganHutangTitipCount || 0})
+                      Nota Supplier/Titip ({rekapMitra?.mitraDenganHutangTitipCount || 0})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMitraFilter('NGUNCI')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                        mitraFilter === 'NGUNCI'
+                          ? 'bg-rose-700 text-white shadow-2xs'
+                          : 'text-rose-700 hover:text-rose-900'
+                      }`}
+                    >
+                      Nota Ngunci ({rekapMitra?.mitraNotaNgunciCount || 0})
                     </button>
                   </div>
                 </div>
@@ -2027,13 +2089,26 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                     }
                                   />
                                   <div>
-                                    <div className="font-semibold text-slate-900">{m.nama}</div>
+                                    <div className="flex items-center flex-wrap gap-1.5">
+                                      <span className="font-semibold text-slate-900">{m.nama}</span>
+                                      {(m.isNotaNgunci || (m.nominalNotaNgunci || 0) > 0) && (
+                                        <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded">
+                                          NOTA NGUNCI
+                                        </span>
+                                      )}
+                                    </div>
                                     <div className="text-xs text-slate-500">
                                       {m.kode} ·{' '}
                                       <strong className="font-semibold text-slate-700">{roleLabel}</strong>
                                       {m.divisiKaryawan ? ` · ${m.divisiKaryawan}` : ''}
+                                      {m.telepon && m.telepon !== '-' ? ` · HP: ${m.telepon}` : ''}
                                       {m.alamat && m.alamat !== '-' ? ` · ${m.alamat}` : ''}
                                     </div>
+                                    {m.catatanNgunci && (m.isNotaNgunci || (m.nominalNotaNgunci || 0) > 0) && (
+                                      <div className="text-[11px] text-rose-700 mt-0.5">
+                                        Kronologi Ngunci: {m.catatanNgunci}
+                                      </div>
+                                    )}
                                     {((m.totalGajiSudahDibayar || 0) > 0 || (m.totalUpahBelumDibayar || 0) > 0) && (
                                       <div className="text-[11px] text-emerald-700 font-mono tabular-nums mt-0.5">
                                         {(m.totalUpahBelumDibayar || 0) > 0
@@ -2051,9 +2126,22 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                 </div>
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-amber-700 whitespace-nowrap">
-                                {bonBersih > 0 ? formatRupiah(bonBersih) : '-'}
+                                {bonBersih > 0 ? (
+                                  <div>
+                                    <div className={(m.nominalNotaNgunci || 0) > 0 ? 'text-rose-700' : 'text-amber-700'}>
+                                      {formatRupiah(bonBersih)}
+                                    </div>
+                                    {(m.nominalNotaNgunci || 0) > 0 && (
+                                      <div className="text-[10px] font-semibold text-rose-600">
+                                        Ngunci: {formatRupiah(m.nominalNotaNgunci || 0)}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  '-'
+                                )}
                               </td>
-                              <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-rose-700 whitespace-nowrap">
+                              <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-purple-800 whitespace-nowrap">
                                 {titipBersih > 0 ? (
                                   <div>
                                     <div>{formatRupiah(titipBersih)}</div>

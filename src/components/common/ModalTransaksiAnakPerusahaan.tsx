@@ -279,7 +279,7 @@ export const ModalTransaksiAnakPerusahaan: React.FC<Props> = ({
             <input
               type="number"
               min="1"
-              step="1000"
+              step="any"
               required
               placeholder="Masukkan nominal rupiah..."
               value={nominalInput}

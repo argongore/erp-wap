@@ -1179,7 +1179,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                   <input
                     type="number"
                     min="0"
-                    step="5000"
+                    step="any"
                     value={inputUpahHarian}
                     onChange={(e) => setInputUpahHarian(Number(e.target.value))}
                     className="w-full bg-zinc-900 border border-amber-500/80 rounded-lg pl-9 pr-3 py-2 text-sm text-amber-300 font-mono font-bold focus:outline-hidden focus:border-amber-400"
@@ -1216,7 +1216,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                       <input
                         type="number"
                         min="0"
-                        step="5000"
+                        step="any"
                         value={inputUangMakan}
                         onChange={(e) => setInputUangMakan(Number(e.target.value))}
                         className="w-full bg-zinc-900 border border-zinc-700 rounded-lg pl-8 pr-2 py-1.5 text-xs text-zinc-100 font-mono focus:outline-hidden focus:border-emerald-500"

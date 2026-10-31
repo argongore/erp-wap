@@ -1234,7 +1234,7 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                 <input
                   type="number"
                   min="1"
-                  step="50000"
+                  step="any"
                   value={dropNominal || ''}
                   onChange={(e) => setDropNominal(Number(e.target.value))}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 text-base font-mono font-bold focus:outline-hidden focus:border-emerald-500"

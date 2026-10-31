@@ -334,7 +334,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                 <input
                   type="number"
                   min="0"
-                  step="5000"
+                  step="any"
                   value={gajiNominal || ''}
                   onChange={(e) => setGajiNominal(Math.max(0, Number(e.target.value)))}
                   placeholder="Contoh: 120000"
@@ -369,7 +369,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                 <input
                   type="number"
                   min="0"
-                  step="5000"
+                  step="any"
                   value={bonus || ''}
                   onChange={(e) => setBonus(Math.max(0, Number(e.target.value)))}
                   placeholder="0"

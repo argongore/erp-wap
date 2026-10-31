@@ -24,8 +24,8 @@ export const TransferRekeningView: React.FC<Props> = ({
 
   const [rekeningSumber, setRekeningSumber] = useState<string>(validAccounts[0]?.kode || 'KAS01');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(validAccounts[1]?.kode || 'BNI01');
-  const [nominalInput, setNominalInput] = useState<string>('5000000');
-  const [keterangan, setKeterangan] = useState<string>('Setor kas operasional ke rekening bank');
+  const [nominalInput, setNominalInput] = useState<string>('');
+  const [keterangan, setKeterangan] = useState<string>('');
 
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -254,9 +254,10 @@ export const TransferRekeningView: React.FC<Props> = ({
               </label>
               <input
                 type="number"
-                min="1000"
-                step="1000"
+                min="1"
+                step="any"
                 required
+                placeholder="Masukkan nominal transfer..."
                 value={nominalInput}
                 onChange={(e) => setNominalInput(e.target.value)}
                 className="w-full px-3 py-2.5 border border-zinc-300 rounded-lg text-sm font-mono font-bold focus:ring-1 focus:ring-sky-600"

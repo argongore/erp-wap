@@ -26,6 +26,8 @@ import type {
   RekeningKoranMitraSummary,
   RekapMasterMitraSummary,
   RekapMitraItem,
+  NotaNgunciDetailItem,
+  StatusNotaRekapMitra,
   RekapKaryawanItem,
   RekapMasterKaryawanSummary,
   DetailHarianKaryawanResponse,
@@ -297,6 +299,7 @@ export class TransactionService {
         totalLabaKotor,
         statusPembayaran,
         sisaPiutang,
+        isNotaNgunci: false,
         keterangan:
           params.keterangan ||
           (isInternalSale
@@ -1773,6 +1776,7 @@ export class TransactionService {
         rekeningTujuan: finalRekeningTujuan,
         statusPembayaran,
         sisaPiutang,
+        isNotaNgunci: false,
         noSuratJalan: params.noSuratJalan?.trim() || '',
         stokGudangSebelum,
         stokGudangSetelah,
@@ -2233,6 +2237,7 @@ export class TransactionService {
         sisaKasbon: params.nominal,
         keterangan: params.keterangan || `Pemberian Kasbon Uang Operasional Tani kepada ${mitra.nama}`,
         status: 'BELUM LUNAS',
+        isNotaNgunci: false,
         fotoNota: params.fotoNota || '',
         createdAt: iso,
       };
@@ -2272,7 +2277,9 @@ export class TransactionService {
     driveFolderPath?: string;
     driveFileList?: Array<{ url: string; id: string; folderPath: string }>;
     keterangan?: string;
-  }): Promise<{ record: any; tipe: string; mitraNama: string; nominal: number }> {
+    isNotaNgunci?: boolean;
+    catatanNgunci?: string;
+  }): Promise<{ record: any; tipe: string; mitraNama: string; nominal: number; isNotaNgunci?: boolean }> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
 
@@ -2295,6 +2302,10 @@ export class TransactionService {
         // Dicatat sebagai Piutang Bon Barang Masa Lalu ke dalam Kasbon Uang dengan penanda Nota Lalu
         // Rekening sumber: BON01 (Virtual Piutang Awal, tidak memotong uang kasir tunai 2026!)
         const idTransaksi = generateId('NTL');
+        const isNgunci = Boolean(params.isNotaNgunci);
+        const cleanCatatanNgunci = isNgunci
+          ? (params.catatanNgunci || '').trim() || 'Mitra memiliki piutang namun sudah tidak ada respon & kepastian membayar'
+          : undefined;
         const ketText = params.keterangan
           ? params.keterangan.trim()
           : `Nota Lalu (Piutang Barang Masa Lalu): ${params.rincianBarang ? params.rincianBarang.trim() : 'Rekapan Bon Barang Bertahun-Tahun Lalu'}`;
@@ -2322,16 +2333,25 @@ export class TransactionService {
           noNotaLalu: cleanNoNota,
           tanggalNotaLalu: cleanTglNota,
           rincianBarangNotaLalu: params.rincianBarang || '',
+          isNotaNgunci: isNgunci,
+          tanggalNgunci: isNgunci ? tanggal : undefined,
+          catatanNgunci: cleanCatatanNgunci,
           createdAt: iso,
         };
 
         db.kasbonUang.unshift(kasbonRecord);
 
+        if (isNgunci) {
+          mitra.isNotaNgunci = true;
+          mitra.tanggalNgunci = tanggal;
+          mitra.catatanNgunci = cleanCatatanNgunci;
+        }
+
         this.addAuditLog(
           db,
           'CREATE',
           idTransaksi,
-          `Input Piutang Barang Nota Lalu untuk ${mitra.nama} sebesar Rp ${params.nominal.toLocaleString('id-ID')} (No Faktur: ${cleanNoNota})`,
+          `Input Piutang Barang Nota Lalu${isNgunci ? ' [STATUS NOTA NGUNCI]' : ''} untuk ${mitra.nama} sebesar Rp ${params.nominal.toLocaleString('id-ID')} (No Faktur: ${cleanNoNota})`,
           params.nominal,
           'BON01'
         );
@@ -2341,6 +2361,7 @@ export class TransactionService {
           tipe: 'PIUTANG_BARANG_NOTA_LALU',
           mitraNama: mitra.nama,
           nominal: params.nominal,
+          isNotaNgunci: isNgunci,
         };
       } else {
         // Dicatat sebagai Titipan Uang / Hasil Bumi Masa Lalu (Kewajiban PT terhadap mitra)
@@ -2551,18 +2572,74 @@ export class TransactionService {
     };
   }
 
+  private static getMitraNominalNotaNgunci(db: any, mitraId: string): number {
+    const mitra = (db.mitra || []).find((m: Mitra) => m.id === mitraId);
+    const isNoteNgunci = (flag?: boolean) =>
+      flag !== undefined ? Boolean(flag) : Boolean(mitra?.isNotaNgunci);
+
+    const ngunciBarang = (db.penjualan || [])
+      .filter(
+        (p: TransaksiPenjualan) =>
+          p.idMitra === mitraId &&
+          p.metode === 'KASBON' &&
+          p.statusPembayaran === 'BELUM_BAYAR' &&
+          (p.sisaPiutang || 0) > 0 &&
+          isNoteNgunci(p.isNotaNgunci)
+      )
+      .reduce((s: number, p: TransaksiPenjualan) => s + (p.sisaPiutang || 0), 0);
+
+    const ngunciHb = (db.penjualanHasilBumi || [])
+      .filter(
+        (j: TransaksiPenjualanHasilBumi) =>
+          j.idMitra === mitraId &&
+          j.metodePembayaran === 'PIUTANG' &&
+          j.statusPembayaran === 'BELUM_BAYAR' &&
+          (j.sisaPiutang || 0) > 0 &&
+          isNoteNgunci(j.isNotaNgunci)
+      )
+      .reduce((s: number, j: TransaksiPenjualanHasilBumi) => s + (j.sisaPiutang || 0), 0);
+
+    const ngunciUang = (db.kasbonUang || [])
+      .filter(
+        (k: TransaksiKasbonUang) =>
+          k.idMitra === mitraId &&
+          k.status !== 'LUNAS' &&
+          (k.sisaKasbon || 0) > 0 &&
+          isNoteNgunci(k.isNotaNgunci)
+      )
+      .reduce((s: number, k: TransaksiKasbonUang) => s + (k.sisaKasbon || 0), 0);
+
+    return ngunciBarang + ngunciHb + ngunciUang;
+  }
+
+  private static syncMitraNotaNgunciAfterPayment(db: any, mitraId: string): void {
+    const mitra = (db.mitra || []).find((m: Mitra) => m.id === mitraId);
+    if (!mitra) return;
+    const remainingNgunci = this.getMitraNominalNotaNgunci(db, mitraId);
+    if (remainingNgunci <= 0 && mitra.isNotaNgunci) {
+      mitra.isNotaNgunci = false;
+    }
+  }
+
   private static allocateMitraBonFifo(
     db: any,
     mitraId: string,
-    amountToAllocate: number
+    amountToAllocate: number,
+    options?: { idNotaTarget?: string }
   ): AlokasiPembayaranBon[] {
     if (amountToAllocate <= 0) return [];
+
+    const mitra = (db.mitra || []).find((m: Mitra) => m.id === mitraId);
+    const isNoteNgunci = (flag?: boolean) =>
+      flag !== undefined ? Boolean(flag) : Boolean(mitra?.isNotaNgunci);
+    const cleanTargetId = options?.idNotaTarget ? String(options.idNotaTarget).trim() : '';
 
     type BonItem = {
       jenis: 'KASBON_BARANG' | 'KASBON_UANG';
       refId: string;
       sisa: number;
       createdAt: string;
+      isNgunci: boolean;
       sourceObj: TransaksiPenjualan | TransaksiPenjualanHasilBumi | TransaksiKasbonUang;
     };
 
@@ -2584,12 +2661,14 @@ export class TransactionService {
       (k: TransaksiKasbonUang) => k.idMitra === mitraId && k.status !== 'LUNAS' && k.sisaKasbon > 0
     );
 
+    // Prioritaskan: (1) Nota spesifik jika dipilih, (2) Nota Kunci (isNgunci=true) agar pembayaran langsung mengurangi nominal uang tidak bisa kembali, (3) FIFO kronologis
     const allBons: BonItem[] = [
       ...outstandingPenjualan.map((p) => ({
         jenis: 'KASBON_BARANG' as const,
         refId: p.noPenjualan,
         sisa: p.sisaPiutang,
         createdAt: p.createdAt,
+        isNgunci: isNoteNgunci(p.isNotaNgunci),
         sourceObj: p,
       })),
       ...outstandingPenjualanHb.map((j) => ({
@@ -2597,6 +2676,7 @@ export class TransactionService {
         refId: j.noPenjualan,
         sisa: j.sisaPiutang,
         createdAt: j.createdAt,
+        isNgunci: isNoteNgunci(j.isNotaNgunci),
         sourceObj: j,
       })),
       ...outstandingKasbonUang.map((k) => ({
@@ -2604,9 +2684,20 @@ export class TransactionService {
         refId: k.idTransaksi,
         sisa: k.sisaKasbon,
         createdAt: k.createdAt,
+        isNgunci: isNoteNgunci(k.isNotaNgunci),
         sourceObj: k,
       })),
-    ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    ].sort((a, b) => {
+      if (cleanTargetId) {
+        const aTarget = a.refId === cleanTargetId ? 1 : 0;
+        const bTarget = b.refId === cleanTargetId ? 1 : 0;
+        if (aTarget !== bTarget) return bTarget - aTarget;
+      }
+      const aLock = a.isNgunci ? 1 : 0;
+      const bLock = b.isNgunci ? 1 : 0;
+      if (aLock !== bLock) return bLock - aLock;
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
 
     let remainingPayment = amountToAllocate;
     const alokasiList: AlokasiPembayaranBon[] = [];
@@ -2636,10 +2727,13 @@ export class TransactionService {
         nominalSebelum,
         nominalDibayar: alokasiNominal,
         nominalSisa,
+        isNotaNgunci: bon.isNgunci,
       });
 
       remainingPayment -= alokasiNominal;
     }
+
+    this.syncMitraNotaNgunciAfterPayment(db, mitraId);
 
     return alokasiList;
   }
@@ -2720,6 +2814,7 @@ export class TransactionService {
     metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningTujuan?: string;
     keterangan?: string;
+    idNotaTarget?: string;
   }): Promise<TransaksiBayarBon> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
@@ -2738,6 +2833,8 @@ export class TransactionService {
         potonganOtomatis,
         sisaBonBersih,
       } = snap;
+      const sisaNotaNgunciSebelum = this.getMitraNominalNotaNgunci(db, mitra.id);
+      const cleanIdNotaTarget = params.idNotaTarget ? String(params.idNotaTarget).trim() : undefined;
 
       const isSinkronMode =
         params.metode === 'SINKRON' || params.rekeningTujuan === 'SINKRON';
@@ -2768,10 +2865,14 @@ export class TransactionService {
 
         const idTransaksi = generateId('BYB');
 
-        // 1. Alokasikan pelunasan bon secara FIFO tanpa menyentuh kas/bank fisik sedikit pun
-        const alokasiSinkron = this.allocateMitraBonFifo(db, mitra.id, params.nominalBayar);
+        // 1. Alokasikan pelunasan bon (Prioritas Nota Kunci dulu lalu FIFO) tanpa menyentuh kas/bank fisik sedikit pun
+        const alokasiSinkron = this.allocateMitraBonFifo(db, mitra.id, params.nominalBayar, {
+          idNotaTarget: cleanIdNotaTarget,
+        });
         const sisaBonSetelah = Math.max(0, totalBonKotor - params.nominalBayar);
         const sisaTitipanSetelah = Math.max(0, saldoTitipanAktif - params.nominalBayar);
+        const sisaNotaNgunciSetelah = this.getMitraNominalNotaNgunci(db, mitra.id);
+        const nominalPengurangNotaNgunci = Math.max(0, sisaNotaNgunciSebelum - sisaNotaNgunciSetelah);
 
         const ketSinkron =
           params.keterangan && params.keterangan.trim()
@@ -2789,6 +2890,14 @@ export class TransactionService {
           nominalPotongTitipanOtomatis: params.nominalBayar,
           nominalBayar: params.nominalBayar,
           sisaBonSetelah,
+          ...(cleanIdNotaTarget ? { idNotaTarget: cleanIdNotaTarget } : {}),
+          ...(sisaNotaNgunciSebelum > 0
+            ? {
+                sisaNotaNgunciSebelum,
+                nominalPengurangNotaNgunci,
+                sisaNotaNgunciSetelah,
+              }
+            : {}),
           metode: 'SINKRON',
           rekeningTujuan: 'SINKRON',
           isKompensasiTitipan: true,
@@ -2830,7 +2939,11 @@ export class TransactionService {
             'id-ID'
           )} dipotong langsung dari Saldo Titipan / Uang Hasil Bumi Rp ${saldoTitipanAktif.toLocaleString(
             'id-ID'
-          )} tanpa uang keluar/masuk. Sisa Bon: Rp ${sisaBonSetelah.toLocaleString(
+          )} tanpa uang keluar/masuk.${
+            nominalPengurangNotaNgunci > 0
+              ? ` [Mengurangi Nominal Nota Kunci Rp ${nominalPengurangNotaNgunci.toLocaleString('id-ID')} -> Sisa Nota Kunci Rp ${sisaNotaNgunciSetelah.toLocaleString('id-ID')}]`
+              : ''
+          } Sisa Bon: Rp ${sisaBonSetelah.toLocaleString(
             'id-ID'
           )}, Sisa Titipan Mitra: Rp ${sisaTitipanSetelah.toLocaleString('id-ID')}.`,
           params.nominalBayar,
@@ -2913,9 +3026,13 @@ export class TransactionService {
       // 2. Tambahkan saldo rekening penerima sebesar uang fisik yang disetor
       rekeningTujuan.saldoSaatIni += params.nominalBayar;
 
-      // 3. Alokasi pembayaran fisik terhadap sisa bon bersih (FIFO)
-      const alokasiList = this.allocateMitraBonFifo(db, mitra.id, params.nominalBayar);
+      // 3. Alokasi pembayaran fisik terhadap sisa bon bersih (Prioritas Nota Kunci dulu lalu FIFO)
+      const alokasiList = this.allocateMitraBonFifo(db, mitra.id, params.nominalBayar, {
+        idNotaTarget: cleanIdNotaTarget,
+      });
       const sisaBonSetelah = Math.max(0, sisaBonBersih - params.nominalBayar);
+      const sisaNotaNgunciSetelah = this.getMitraNominalNotaNgunci(db, mitra.id);
+      const nominalPengurangNotaNgunci = Math.max(0, sisaNotaNgunciSebelum - sisaNotaNgunciSetelah);
 
       const bayarBonRecord: TransaksiBayarBon = {
         idTransaksi,
@@ -2932,6 +3049,14 @@ export class TransactionService {
           : {}),
         nominalBayar: params.nominalBayar,
         sisaBonSetelah,
+        ...(cleanIdNotaTarget ? { idNotaTarget: cleanIdNotaTarget } : {}),
+        ...(sisaNotaNgunciSebelum > 0
+          ? {
+              sisaNotaNgunciSebelum,
+              nominalPengurangNotaNgunci,
+              sisaNotaNgunciSetelah,
+            }
+          : {}),
         metode: params.metode,
         rekeningTujuan: rekeningTujuan.kode,
         alokasi: alokasiList,
@@ -2948,6 +3073,13 @@ export class TransactionService {
       db.bayarBon.unshift(bayarBonRecord);
       dbManager.synchronizeVirtualAccounts();
 
+      const logNgunciInfo =
+        nominalPengurangNotaNgunci > 0
+          ? ` [Otomatis Mengurangi Nominal Nota Kunci Rp ${nominalPengurangNotaNgunci.toLocaleString(
+              'id-ID'
+            )} -> Sisa Nota Kunci Rp ${sisaNotaNgunciSetelah.toLocaleString('id-ID')}]`
+          : '';
+
       this.addAuditLog(
         db,
         'PAYMENT',
@@ -2959,10 +3091,10 @@ export class TransactionService {
               'id-ID'
             )}, dibayar tunai/transfer Rp ${params.nominalBayar.toLocaleString('id-ID')} masuk ke ${
               rekeningTujuan.nama
-            }. Sisa bon: Rp ${sisaBonSetelah.toLocaleString('id-ID')}`
+            }.${logNgunciInfo} Sisa bon: Rp ${sisaBonSetelah.toLocaleString('id-ID')}`
           : `Pembayaran Bon oleh ${mitra.nama}: Rp ${params.nominalBayar.toLocaleString(
               'id-ID'
-            )} masuk ke ${rekeningTujuan.nama}. Sisa kewajiban bon: Rp ${sisaBonSetelah.toLocaleString('id-ID')}`,
+            )} masuk ke ${rekeningTujuan.nama}.${logNgunciInfo} Sisa kewajiban bon: Rp ${sisaBonSetelah.toLocaleString('id-ID')}`,
         params.nominalBayar,
         rekeningTujuan.kode
       );
@@ -3222,59 +3354,23 @@ export class TransactionService {
 
       let idBayarBonTerkait: string | undefined;
 
-      // Settle kasbon if deduction > 0
+      // Settle kasbon if deduction > 0 (Prioritas Nota Kunci dulu lalu FIFO)
       if (potonganKasbon > 0) {
-        let remainingToSettle = potonganKasbon;
-        const alokasiList: AlokasiPembayaranBon[] = [];
-
-        // 1. Settle Kasbon Uang first
-        const unpaidKasbonUang = db.kasbonUang.filter(
-          (k) => k.idMitra === mitraId && k.status !== 'LUNAS'
-        );
-        for (const kbu of unpaidKasbonUang) {
-          if (remainingToSettle <= 0) break;
-          const sisa = kbu.sisaKasbon;
-          const settled = Math.min(remainingToSettle, sisa);
-          kbu.sisaKasbon = sisa - settled;
-          kbu.status = kbu.sisaKasbon === 0 ? 'LUNAS' : 'SEBAGIAN';
-
-          alokasiList.push({
-            jenis: 'KASBON_UANG',
-            refId: kbu.idTransaksi,
-            nominalSebelum: sisa,
-            nominalDibayar: settled,
-            nominalSisa: kbu.sisaKasbon,
-          });
-          remainingToSettle -= settled;
-        }
-
-        // 2. Settle Kasbon Barang
-        if (remainingToSettle > 0) {
-          const unpaidPenjualan = db.penjualan.filter(
-            (p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR'
-          );
-          for (const pj of unpaidPenjualan) {
-            if (remainingToSettle <= 0) break;
-            const sisa = pj.sisaPiutang;
-            const settled = Math.min(remainingToSettle, sisa);
-            pj.sisaPiutang = sisa - settled;
-            if (pj.sisaPiutang === 0) {
-              pj.statusPembayaran = 'LUNAS';
-            }
-            alokasiList.push({
-              jenis: 'KASBON_BARANG',
-              refId: pj.noPenjualan,
-              nominalSebelum: sisa,
-              nominalDibayar: settled,
-              nominalSisa: pj.sisaPiutang,
-            });
-            remainingToSettle -= settled;
-          }
-        }
+        const ngunciBefore = this.getMitraNominalNotaNgunci(db, mitraId);
+        const alokasiList = this.allocateMitraBonFifo(db, mitraId, potonganKasbon);
+        const ngunciAfter = this.getMitraNominalNotaNgunci(db, mitraId);
+        const pengurangNgunci = Math.max(0, ngunciBefore - ngunciAfter);
 
         const idBYB = generateId('BYB');
         idBayarBonTerkait = idBYB;
         db.bayarBon.unshift({
+          ...(ngunciBefore > 0
+            ? {
+                sisaNotaNgunciSebelum: ngunciBefore,
+                nominalPengurangNotaNgunci: pengurangNgunci,
+                sisaNotaNgunciSetelah: ngunciAfter,
+              }
+            : {}),
           idTransaksi: idBYB,
           tanggal: targetTanggal,
           jam,
@@ -3494,46 +3590,7 @@ export class TransactionService {
 
         let idBayarBonTerkait: string | undefined;
         if (potonganKasbon > 0) {
-          let remaining = potonganKasbon;
-          const alokasiList: AlokasiPembayaranBon[] = [];
-          // 1. Settle Kasbon Uang
-          const unpaidUang = db.kasbonUang.filter((k) => k.idMitra === mitraId && k.status !== 'LUNAS');
-          for (const kbu of unpaidUang) {
-            if (remaining <= 0) break;
-            const sisa = kbu.sisaKasbon;
-            const settled = Math.min(remaining, sisa);
-            kbu.sisaKasbon = sisa - settled;
-            kbu.status = kbu.sisaKasbon === 0 ? 'LUNAS' : 'SEBAGIAN';
-            alokasiList.push({
-              jenis: 'KASBON_UANG',
-              refId: kbu.idTransaksi,
-              nominalSebelum: sisa,
-              nominalDibayar: settled,
-              nominalSisa: kbu.sisaKasbon,
-            });
-            remaining -= settled;
-          }
-          // 2. Settle Kasbon Barang
-          if (remaining > 0) {
-            const unpaidBarang = db.penjualan.filter(
-              (p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR'
-            );
-            for (const pj of unpaidBarang) {
-              if (remaining <= 0) break;
-              const sisa = pj.sisaPiutang;
-              const settled = Math.min(remaining, sisa);
-              pj.sisaPiutang = sisa - settled;
-              if (pj.sisaPiutang === 0) pj.statusPembayaran = 'LUNAS';
-              alokasiList.push({
-                jenis: 'KASBON_BARANG',
-                refId: pj.noPenjualan,
-                nominalSebelum: sisa,
-                nominalDibayar: settled,
-                nominalSisa: pj.sisaPiutang,
-              });
-              remaining -= settled;
-            }
-          }
+          const alokasiList = this.allocateMitraBonFifo(db, mitraId, potonganKasbon);
           const idBYB = generateId('BYB');
           idBayarBonTerkait = idBYB;
           db.bayarBon.unshift({
@@ -3941,50 +3998,21 @@ export class TransactionService {
 
       let idBayarBonTerkait: string | undefined;
       if (potonganKasbon > 0) {
-        let remaining = potonganKasbon;
-        const alokasiList: AlokasiPembayaranBon[] = [];
-        // 1. Settle Kasbon Uang
-        const unpaidUang = db.kasbonUang.filter((k) => k.idMitra === mitraId && k.status !== 'LUNAS');
-        for (const kbu of unpaidUang) {
-          if (remaining <= 0) break;
-          const sisa = kbu.sisaKasbon;
-          const settled = Math.min(remaining, sisa);
-          kbu.sisaKasbon = sisa - settled;
-          kbu.status = kbu.sisaKasbon === 0 ? 'LUNAS' : 'SEBAGIAN';
-          alokasiList.push({
-            jenis: 'KASBON_UANG',
-            refId: kbu.idTransaksi,
-            nominalSebelum: sisa,
-            nominalDibayar: settled,
-            nominalSisa: kbu.sisaKasbon,
-          });
-          remaining -= settled;
-        }
-        // 2. Settle Kasbon Barang
-        if (remaining > 0) {
-          const unpaidBarang = db.penjualan.filter(
-            (p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR'
-          );
-          for (const pj of unpaidBarang) {
-            if (remaining <= 0) break;
-            const sisa = pj.sisaPiutang;
-            const settled = Math.min(remaining, sisa);
-            pj.sisaPiutang = sisa - settled;
-            if (pj.sisaPiutang === 0) pj.statusPembayaran = 'LUNAS';
-            alokasiList.push({
-              jenis: 'KASBON_BARANG',
-              refId: pj.noPenjualan,
-              nominalSebelum: sisa,
-              nominalDibayar: settled,
-              nominalSisa: pj.sisaPiutang,
-            });
-            remaining -= settled;
-          }
-        }
+        const ngunciBefore = this.getMitraNominalNotaNgunci(db, mitraId);
+        const alokasiList = this.allocateMitraBonFifo(db, mitraId, potonganKasbon);
+        const ngunciAfter = this.getMitraNominalNotaNgunci(db, mitraId);
+        const pengurangNgunci = Math.max(0, ngunciBefore - ngunciAfter);
         const idBYB = generateId('BYB');
         idBayarBonTerkait = idBYB;
         db.bayarBon.unshift({
           idTransaksi: idBYB,
+          ...(ngunciBefore > 0
+            ? {
+                sisaNotaNgunciSebelum: ngunciBefore,
+                nominalPengurangNotaNgunci: pengurangNgunci,
+                sisaNotaNgunciSetelah: ngunciAfter,
+              }
+            : {}),
           tanggal,
           jam,
           idMitra: mitraId,
@@ -4865,6 +4893,21 @@ export class TransactionService {
     const totalBonKeseluruhan = totalKasbonBarang + totalKasbonUang;
     const sisaBon = totalBonKeseluruhan;
 
+    const isNoteNgunciHelper = (flag?: boolean) =>
+      flag !== undefined ? Boolean(flag) : Boolean(mitra.isNotaNgunci);
+
+    const nominalNotaNgunci =
+      kasbonBarangList
+        .filter((p) => (p.sisaPiutang || 0) > 0 && isNoteNgunciHelper(p.isNotaNgunci))
+        .reduce((s, p) => s + (p.sisaPiutang || 0), 0) +
+      piutangHasilBumiList
+        .filter((j) => (j.sisaPiutang || 0) > 0 && isNoteNgunciHelper(j.isNotaNgunci))
+        .reduce((s, j) => s + (j.sisaPiutang || 0), 0) +
+      kasbonUangList
+        .filter((k) => k.status !== 'LUNAS' && (k.sisaKasbon || 0) > 0 && isNoteNgunciHelper(k.isNotaNgunci))
+        .reduce((s, k) => s + (k.sisaKasbon || 0), 0);
+    const nominalPiutangAktif = Math.max(0, totalBonKeseluruhan - nominalNotaNgunci);
+
     // Timeline ledger transactions
     type TimelineRaw = {
       id: string;
@@ -4883,6 +4926,9 @@ export class TransactionService {
       fotoNota?: string;
       isNotaLalu?: boolean;
       noNotaLalu?: string;
+      isNotaNgunci?: boolean;
+      catatanNgunci?: string;
+      sisaPiutangNota?: number;
     };
 
     const timeline: TimelineRaw[] = [];
@@ -4915,6 +4961,7 @@ export class TransactionService {
       const rincianText = p.items.map((i) => `${i.namaProduk} (${i.qty} ${i.satuan} @ Rp ${i.harga.toLocaleString('id-ID')})`).join(', ');
 
       if (p.metode === 'KASBON') {
+        const isNgunci = (p.sisaPiutang || 0) > 0 && isNoteNgunciHelper(p.isNotaNgunci);
         timeline.push({
           id: p.noPenjualan,
           tanggal: p.tanggal,
@@ -4927,6 +4974,9 @@ export class TransactionService {
           itemsDetail,
           debet: p.totalNominal,
           kredit: 0,
+          isNotaNgunci: isNgunci,
+          catatanNgunci: isNgunci ? p.catatanNgunci || mitra.catatanNgunci : undefined,
+          sisaPiutangNota: p.sisaPiutang || 0,
         });
       } else {
         timeline.push({
@@ -4948,6 +4998,7 @@ export class TransactionService {
     // Penjualan Hasil Bumi keluar gudang ke Mitra ini
     for (const jhb of (db.penjualanHasilBumi || []).filter((item) => item.idMitra === mitra.id)) {
       const isPiutang = jhb.metodePembayaran === 'PIUTANG';
+      const isNgunci = isPiutang && (jhb.sisaPiutang || 0) > 0 && isNoteNgunciHelper(jhb.isNotaNgunci);
       timeline.push({
         id: jhb.noPenjualan,
         tanggal: jhb.tanggal,
@@ -4970,6 +5021,9 @@ export class TransactionService {
         ],
         debet: isPiutang ? jhb.totalNominal : 0,
         kredit: 0,
+        isNotaNgunci: isNgunci,
+        catatanNgunci: isNgunci ? jhb.catatanNgunci || mitra.catatanNgunci : undefined,
+        sisaPiutangNota: isPiutang ? jhb.sisaPiutang || 0 : 0,
       });
     }
 
@@ -4978,6 +5032,7 @@ export class TransactionService {
       const isNotaLalu = k.isNotaLalu || k.keterangan?.includes('Nota Lalu') || k.rekeningSumber === 'BON01';
       const noNotaLabel = k.noNotaLalu ? ` [No. Nota: ${k.noNotaLalu}]` : '';
       const fotoK = (k.fotoNotaList && k.fotoNotaList.length > 0) ? k.fotoNotaList.join('|||') : (k.fotoNota || '');
+      const isNgunci = k.status !== 'LUNAS' && (k.sisaKasbon || 0) > 0 && isNoteNgunciHelper(k.isNotaNgunci);
 
       timeline.push({
         id: k.idTransaksi,
@@ -5006,6 +5061,9 @@ export class TransactionService {
         fotoNota: fotoK,
         isNotaLalu,
         noNotaLalu: k.noNotaLalu,
+        isNotaNgunci: isNgunci,
+        catatanNgunci: isNgunci ? k.catatanNgunci || mitra.catatanNgunci : undefined,
+        sisaPiutangNota: k.sisaKasbon || 0,
       });
     }
 
@@ -5016,6 +5074,15 @@ export class TransactionService {
         b.metode === 'KOMPENSASI_TITIP' ||
         b.rekeningTujuan === 'SINKRON' ||
         Boolean(b.isKompensasiTitipan);
+      const pengurangNgunci =
+        b.nominalPengurangNotaNgunci ??
+        (b.alokasi || [])
+          .filter((a) => a.isNotaNgunci)
+          .reduce((s, a) => s + (a.nominalDibayar || 0), 0);
+      const infoNgunciSuffix =
+        pengurangNgunci > 0
+          ? ` [Otomatis Mengurangi Nota Kunci: -Rp ${pengurangNgunci.toLocaleString('id-ID')}]`
+          : '';
       timeline.push({
         id: b.idTransaksi,
         tanggal: b.tanggal,
@@ -5023,8 +5090,8 @@ export class TransactionService {
         createdAt: b.createdAt,
         jenis: isSinkronBon ? 'PELUNASAN BON (SINKRON POTONG TITIPAN)' : 'PEMBAYARAN BON',
         keterangan: isSinkronBon
-          ? `Pelunasan Bon via Rekening SINKRON (Potong Saldo Titipan / Uang Hasil Bumi — Tanpa Uang Fisik) - ${b.keterangan}`
-          : `Setoran Bayar Bon via ${b.metode} (${b.rekeningTujuan}) - ${b.keterangan}`,
+          ? `Pelunasan Bon via Rekening SINKRON (Potong Saldo Titipan / Uang Hasil Bumi — Tanpa Uang Fisik) - ${b.keterangan}${infoNgunciSuffix}`
+          : `Setoran Bayar Bon via ${b.metode} (${b.rekeningTujuan}) - ${b.keterangan}${infoNgunciSuffix}`,
         qtyDisplay: '1',
         hargaSatuanDisplay: `Rp ${b.nominalBayar.toLocaleString('id-ID')}`,
         itemsDetail: [
@@ -5667,6 +5734,9 @@ export class TransactionService {
         fotoNota: item.fotoNota,
         isNotaLalu: item.isNotaLalu,
         noNotaLalu: item.noNotaLalu,
+        isNotaNgunci: item.isNotaNgunci,
+        catatanNgunci: item.catatanNgunci,
+        sisaPiutangNota: item.sisaPiutangNota,
       };
     });
 
@@ -5736,6 +5806,10 @@ export class TransactionService {
       potonganTitipanOtomatis: Math.min(totalBonKeseluruhan, totalTitip),
       sisaBonBersih: Math.max(0, totalBonKeseluruhan - totalTitip),
       sisaTitipanBersih: Math.max(0, totalTitip - totalBonKeseluruhan),
+      isNotaNgunci: nominalNotaNgunci > 0 || Boolean(mitra.isNotaNgunci && totalBonKeseluruhan > 0),
+      catatanNgunci: mitra.catatanNgunci,
+      nominalNotaNgunci,
+      nominalPiutangAktif,
       history,
     };
   }
@@ -5750,23 +5824,33 @@ export class TransactionService {
     let totalTitipPanenMurniGlobal = 0;
     let totalUpahKaryawanBelumDibayarGlobal = 0;
     let totalBonMitra = 0;
+    let totalPiutangAktifGlobal = 0;
+    let totalNominalNotaNgunciGlobal = 0;
     let mitraDenganHutangTitipCount = 0;
     let mitraDenganBonCount = 0;
+    let mitraNotaNgunciCount = 0;
+    const daftarNotaNgunci: NotaNgunciDetailItem[] = [];
 
     const items: RekapMitraItem[] = db.mitra.map((m) => {
-      // 1. Kasbon barang & Piutang Hasil Bumi
-      const kasbonBarang =
-        db.penjualan
-          .filter((p) => p.idMitra === m.id && p.metode === 'KASBON')
-          .reduce((sum, p) => sum + (p.sisaPiutang || 0), 0) +
-        (db.penjualanHasilBumi || [])
-          .filter((j) => j.idMitra === m.id && j.metodePembayaran === 'PIUTANG')
-          .reduce((sum, j) => sum + (j.sisaPiutang || 0), 0);
+      const isNoteNgunci = (flag?: boolean) =>
+        flag !== undefined ? Boolean(flag) : Boolean(m.isNotaNgunci);
 
-      // 2. Kasbon uang
-      const kasbonUang = db.kasbonUang
-        .filter((k) => k.idMitra === m.id && k.status !== 'LUNAS')
-        .reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
+      // 1. Kasbon barang & Piutang Hasil Bumi
+      const unpaidPenjualanToko = db.penjualan.filter(
+        (p) => p.idMitra === m.id && p.metode === 'KASBON' && (p.sisaPiutang || 0) > 0
+      );
+      const unpaidPenjualanHasilBumi = (db.penjualanHasilBumi || []).filter(
+        (j) => j.idMitra === m.id && j.metodePembayaran === 'PIUTANG' && (j.sisaPiutang || 0) > 0
+      );
+      const kasbonBarang =
+        unpaidPenjualanToko.reduce((sum, p) => sum + (p.sisaPiutang || 0), 0) +
+        unpaidPenjualanHasilBumi.reduce((sum, j) => sum + (j.sisaPiutang || 0), 0);
+
+      // 2. Kasbon uang (termasuk Nota Lalu Piutang Barang di BON01)
+      const unpaidKasbonUang = db.kasbonUang.filter(
+        (k) => k.idMitra === m.id && k.status !== 'LUNAS' && (k.sisaKasbon || 0) > 0
+      );
+      const kasbonUang = unpaidKasbonUang.reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
 
       const totalBon = kasbonBarang + kasbonUang;
 
@@ -5816,6 +5900,129 @@ export class TransactionService {
         (m.kodeRekeningTerkait && db.rekening.find((r) => r.kode === m.kodeRekeningTerkait)) ||
         db.rekening.find((r) => r.idMitraTerkait === m.id && this.isAnakPerusahaanRekening(r));
       const isAnakPerusahaan = Boolean(m.isAnakPerusahaan || m.role === 'ANAK_PERUSAHAAN' || linkedRek);
+      const canonicalRole = normalizeRoleMitra(m.role, {
+        isAnakPerusahaan,
+        isKaryawan: Boolean(linkedKry || m.isKaryawan),
+      });
+      const mitraFoto = m.fotoUrl || linkedKry?.fotoUrl;
+
+      // Hitung rincian Nota Ngunci (Piutang macet — uang tidak bisa kembali) vs Piutang Aktif
+      let nominalNotaNgunciMitra = 0;
+      let jumlahNotaNgunciMitra = 0;
+      let latestCatatanNgunci = m.catatanNgunci;
+      let latestTanggalNgunci = m.tanggalNgunci;
+
+      for (const k of unpaidKasbonUang) {
+        if (isNoteNgunci(k.isNotaNgunci)) {
+          const sisa = k.sisaKasbon || 0;
+          nominalNotaNgunciMitra += sisa;
+          jumlahNotaNgunciMitra += 1;
+          if (k.catatanNgunci) latestCatatanNgunci = k.catatanNgunci;
+          if (k.tanggalNgunci) latestTanggalNgunci = k.tanggalNgunci;
+          const isNotaLalu =
+            Boolean(k.isNotaLalu) ||
+            k.rekeningSumber === 'BON01' ||
+            Boolean(k.noNotaLalu) ||
+            Boolean(k.keterangan?.toLowerCase().includes('nota lalu'));
+          const fotoNota =
+            k.fotoNotaList && k.fotoNotaList.length > 0
+              ? k.fotoNotaList.join('|||')
+              : k.fotoNota || '';
+          daftarNotaNgunci.push({
+            idNota: k.idTransaksi,
+            noNota: k.noNotaLalu || k.idTransaksi,
+            tanggal: k.tanggalNotaLalu || k.tanggal,
+            idMitra: m.id,
+            kodeMitra: m.kode,
+            namaMitra: m.nama,
+            roleMitra: canonicalRole,
+            alamat: m.alamat || '-',
+            telepon: m.telepon || '-',
+            fotoMitra: mitraFoto,
+            jenisNota: isNotaLalu ? 'NOTA_LALU_PIUTANG' : 'KASBON_UANG',
+            jenisNotaLabel: isNotaLalu ? 'Nota Lalu (Piutang Barang/Bon)' : 'Kasbon Pinjaman Uang',
+            rincian: k.rincianBarangNotaLalu || k.keterangan || 'Piutang Nota Lalu',
+            catatanNgunci: k.catatanNgunci || m.catatanNgunci,
+            tanggalNgunci: k.tanggalNgunci || m.tanggalNgunci,
+            fotoNota: fotoNota || undefined,
+            nominalAwal: k.nominal || sisa,
+            sisaNominalNgunci: sisa,
+          });
+        }
+      }
+
+      for (const p of unpaidPenjualanToko) {
+        if (isNoteNgunci(p.isNotaNgunci)) {
+          const sisa = p.sisaPiutang || 0;
+          nominalNotaNgunciMitra += sisa;
+          jumlahNotaNgunciMitra += 1;
+          if (p.catatanNgunci) latestCatatanNgunci = p.catatanNgunci;
+          if (p.tanggalNgunci) latestTanggalNgunci = p.tanggalNgunci;
+          const rincianProduk = (p.items || [])
+            .map((i) => `${i.namaProduk} (${i.qty} ${i.satuan})`)
+            .join(', ');
+          daftarNotaNgunci.push({
+            idNota: p.noPenjualan,
+            noNota: p.noPenjualan,
+            tanggal: p.tanggal,
+            idMitra: m.id,
+            kodeMitra: m.kode,
+            namaMitra: m.nama,
+            roleMitra: canonicalRole,
+            alamat: m.alamat || '-',
+            telepon: m.telepon || '-',
+            fotoMitra: mitraFoto,
+            jenisNota: 'KASBON_BARANG',
+            jenisNotaLabel: 'Kasbon Barang Toko',
+            rincian: rincianProduk || p.keterangan || 'Kasbon Barang Toko',
+            catatanNgunci: p.catatanNgunci || m.catatanNgunci,
+            tanggalNgunci: p.tanggalNgunci || m.tanggalNgunci,
+            nominalAwal: p.totalNominal || sisa,
+            sisaNominalNgunci: sisa,
+          });
+        }
+      }
+
+      for (const j of unpaidPenjualanHasilBumi) {
+        if (isNoteNgunci(j.isNotaNgunci)) {
+          const sisa = j.sisaPiutang || 0;
+          nominalNotaNgunciMitra += sisa;
+          jumlahNotaNgunciMitra += 1;
+          if (j.catatanNgunci) latestCatatanNgunci = j.catatanNgunci;
+          if (j.tanggalNgunci) latestTanggalNgunci = j.tanggalNgunci;
+          daftarNotaNgunci.push({
+            idNota: j.noPenjualan,
+            noNota: j.noSuratJalan || j.noPenjualan,
+            tanggal: j.tanggal,
+            idMitra: m.id,
+            kodeMitra: m.kode,
+            namaMitra: m.nama,
+            roleMitra: canonicalRole,
+            alamat: m.alamat || '-',
+            telepon: m.telepon || '-',
+            fotoMitra: mitraFoto,
+            jenisNota: 'PIUTANG_HASIL_BUMI',
+            jenisNotaLabel: 'Piutang Jual Hasil Bumi',
+            rincian: `${j.komoditasNama} (${j.beratBersih} Kg @ Rp ${j.hargaJualPerKg.toLocaleString('id-ID')})`,
+            catatanNgunci: j.catatanNgunci || m.catatanNgunci,
+            tanggalNgunci: j.tanggalNgunci || m.tanggalNgunci,
+            nominalAwal: j.totalNominal || sisa,
+            sisaNominalNgunci: sisa,
+          });
+        }
+      }
+
+      const nominalPiutangAktifMitra = Math.max(0, totalBon - nominalNotaNgunciMitra);
+      const mitraHasNotaNgunci = nominalNotaNgunciMitra > 0 || Boolean(m.isNotaNgunci && totalBon > 0);
+
+      let statusNotaLabel: StatusNotaRekapMitra = 'LUNAS_IMPAS';
+      if (mitraHasNotaNgunci) {
+        statusNotaLabel = 'NOTA_NGUNCI';
+      } else if (totalBon > 0) {
+        statusNotaLabel = 'NOTA_AKTIF';
+      } else if (totalHakGabungan > 0) {
+        statusNotaLabel = 'NOTA_SUPPLIER';
+      }
 
       // Count unique transactions across all linked partner ledgers (+ Karyawan Upah/Slip + Rekening Anak Perusahaan)
       const txIdSet = new Set<string>();
@@ -5865,22 +6072,22 @@ export class TransactionService {
       totalTitipPanenMurniGlobal += titipPanenMurni;
       totalUpahKaryawanBelumDibayarGlobal += upahBelumDibayarKry;
       totalBonMitra += totalBon;
+      totalPiutangAktifGlobal += nominalPiutangAktifMitra;
+      totalNominalNotaNgunciGlobal += nominalNotaNgunciMitra;
       if (totalHakGabungan > 0) mitraDenganHutangTitipCount++;
       if (totalBon > 0) mitraDenganBonCount++;
+      if (mitraHasNotaNgunci) mitraNotaNgunciCount++;
 
       return {
         id: m.id,
         kode: m.kode,
         nama: m.nama,
-        role: normalizeRoleMitra(m.role, {
-          isAnakPerusahaan,
-          isKaryawan: Boolean(linkedKry || m.isKaryawan),
-        }),
+        role: canonicalRole,
         telepon: m.telepon,
         alamat: m.alamat,
         status: m.status,
         catatan: m.catatan,
-        fotoUrl: m.fotoUrl || linkedKry?.fotoUrl,
+        fotoUrl: mitraFoto,
         ...(linkedKry
           ? {
               isKaryawan: true,
@@ -5908,14 +6115,29 @@ export class TransactionService {
         totalKasbonBarang: kasbonBarang,
         totalKasbonUang: kasbonUang,
         totalBonMitra: totalBon,
+        isNotaNgunci: mitraHasNotaNgunci,
+        catatanNgunci: latestCatatanNgunci,
+        tanggalNgunci: latestTanggalNgunci,
+        statusNotaLabel,
+        nominalPiutangAktif: nominalPiutangAktifMitra,
+        nominalNotaNgunci: nominalNotaNgunciMitra,
+        jumlahNotaNgunci: jumlahNotaNgunciMitra,
         potonganSilangOtomatis: Math.min(totalHakGabungan, totalBon),
         sisaBonBersih: Math.max(0, totalBon - totalHakGabungan),
         sisaTitipanBersih: Math.max(0, totalHakGabungan - totalBon),
+        uangKitaDiMitraIndividu: totalBon - totalHakGabungan,
         saldoBersih,
         posisiStatus,
         totalTransaksiCount: txCount,
       };
     });
+
+    // Rumus Resmi Uang Kita yang Masih Ada di Mitra:
+    // Total Seluruh Piutang Mitra - Total Hutang Kita ke Mitra (Nota Supplier / Rekening Mitra)
+    const totalSeluruhPiutangMitra = totalBonMitra;
+    const totalNotaSupplierRekeningMitra = totalHutangPerusahaanKeMitra;
+    const uangKitaDiMitra = totalSeluruhPiutangMitra - totalNotaSupplierRekeningMitra;
+    const uangKitaDiMitraEfektif = totalPiutangAktifGlobal - totalNotaSupplierRekeningMitra;
 
     return {
       totalMitra: db.mitra.length,
@@ -5926,6 +6148,15 @@ export class TransactionService {
       saldoBersihKemitraan: totalHutangPerusahaanKeMitra - totalBonMitra,
       mitraDenganHutangTitipCount,
       mitraDenganBonCount,
+      totalSeluruhPiutangMitra,
+      totalPiutangAktifMitra: totalPiutangAktifGlobal,
+      totalNominalNotaNgunci: totalNominalNotaNgunciGlobal,
+      mitraNotaNgunciCount,
+      totalLembarNotaNgunci: daftarNotaNgunci.length,
+      totalNotaSupplierRekeningMitra,
+      uangKitaDiMitra,
+      uangKitaDiMitraEfektif,
+      daftarNotaNgunci,
       items,
     };
   }
@@ -8010,67 +8241,9 @@ export class TransactionService {
       const idReferensiKliring = generateId('KLR');
       const alokasiBonLunas: AlokasiPembayaranBon[] = [];
 
-      // Helper FIFO untuk melunasi bon
+      // Helper alokasi bon (Prioritas Nota Kunci dulu agar otomatis mengurangi nominal tidak bisa kembali, lalu FIFO)
       const allocateBonPayment = (amountToAllocate: number): AlokasiPembayaranBon[] => {
-        if (amountToAllocate <= 0) return [];
-        const localAlokasi: AlokasiPembayaranBon[] = [];
-        const allBons = [
-          ...outstandingPenjualan
-            .filter((p) => p.sisaPiutang > 0)
-            .map((p) => ({
-              jenis: 'KASBON_BARANG' as const,
-              refId: p.noPenjualan,
-              sisa: p.sisaPiutang,
-              createdAt: p.createdAt,
-              sourceObj: p as TransaksiPenjualan | TransaksiPenjualanHasilBumi,
-            })),
-          ...outstandingPenjualanHb
-            .filter((j) => j.sisaPiutang > 0)
-            .map((j) => ({
-              jenis: 'KASBON_BARANG' as const,
-              refId: j.noPenjualan,
-              sisa: j.sisaPiutang,
-              createdAt: j.createdAt,
-              sourceObj: j as TransaksiPenjualan | TransaksiPenjualanHasilBumi,
-            })),
-          ...outstandingKasbonUang
-            .filter((k) => k.sisaKasbon > 0)
-            .map((k) => ({
-              jenis: 'KASBON_UANG' as const,
-              refId: k.idTransaksi,
-              sisa: k.sisaKasbon,
-              createdAt: k.createdAt,
-              sourceObj: k,
-            })),
-        ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-
-        let rem = amountToAllocate;
-        for (const bon of allBons) {
-          if (rem <= 0) break;
-          const sebelum = bon.sisa;
-          const bayar = Math.min(rem, sebelum);
-          const sisaBaru = sebelum - bayar;
-
-          if (bon.jenis === 'KASBON_BARANG') {
-            const pj = bon.sourceObj as TransaksiPenjualan | TransaksiPenjualanHasilBumi;
-            pj.sisaPiutang = sisaBaru;
-            if (sisaBaru === 0) pj.statusPembayaran = 'LUNAS';
-          } else {
-            const kbu = bon.sourceObj as TransaksiKasbonUang;
-            kbu.sisaKasbon = sisaBaru;
-            kbu.status = sisaBaru === 0 ? 'LUNAS' : 'SEBAGIAN';
-          }
-
-          localAlokasi.push({
-            jenis: bon.jenis,
-            refId: bon.refId,
-            nominalSebelum: sebelum,
-            nominalDibayar: bayar,
-            nominalSisa: sisaBaru,
-          });
-          rem -= bayar;
-        }
-        return localAlokasi;
+        return this.allocateMitraBonFifo(db, mitra.id, amountToAllocate);
       };
 
       let runningTitipan = saldoTitipanAwal;
@@ -9578,56 +9751,13 @@ export class TransactionService {
           openHasilBumi.reduce((s, j) => s + j.sisaPiutang, 0) +
           openUang.reduce((s, k) => s + k.sisaKasbon, 0);
 
-        let remainingToAllocate = newNominal;
-        const newAlokasi: typeof record.alokasi = [];
-
-        for (const pj of openBarang) {
-          if (remainingToAllocate <= 0) break;
-          const bayar = Math.min(pj.sisaPiutang, remainingToAllocate);
-          const sebelum = pj.sisaPiutang;
-          pj.sisaPiutang -= bayar;
-          pj.statusPembayaran = pj.sisaPiutang === 0 ? 'LUNAS' : 'BELUM_BAYAR';
-          remainingToAllocate -= bayar;
-          newAlokasi.push({
-            jenis: 'KASBON_BARANG',
-            refId: pj.noPenjualan,
-            nominalSebelum: sebelum,
-            nominalDibayar: bayar,
-            nominalSisa: pj.sisaPiutang,
-          });
-        }
-
-        for (const jhb of openHasilBumi) {
-          if (remainingToAllocate <= 0) break;
-          const bayar = Math.min(jhb.sisaPiutang, remainingToAllocate);
-          const sebelum = jhb.sisaPiutang;
-          jhb.sisaPiutang -= bayar;
-          jhb.statusPembayaran = jhb.sisaPiutang === 0 ? 'LUNAS' : 'BELUM_BAYAR';
-          remainingToAllocate -= bayar;
-          newAlokasi.push({
-            jenis: 'KASBON_BARANG',
-            refId: jhb.noPenjualan,
-            nominalSebelum: sebelum,
-            nominalDibayar: bayar,
-            nominalSisa: jhb.sisaPiutang,
-          });
-        }
-
-        for (const ku of openUang) {
-          if (remainingToAllocate <= 0) break;
-          const bayar = Math.min(ku.sisaKasbon, remainingToAllocate);
-          const sebelum = ku.sisaKasbon;
-          ku.sisaKasbon -= bayar;
-          ku.status = ku.sisaKasbon === 0 ? 'LUNAS' : 'SEBAGIAN';
-          remainingToAllocate -= bayar;
-          newAlokasi.push({
-            jenis: 'KASBON_UANG',
-            refId: ku.idTransaksi,
-            nominalSebelum: sebelum,
-            nominalDibayar: bayar,
-            nominalSisa: ku.sisaKasbon,
-          });
-        }
+        const newAlokasi = this.allocateMitraBonFifo(db, record.idMitra, newNominal, {
+          idNotaTarget: record.idNotaTarget,
+        });
+        record.nominalPengurangNotaNgunci = newAlokasi
+          .filter((a) => a.isNotaNgunci)
+          .reduce((s, a) => s + (a.nominalDibayar || 0), 0);
+        record.sisaNotaNgunciSetelah = this.getMitraNominalNotaNgunci(db, record.idMitra);
 
         if (!isNonTunai) {
           const newMetode = (params.metode || record.metode) as 'TUNAI' | 'TRANSFER';
@@ -9973,6 +10103,9 @@ export class TransactionService {
       }
 
       // 1. Bersihkan kasbon uang, pembayaran bon, & pencairan titipan mitra ini
+      mitra.isNotaNgunci = false;
+      mitra.tanggalNgunci = undefined;
+      mitra.catatanNgunci = undefined;
       db.kasbonUang = (db.kasbonUang || []).filter((k) => k.idMitra !== cleanId);
       db.bayarBon = (db.bayarBon || []).filter((b) => b.idMitra !== cleanId);
       db.pencairanTitipan = (db.pencairanTitipan || []).filter((pt) => pt.idMitra !== cleanId);
@@ -9983,6 +10116,9 @@ export class TransactionService {
           p.metode = 'TUNAI';
           p.statusPembayaran = 'LUNAS';
           p.sisaPiutang = 0;
+          p.isNotaNgunci = false;
+          p.tanggalNgunci = undefined;
+          p.catatanNgunci = undefined;
         }
       }
       for (const j of db.penjualanHasilBumi || []) {
@@ -9990,6 +10126,9 @@ export class TransactionService {
           j.metodePembayaran = 'TUNAI';
           j.statusPembayaran = 'LUNAS';
           j.sisaPiutang = 0;
+          j.isNotaNgunci = false;
+          j.tanggalNgunci = undefined;
+          j.catatanNgunci = undefined;
         }
       }
 
@@ -10301,6 +10440,12 @@ export class TransactionService {
         db.cashOpnameLogs = [];
       }
 
+      for (const m of db.mitra || []) {
+        m.isNotaNgunci = false;
+        m.tanggalNgunci = undefined;
+        m.catatanNgunci = undefined;
+      }
+
       dbManager.synchronizeVirtualAccounts();
       dbManager.synchronizeDivisiAccounts();
 
@@ -10315,6 +10460,158 @@ export class TransactionService {
         totalMitra: (db.mitra || []).length,
         totalRekening: (db.rekening || []).length,
         message: msg,
+      };
+    });
+  }
+
+  public static async setStatusNotaNgunci(params: {
+    idMitra: string;
+    idNota?: string;
+    isNotaNgunci: boolean;
+    catatanNgunci?: string;
+  }) {
+    const cleanIdMitra = String(params.idMitra || '').trim();
+    const cleanIdNota = params.idNota ? String(params.idNota).trim() : '';
+    const isNgunci = Boolean(params.isNotaNgunci);
+
+    if (!cleanIdMitra) {
+      throw new Error('ID Mitra wajib disertakan');
+    }
+
+    return await dbManager.executeTransaction((db) => {
+      const { tanggal } = getWIBDateTime();
+      const mitra = (db.mitra || []).find((m) => m.id === cleanIdMitra);
+      if (!mitra) {
+        throw new Error(`Mitra dengan ID ${cleanIdMitra} tidak ditemukan`);
+      }
+
+      const cleanCatatan = isNgunci
+        ? (params.catatanNgunci || '').trim() ||
+          'Mitra memiliki piutang namun sudah tidak ada respon & kepastian membayar'
+        : undefined;
+
+      let affectedNominal = 0;
+      let affectedCount = 0;
+
+      if (cleanIdNota) {
+        // Toggle pada 1 lembar nota piutang spesifik
+        const k = (db.kasbonUang || []).find(
+          (item) => item.idMitra === cleanIdMitra && item.idTransaksi === cleanIdNota
+        );
+        if (k) {
+          k.isNotaNgunci = isNgunci;
+          k.tanggalNgunci = isNgunci ? tanggal : undefined;
+          k.catatanNgunci = cleanCatatan;
+          affectedNominal += k.sisaKasbon || 0;
+          affectedCount++;
+        }
+
+        const p = (db.penjualan || []).find(
+          (item) => item.idMitra === cleanIdMitra && item.noPenjualan === cleanIdNota
+        );
+        if (p) {
+          p.isNotaNgunci = isNgunci;
+          p.tanggalNgunci = isNgunci ? tanggal : undefined;
+          p.catatanNgunci = cleanCatatan;
+          affectedNominal += p.sisaPiutang || 0;
+          affectedCount++;
+        }
+
+        const j = (db.penjualanHasilBumi || []).find(
+          (item) => item.idMitra === cleanIdMitra && item.noPenjualan === cleanIdNota
+        );
+        if (j) {
+          j.isNotaNgunci = isNgunci;
+          j.tanggalNgunci = isNgunci ? tanggal : undefined;
+          j.catatanNgunci = cleanCatatan;
+          affectedNominal += j.sisaPiutang || 0;
+          affectedCount++;
+        }
+
+        if (affectedCount === 0) {
+          throw new Error(`Nota piutang ${cleanIdNota} untuk mitra ${mitra.nama} tidak ditemukan`);
+        }
+
+        // Sinkronkan penanda di level Mitra berdasarkan apakah masih ada nota belum lunas yang ngunci
+        const stillHasNgunci =
+          (db.kasbonUang || []).some(
+            (x) => x.idMitra === cleanIdMitra && x.status !== 'LUNAS' && (x.sisaKasbon || 0) > 0 && Boolean(x.isNotaNgunci)
+          ) ||
+          (db.penjualan || []).some(
+            (x) => x.idMitra === cleanIdMitra && x.metode === 'KASBON' && (x.sisaPiutang || 0) > 0 && Boolean(x.isNotaNgunci)
+          ) ||
+          (db.penjualanHasilBumi || []).some(
+            (x) => x.idMitra === cleanIdMitra && x.metodePembayaran === 'PIUTANG' && (x.sisaPiutang || 0) > 0 && Boolean(x.isNotaNgunci)
+          );
+        mitra.isNotaNgunci = stillHasNgunci;
+        if (isNgunci) {
+          mitra.tanggalNgunci = tanggal;
+          mitra.catatanNgunci = cleanCatatan;
+        } else if (!stillHasNgunci) {
+          mitra.tanggalNgunci = undefined;
+          mitra.catatanNgunci = undefined;
+        }
+      } else {
+        // Toggle seluruh piutang berjalan milik Mitra ini
+        for (const k of db.kasbonUang || []) {
+          if (k.idMitra === cleanIdMitra && k.status !== 'LUNAS' && (k.sisaKasbon || 0) > 0) {
+            k.isNotaNgunci = isNgunci;
+            k.tanggalNgunci = isNgunci ? tanggal : undefined;
+            k.catatanNgunci = cleanCatatan;
+            affectedNominal += k.sisaKasbon || 0;
+            affectedCount++;
+          }
+        }
+        for (const p of db.penjualan || []) {
+          if (p.idMitra === cleanIdMitra && p.metode === 'KASBON' && (p.sisaPiutang || 0) > 0) {
+            p.isNotaNgunci = isNgunci;
+            p.tanggalNgunci = isNgunci ? tanggal : undefined;
+            p.catatanNgunci = cleanCatatan;
+            affectedNominal += p.sisaPiutang || 0;
+            affectedCount++;
+          }
+        }
+        for (const j of db.penjualanHasilBumi || []) {
+          if (j.idMitra === cleanIdMitra && j.metodePembayaran === 'PIUTANG' && (j.sisaPiutang || 0) > 0) {
+            j.isNotaNgunci = isNgunci;
+            j.tanggalNgunci = isNgunci ? tanggal : undefined;
+            j.catatanNgunci = cleanCatatan;
+            affectedNominal += j.sisaPiutang || 0;
+            affectedCount++;
+          }
+        }
+
+        if (isNgunci && affectedCount === 0) {
+          throw new Error(
+            `Mitra ${mitra.nama} saat ini tidak memiliki saldo piutang / nota belum lunas. Silakan input Nota Lalu terlebih dahulu.`
+          );
+        }
+
+        mitra.isNotaNgunci = isNgunci;
+        mitra.tanggalNgunci = isNgunci ? tanggal : undefined;
+        mitra.catatanNgunci = cleanCatatan;
+      }
+
+      const statusLabel = isNgunci ? 'NOTA NGUNCI (Piutang Macet)' : 'NOTA AKTIF (Dipulihkan)';
+      this.addAuditLog(
+        db,
+        'UPDATE',
+        cleanIdNota || cleanIdMitra,
+        `Perubahan status nota piutang ${mitra.nama}${cleanIdNota ? ` [${cleanIdNota}]` : ''} menjadi ${statusLabel} senilai Rp ${affectedNominal.toLocaleString('id-ID')}`,
+        affectedNominal,
+        'BON01'
+      );
+
+      return {
+        idMitra: cleanIdMitra,
+        namaMitra: mitra.nama,
+        idNota: cleanIdNota || undefined,
+        isNotaNgunci: isNgunci,
+        affectedCount,
+        affectedNominal,
+        message: isNgunci
+          ? `Status piutang ${mitra.nama} (${affectedCount} nota · Rp ${affectedNominal.toLocaleString('id-ID')}) berhasil ditandai sebagai NOTA NGUNCI.`
+          : `Status piutang ${mitra.nama} (${affectedCount} nota · Rp ${affectedNominal.toLocaleString('id-ID')}) berhasil dipulihkan menjadi NOTA AKTIF.`,
       };
     });
   }
