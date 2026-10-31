@@ -14,6 +14,7 @@ import {
   RefreshCw,
   KeyRound,
   LogOut,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { DEFAULT_PT_LOGO_URL, ProfilPerusahaan, Rekening } from '../../server/types.ts';
@@ -46,6 +47,7 @@ interface HeaderProps {
   onToggleMobileSidebar?: () => void;
   onOpenFullLinkModal?: () => void;
   onOpenBosAccessModal?: () => void;
+  onOpenBackupSpreadsheet?: () => void;
   onLockScreen?: () => void;
 }
 
@@ -62,6 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleMobileSidebar,
   onOpenFullLinkModal,
   onOpenBosAccessModal,
+  onOpenBackupSpreadsheet,
   onLockScreen,
 }) => {
   const [timeStr, setTimeStr] = useState<string>('');
@@ -285,6 +288,18 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <LogOut className="w-3.5 h-3.5 shrink-0" />
               <span>Keluar</span>
+            </button>
+          )}
+
+          {onOpenBackupSpreadsheet && (
+            <button
+              type="button"
+              onClick={onOpenBackupSpreadsheet}
+              className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+              title="Backup Full Keseluruhan Data & Larikan ke Google Spreadsheet / Excel (.xlsx)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <span className="hidden md:inline">Backup Spreadsheet</span>
             </button>
           )}
 

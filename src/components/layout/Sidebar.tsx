@@ -31,6 +31,7 @@ import {
   PanelLeftOpen,
   Truck,
   LogOut,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 export type ActiveTab =
@@ -136,6 +137,7 @@ interface SidebarProps {
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   onOpenFullLinkModal?: () => void;
+  onOpenBackupSpreadsheet?: () => void;
   onLogout?: () => void;
 }
 
@@ -170,6 +172,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   collapsed = false,
   onToggleCollapse,
   onOpenFullLinkModal,
+  onOpenBackupSpreadsheet,
   onLogout,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -468,10 +471,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {
             id: 'google-sheets-sync',
             label: 'Studio Database Master',
+            sublabel: 'Tabel master & integritas DB',
             keywords: 'database tabel ekspor impor backup excel json',
             icon: Database,
             tab: 'google-sheets-sync',
           },
+          ...(onOpenBackupSpreadsheet
+            ? [
+                {
+                  id: 'backup-full-spreadsheet',
+                  label: 'Backup Full & Spreadsheet',
+                  sublabel: 'Google Sheets, Excel & JSON',
+                  keywords:
+                    'backup full keseluruhan data larikan ke spreadsheet google sheets excel xlsx hang maintenance darurat restore',
+                  icon: FileSpreadsheet,
+                  action: () => {
+                    onOpenBackupSpreadsheet();
+                    onCloseMobile?.();
+                  },
+                },
+              ]
+            : []),
           ...(onOpenSupabaseSync
             ? [
                 {
@@ -489,7 +509,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ],
       },
     ],
-    [onOpenPinjamUangModal, onOpenProfilModal, onOpenSupabaseSync, supabaseConfigured, setActiveTab, onCloseMobile]
+    [
+      onOpenPinjamUangModal,
+      onOpenProfilModal,
+      onOpenSupabaseSync,
+      onOpenBackupSpreadsheet,
+      supabaseConfigured,
+      setActiveTab,
+      onCloseMobile,
+    ]
   );
 
   const normalizedSearch = searchQuery.trim().toLowerCase();

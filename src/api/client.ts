@@ -1813,6 +1813,27 @@ export const api = {
     if (!data.success) throw new Error(data.message || 'Gagal menyimpan konfigurasi PIN');
     return data.data;
   },
+
+  getFullBackupBundle: async (): Promise<{
+    db: Record<string, any>;
+    rekapMitra: RekapMasterMitraSummary;
+    serverTime: { tanggal: string; jam: string; iso: string };
+    source: 'SERVER_LIVE';
+  }> => {
+    const data = await requestJson('/api/database/backup-full-bundle');
+    if (!data.success) throw new Error(data.message || 'Gagal mengambil paket backup lengkap');
+    return data.data;
+  },
+
+  restoreDatabaseJson: async (backupData: Record<string, any>): Promise<{ message: string }> => {
+    const data = await requestJson('/api/database/restore-json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: backupData }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memulihkan database');
+    return { message: data.message };
+  },
 };
 
 export interface BillboardData {

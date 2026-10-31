@@ -43,6 +43,7 @@ interface DatabaseExplorerViewProps {
   erpData: FullErpModularDataset;
   onRefreshAll: () => void;
   onNavigateToTab?: (tab: string) => void;
+  onOpenBackupSpreadsheet?: () => void;
 }
 
 type CollectionKey =
@@ -69,6 +70,7 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
   erpData,
   onRefreshAll,
   onNavigateToTab,
+  onOpenBackupSpreadsheet,
 }) => {
   const [activeCollection, setActiveCollection] = useState<CollectionKey>('produkDagang');
 
@@ -524,6 +526,18 @@ export const DatabaseExplorerView: React.FC<DatabaseExplorerViewProps> = ({
 
           {/* Action Toolbar */}
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onOpenBackupSpreadsheet && (
+              <button
+                type="button"
+                onClick={onOpenBackupSpreadsheet}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg border border-emerald-400/50 transition-colors flex items-center space-x-2 cursor-pointer shadow-xs"
+                title="Backup Full Keseluruhan Data & Larikan ke Google Spreadsheet / Excel (.xlsx)"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-white" />
+                <span>Backup Full &amp; Larikan ke Spreadsheet</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleDownloadDatabaseJson}

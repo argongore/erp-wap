@@ -20,6 +20,7 @@ import {
   UserCog,
   Plus,
   ArrowRight,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
@@ -59,6 +60,7 @@ import {
 } from '../karyawan/ModalProfilKaryawan.tsx';
 import { DivisiLogoAvatar, resolveDivisiLogoUrl } from '../common/DivisiLogoAvatar.tsx';
 import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
+import { ModalBackupFullSpreadsheet } from '../database/ModalBackupFullSpreadsheet.tsx';
 
 type BosTab = 'kas' | 'divisi' | 'karyawan' | 'mitra' | 'jurnal' | 'stok';
 type KaryawanSubView = 'BULANAN' | 'SALDO_TOTAL' | 'SLIP_GAJI';
@@ -136,6 +138,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<BosTab>('kas');
   const [refreshing, setRefreshing] = useState(false);
+  const [showBackupModal, setShowBackupModal] = useState(false);
 
   // Lazy load tracking per tab to eliminate initial mount API storms
   const loadedTabsRef = useRef<{ divisi: boolean; karyawan: boolean; mitra: boolean }>({
@@ -568,6 +571,16 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                 <span className="hidden sm:inline">Menu Kasir</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => setShowBackupModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-semibold transition-colors cursor-pointer"
+              title="Backup Full Keseluruhan Data & Larikan ke Google Spreadsheet / Excel (.xlsx)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <span className="hidden sm:inline">Backup Spreadsheet</span>
+            </button>
 
             <button
               type="button"
@@ -2387,6 +2400,14 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
           onClose={() => setPreviewFotoKry(null)}
         />
       )}
+
+      {/* Pusat Backup Full & Larikan ke Google Spreadsheet */}
+      <ModalBackupFullSpreadsheet
+        isOpen={showBackupModal}
+        onClose={() => setShowBackupModal(false)}
+        companyName={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+        allowRestore={false}
+      />
     </div>
   );
 };

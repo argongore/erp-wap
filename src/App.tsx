@@ -28,6 +28,11 @@ import { RekapSemuaTransaksiHarianView } from './components/laporan/RekapSemuaTr
 import { AuditLogView } from './components/laporan/AuditLogView.tsx';
 import { DatabaseExplorerView } from './components/database/DatabaseExplorerView.tsx';
 import { SupabaseSyncModal } from './components/database/SupabaseSyncModal.tsx';
+import { ModalBackupFullSpreadsheet } from './components/database/ModalBackupFullSpreadsheet.tsx';
+import {
+  convertErpSnapshotToRawDb,
+  saveEmergencyLocalSnapshot,
+} from './utils/fullBackupSpreadsheet.ts';
 import {
   Cloud,
   ExternalLink,
@@ -183,6 +188,7 @@ export default function App() {
   const [dismissSupabaseNotice, setDismissSupabaseNotice] = useState<boolean>(false);
   const [showFullLinkModal, setShowFullLinkModal] = useState<boolean>(false);
   const [showBosAccessModal, setShowBosAccessModal] = useState<boolean>(false);
+  const [showBackupSpreadsheetModal, setShowBackupSpreadsheetModal] = useState<boolean>(false);
   const [copiedLinkType, setCopiedLinkType] = useState<'shared' | 'dev' | null>(null);
   const [supabaseStatus, setSupabaseStatus] = useState<{
     configured: boolean;
@@ -318,6 +324,9 @@ export default function App() {
     if (Array.isArray(snap.inventaris)) setInventarisList(snap.inventaris);
     if (Array.isArray(snap.divisiList)) setDivisiMasterList(snap.divisiList);
     if (snap.supabaseStatus) setSupabaseStatus(snap.supabaseStatus);
+
+    // Continuously keep local browser Anti-Hang / Maintenance emergency snapshot up to date
+    void saveEmergencyLocalSnapshot(convertErpSnapshotToRawDb(snap as unknown as Record<string, any>));
   }, []);
 
   const loadAllData = useCallback(async () => {
@@ -676,6 +685,57 @@ export default function App() {
     ]
   );
 
+  const fallbackClientDbForBackup = useMemo(
+    () => ({
+      profilPerusahaan: profilPerusahaan || {},
+      rekening: rekeningList,
+      mitra: mitraList,
+      karyawan: karyawanList,
+      upahHarian: upahHarianList,
+      penggajian: penggajianList,
+      produk: produkList,
+      kategoriProduk: kategoriProdukList,
+      stokBarang: stokList,
+      stokHasilBumi: stokHasilBumiList,
+      inventaris: inventarisList,
+      divisi: divisiMasterList,
+      penjualan: penjualanList,
+      pembelianBarang: pembelianBarangList,
+      pembelianHasilBumi: pembelianList,
+      penjualanHasilBumi: penjualanHasilBumiList,
+      kasbonUang: kasbonUangList,
+      bayarBon: bayarBonList,
+      pencairanTitipan: pencairanTitipanList,
+      pengeluaran: pengeluaranList,
+      transferRekening: transferList,
+      auditLogs,
+    }),
+    [
+      profilPerusahaan,
+      rekeningList,
+      mitraList,
+      karyawanList,
+      upahHarianList,
+      penggajianList,
+      produkList,
+      kategoriProdukList,
+      stokList,
+      stokHasilBumiList,
+      inventarisList,
+      divisiMasterList,
+      penjualanList,
+      pembelianBarangList,
+      pembelianList,
+      penjualanHasilBumiList,
+      kasbonUangList,
+      bayarBonList,
+      pencairanTitipanList,
+      pengeluaranList,
+      transferList,
+      auditLogs,
+    ]
+  );
+
   // If URL has public share parameters, render the secure Read-Only Public Portal
   if (publicShareConfig) {
     return (
@@ -755,6 +815,7 @@ export default function App() {
         onToggleMobileSidebar={() => setMobileSidebarOpen((prev) => !prev)}
         onOpenFullLinkModal={() => setShowFullLinkModal(true)}
         onOpenBosAccessModal={() => setShowBosAccessModal(true)}
+        onOpenBackupSpreadsheet={() => setShowBackupSpreadsheetModal(true)}
         onLockScreen={handleLockPinScreen}
       />
 
@@ -766,6 +827,7 @@ export default function App() {
           onOpenProfilModal={() => setShowProfilModal(true)}
           onOpenPinjamUangModal={() => setShowPinjamUangModal(true)}
           onOpenSupabaseSync={() => setShowSupabaseModal(true)}
+          onOpenBackupSpreadsheet={() => setShowBackupSpreadsheetModal(true)}
           supabaseConfigured={Boolean(supabaseStatus?.configured)}
           mobileOpen={mobileSidebarOpen}
           onCloseMobile={() => setMobileSidebarOpen(false)}
@@ -1305,6 +1367,7 @@ export default function App() {
                   erpData={fullErpData}
                   onRefreshAll={loadAllData}
                   onNavigateToTab={(t) => setActiveTab(t as ActiveTab)}
+                  onOpenBackupSpreadsheet={() => setShowBackupSpreadsheetModal(true)}
                 />
               )}
             </ErrorBoundary>
@@ -1370,6 +1433,19 @@ export default function App() {
         onClose={() => setShowBosAccessModal(false)}
         onEnterPreviewBos={() => setPreviewBosView(true)}
         onEnterPinLockScreen={handleLockPinScreen}
+      />
+
+      {/* Pusat Backup Full & Larikan ke Google Spreadsheet (Siaga Hang / Maintenance) */}
+      <ModalBackupFullSpreadsheet
+        isOpen={showBackupSpreadsheetModal}
+        onClose={() => setShowBackupSpreadsheetModal(false)}
+        fallbackClientDb={fallbackClientDbForBackup}
+        companyName={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+        allowRestore={true}
+        onAfterRestore={() => {
+          void loadAllData();
+          void checkAndSyncSupabase();
+        }}
       />
 
       {/* Full Tampilan Direct Link Modal */}

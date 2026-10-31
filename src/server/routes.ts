@@ -11,6 +11,7 @@ import {
   type RiwayatDivisiKaryawan,
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
+import { generateFullBackupXlsxBuffer } from '../utils/fullBackupSpreadsheet.ts';
 
 export const apiRouter = Router();
 
@@ -2820,6 +2821,54 @@ apiRouter.get('/database/backup-json', (_req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'application/json');
     res.send(JSON.stringify(data, null, 2));
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Paket Backup Full Terpadu (Raw DB + Rekap Mitra & Nota Kunci) untuk Sinkronisasi Google Sheets / Cache Darurat
+apiRouter.get('/database/backup-full-bundle', (_req, res) => {
+  try {
+    const db = dbManager.get();
+    const rekapMitra = TransactionService.getRekapMasterMitra();
+    const serverTime = getWIBDateTime();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      data: {
+        db,
+        rekapMitra,
+        serverTime,
+        source: 'SERVER_LIVE',
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Download Langsung Spreadsheet Excel (.xlsx) 21-Sheet Lengkap dari Server
+apiRouter.get('/database/backup-xlsx', (_req, res) => {
+  try {
+    const db = dbManager.get();
+    const rekapMitra = TransactionService.getRekapMasterMitra();
+    const serverTime = getWIBDateTime();
+    const xlsxBuffer = generateFullBackupXlsxBuffer({
+      db,
+      rekapMitra,
+      serverTime,
+      source: 'SERVER_LIVE',
+    });
+    const safeDate = serverTime.tanggal.split('/').reverse().join('-');
+    const safeHour = serverTime.jam.slice(0, 5).replace(':', '');
+    const filename = `BACKUP_FULL_SPREADSHEET_WIJAYA_AGRO_${safeDate}_${safeHour}.xlsx`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(xlsxBuffer);
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
