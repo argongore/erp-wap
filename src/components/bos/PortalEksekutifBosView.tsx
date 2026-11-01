@@ -21,6 +21,7 @@ import {
   Plus,
   ArrowRight,
   FileSpreadsheet,
+  Calendar,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
@@ -46,7 +47,6 @@ import {
   TransaksiPenggajian,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
-import { BukuKasHarianBosWidget } from '../dashboard/BukuKasHarianBosWidget.tsx';
 import { RekapSemuaTransaksiHarianView } from '../laporan/RekapSemuaTransaksiHarianView.tsx';
 import { LabaRugiProdukView } from '../laporan/LabaRugiProdukView.tsx';
 import { CetakRekeningKoranModal } from '../laporan/CetakRekeningKoranModal.tsx';
@@ -61,8 +61,9 @@ import {
 import { DivisiLogoAvatar, resolveDivisiLogoUrl } from '../common/DivisiLogoAvatar.tsx';
 import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 import { ModalBackupFullSpreadsheet } from '../database/ModalBackupFullSpreadsheet.tsx';
+import { RekapHarianDanKomoditasBosView } from './RekapHarianDanKomoditasBosView.tsx';
 
-type BosTab = 'kas' | 'divisi' | 'karyawan' | 'mitra' | 'jurnal' | 'stok';
+type BosTab = 'kas' | 'harian' | 'divisi' | 'karyawan' | 'mitra' | 'jurnal' | 'stok';
 type KaryawanSubView = 'BULANAN' | 'SALDO_TOTAL' | 'SLIP_GAJI';
 
 const BULAN_OPTIONS = [
@@ -350,6 +351,9 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   // Financial aggregations
   const safeRekening = Array.isArray(rekeningList) ? rekeningList : [];
   const kas01 = safeRekening.find((r) => r.kode === 'KAS01');
+  const berangkasRek = safeRekening.find(
+    (r) => r.kode === 'BRK01' || /\b(berangkas|brankas)\b/i.test(r.nama || '')
+  );
   const bon01 = safeRekening.find((r) => r.kode === 'BON01');
   const tit01 = safeRekening.find((r) => r.kode === 'TIT01');
 
@@ -359,9 +363,10 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
         (r) =>
           (r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-'))) &&
           r.kode !== 'KAS01' &&
+          r.kode !== berangkasRek?.kode &&
           r.status === 'AKTIF'
       ),
-    [safeRekening]
+    [safeRekening, berangkasRek]
   );
 
   const anakPerusahaanList = useMemo(
@@ -370,11 +375,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   );
 
   const totalKasTunai = Number(kas01?.saldoSaatIni) || 0;
+  const totalBerangkas = Number(berangkasRek?.saldoSaatIni) || 0;
   const totalBankPerusahaan = bankPerusahaanList.reduce(
     (sum, r) => sum + (Number(r.saldoSaatIni) || 0),
     0
   );
-  const totalLikuiditasRiil = totalKasTunai + totalBankPerusahaan;
+  const totalLikuiditasRiil = totalKasTunai + totalBerangkas + totalBankPerusahaan;
   const totalPiutangBon = Number(bon01?.saldoSaatIni) || 0;
   const totalTitipanMitra = Number(tit01?.saldoSaatIni) || 0;
 
@@ -517,6 +523,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   const navTabs: Array<{ id: BosTab; label: string; icon: React.ComponentType<{ className?: string }> }> = useMemo(
     () => [
       { id: 'kas', label: 'Kas & Saldo PT', icon: Wallet },
+      { id: 'harian', label: 'Rekap Harian & Komoditas', icon: Calendar },
       { id: 'divisi', label: 'Divisi & Armada', icon: Layers },
       { id: 'karyawan', label: 'Rekap Karyawan', icon: Briefcase },
       { id: 'mitra', label: 'Rekening Mitra', icon: Users },
@@ -651,16 +658,26 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-5">
                 <div className="space-y-1">
-                  <div className="text-xs text-slate-500">Brankas &amp; Kasir Tunai (KAS01)</div>
+                  <div className="text-xs text-slate-500">Kas Utama Kasir (KAS01)</div>
                   <div className="font-mono text-lg font-bold text-emerald-700 tabular-nums">
                     {formatRupiah(totalKasTunai)}
                   </div>
-                  <div className="text-[11px] text-slate-400">Uang tunai fisik di kantor</div>
+                  <div className="text-[11px] text-slate-400">Uang tunai berjalan di kasir</div>
                 </div>
 
                 <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
+                  <div className="text-xs text-slate-500">
+                    Saldo {berangkasRek?.nama || 'BERANGKAS'} ({berangkasRek?.kode || 'BRK01'})
+                  </div>
+                  <div className="font-mono text-lg font-bold text-amber-800 tabular-nums">
+                    {formatRupiah(totalBerangkas)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">Simpanan tunai berangkas kantor</div>
+                </div>
+
+                <div className="space-y-1 lg:border-l lg:border-slate-100 lg:pl-4">
                   <div className="text-xs text-slate-500">Total Rekening Bank PT</div>
                   <div className="font-mono text-lg font-bold text-slate-900 tabular-nums">
                     {formatRupiah(totalBankPerusahaan)}
@@ -670,7 +687,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                   </div>
                 </div>
 
-                <div className="space-y-1 lg:border-l lg:border-slate-100 lg:pl-4">
+                <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
                   <div className="text-xs text-slate-500">Total Piutang Bon Mitra (BON01)</div>
                   <div className="font-mono text-lg font-bold text-amber-700 tabular-nums">
                     {formatRupiah(totalPiutangBon)}
@@ -678,7 +695,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                   <div className="text-[11px] text-slate-400">Uang PT di luar (belum ditagih)</div>
                 </div>
 
-                <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
+                <div className="space-y-1 lg:border-l lg:border-slate-100 lg:pl-4">
                   <div className="text-xs text-slate-500">Titipan Hasil Bumi Mitra (TIT01)</div>
                   <div className="font-mono text-lg font-bold text-rose-700 tabular-nums">
                     {formatRupiah(totalTitipanMitra)}
@@ -693,7 +710,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
               <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                 <div>
                   <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                    Rincian Posisi Saldo Tiap Rekening Kas &amp; Bank
+                    Rincian Posisi Saldo Tiap Rekening Kas, Berangkas &amp; Bank
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
                     Saldo riil masing-masing rekening perusahaan dan afiliasi
@@ -722,6 +739,21 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                         </td>
                         <td className="py-3.5 px-5 text-right font-mono font-bold text-emerald-700 tabular-nums">
                           {formatRupiah(kas01.saldoSaatIni)}
+                        </td>
+                      </tr>
+                    )}
+                    {berangkasRek && (
+                      <tr className="bg-amber-50/40 hover:bg-amber-50/70">
+                        <td className="py-3.5 px-5 font-mono font-bold text-amber-900">{berangkasRek.kode}</td>
+                        <td className="py-3.5 px-4 font-bold text-slate-900">
+                          {berangkasRek.nama}{' '}
+                          <span className="text-xs font-medium text-amber-800">· Tempat Setor Kasir</span>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-500 hidden md:table-cell">
+                          {berangkasRek.atasNama} · {berangkasRek.nomorRekening}
+                        </td>
+                        <td className="py-3.5 px-5 text-right font-mono font-bold text-amber-800 tabular-nums">
+                          {formatRupiah(berangkasRek.saldoSaatIni)}
                         </td>
                       </tr>
                     )}
@@ -756,12 +788,14 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
               </div>
             </section>
 
-            {/* Buku Kas Harian Bos Widget */}
-            <BukuKasHarianBosWidget
-              onNavigate={() => setActiveTab('jurnal')}
-              onRefreshParent={onRefreshAll}
-            />
+            {/* Rekapan Transaksi Harian Bos, Tutup Kasir -> Berangkas & Barang Masuk per Komoditas */}
+            <RekapHarianDanKomoditasBosView onRefreshParent={onRefreshAll} />
           </div>
+        )}
+
+        {/* TAB KHUSUS: REKAP HARIAN & KOMODITAS */}
+        {activeTab === 'harian' && (
+          <RekapHarianDanKomoditasBosView onRefreshParent={onRefreshAll} />
         )}
 
         {/* TAB 2: ARUS KAS DIVISI & ARMADA */}

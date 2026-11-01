@@ -46,6 +46,7 @@ import {
   TransaksiBrilink,
   JenisTransaksiBrilink,
   TransaksiUangMasuk,
+  RekapHarianBosLengkapResponse,
 } from '../server/types.ts';
 
 export interface KaryawanWithBon extends Karyawan {
@@ -1166,6 +1167,15 @@ export const api = {
       : '/api/laporan/arus-kas-harian';
     const data = await requestJson(url);
     if (!data.success) throw new Error(data.message || 'Gagal memuat rekap arus kas harian');
+    return data.data;
+  },
+
+  getRekapHarianBosLengkap: async (tanggal?: string): Promise<RekapHarianBosLengkapResponse> => {
+    const url = tanggal
+      ? `/api/bos/rekap-harian-lengkap?tanggal=${encodeURIComponent(tanggal)}`
+      : '/api/bos/rekap-harian-lengkap';
+    const data = await requestJson(url);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat rekapan harian lengkap bos');
     return data.data;
   },
 

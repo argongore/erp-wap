@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShoppingCart,
   Plus,
@@ -23,6 +23,8 @@ import {
   Info,
   Pencil,
   History,
+  ChevronDown,
+  X,
 } from 'lucide-react';
 import {
   Mitra,
@@ -69,6 +71,111 @@ interface CartItem {
   labaKotor: number;
   stokTersedia: number;
   isNonStokAlat?: boolean;
+}
+
+interface CategoryVisualTheme {
+  dot: string;
+  leftBorder: string;
+  headerBg: string;
+  headerText: string;
+  tagBg: string;
+  tagText: string;
+  tagBorder: string;
+}
+
+const CATEGORY_PALETTES: CategoryVisualTheme[] = [
+  {
+    dot: 'bg-amber-400',
+    leftBorder: 'border-l-amber-400',
+    headerBg: 'bg-amber-950/70 border-amber-800/70',
+    headerText: 'text-amber-300',
+    tagBg: 'bg-amber-950/80',
+    tagText: 'text-amber-300',
+    tagBorder: 'border-amber-700/80',
+  },
+  {
+    dot: 'bg-emerald-400',
+    leftBorder: 'border-l-emerald-400',
+    headerBg: 'bg-emerald-950/70 border-emerald-800/70',
+    headerText: 'text-emerald-300',
+    tagBg: 'bg-emerald-950/80',
+    tagText: 'text-emerald-300',
+    tagBorder: 'border-emerald-700/80',
+  },
+  {
+    dot: 'bg-cyan-400',
+    leftBorder: 'border-l-cyan-400',
+    headerBg: 'bg-cyan-950/70 border-cyan-800/70',
+    headerText: 'text-cyan-300',
+    tagBg: 'bg-cyan-950/80',
+    tagText: 'text-cyan-300',
+    tagBorder: 'border-cyan-700/80',
+  },
+  {
+    dot: 'bg-sky-400',
+    leftBorder: 'border-l-sky-400',
+    headerBg: 'bg-sky-950/70 border-sky-800/70',
+    headerText: 'text-sky-300',
+    tagBg: 'bg-sky-950/80',
+    tagText: 'text-sky-300',
+    tagBorder: 'border-sky-700/80',
+  },
+  {
+    dot: 'bg-violet-400',
+    leftBorder: 'border-l-violet-400',
+    headerBg: 'bg-violet-950/70 border-violet-800/70',
+    headerText: 'text-violet-300',
+    tagBg: 'bg-violet-950/80',
+    tagText: 'text-violet-300',
+    tagBorder: 'border-violet-700/80',
+  },
+  {
+    dot: 'bg-lime-400',
+    leftBorder: 'border-l-lime-400',
+    headerBg: 'bg-lime-950/70 border-lime-800/70',
+    headerText: 'text-lime-300',
+    tagBg: 'bg-lime-950/80',
+    tagText: 'text-lime-300',
+    tagBorder: 'border-lime-700/80',
+  },
+  {
+    dot: 'bg-orange-400',
+    leftBorder: 'border-l-orange-400',
+    headerBg: 'bg-orange-950/70 border-orange-800/70',
+    headerText: 'text-orange-300',
+    tagBg: 'bg-orange-950/80',
+    tagText: 'text-orange-300',
+    tagBorder: 'border-orange-700/80',
+  },
+  {
+    dot: 'bg-fuchsia-400',
+    leftBorder: 'border-l-fuchsia-400',
+    headerBg: 'bg-fuchsia-950/70 border-fuchsia-800/70',
+    headerText: 'text-fuchsia-300',
+    tagBg: 'bg-fuchsia-950/80',
+    tagText: 'text-fuchsia-300',
+    tagBorder: 'border-fuchsia-700/80',
+  },
+];
+
+function getCategoryVisualTheme(rawCategory?: string): CategoryVisualTheme {
+  const norm = String(rawCategory || 'LAINNYA')
+    .trim()
+    .toUpperCase()
+    .replace(/_/g, ' ');
+  if (norm.includes('MATERIAL') || norm.includes('BANGUNAN')) return CATEGORY_PALETTES[0];
+  if (norm.includes('PUPUK')) return CATEGORY_PALETTES[1];
+  if (norm.includes('OBAT') || norm.includes('HERBISIDA') || norm.includes('PESTISIDA')) return CATEGORY_PALETTES[2];
+  if (norm.includes('ALAT') || norm.includes('JASA') || norm.includes('SEWA')) return CATEGORY_PALETTES[3];
+  if (norm.includes('SEMBAKO') || norm.includes('KONSUMSI')) return CATEGORY_PALETTES[4];
+  if (norm.includes('BIBIT') || norm.includes('BENIH')) return CATEGORY_PALETTES[5];
+  if (norm.includes('PAKAN') || norm.includes('TERNAK')) return CATEGORY_PALETTES[6];
+
+  let hash = 0;
+  for (let i = 0; i < norm.length; i++) {
+    hash = (hash * 31 + norm.charCodeAt(i)) >>> 0;
+  }
+  return CATEGORY_PALETTES[hash % CATEGORY_PALETTES.length];
 }
 
 export const PenjualanView: React.FC<Props> = ({
@@ -157,6 +264,28 @@ export const PenjualanView: React.FC<Props> = ({
   const [errorMsg, setErrorMsg] = useState('');
 
   const [kasirKategoriFilter, setKasirKategoriFilter] = useState<string>('ALL');
+  const [productDropdownOpen, setProductDropdownOpen] = useState<boolean>(false);
+  const [productSearchQuery, setProductSearchQuery] = useState<string>('');
+  const productDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!productDropdownOpen) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (productDropdownRef.current && !productDropdownRef.current.contains(e.target as Node)) {
+        setProductDropdownOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setProductDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [productDropdownOpen]);
+
   const kasirCategories = React.useMemo(() => {
     const set = new Set<string>();
     for (const p of activeProducts) {
@@ -174,6 +303,33 @@ export const PenjualanView: React.FC<Props> = ({
       (p) => String(p.kategori || '').trim().toUpperCase() === kasirKategoriFilter
     );
   }, [activeProducts, kasirKategoriFilter]);
+
+  const groupedDropdownProducts = React.useMemo(() => {
+    const q = productSearchQuery.trim().toLowerCase();
+    const list = filteredKasirProducts.filter((p) => {
+      if (!q) return true;
+      const cleanKat = String(p.kategori || 'LAINNYA').replace(/_/g, ' ').toLowerCase();
+      return (
+        p.nama.toLowerCase().includes(q) ||
+        cleanKat.includes(q) ||
+        String(p.kode || '').toLowerCase().includes(q)
+      );
+    });
+
+    const groupsMap = new Map<string, Produk[]>();
+    for (const p of list) {
+      const catKey = String(p.kategori || 'LAINNYA').trim().toUpperCase() || 'LAINNYA';
+      if (!groupsMap.has(catKey)) groupsMap.set(catKey, []);
+      groupsMap.get(catKey)!.push(p);
+    }
+
+    return Array.from(groupsMap.entries()).map(([kategori, items]) => ({
+      kategori,
+      label: kategori.replace(/_/g, ' '),
+      theme: getCategoryVisualTheme(kategori),
+      items,
+    }));
+  }, [filteredKasirProducts, productSearchQuery]);
 
   const activeMitras = React.useMemo(
     () => mitraList.filter((m) => m.status === 'AKTIF'),
@@ -879,7 +1035,7 @@ export const PenjualanView: React.FC<Props> = ({
             </div>
 
             {/* Dynamic Category Filter + Product selection */}
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {kasirCategories.length > 1 && (
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
                   <span className="text-[10px] text-zinc-400 shrink-0">Filter Kategori:</span>
@@ -889,10 +1045,10 @@ export const PenjualanView: React.FC<Props> = ({
                       setKasirKategoriFilter('ALL');
                       if (activeProducts[0]) setSelectedProductCode(activeProducts[0].kode);
                     }}
-                    className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer shrink-0 ${
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer shrink-0 ${
                       kasirKategoriFilter === 'ALL'
                         ? 'bg-emerald-600 text-white'
-                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-700'
+                        : 'bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700'
                     }`}
                   >
                     Semua ({activeProducts.length})
@@ -902,6 +1058,7 @@ export const PenjualanView: React.FC<Props> = ({
                       (p) => String(p.kategori || '').trim().toUpperCase() === cat
                     ).length;
                     const isSelected = kasirKategoriFilter === cat;
+                    const catTheme = getCategoryVisualTheme(cat);
                     return (
                       <button
                         key={cat}
@@ -913,13 +1070,16 @@ export const PenjualanView: React.FC<Props> = ({
                           );
                           if (firstInCat) setSelectedProductCode(firstInCat.kode);
                         }}
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer shrink-0 ${
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer shrink-0 border ${
                           isSelected
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-700'
+                            ? `${catTheme.tagBg} ${catTheme.tagText} ${catTheme.tagBorder} ring-1 ring-white/20`
+                            : 'bg-zinc-800 text-zinc-300 hover:text-white border-zinc-700'
                         }`}
                       >
-                        {cat.replace(/_/g, ' ')} ({count})
+                        <span className={`w-2 h-2 rounded-full ${catTheme.dot}`} />
+                        <span>
+                          {cat.replace(/_/g, ' ')} ({count})
+                        </span>
                       </button>
                     );
                   })}
@@ -928,35 +1088,47 @@ export const PenjualanView: React.FC<Props> = ({
 
               {/* Quick-pick Barang & Jasa Sewa Siap Transaksi */}
               {inStockProducts.length > 0 ? (
-                <div className="p-2.5 bg-emerald-950/35 border border-emerald-800/70 rounded-lg space-y-1.5">
+                <div className="p-2.5 bg-zinc-950/60 border border-zinc-800 rounded-lg space-y-2">
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="font-bold text-emerald-300">
-                      Barang &amp; Jasa Sewa Siap Transaksi ({inStockProducts.length} Item):
+                      Pilih Cepat Produk Siap Jual ({inStockProducts.length} Item):
                     </span>
-                    <span className="text-[10px] text-zinc-400">Klik cepat produk / sewa alat</span>
+                    <span className="text-[10px] text-zinc-400">Warna garis kiri = pembeda kategori</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    {inStockProducts.map((p) => {
-                      const sq = getStokQty(p.kode);
-                      const isAlat = isItemTanpaStok(p);
-                      const isSel = currentProduct?.kode === p.kode;
-                      return (
-                        <button
-                          key={p.kode}
-                          type="button"
-                          onClick={() => setSelectedProductCode(p.kode)}
-                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-all cursor-pointer ${
-                            isSel
-                              ? 'bg-emerald-600 text-white border-emerald-400 shadow-xs'
-                              : isAlat
-                              ? 'bg-zinc-900 text-sky-200 border-sky-800 hover:bg-sky-950'
-                              : 'bg-zinc-900 text-emerald-200 border-emerald-800 hover:bg-emerald-950'
-                          }`}
-                        >
-                          {p.nama} ({isAlat ? `Tanpa Stok / ${p.satuan}` : `${sq} ${p.satuan}`})
-                        </button>
-                      );
-                    })}
+                    {inStockProducts
+                      .filter(
+                        (p) =>
+                          kasirKategoriFilter === 'ALL' ||
+                          String(p.kategori || '').trim().toUpperCase() === kasirKategoriFilter
+                      )
+                      .map((p) => {
+                        const sq = getStokQty(p.kode);
+                        const isAlat = isItemTanpaStok(p);
+                        const isSel = currentProduct?.kode === p.kode;
+                        const catTheme = getCategoryVisualTheme(p.kategori);
+                        return (
+                          <button
+                            key={p.kode}
+                            type="button"
+                            onClick={() => setSelectedProductCode(p.kode)}
+                            className={`px-2.5 py-1.5 rounded-md text-xs border border-l-4 ${catTheme.leftBorder} transition-all cursor-pointer flex items-center gap-2 ${
+                              isSel
+                                ? 'bg-emerald-950 text-white border-emerald-500 shadow-xs'
+                                : 'bg-zinc-900 text-zinc-100 border-zinc-700/80 hover:bg-zinc-800'
+                            }`}
+                          >
+                            <span className="font-bold">{p.nama}</span>
+                            <span
+                              className={`font-mono text-[11px] font-semibold ${
+                                isAlat ? 'text-sky-300' : 'text-emerald-400'
+                              }`}
+                            >
+                              • {isAlat ? 'Tanpa Stok' : `Sisa ${sq} ${p.satuan}`}
+                            </span>
+                          </button>
+                        );
+                      })}
                   </div>
                 </div>
               ) : (
@@ -974,30 +1146,180 @@ export const PenjualanView: React.FC<Props> = ({
                 </div>
               )}
 
-              <div>
-                <label className="block text-[11px] text-zinc-400 mb-1">Daftar Produk &amp; Item Tanpa Stok</label>
-                <select
-                  value={currentProduct?.kode || selectedProductCode}
-                  onChange={(e) => setSelectedProductCode(e.target.value)}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-xs text-zinc-100 focus:outline-hidden focus:border-emerald-500 font-medium"
-                >
-                  {filteredKasirProducts.map((p) => {
-                    const stQty = getStokQty(p.kode);
-                    const isAlat = isItemTanpaStok(p);
-                    const cleanKat = String(p.kategori || 'LAINNYA').replace(/_/g, ' ');
-                    const sugestiOpt = p.hargaJual > 0 ? p.hargaJual : p.hargaBeli || 0;
-                    return (
-                      <option key={p.kode} value={p.kode}>
-                        {isAlat
-                          ? `[TANPA STOK] `
-                          : stQty > 0
-                          ? `[SIAP JUAL: ${stQty} ${p.satuan}] `
-                          : '[STOK 0] '}
-                        [{cleanKat}] {p.nama} | HPP: {formatRupiah(p.hargaBeli || 0)} | Sugesti: {formatRupiah(sugestiOpt)}
-                      </option>
-                    );
-                  })}
-                </select>
+              {/* Clean Product Selector: ONLY Nama Produk + Sisa Stok, Differentiated by Kategori */}
+              <div ref={productDropdownRef} className="relative">
+                <label className="block text-[11px] font-semibold text-zinc-300 mb-1">
+                  Daftar Produk &amp; Sisa Stok (Dikelompokkan per Kategori)
+                </label>
+
+                {(() => {
+                  const selTheme = getCategoryVisualTheme(currentProduct?.kategori);
+                  const selKatLabel = String(currentProduct?.kategori || 'LAINNYA').replace(/_/g, ' ');
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setProductDropdownOpen((prev) => !prev)}
+                      className={`w-full bg-zinc-800 hover:bg-zinc-800/90 border ${
+                        productDropdownOpen ? 'border-emerald-500 ring-1 ring-emerald-500/40' : 'border-zinc-700'
+                      } border-l-4 ${selTheme.leftBorder} rounded-lg px-3.5 py-2.5 text-left flex items-center justify-between gap-3 transition-all cursor-pointer`}
+                    >
+                      {currentProduct ? (
+                        <>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border shrink-0 ${selTheme.tagBg} ${selTheme.tagText} ${selTheme.tagBorder}`}
+                            >
+                              {selKatLabel}
+                            </span>
+                            <span className="text-sm font-bold text-white truncate">
+                              {currentProduct.nama}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            {isCurrentAlatJasa ? (
+                              <span className="text-xs font-bold font-mono text-sky-300 bg-sky-950/80 border border-sky-800 px-2.5 py-0.5 rounded">
+                                Tanpa Stok
+                              </span>
+                            ) : (
+                              <span
+                                className={`text-xs font-bold font-mono px-2.5 py-0.5 rounded border ${
+                                  stokTersediaCurrent > 0
+                                    ? 'text-emerald-300 bg-emerald-950/80 border-emerald-800'
+                                    : 'text-rose-300 bg-rose-950/80 border-rose-800'
+                                }`}
+                              >
+                                Sisa Stok: {stokTersediaCurrent} {currentProduct.satuan}
+                              </span>
+                            )}
+                            <ChevronDown
+                              className={`w-4 h-4 text-zinc-400 transition-transform ${
+                                productDropdownOpen ? 'rotate-180 text-emerald-400' : ''
+                              }`}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-xs text-zinc-400">Pilih produk yang akan dijual...</span>
+                      )}
+                    </button>
+                  );
+                })()}
+
+                {productDropdownOpen && (
+                  <div className="absolute z-40 mt-1.5 w-full bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden">
+                    {/* Search input inside dropdown */}
+                    <div className="p-2.5 bg-zinc-950 border-b border-zinc-800">
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-2.5" />
+                        <input
+                          type="text"
+                          autoFocus
+                          value={productSearchQuery}
+                          onChange={(e) => setProductSearchQuery(e.target.value)}
+                          placeholder="Cari nama produk atau kategori..."
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-lg pl-8 pr-8 py-1.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-hidden focus:border-emerald-500"
+                        />
+                        {productSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setProductSearchQuery('')}
+                            className="absolute right-2.5 top-2 text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Categorized Product List: ONLY Nama Produk & Sisa Stok */}
+                    <div className="max-h-80 overflow-y-auto divide-y divide-zinc-800/80">
+                      {groupedDropdownProducts.length === 0 ? (
+                        <div className="p-5 text-center text-xs text-zinc-400">
+                          Produk tidak ditemukan untuk pencarian "{productSearchQuery}".
+                        </div>
+                      ) : (
+                        groupedDropdownProducts.map((group) => (
+                          <div key={group.kategori} className="bg-zinc-900">
+                            {/* Category Header Separator */}
+                            <div
+                              className={`px-3 py-1.5 border-y ${group.theme.headerBg} flex items-center justify-between sticky top-0 z-10 backdrop-blur-xs`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full ${group.theme.dot}`} />
+                                <span
+                                  className={`text-[11px] font-extrabold uppercase tracking-wider ${group.theme.headerText}`}
+                                >
+                                  Kategori: {group.label}
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-mono text-zinc-300">
+                                {group.items.length} Produk
+                              </span>
+                            </div>
+
+                            {/* Items in this category */}
+                            <div className="divide-y divide-zinc-800/60">
+                              {group.items.map((p) => {
+                                const stQty = getStokQty(p.kode);
+                                const isAlat = isItemTanpaStok(p);
+                                const isSelected = currentProduct?.kode === p.kode;
+                                return (
+                                  <button
+                                    key={p.kode}
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedProductCode(p.kode);
+                                      setProductDropdownOpen(false);
+                                      setProductSearchQuery('');
+                                    }}
+                                    className={`w-full px-3.5 py-2.5 text-left flex items-center justify-between gap-3 border-l-4 ${group.theme.leftBorder} transition-colors cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-emerald-950/70'
+                                        : 'hover:bg-zinc-800/90'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      {isSelected && (
+                                        <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                                      )}
+                                      <span
+                                        className={`text-sm font-bold truncate ${
+                                          isSelected
+                                            ? 'text-emerald-300'
+                                            : !isAlat && stQty === 0
+                                            ? 'text-zinc-400'
+                                            : 'text-zinc-100'
+                                        }`}
+                                      >
+                                        {p.nama}
+                                      </span>
+                                    </div>
+
+                                    <div className="shrink-0">
+                                      {isAlat ? (
+                                        <span className="text-xs font-bold font-mono text-sky-300 bg-sky-950/70 border border-sky-800/80 px-2 py-0.5 rounded">
+                                          Tanpa Stok
+                                        </span>
+                                      ) : stQty > 0 ? (
+                                        <span className="text-xs font-bold font-mono text-emerald-300 bg-emerald-950/70 border border-emerald-800/80 px-2 py-0.5 rounded">
+                                          Sisa: {stQty} {p.satuan}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs font-semibold font-mono text-rose-400 bg-rose-950/50 border border-rose-900/70 px-2 py-0.5 rounded">
+                                          Stok: 0 {p.satuan}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -1699,3 +1699,137 @@ export interface HasilKliringSilangResponse {
   keterangan: string;
 }
 
+// ==========================================
+// REKAPAN TRANSAKSI HARIAN BOS, TUTUP KASIR -> BERANGKAS & BARANG MASUK PER KOMODITAS
+// ==========================================
+export interface ItemDetailArusKasBos {
+  id: string;
+  tanggal: string;
+  jam: string;
+  arah: 'MASUK' | 'KELUAR' | 'MUTASI_INTERNAL';
+  kategoriKode: string;
+  kategoriLabel: string;
+  divisi?: string;
+  pihak: string;
+  deskripsi: string;
+  metode: string;
+  rekeningKode: string;
+  rekeningNama: string;
+  nominalTotal: number;
+  nominalKasirTunai: number; // Pengaruh ke KAS01 (Kas Utama Kasir)
+  nominalBank: number;       // Pengaruh ke Bank PT
+  fotoBukti?: string;
+}
+
+export interface KesimpulanKasirBerangkasBos {
+  kodeKasir: string;
+  namaKasir: string;
+  kodeBerangkas: string;
+  namaBerangkas: string;
+  isTanggalHariIni: boolean;
+  saldoAwalKasirPagi: number;
+  droppingMasukKasirHariIni: number; // Transfer dari Berangkas / Bank ke KAS01
+  uangMasukOperasionalKasirHariIni: number;
+  uangKeluarOperasionalKasirHariIni: number;
+  mutasiPokokBrilinkKasirHariIni: number; // + jika Tukar Cash, - jika Tarik Tunai nasabah
+  transferKeluarKeBankLainHariIni: number;
+  saldoAkhirKasirSebelumSetorBerangkas: number; // Kesimpulan uang kasir sebelum dikosongkan ke Berangkas
+  sudahDisetorKeBerangkasHariIni: number;       // Transfer KAS01 -> BRK01 pada tanggal terpilih
+  saldoAkhirKasirPadaTanggal: number;           // Posisi akhir KAS01 setelah dikurangi setoran Berangkas
+  saldoKasirSaatIniLive: number;
+  saldoBerangkasSaatIniLive: number;
+  estimasiSaldoBerangkasSetelahKosongkanKasir: number;
+}
+
+export interface BarisKomoditasMasukBos {
+  id: string;
+  tanggal: string; // DD/MM/YYYY
+  jam: string;
+  namaMitra: string;
+  beratBersihKg: number;
+  hargaPerKg: number;
+  jumlahRp: number;
+  metodePembayaran: string;
+  isBelumPutusHarga?: boolean;
+  isSaldoAwalMigrasi?: boolean;
+}
+
+export interface StokLamaKomoditasBos {
+  label: string;          // e.g. "SISA OKTOBER" / "STOK AKHIR OKTOBER" / "STOK LAMA"
+  tanggalLabel: string;   // e.g. "1 NOV"
+  beratKg: number;        // Stok lama sebelum transaksi periode/hari ini
+  hargaRataPerKg: number; // Harga rata-rata lama (Rp/Kg)
+  jumlahModalRp: number;  // Jumlah uang modal lama (Rp)
+  // Nilai master saldo awal (untuk form input/edit stok lama)
+  masterStokAwalKg: number;
+  masterHargaRataAwal: number;
+  masterModalAwalRp: number;
+  masterKeteranganAwal: string;
+}
+
+export interface KolomKomoditasMasukBos {
+  kode: string;
+  nama: string;
+  satuan: string;
+  stokGudangSaatIniKg: number;
+  stokLama: StokLamaKomoditasBos;
+  rows: BarisKomoditasMasukBos[];
+  // Khusus penambahan barang masuk pada periode / tanggal terpilih
+  totalKgPeriode: number;
+  rataHargaPerKgPeriode: number;
+  totalRpPeriode: number;
+  // Total gabungan (Stok Lama + Barang Masuk) seperti baris hijau Excel Bos
+  totalStokGabunganKg: number;
+  rataHargaGabunganPerKg: number;
+  totalModalGabunganRp: number;
+}
+
+export interface ItemBarangTokoMasukBos {
+  idFaktur: string;
+  tanggal: string;
+  jam: string;
+  namaSupplier: string;
+  namaProduk: string;
+  kategori: string;
+  qty: number;
+  satuan: string;
+  hargaBeli: number;
+  subtotal: number;
+  metodePembayaran: string;
+  rekeningSumber: string;
+}
+
+export interface RekapHarianBosLengkapResponse {
+  tanggal: string; // DD/MM/YYYY
+  tanggalIso: string; // YYYY-MM-DD
+  daftarTanggalTersedia: string[]; // DD/MM/YYYY sorted newest first
+  // Ringkasan Arus Kas Operasional (Kasir + Bank PT)
+  totalUangMasuk: number;
+  totalUangMasukKasirTunai: number;
+  totalUangMasukBank: number;
+  totalUangKeluar: number;
+  totalUangKeluarKasirTunai: number;
+  totalUangKeluarBank: number;
+  arusKasBersih: number;
+  arusKasBersihKasirTunai: number;
+  rincianKategoriMasuk: Array<{ label: string; total: number; kasirTunai: number; bank: number; count: number }>;
+  rincianKategoriKeluar: Array<{ label: string; total: number; kasirTunai: number; bank: number; count: number }>;
+  detailUangMasuk: ItemDetailArusKasBos[];
+  detailUangKeluar: ItemDetailArusKasBos[];
+  detailMutasiKasirBerangkas: ItemDetailArusKasBos[];
+  kesimpulanKasirBerangkas: KesimpulanKasirBerangkasBos;
+  // Rekapan Barang Masuk per Hari & Akumulasi per Komoditas
+  komoditasHarianList: KolomKomoditasMasukBos[];
+  komoditasAkumulasiList: KolomKomoditasMasukBos[];
+  totalKgStokLamaHariIni: number;
+  totalModalStokLamaHariIni: number;
+  totalKgHasilBumiHariIni: number;
+  totalRpHasilBumiHariIni: number;
+  totalKgStokGabunganHariIni: number;
+  totalUangModalHbDikeluarkan: number;
+  barangTokoMasukHariIni: ItemBarangTokoMasukBos[];
+  totalRpBarangTokoHariIni: number;
+}
+
+
+

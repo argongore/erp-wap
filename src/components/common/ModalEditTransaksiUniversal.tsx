@@ -19,6 +19,7 @@ import {
   Rekening,
   StokBarang,
   StokHasilBumi,
+  isProdukTanpaStok,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 
@@ -1259,17 +1260,40 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                           >
                             <div className="sm:col-span-5">
                               <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
-                                Produk ({stokRef ? `Stok Gudang: ${stokRef.stok} ${stokRef.satuan}` : it.satuan})
+                                Produk ({stokRef ? `Sisa Stok: ${stokRef.stok} ${stokRef.satuan}` : it.satuan})
                               </label>
                               <select
                                 value={it.kodeProduk}
                                 onChange={(e) => handleProductRowChange(idx, e.target.value)}
                                 className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-semibold text-xs"
                               >
-                                {masters.produkList.map((p) => (
-                                  <option key={p.kode} value={p.kode}>
-                                    {p.nama} ({p.satuan})
-                                  </option>
+                                {Array.from(
+                                  masters.produkList.reduce((acc, p) => {
+                                    const cat = String(p.kategori || 'LAINNYA')
+                                      .trim()
+                                      .toUpperCase()
+                                      .replace(/_/g, ' ');
+                                    if (!acc.has(cat)) acc.set(cat, []);
+                                    acc.get(cat)!.push(p);
+                                    return acc;
+                                  }, new Map<string, Produk[]>())
+                                ).map(([catLabel, items]) => (
+                                  <optgroup key={catLabel} label={`KATEGORI: ${catLabel}`}>
+                                    {items.map((p) => {
+                                      const stObj = masters.stokBarangList.find(
+                                        (s) =>
+                                          String(s.kode || '').trim().toUpperCase() ===
+                                          String(p.kode || '').trim().toUpperCase()
+                                      );
+                                      const tanpaStok = Boolean(stObj?.tanpaStok || isProdukTanpaStok(p));
+                                      const sisaQty = Math.max(0, Number(stObj?.stok) || 0);
+                                      return (
+                                        <option key={p.kode} value={p.kode}>
+                                          {p.nama} — {tanpaStok ? 'Tanpa Stok' : `Sisa: ${sisaQty} ${p.satuan}`}
+                                        </option>
+                                      );
+                                    })}
+                                  </optgroup>
                                 ))}
                               </select>
                             </div>

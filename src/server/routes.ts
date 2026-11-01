@@ -3551,6 +3551,17 @@ apiRouter.get('/bos-snapshot', (_req, res) => {
   }
 });
 
+apiRouter.get('/bos/rekap-harian-lengkap', (req, res) => {
+  try {
+    const tanggal = req.query.tanggal ? String(req.query.tanggal).trim() : undefined;
+    const data = TransactionService.getRekapHarianBosLengkap(tanggal);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.get('/access/status', (_req, res) => {
   try {
     const profil = TransactionService.getProfilPerusahaan();
