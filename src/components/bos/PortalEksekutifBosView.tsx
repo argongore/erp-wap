@@ -1881,16 +1881,11 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
             <section className="bg-white border border-slate-200 rounded-2xl p-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pb-5 border-b border-slate-100">
                 <div>
-                  <div className="text-xs text-slate-500">Total Seluruh Piutang Mitra</div>
+                  <div className="text-xs text-slate-500">1. Piutang (Mitra Berhutang)</div>
                   <div className="font-mono text-xl font-bold text-amber-700 tabular-nums mt-0.5">
                     {formatRupiah(
-                      rekapMitra?.totalSeluruhPiutangMitra ?? rekapMitra?.totalBonMitra ?? totalPiutangBon
-                    )}
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    {rekapMitra?.mitraDenganBonCount || 0} mitra memiliki piutang · Aktif:{' '}
-                    {formatRupiah(
-                      rekapMitra?.totalPiutangAktifMitra ??
+                      rekapMitra?.totalPiutangAktifGlobal ??
+                        rekapMitra?.totalPiutangAktifMitra ??
                         Math.max(
                           0,
                           (rekapMitra?.totalBonMitra || totalPiutangBon) -
@@ -1898,9 +1893,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                         )
                     )}
                   </div>
+                  <div className="text-[11px] text-slate-400">
+                    1. Piutang aktif berjalan ({rekapMitra?.mitraPiutangAktifCount ?? rekapMitra?.mitraDenganBonCount ?? 0} mitra)
+                  </div>
                 </div>
                 <div className="sm:border-l sm:border-slate-100 sm:pl-4">
-                  <div className="text-xs text-slate-500">Total Hutang Kita ke Mitra</div>
+                  <div className="text-xs text-slate-500">2. Hutang (PT Berhutang)</div>
                   <div className="font-mono text-xl font-bold text-purple-800 tabular-nums mt-0.5">
                     {formatRupiah(
                       rekapMitra?.totalNotaSupplierRekeningMitra ??
@@ -1909,36 +1907,40 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                     )}
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    Nota supplier / rekening mitra ({rekapMitra?.mitraDenganHutangTitipCount || 0} mitra)
+                    Termasuk Uang Titip &amp; HB Titip ({rekapMitra?.mitraDenganHutangTitipCount || 0} mitra)
                   </div>
                 </div>
                 <div className="lg:border-l lg:border-slate-100 lg:pl-4">
-                  <div className="text-xs text-slate-500">Uang Kita Masih di Mitra</div>
+                  <div className="text-xs text-slate-500">Total Rekening Mitra / Nota Supplier</div>
                   {(() => {
-                    const totalPiutang =
-                      rekapMitra?.totalSeluruhPiutangMitra ?? rekapMitra?.totalBonMitra ?? totalPiutangBon;
+                    const totalPiutangAktif =
+                      rekapMitra?.totalPiutangAktifGlobal ??
+                      rekapMitra?.totalPiutangAktifMitra ??
+                      Math.max(
+                        0,
+                        (rekapMitra?.totalBonMitra || totalPiutangBon) -
+                          (rekapMitra?.totalNominalNotaNgunci || 0)
+                      );
                     const totalHutangKita =
                       rekapMitra?.totalNotaSupplierRekeningMitra ??
                       rekapMitra?.totalHutangPerusahaanKeMitra ??
                       totalTitipanMitra;
-                    const uangKita = rekapMitra?.uangKitaDiMitra ?? totalPiutang - totalHutangKita;
-                    const uangEfektif =
-                      rekapMitra?.uangKitaDiMitraEfektif ??
-                      uangKita - (rekapMitra?.totalNominalNotaNgunci || 0);
+                    const totalRekeningMitra =
+                      rekapMitra?.totalRekeningMitraNotaSupplier ??
+                      (totalPiutangAktif - totalHutangKita);
                     return (
                       <>
                         <div
                           className={`font-mono text-xl font-bold tabular-nums mt-0.5 ${
-                            uangKita >= 0 ? 'text-emerald-700' : 'text-purple-800'
+                            totalRekeningMitra >= 0 ? 'text-emerald-700' : 'text-purple-800'
                           }`}
                         >
-                          {uangKita < 0 ? `-${formatRupiah(Math.abs(uangKita))}` : formatRupiah(uangKita)}
+                          {totalRekeningMitra < 0
+                            ? `-${formatRupiah(Math.abs(totalRekeningMitra))}`
+                            : formatRupiah(totalRekeningMitra)}
                         </div>
                         <div className="text-[11px] text-slate-400">
-                          Piutang − Hutang Kita · Efektif:{' '}
-                          {uangEfektif < 0
-                            ? `-${formatRupiah(Math.abs(uangEfektif))}`
-                            : formatRupiah(uangEfektif)}
+                          Rumus: Piutang − Hutang (Tanpa Ngunci)
                         </div>
                       </>
                     );
@@ -1946,14 +1948,14 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                 </div>
                 <div className="sm:border-l sm:border-slate-100 sm:pl-4">
                   <div className="text-xs text-rose-700 font-semibold">
-                    Nota Ngunci (Uang Tak Kembali)
+                    3. Ngunci (Uang Tak Kembali)
                   </div>
                   <div className="font-mono text-xl font-bold text-rose-700 tabular-nums mt-0.5">
                     {formatRupiah(rekapMitra?.totalNominalNotaNgunci || 0)}
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    {rekapMitra?.mitraNotaNgunciCount || 0} mitra ngunci ·{' '}
-                    {rekapMitra?.totalLembarNotaNgunci || 0} lembar nota
+                    {rekapMitra?.mitraNotaNgunciCount || 0} mitra ·{' '}
+                    {rekapMitra?.totalLembarNotaNgunci || 0} nota (berkurang jika dibayar)
                   </div>
                 </div>
               </div>
@@ -1993,7 +1995,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Piutang ({rekapMitra?.mitraDenganBonCount || 0})
+                      1. Piutang ({rekapMitra?.mitraPiutangAktifCount ?? rekapMitra?.mitraDenganBonCount ?? 0})
                     </button>
                     <button
                       type="button"
@@ -2004,7 +2006,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Nota Supplier/Titip ({rekapMitra?.mitraDenganHutangTitipCount || 0})
+                      2. Hutang / Titip ({rekapMitra?.mitraDenganHutangTitipCount || 0})
                     </button>
                     <button
                       type="button"
@@ -2015,7 +2017,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           : 'text-rose-700 hover:text-rose-900'
                       }`}
                     >
-                      Nota Ngunci ({rekapMitra?.mitraNotaNgunciCount || 0})
+                      3. Ngunci ({rekapMitra?.mitraNotaNgunciCount || 0})
                     </button>
                   </div>
                 </div>

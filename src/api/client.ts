@@ -43,6 +43,9 @@ import {
   ItemDivisi,
   KategoriInventaris,
   KondisiInventaris,
+  TransaksiBrilink,
+  JenisTransaksiBrilink,
+  TransaksiUangMasuk,
 } from '../server/types.ts';
 
 export interface KaryawanWithBon extends Karyawan {
@@ -365,14 +368,18 @@ export const api = {
 
   // Master Produk, Kategori Kustom & Stok
   getKategoriProduk: async (): Promise<
-    Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>
+    Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean; tanpaStok?: boolean }>
   > => {
     const data = await requestJson('/api/kategori-produk');
     if (!data.success) throw new Error(data.message || 'Gagal memuat daftar kategori produk');
     return data.data;
   },
 
-  createKategoriProduk: async (payload: { nama: string; deskripsi?: string }): Promise<any> => {
+  createKategoriProduk: async (payload: {
+    nama: string;
+    deskripsi?: string;
+    tanpaStok?: boolean;
+  }): Promise<any> => {
     const data = await requestJson('/api/kategori-produk', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -386,6 +393,7 @@ export const api = {
     kategoriLama: string;
     kategoriBaru: string;
     deskripsi?: string;
+    tanpaStok?: boolean;
   }): Promise<{ kategoriLama: string; kategoriBaru: string; affectedCount: number }> => {
     const data = await requestJson('/api/kategori-produk/rename', {
       method: 'PUT',
@@ -413,6 +421,7 @@ export const api = {
     kodeProdukList: string[];
     kategoriBaru: string;
     deskripsiKategori?: string;
+    tanpaStokKategori?: boolean;
   }): Promise<{ kategoriBaru: string; updatedCount: number }> => {
     const data = await requestJson('/api/produk/bulk-kategori', {
       method: 'POST',
@@ -439,7 +448,10 @@ export const api = {
     return data.data;
   },
 
-  updateProduk: async (kode: string, payload: Partial<Produk> & { minimum?: number }): Promise<any> => {
+  updateProduk: async (
+    kode: string,
+    payload: Partial<Produk> & { minimum?: number; deskripsiKategori?: string; tanpaStokKategori?: boolean }
+  ): Promise<any> => {
     const data = await requestJson(`/api/produk/${encodeURIComponent(kode)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -484,6 +496,16 @@ export const api = {
       body: JSON.stringify(payload),
     });
     if (!data.success) throw new Error(data.message || 'Gagal menambah komoditas hasil bumi');
+    return data.data;
+  },
+
+  deleteKomoditasHasilBumi: async (kode: string): Promise<{ deleted: StokHasilBumi }> => {
+    const data = await requestJson('/api/stok-hasil-bumi/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kode }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus komoditas hasil bumi');
     return data.data;
   },
 
@@ -655,6 +677,88 @@ export const api = {
     return data.data;
   },
 
+  // Transaksi BRILink (Uang Masuk: Adm Tarik Tunai | Uang Keluar: Adm Tukar Cash Rupiah PT)
+  getBrilinkList: async (): Promise<TransaksiBrilink[]> => {
+    const data = await requestJson('/api/transaksi/brilink');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat riwayat transaksi BRILink');
+    return data.data;
+  },
+
+  processBrilink: async (payload: {
+    jenisBrilink?: JenisTransaksiBrilink;
+    jenisTransaksi?: JenisTransaksiBrilink;
+    idMitra?: string;
+    namaPelangganManual?: string;
+    teleponPelanggan?: string;
+    nominalPokok?: number;
+    nominalAdmin: number;
+    rekeningAdmin: string;
+    rekeningBank?: string;
+    rekeningPokokBank?: string;
+    divisi?: string;
+    fotoBukti?: string;
+    keterangan?: string;
+    tanggal?: string;
+  }): Promise<TransaksiBrilink> => {
+    const data = await requestJson('/api/transaksi/brilink', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memproses transaksi BRILink');
+    return data.data;
+  },
+
+  deleteBrilink: async (idTransaksi: string): Promise<{ deleted: TransaksiBrilink }> => {
+    const data = await requestJson('/api/transaksi/brilink/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idTransaksi }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal membatalkan transaksi BRILink');
+    return data.data;
+  },
+
+  // Transaksi Uang Masuk (+) & Realisasi Penjualan Hasil Bumi Belum Putus Harga
+  getUangMasukList: async (): Promise<TransaksiUangMasuk[]> => {
+    const data = await requestJson('/api/transaksi/uang-masuk');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat riwayat Uang Masuk');
+    return data.data;
+  },
+
+  processUangMasuk: async (payload: {
+    divisi?: string;
+    kategori?: string;
+    keterangan?: string;
+    nominal: number;
+    metode: 'TUNAI' | 'TRANSFER';
+    rekeningTujuan?: string;
+    idMitra?: string;
+    namaPengirimManual?: string;
+    noPenjualanHasilBumi?: string;
+    tandaiPutusLunas?: boolean;
+    tanggal?: string;
+    fotoBukti?: string;
+  }): Promise<TransaksiUangMasuk> => {
+    const data = await requestJson('/api/transaksi/uang-masuk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mencatat transaksi Uang Masuk');
+    return data.data;
+  },
+
+  deleteUangMasuk: async (idTransaksi: string): Promise<{ deleted: TransaksiUangMasuk }> => {
+    const data = await requestJson('/api/transaksi/uang-masuk/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idTransaksi }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal membatalkan transaksi Uang Masuk');
+    return data.data;
+  },
+
   // Penjualan / Pengiriman Hasil Bumi Keluar Gudang & Ringkasan Bulanan
   getPenjualanHasilBumi: async (): Promise<TransaksiPenjualanHasilBumi[]> => {
     const data = await requestJson('/api/transaksi/penjualan-hasil-bumi');
@@ -668,13 +772,15 @@ export const api = {
     komoditasKode: string;
     beratKotor: number;
     potonganRafaksi?: number;
-    hargaJualPerKg: number;
+    hargaJualPerKg?: number;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG';
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA';
     rekeningTujuan?: string;
     noSuratJalan?: string;
     tanggal?: string;
     keterangan?: string;
+    allowOverStockMuat?: boolean;
+    isHabisMuatSusut?: boolean;
   }): Promise<TransaksiPenjualanHasilBumi> => {
     const data = await requestJson('/api/transaksi/penjualan-hasil-bumi', {
       method: 'POST',
@@ -1685,13 +1791,14 @@ export const api = {
     karyawan: KaryawanWithBon[];
     upahHarian: CatatanUpahHarian[];
     produk: Produk[];
-    kategoriProduk: Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>;
+    kategoriProduk: Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean; tanpaStok?: boolean }>;
     stokBarang: StokBarang[];
     stokHasilBumi: StokHasilBumi[];
     penjualan: TransaksiPenjualan[];
     pembelianHasilBumi: TransaksiPembelianHasilBumi[];
     penjualanHasilBumi: TransaksiPenjualanHasilBumi[];
     pembelianBarang: TransaksiPembelianBarang[];
+    brilink?: TransaksiBrilink[];
     pencairanTitipan: TransaksiPencairanTitipan[];
     kasbonUang: TransaksiKasbonUang[];
     bayarBon: TransaksiBayarBon[];

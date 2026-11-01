@@ -6,6 +6,7 @@ import {
   DEFAULT_PT_LOGO_URL,
   KATEGORI_ALAT_DEFAULT_DESC,
   isKategoriAlatNonStok,
+  isProdukTanpaStok,
   isExcludedFromDivisi,
   normalizeRoleMitra,
 } from './types.ts';
@@ -29,6 +30,8 @@ import type {
   ProfilPerusahaan,
   TransaksiPengeluaran,
   TransaksiPencairanTitipan,
+  TransaksiBrilink,
+  TransaksiUangMasuk,
   ItemDivisi,
   ItemKategoriProduk,
   CatatanCashOpname,
@@ -56,11 +59,14 @@ export interface DatabaseSchema {
   transferRekening: TransaksiTransferRekening[];
   pengeluaran: TransaksiPengeluaran[];
   pencairanTitipan: TransaksiPencairanTitipan[];
+  brilink?: TransaksiBrilink[];
+  uangMasuk?: TransaksiUangMasuk[];
   auditLogs: AuditLog[];
   divisi?: ItemDivisi[];
   kategoriProduk?: ItemKategoriProduk[];
   cashOpnameLogs?: CatatanCashOpname[];
   inventaris?: ItemInventaris[];
+  deletedHasilBumiKodes?: string[];
 }
 
 const RUNTIME_CACHE_DIR = path.join(os.tmpdir(), 'wijaya_agro_erp_runtime');
@@ -516,6 +522,8 @@ export function getDefaultDatabase(): DatabaseSchema {
     transferRekening: [],
     pengeluaran: [],
     pencairanTitipan: [],
+    brilink: [],
+    uangMasuk: [],
     inventaris: [],
     auditLogs: [
       {
@@ -571,16 +579,20 @@ class DatabaseManager {
           penjualan: Array.isArray(parsed.penjualan) ? parsed.penjualan : [],
           pembelianBarang: Array.isArray(parsed.pembelianBarang) ? parsed.pembelianBarang : [],
           pembelianHasilBumi: Array.isArray(parsed.pembelianHasilBumi) ? parsed.pembelianHasilBumi : [],
+          penjualanHasilBumi: Array.isArray(parsed.penjualanHasilBumi) ? parsed.penjualanHasilBumi : [],
           kasbonUang: Array.isArray(parsed.kasbonUang) ? parsed.kasbonUang : [],
           bayarBon: Array.isArray(parsed.bayarBon) ? parsed.bayarBon : [],
           transferRekening: Array.isArray(parsed.transferRekening) ? parsed.transferRekening : [],
           pengeluaran: Array.isArray(parsed.pengeluaran) ? parsed.pengeluaran : [],
           pencairanTitipan: Array.isArray(parsed.pencairanTitipan) ? parsed.pencairanTitipan : [],
+          brilink: Array.isArray(parsed.brilink) ? parsed.brilink : [],
+          uangMasuk: Array.isArray(parsed.uangMasuk) ? parsed.uangMasuk : [],
           auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
           divisi: Array.isArray(parsed.divisi) ? parsed.divisi : [],
           kategoriProduk: Array.isArray(parsed.kategoriProduk) ? parsed.kategoriProduk : [],
           cashOpnameLogs: Array.isArray(parsed.cashOpnameLogs) ? parsed.cashOpnameLogs : [],
           inventaris: Array.isArray(parsed.inventaris) ? parsed.inventaris : [],
+          deletedHasilBumiKodes: Array.isArray(parsed.deletedHasilBumiKodes) ? parsed.deletedHasilBumiKodes : [],
         };
 
         if (!Array.isArray(merged.karyawan)) {
@@ -640,8 +652,14 @@ class DatabaseManager {
         // Clean out KOPI JALAN from stokHasilBumi
         merged.stokHasilBumi = merged.stokHasilBumi.filter((h) => h.kode !== 'HB-01B' && !h.nama.toUpperCase().includes('KOPI JALAN'));
 
-        // Ensure all 1 to 8 Hasil Bumi items exist as foundational system master (including No 8 Kopi Titip)
+        // Ensure all 1 to 8 Hasil Bumi items exist as foundational system master unless explicitly deleted by user
+        const deletedHbSet = new Set(
+          (merged.deletedHasilBumiKodes || []).map((x) => String(x || '').trim().toUpperCase()).filter(Boolean)
+        );
         for (const defHb of defaultHasilBumi) {
+          if (deletedHbSet.has(defHb.kode.toUpperCase()) || deletedHbSet.has(defHb.nama.trim().toUpperCase())) {
+            continue;
+          }
           if (!merged.stokHasilBumi.some((h) => h.kode === defHb.kode || h.nama.toUpperCase() === defHb.nama.toUpperCase())) {
             merged.stokHasilBumi.push({ ...defHb });
           }
@@ -784,15 +802,21 @@ class DatabaseManager {
     this.db.penjualan = Array.isArray(incoming.penjualan) ? incoming.penjualan : [];
     this.db.pembelianBarang = Array.isArray(incoming.pembelianBarang) ? incoming.pembelianBarang : [];
     this.db.pembelianHasilBumi = Array.isArray(incoming.pembelianHasilBumi) ? incoming.pembelianHasilBumi : [];
+    this.db.penjualanHasilBumi = Array.isArray(incoming.penjualanHasilBumi) ? incoming.penjualanHasilBumi : [];
     this.db.kasbonUang = Array.isArray(incoming.kasbonUang) ? incoming.kasbonUang : [];
     this.db.bayarBon = Array.isArray(incoming.bayarBon) ? incoming.bayarBon : [];
     this.db.transferRekening = Array.isArray(incoming.transferRekening) ? incoming.transferRekening : [];
     this.db.pengeluaran = Array.isArray(incoming.pengeluaran) ? incoming.pengeluaran : [];
     this.db.pencairanTitipan = Array.isArray(incoming.pencairanTitipan) ? incoming.pencairanTitipan : [];
+    this.db.brilink = Array.isArray(incoming.brilink) ? incoming.brilink : [];
+    this.db.uangMasuk = Array.isArray(incoming.uangMasuk) ? incoming.uangMasuk : [];
     this.db.auditLogs = Array.isArray(incoming.auditLogs) ? incoming.auditLogs : this.db.auditLogs;
     this.db.divisi = Array.isArray(incoming.divisi) ? incoming.divisi : [];
     this.db.cashOpnameLogs = Array.isArray(incoming.cashOpnameLogs) ? incoming.cashOpnameLogs : [];
     this.db.inventaris = Array.isArray(incoming.inventaris) ? incoming.inventaris : (this.db.inventaris || []);
+    this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes)
+      ? incoming.deletedHasilBumiKodes
+      : (this.db.deletedHasilBumiKodes || []);
   }
 
   /**
@@ -879,6 +903,8 @@ class DatabaseManager {
       db.transferRekening = [];
       db.pengeluaran = [];
       db.pencairanTitipan = [];
+      db.brilink = [];
+      db.uangMasuk = [];
       db.rekening = getDefaultRekeningList();
 
       const now = getWIBDateTime();
@@ -926,6 +952,8 @@ class DatabaseManager {
     if (!Array.isArray(this.db.transferRekening)) this.db.transferRekening = [];
     if (!Array.isArray(this.db.pengeluaran)) this.db.pengeluaran = [];
     if (!Array.isArray(this.db.pencairanTitipan)) this.db.pencairanTitipan = [];
+    if (!Array.isArray(this.db.brilink)) this.db.brilink = [];
+    if (!Array.isArray(this.db.uangMasuk)) this.db.uangMasuk = [];
     if (!Array.isArray(this.db.auditLogs)) this.db.auditLogs = [];
     if (!Array.isArray(this.db.divisi)) this.db.divisi = [];
     if (!Array.isArray(this.db.cashOpnameLogs)) this.db.cashOpnameLogs = [];
@@ -970,6 +998,7 @@ class DatabaseManager {
     normalizeExcludedDivisi(this.db.pembelianBarang);
     normalizeExcludedDivisi(this.db.pembelianHasilBumi);
     normalizeExcludedDivisi(this.db.pengeluaran);
+    normalizeExcludedDivisi(this.db.brilink);
     normalizeExcludedDivisi(this.db.upahHarian);
     normalizeExcludedDivisi(this.db.penggajian);
 
@@ -1005,6 +1034,10 @@ class DatabaseManager {
     }
     for (const pt of this.db.pencairanTitipan) {
       if (pt.rekeningSumber) usedRekCodes.add(pt.rekeningSumber);
+    }
+    for (const br of this.db.brilink || []) {
+      if (br.rekeningAdmin) usedRekCodes.add(br.rekeningAdmin);
+      if (br.rekeningBank) usedRekCodes.add(br.rekeningBank);
     }
     for (const log of this.db.auditLogs) {
       if (log.idTransaksi && log.idTransaksi.startsWith('REK-')) {
@@ -1145,6 +1178,7 @@ class DatabaseManager {
         this.db.kategoriProduk!.push({
           nama: clean,
           deskripsi: clean === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : '',
+          tanpaStok: isKategoriAlatNonStok(clean),
           createdAt: nowIso,
         });
       }
@@ -1157,14 +1191,16 @@ class DatabaseManager {
       this.db.kategoriProduk.push({
         nama: 'ALAT',
         deskripsi: KATEGORI_ALAT_DEFAULT_DESC,
+        tanpaStok: true,
         createdAt: nowIso,
       });
     } else {
       const alatKat = this.db.kategoriProduk.find(
         (k) => String(k.nama || '').trim().replace(/\s+/g, ' ').toUpperCase() === 'ALAT'
       );
-      if (alatKat && !alatKat.deskripsi) {
-        alatKat.deskripsi = KATEGORI_ALAT_DEFAULT_DESC;
+      if (alatKat) {
+        if (!alatKat.deskripsi) alatKat.deskripsi = KATEGORI_ALAT_DEFAULT_DESC;
+        if (alatKat.tanpaStok === undefined) alatKat.tanpaStok = true;
       }
     }
 
@@ -1226,7 +1262,10 @@ class DatabaseManager {
     // Sync every Produk -> KategoriProduk & StokBarang
     for (const p of this.db.produk) {
       p.kategori = ensureKat(p.kategori);
-      const isNonStokAlat = isKategoriAlatNonStok(p.kategori);
+      const isNonStok = isProdukTanpaStok(p, this.db.kategoriProduk);
+      if (p.tanpaStok === undefined && isNonStok) {
+        p.tanpaStok = true;
+      }
       const s = stokMap.get(p.kode);
       if (!s) {
         const createdStok: StokBarang = {
@@ -1234,8 +1273,9 @@ class DatabaseManager {
           namaProduk: p.nama,
           satuan: p.satuan,
           kategori: p.kategori,
+          tanpaStok: isNonStok,
           stok: 0,
-          minimum: isNonStokAlat ? 0 : 10,
+          minimum: isNonStok ? 0 : 10,
           updateTerakhir: nowIso,
         };
         this.db.stokBarang.push(createdStok);
@@ -1244,7 +1284,8 @@ class DatabaseManager {
         s.namaProduk = p.nama;
         s.satuan = p.satuan;
         s.kategori = p.kategori;
-        if (isNonStokAlat) {
+        s.tanpaStok = isNonStok;
+        if (isNonStok) {
           s.minimum = 0;
         }
       }
@@ -1676,6 +1717,12 @@ class DatabaseManager {
     for (const gj of this.db.penggajian || []) {
       if (gj.divisi) this.ensureDivisiRegisteredInMemory(gj.divisi);
     }
+    for (const br of this.db.brilink || []) {
+      if (br.divisi) this.ensureDivisiRegisteredInMemory(br.divisi);
+    }
+    for (const um of this.db.uangMasuk || []) {
+      if (um.divisi) this.ensureDivisiRegisteredInMemory(um.divisi);
+    }
 
     const allDivisi = this.getDivisiList();
     const divisiByRekKode = new Map(allDivisi.map((d) => [d.kodeRekening.toUpperCase(), norm(d.nama)]));
@@ -1684,6 +1731,7 @@ class DatabaseManager {
       norm(divisi || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
     const resolvePembelianBarangDivNorm = (divisi?: string) => norm(divisi || 'CV Wijaya Agro');
     const resolveHasilBumiDivNorm = (divisi?: string) => norm(divisi || 'Gudang Wijaya Agro');
+    const resolveBrilinkDivNorm = (divisi?: string) => norm(divisi || 'BRILink');
     const resolveBebanDivNorm = (divisi?: string, rekeningSumber?: string) => {
       if (divisi && String(divisi).trim()) return norm(divisi);
       if (rekeningSumber) {
@@ -1756,7 +1804,14 @@ class DatabaseManager {
         (sum, j) => sum + (Number(j.totalNominal) || 0),
         0
       );
-      hppTerjualKas += penjualanHbTunai.reduce(
+      const penjualanHbFisikKeluar = (this.db.penjualanHasilBumi || []).filter(
+        (j) =>
+          resolveHasilBumiDivNorm(j.divisi) === targetNorm &&
+          (j.metodePembayaran === 'TUNAI' ||
+            j.metodePembayaran === 'TRANSFER' ||
+            j.metodePembayaran === 'BELUM_PUTUS_HARGA')
+      );
+      hppTerjualKas += penjualanHbFisikKeluar.reduce(
         (sum, j) =>
           sum +
           (Number(j.totalModalHpp) ||
@@ -1782,8 +1837,29 @@ class DatabaseManager {
         }
       }
 
+      const masukAdminBrilink = (this.db.brilink || [])
+        .filter(
+          (br) =>
+            resolveBrilinkDivNorm(br.divisi) === targetNorm &&
+            br.jenisBrilink === 'TARIK_TUNAI' &&
+            (Number(br.nominalAdmin) || 0) > 0
+        )
+        .reduce((sum, br) => sum + (Number(br.nominalAdmin) || 0), 0);
+
+      const masukUangMasukDivisi = (this.db.uangMasuk || [])
+        .filter(
+          (um) =>
+            norm(um.divisi || 'Gudang Wijaya Agro') === targetNorm &&
+            (Number(um.nominal) || 0) > 0
+        )
+        .reduce((sum, um) => sum + (Number(um.nominal) || 0), 0);
+
       const masukPenjualanKas =
-        masukPenjualanToko + masukPenjualanHasilBumi + masukPelunasanPiutangDivisi;
+        masukPenjualanToko +
+        masukPenjualanHasilBumi +
+        masukPelunasanPiutangDivisi +
+        masukAdminBrilink +
+        masukUangMasukDivisi;
 
       const masukDropping = (this.db.transferRekening || [])
         .filter((t) => t.status === 'BERHASIL' && t.rekeningTujuan === div.kodeRekening)
@@ -1829,9 +1905,19 @@ class DatabaseManager {
       const sisaModalStokKas = Math.max(0, totalModalPembelianKas - effectiveModalTerpakaiKas);
 
       // 3. PENGELUARAN & BEBAN DIVISI (-) — Pasti mengurangi Saldo & Nilai Uang Berjalan Divisi
-      const keluarOperasional = (this.db.pengeluaran || [])
-        .filter((p) => resolveBebanDivNorm(p.divisi, p.rekeningSumber) === targetNorm)
-        .reduce((sum, p) => sum + (Number(p.nominal) || 0), 0);
+      const keluarAdminBrilink = (this.db.brilink || [])
+        .filter(
+          (br) =>
+            resolveBrilinkDivNorm(br.divisi) === targetNorm &&
+            br.jenisBrilink === 'TUKAR_CASH' &&
+            (Number(br.nominalAdmin) || 0) > 0
+        )
+        .reduce((sum, br) => sum + (Number(br.nominalAdmin) || 0), 0);
+
+      const keluarOperasional =
+        (this.db.pengeluaran || [])
+          .filter((p) => resolveBebanDivNorm(p.divisi, p.rekeningSumber) === targetNorm)
+          .reduce((sum, p) => sum + (Number(p.nominal) || 0), 0) + keluarAdminBrilink;
 
       const keluarGaji = (this.db.penggajian || [])
         .filter((g) => resolveBebanDivNorm(g.divisi, g.rekeningSumber) === targetNorm)
@@ -1914,7 +2000,9 @@ class DatabaseManager {
       kasbonUang: (this.db.kasbonUang || []).length,
       bayarBon: (this.db.bayarBon || []).length,
       pengeluaran: (this.db.pengeluaran || []).length,
+      uangMasuk: (this.db.uangMasuk || []).length,
       transferRekening: (this.db.transferRekening || []).length,
+      brilink: (this.db.brilink || []).length,
       upahHarian: (this.db.upahHarian || []).length,
       penggajian: (this.db.penggajian || []).length,
       auditLogs: (this.db.auditLogs || []).length,
@@ -1936,7 +2024,9 @@ class DatabaseManager {
       counts.kasbonUang +
       counts.bayarBon +
       counts.pengeluaran +
+      counts.uangMasuk +
       counts.transferRekening +
+      counts.brilink +
       counts.upahHarian +
       counts.penggajian +
       counts.auditLogs;
@@ -2168,6 +2258,8 @@ class DatabaseManager {
       db.transferRekening = [];
       db.pengeluaran = [];
       db.pencairanTitipan = [];
+      db.brilink = [];
+      db.uangMasuk = [];
       db.cashOpnameLogs = [];
       db.auditLogs = [
         {

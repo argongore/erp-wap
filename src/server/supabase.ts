@@ -72,7 +72,9 @@ function countAllTransactions(data: Partial<DatabaseSchema> | undefined | null):
     (data.kasbonUang?.length || 0) +
     (data.bayarBon?.length || 0) +
     (data.pengeluaran?.length || 0) +
+    (data.uangMasuk?.length || 0) +
     (data.transferRekening?.length || 0) +
+    (data.brilink?.length || 0) +
     (data.penggajian?.length || 0) +
     (data.upahHarian?.length || 0)
   );

@@ -234,9 +234,11 @@ export const ModalBackupFullSpreadsheet: React.FC<ModalBackupFullSpreadsheetProp
       .reduce((s, r) => s + (Number(r.saldoSaatIni) || 0), 0);
 
     const uangKita =
+      activeBundle.rekapMitra?.totalRekeningMitraNotaSupplier ??
       activeBundle.rekapMitra?.uangKitaDiMitra ??
       (Number(
-        activeBundle.rekapMitra?.totalSeluruhPiutangMitra ??
+        activeBundle.rekapMitra?.totalPiutangAktifGlobal ??
+          activeBundle.rekapMitra?.totalSeluruhPiutangMitra ??
           activeBundle.rekapMitra?.totalBonMitra ??
           0
       ) -
@@ -503,7 +505,7 @@ export const ModalBackupFullSpreadsheet: React.FC<ModalBackupFullSpreadsheetProp
                 Pusat Backup Full &amp; Larikan ke Google Spreadsheet
               </h2>
               <p className="text-xs text-zinc-400 truncate">
-                Proteksi menyeluruh 21 tabel ERP terhadap kondisi server hang, gangguan jaringan, atau maintenance
+                Proteksi menyeluruh 22 tabel ERP terhadap kondisi server hang, gangguan jaringan, atau maintenance
               </p>
             </div>
           </div>
@@ -591,16 +593,18 @@ export const ModalBackupFullSpreadsheet: React.FC<ModalBackupFullSpreadsheetProp
                   </div>
                 </div>
                 <div className="bg-slate-50 rounded-xl px-3 py-2 border border-slate-200/80">
-                  <div className="text-[11px] text-slate-500">Uang Kita di Mitra (Piutang − Hutang)</div>
+                  <div className="text-[11px] text-slate-500">Total Rekening Mitra / Nota Supplier</div>
                   <div className="font-mono tabular-nums font-bold text-emerald-800 mt-0.5">
                     {formatRupiah(summaryMetrics.uangKitaDiMitra)}
                   </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">Piutang − Hutang (Tanpa Ngunci)</div>
                 </div>
                 <div className="bg-slate-50 rounded-xl px-3 py-2 border border-slate-200/80">
-                  <div className="text-[11px] text-slate-500">Nominal Nota Kunci (Tak Kembali)</div>
+                  <div className="text-[11px] text-slate-500">3. Nominal Nota Ngunci</div>
                   <div className="font-mono tabular-nums font-bold text-rose-700 mt-0.5">
                     {formatRupiah(summaryMetrics.nominalNotaKunci)}
                   </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">Berkurang otomatis jika dibayar</div>
                 </div>
               </div>
             )}

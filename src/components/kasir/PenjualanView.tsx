@@ -30,7 +30,7 @@ import {
   Rekening,
   StokBarang,
   TransaksiPenjualan,
-  isKategoriAlatNonStok,
+  isProdukTanpaStok,
 } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
@@ -100,21 +100,30 @@ export const PenjualanView: React.FC<Props> = ({
     [stokByKode]
   );
 
+  const isItemTanpaStok = React.useCallback(
+    (p: Produk | undefined | null) => {
+      if (!p) return false;
+      const st = stokByKode.get(String(p.kode || '').trim().toUpperCase());
+      return Boolean(st?.tanpaStok || isProdukTanpaStok(p));
+    },
+    [stokByKode]
+  );
+
   const activeProducts = React.useMemo(() => {
     const list = produkList.filter((p) => p.status === 'AKTIF');
-    // Urutkan produk siap jual (stok > 0 atau jasa sewa ALAT tanpa stok) di bagian paling atas
+    // Urutkan produk siap jual (stok > 0 atau produk Tanpa Stok seperti kategori Alat) di bagian paling atas
     return [...list].sort((a, b) => {
-      const readyA = getStokQty(a.kode) > 0 || isKategoriAlatNonStok(a.kategori);
-      const readyB = getStokQty(b.kode) > 0 || isKategoriAlatNonStok(b.kategori);
+      const readyA = getStokQty(a.kode) > 0 || isItemTanpaStok(a);
+      const readyB = getStokQty(b.kode) > 0 || isItemTanpaStok(b);
       if (readyA && !readyB) return -1;
       if (!readyA && readyB) return 1;
       return a.nama.localeCompare(b.nama, 'id');
     });
-  }, [produkList, getStokQty]);
+  }, [produkList, getStokQty, isItemTanpaStok]);
 
   const inStockProducts = React.useMemo(
-    () => activeProducts.filter((p) => getStokQty(p.kode) > 0 || isKategoriAlatNonStok(p.kategori)),
-    [activeProducts, getStokQty]
+    () => activeProducts.filter((p) => getStokQty(p.kode) > 0 || isItemTanpaStok(p)),
+    [activeProducts, getStokQty, isItemTanpaStok]
   );
 
   const availableBanks = React.useMemo(
@@ -194,7 +203,7 @@ export const PenjualanView: React.FC<Props> = ({
       (p) => String(p.kode || '').trim().toUpperCase() === currentCodeNorm
     );
     const currentIsReady = currentObj
-      ? getStokQty(currentObj.kode) > 0 || isKategoriAlatNonStok(currentObj.kategori)
+      ? getStokQty(currentObj.kode) > 0 || isItemTanpaStok(currentObj)
       : false;
 
     if (!currentObj && (inStockProducts[0] || activeProducts[0])) {
@@ -221,7 +230,7 @@ export const PenjualanView: React.FC<Props> = ({
   const currentStok = currentProduct
     ? stokByKode.get(String(currentProduct.kode || '').trim().toUpperCase())
     : undefined;
-  const isCurrentAlatJasa = isKategoriAlatNonStok(currentProduct?.kategori);
+  const isCurrentAlatJasa = isItemTanpaStok(currentProduct);
   const stokTersediaCurrent = Math.max(0, Number(currentStok?.stok) || 0);
 
   // Suggested price strictly from purchase capital (HPP) & catalog (zero invented numbers)
@@ -297,7 +306,7 @@ export const PenjualanView: React.FC<Props> = ({
 
   const buildPendingSaleItem = (): CartItem | null => {
     if (!currentProduct || qtyInput <= 0 || hargaNegoInput < 0) return null;
-    const isAlatJasa = isKategoriAlatNonStok(currentProduct.kategori);
+    const isAlatJasa = isItemTanpaStok(currentProduct);
     if (!isAlatJasa && (stokTersediaCurrent <= 0 || qtyInput > stokTersediaCurrent)) return null;
     const modalHpp = Math.max(0, Number(currentProduct.hargaBeli) || 0);
     return {
@@ -327,7 +336,7 @@ export const PenjualanView: React.FC<Props> = ({
       return;
     }
 
-    const isAlatJasa = isKategoriAlatNonStok(currentProduct.kategori);
+    const isAlatJasa = isItemTanpaStok(currentProduct);
     const stokTersedia = stokTersediaCurrent;
     const existingCartItem = cart.find(
       (i) => String(i.kodeProduk).trim().toUpperCase() === String(currentProduct.kode).trim().toUpperCase()
@@ -929,7 +938,7 @@ export const PenjualanView: React.FC<Props> = ({
                   <div className="flex flex-wrap gap-1.5">
                     {inStockProducts.map((p) => {
                       const sq = getStokQty(p.kode);
-                      const isAlat = isKategoriAlatNonStok(p.kategori);
+                      const isAlat = isItemTanpaStok(p);
                       const isSel = currentProduct?.kode === p.kode;
                       return (
                         <button
@@ -944,7 +953,7 @@ export const PenjualanView: React.FC<Props> = ({
                               : 'bg-zinc-900 text-emerald-200 border-emerald-800 hover:bg-emerald-950'
                           }`}
                         >
-                          {p.nama} ({isAlat ? `Sewa / ${p.satuan}` : `${sq} ${p.satuan}`})
+                          {p.nama} ({isAlat ? `Tanpa Stok / ${p.satuan}` : `${sq} ${p.satuan}`})
                         </button>
                       );
                     })}
@@ -952,7 +961,7 @@ export const PenjualanView: React.FC<Props> = ({
                 </div>
               ) : (
                 <div className="p-2.5 bg-amber-950/40 border border-amber-800/70 rounded-lg flex items-center justify-between gap-2 text-xs text-amber-200">
-                  <span>Belum ada barang dengan stok &gt; 0 atau item sewa jasa ALAT.</span>
+                  <span>Belum ada barang dengan stok &gt; 0 atau item Tanpa Stok.</span>
                   {onNavigateToKulakan && (
                     <button
                       type="button"
@@ -966,7 +975,7 @@ export const PenjualanView: React.FC<Props> = ({
               )}
 
               <div>
-                <label className="block text-[11px] text-zinc-400 mb-1">Daftar Produk &amp; Jasa Sewa Alat</label>
+                <label className="block text-[11px] text-zinc-400 mb-1">Daftar Produk &amp; Item Tanpa Stok</label>
                 <select
                   value={currentProduct?.kode || selectedProductCode}
                   onChange={(e) => setSelectedProductCode(e.target.value)}
@@ -974,13 +983,13 @@ export const PenjualanView: React.FC<Props> = ({
                 >
                   {filteredKasirProducts.map((p) => {
                     const stQty = getStokQty(p.kode);
-                    const isAlat = isKategoriAlatNonStok(p.kategori);
+                    const isAlat = isItemTanpaStok(p);
                     const cleanKat = String(p.kategori || 'LAINNYA').replace(/_/g, ' ');
                     const sugestiOpt = p.hargaJual > 0 ? p.hargaJual : p.hargaBeli || 0;
                     return (
                       <option key={p.kode} value={p.kode}>
                         {isAlat
-                          ? `[SEWA JASA - TANPA STOK] `
+                          ? `[TANPA STOK] `
                           : stQty > 0
                           ? `[SIAP JUAL: ${stQty} ${p.satuan}] `
                           : '[STOK 0] '}

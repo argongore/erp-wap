@@ -43,6 +43,7 @@ import { InputNotaLaluModal } from '../common/InputNotaLaluModal.tsx';
 import { ModalPinjamUangMitra } from '../common/ModalPinjamUangMitra.tsx';
 import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
+import { ModalKliringSilangMitra } from '../common/ModalKliringSilangMitra.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { findSimilarMitra, useFuzzyMitraMatches } from '../../utils/nameSimilarity.ts';
 import { FuzzyNameWarningCard } from '../common/FuzzyNameWarningCard.tsx';
@@ -68,7 +69,13 @@ interface Props {
   onSuccessReceipt?: (receipt: ReceiptData) => void;
 }
 
-type FilterTab = 'ALL' | CanonicalRoleMitra | 'HUTANG_TITIP' | 'BON_AKTIF' | 'NOTA_NGUNCI';
+type FilterTab =
+  | 'ALL'
+  | CanonicalRoleMitra
+  | 'HUTANG_TITIP'
+  | 'BON_AKTIF'
+  | 'SIAP_KLIRING'
+  | 'NOTA_NGUNCI';
 type MasterMitraViewMode = 'BUKU_OPERASIONAL' | 'REKAP_UANG_KITA' | 'KHUSUS_NOTA_NGUNCI';
 
 export const MasterMitraView: React.FC<Props> = ({
@@ -104,6 +111,7 @@ export const MasterMitraView: React.FC<Props> = ({
   const [pinjamUangModalOpen, setPinjamUangModalOpen] = useState(false);
   const [pinjamUangSelectedMitraId, setPinjamUangSelectedMitraId] = useState<string | undefined>(undefined);
   const [anakPerusahaanRekKode, setAnakPerusahaanRekKode] = useState<string | null>(null);
+  const [kliringTargetMitra, setKliringTargetMitra] = useState<RekapMitraItem | null>(null);
 
   // Form State
   const [formKode, setFormKode] = useState('');
@@ -417,6 +425,9 @@ export const MasterMitraView: React.FC<Props> = ({
     if (activeFilter === 'BON_AKTIF') {
       return item.totalBonMitra > 0;
     }
+    if (activeFilter === 'SIAP_KLIRING') {
+      return item.totalBonMitra > 0 && item.totalHutangTitipPanen > 0;
+    }
     if (activeFilter === 'NOTA_NGUNCI') {
       return Boolean(item.isNotaNgunci || (item.nominalNotaNgunci || 0) > 0);
     }
@@ -426,13 +437,22 @@ export const MasterMitraView: React.FC<Props> = ({
     return true;
   });
 
-  const totalSeluruhPiutangMitra =
+  const countSiapKliring = items.filter(
+    (i) => i.totalBonMitra > 0 && i.totalHutangTitipPanen > 0
+  ).length;
+
+  const totalSeluruhPiutangKotor =
     rekapData?.totalSeluruhPiutangMitra ?? rekapData?.totalBonMitra ?? 0;
+  const totalNominalNotaNgunci = rekapData?.totalNominalNotaNgunci ?? 0;
+  const totalPiutangAktifMitra =
+    rekapData?.totalPiutangAktifGlobal ??
+    rekapData?.totalPiutangAktifMitra ??
+    Math.max(0, totalSeluruhPiutangKotor - totalNominalNotaNgunci);
   const totalHutangKitaKeMitra =
     rekapData?.totalNotaSupplierRekeningMitra ?? rekapData?.totalHutangPerusahaanKeMitra ?? 0;
-  const uangKitaDiMitra =
-    rekapData?.uangKitaDiMitra ?? totalSeluruhPiutangMitra - totalHutangKitaKeMitra;
-  const totalNominalNotaNgunci = rekapData?.totalNominalNotaNgunci ?? 0;
+  // Rumus Resmi: Jumlah Piutang dikurangi Jumlah Hutang (TIDAK melibatkan Status Nota Ngunci)
+  const totalRekeningMitraNotaSupplier =
+    rekapData?.totalRekeningMitraNotaSupplier ?? totalPiutangAktifMitra - totalHutangKitaKeMitra;
 
   return (
     <div className="space-y-6">
@@ -603,7 +623,7 @@ export const MasterMitraView: React.FC<Props> = ({
 
       {/* Top Rekap Master Mitra KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-        {/* Card 1: Total Seluruh Piutang Mitra */}
+        {/* Card 1: 1. Piutang (Mitra Berhutang) */}
         <div
           onClick={() => setViewModeMaster('REKAP_UANG_KITA')}
           className="p-4 bg-white rounded-xl border border-amber-300 shadow-2xs space-y-1.5 min-w-0 overflow-hidden cursor-pointer hover:border-amber-500 transition-colors"
@@ -611,21 +631,21 @@ export const MasterMitraView: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
               <HandCoins className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-              <span className="truncate">TOTAL SELURUH PIUTANG MITRA</span>
+              <span className="truncate">1. PIUTANG (MITRA BERHUTANG)</span>
             </span>
           </div>
           <p
             className="text-xl font-black text-amber-950 font-mono tabular-nums truncate whitespace-nowrap"
-            title={formatRupiah(totalSeluruhPiutangMitra)}
+            title={formatRupiah(totalPiutangAktifMitra)}
           >
-            {formatRupiahSingkat(totalSeluruhPiutangMitra)}
+            {formatRupiahSingkat(totalPiutangAktifMitra)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
-            {rekapData?.mitraDenganBonCount || 0} mitra punya piutang (Aktif + Nota Ngunci).
+            {rekapData?.mitraPiutangAktifCount ?? rekapData?.mitraDenganBonCount ?? 0} mitra punya piutang aktif berjalan.
           </p>
         </div>
 
-        {/* Card 2: Total Nota Supplier / Hutang Kita ke Mitra */}
+        {/* Card 2: 2. Hutang (PT Berhutang: Uang Titip & HB Titip) */}
         <div
           onClick={() => setViewModeMaster('REKAP_UANG_KITA')}
           className="p-4 bg-white rounded-xl border border-purple-300 shadow-2xs space-y-1.5 min-w-0 overflow-hidden cursor-pointer hover:border-purple-500 transition-colors"
@@ -633,7 +653,7 @@ export const MasterMitraView: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-purple-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
               <Wheat className="w-3.5 h-3.5 text-purple-700 shrink-0" />
-              <span className="truncate">TOTAL HUTANG KITA KE MITRA</span>
+              <span className="truncate">2. HUTANG (PT BERHUTANG)</span>
             </span>
           </div>
           <p
@@ -643,11 +663,11 @@ export const MasterMitraView: React.FC<Props> = ({
             {formatRupiahSingkat(totalHutangKitaKeMitra)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
-            Total Nota Supplier &amp; Rekening Mitra ({rekapData?.mitraDenganHutangTitipCount || 0} mitra).
+            Termasuk Uang Titip &amp; HB Titip ({rekapData?.mitraDenganHutangTitipCount || 0} mitra).
           </p>
         </div>
 
-        {/* Card 3: Uang Kita yang Masih Ada di Mitra */}
+        {/* Card 3: Total Rekening Mitra / Nota Supplier */}
         <div
           onClick={() => setViewModeMaster('REKAP_UANG_KITA')}
           className="p-4 bg-white rounded-xl border border-emerald-300 shadow-2xs space-y-1.5 min-w-0 overflow-hidden cursor-pointer hover:border-emerald-500 transition-colors"
@@ -655,25 +675,25 @@ export const MasterMitraView: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-emerald-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
               <Scale className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-              <span className="truncate">UANG KITA DI MITRA</span>
+              <span className="truncate">TOTAL REKENING MITRA / NOTA SUPPLIER</span>
             </span>
           </div>
           <p
             className={`text-xl font-black font-mono tabular-nums truncate whitespace-nowrap ${
-              uangKitaDiMitra >= 0 ? 'text-emerald-900' : 'text-rose-800'
+              totalRekeningMitraNotaSupplier >= 0 ? 'text-emerald-900' : 'text-purple-900'
             }`}
-            title={formatRupiah(uangKitaDiMitra)}
+            title={formatRupiah(totalRekeningMitraNotaSupplier)}
           >
-            {uangKitaDiMitra < 0
-              ? `-${formatRupiahSingkat(Math.abs(uangKitaDiMitra))}`
-              : formatRupiahSingkat(uangKitaDiMitra)}
+            {totalRekeningMitraNotaSupplier < 0
+              ? `-${formatRupiahSingkat(Math.abs(totalRekeningMitraNotaSupplier))}`
+              : formatRupiahSingkat(totalRekeningMitraNotaSupplier)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
-            Rumus: Total Seluruh Piutang − Total Hutang Kita ke Mitra.
+            Rumus: Jumlah Piutang − Jumlah Hutang (Tanpa Ngunci).
           </p>
         </div>
 
-        {/* Card 4: Khusus Nota Ngunci (Uang Tidak Bisa Kembali) */}
+        {/* Card 4: 3. Ngunci */}
         <div
           onClick={() => setViewModeMaster('KHUSUS_NOTA_NGUNCI')}
           className="p-4 bg-white rounded-xl border border-rose-300 shadow-2xs space-y-1.5 min-w-0 overflow-hidden cursor-pointer hover:border-rose-500 transition-colors"
@@ -681,7 +701,7 @@ export const MasterMitraView: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-rose-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
               <Lock className="w-3.5 h-3.5 text-rose-700 shrink-0" />
-              <span className="truncate">NOTA NGUNCI (TAK KEMBALI)</span>
+              <span className="truncate">3. NGUNCI (TAK KEMBALI)</span>
             </span>
           </div>
           <p
@@ -691,7 +711,7 @@ export const MasterMitraView: React.FC<Props> = ({
             {formatRupiahSingkat(totalNominalNotaNgunci)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
-            {rekapData?.mitraNotaNgunciCount || 0} mitra macet tanpa respon ({rekapData?.totalLembarNotaNgunci || 0} nota).
+            {rekapData?.mitraNotaNgunciCount || 0} mitra ({rekapData?.totalLembarNotaNgunci || 0} nota) · berkurang jika dibayar.
           </p>
         </div>
       </div>
@@ -714,14 +734,14 @@ export const MasterMitraView: React.FC<Props> = ({
         <button
           type="button"
           onClick={() => setViewModeMaster('REKAP_UANG_KITA')}
-          className={`flex-1 min-w-[220px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+          className={`flex-1 min-w-[240px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
             viewModeMaster === 'REKAP_UANG_KITA'
               ? 'bg-emerald-800 text-white'
               : 'text-zinc-600 hover:bg-zinc-100'
           }`}
         >
           <LayoutList className="w-4 h-4 shrink-0" />
-          <span>2. Rekap Mitra &amp; Uang Kita di Mitra</span>
+          <span>2. Rekap Mitra &amp; Total Rekening Mitra/Nota Supplier</span>
         </button>
 
         <button
@@ -770,6 +790,7 @@ export const MasterMitraView: React.FC<Props> = ({
             setNotaLaluDefaultNgunci(Boolean(opts?.defaultNgunci));
             setNotaLaluModalOpen(true);
           }}
+          onOpenKliringSilang={(mitraItem) => setKliringTargetMitra(mitraItem)}
           onPreviewFotoMitra={setPreviewFotoMitra}
         />
       )}
@@ -888,6 +909,19 @@ export const MasterMitraView: React.FC<Props> = ({
               >
                 <HandCoins className="w-3.5 h-3.5" />
                 <span>Bon Aktif ({rekapData?.mitraDenganBonCount || 0})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveFilter('SIAP_KLIRING')}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                  activeFilter === 'SIAP_KLIRING'
+                    ? 'bg-indigo-700 text-white shadow-2xs'
+                    : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-200'
+                }`}
+                title="Mitra yang memiliki Piutang sekaligus Hutang dalam satu akun (Siap Kliring Silang)"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+                <span>Siap Kliring Silang ({countSiapKliring})</span>
               </button>
 
               <button
@@ -1212,20 +1246,78 @@ export const MasterMitraView: React.FC<Props> = ({
                         )}
                       </td>
 
-                      {/* Status */}
-                      <td className="py-3 px-4 text-center">
-                        <span
-                          className={`text-[10px] font-semibold ${
-                            m.status === 'AKTIF' ? 'text-emerald-800' : 'text-rose-800'
-                          }`}
-                        >
-                          {m.status}
-                        </span>
+                      {/* Status Rekening Mitra (Disesuaikan: Piutang vs Hutang / Kliring Silang) */}
+                      <td className="py-3 px-4 text-center whitespace-nowrap">
+                        {(() => {
+                          const pTotal = m.totalBonMitra || 0;
+                          const nKunci = m.nominalNotaNgunci || 0;
+                          const pAktif = m.nominalPiutangAktif ?? Math.max(0, pTotal - nKunci);
+                          const hPt = m.totalHutangTitipPanen || 0;
+                          const pBanding = pAktif > 0 ? pAktif : hPt > 0 && pTotal > 0 ? pTotal : 0;
+                          const adaDuaSisi = pTotal > 0 && hPt > 0;
+
+                          let labelStatus = 'LUNAS';
+                          let colorClass = 'text-emerald-800';
+                          let subInfo = '';
+
+                          if (pBanding > hPt) {
+                            labelStatus = 'PIUTANG';
+                            colorClass = 'text-amber-800';
+                            subInfo = adaDuaSisi ? 'Piutang > Hutang' : 'Mitra Berhutang';
+                          } else if (hPt > pBanding) {
+                            labelStatus = 'HUTANG';
+                            colorClass = 'text-purple-800';
+                            subInfo = adaDuaSisi ? 'Hutang > Piutang' : 'PT Berhutang';
+                          } else if (pBanding > 0 && hPt > 0 && pBanding === hPt) {
+                            labelStatus = 'SEIMBANG';
+                            colorClass = 'text-sky-800';
+                            subInfo = 'Piutang = Hutang';
+                          } else if (m.isNotaNgunci || nKunci > 0) {
+                            labelStatus = 'NGUNCI';
+                            colorClass = 'text-rose-800';
+                            subInfo = 'Nota Ngunci';
+                          } else if (isAnak && saldoRekAnak !== 0) {
+                            labelStatus = saldoRekAnak > 0 ? 'PIUTANG' : 'HUTANG';
+                            colorClass = saldoRekAnak > 0 ? 'text-teal-800' : 'text-purple-800';
+                            subInfo = saldoRekAnak > 0 ? 'Simpanan PT' : 'Talangan Afiliasi';
+                          }
+
+                          return (
+                            <div className="space-y-0.5">
+                              <div className={`text-xs font-extrabold tracking-wide uppercase ${colorClass}`}>
+                                {labelStatus}
+                              </div>
+                              {subInfo && (
+                                <div className="text-[10px] text-zinc-500">{subInfo}</div>
+                              )}
+                              {adaDuaSisi && (
+                                <div className="text-[10px] font-semibold text-indigo-700">
+                                  Ada Piutang &amp; Hutang
+                                </div>
+                              )}
+                              {m.status === 'NONAKTIF' && (
+                                <div className="text-[9px] text-rose-600 uppercase">Nonaktif</div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Aksi */}
                       <td className="py-3 px-4 text-center">
                         <div className="flex flex-wrap items-center justify-center gap-1.5">
+                          {hasBon && hasTitip && (
+                            <button
+                              type="button"
+                              onClick={() => setKliringTargetMitra(m)}
+                              className="flex items-center space-x-1 px-2.5 py-1.5 text-[10px] font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors shadow-2xs cursor-pointer"
+                              title="Kliring Silang Otomatis antara Piutang Mitra dengan Hutang / Titipan PT"
+                            >
+                              <ArrowRightLeft className="w-3 h-3" />
+                              <span>Kliring Silang</span>
+                            </button>
+                          )}
+
                           {isAnak && rekeningList.length > 0 && (
                             <button
                               type="button"
@@ -2010,6 +2102,23 @@ export const MasterMitraView: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      <ModalKliringSilangMitra
+        isOpen={Boolean(kliringTargetMitra)}
+        onClose={() => setKliringTargetMitra(null)}
+        mitra={kliringTargetMitra}
+        rekeningList={rekeningList}
+        onSuccess={(res, receipt) => {
+          setSuccessMsg(
+            `Kliring Silang ${res.namaMitra} berhasil diproses (${formatRupiah(res.nominalPotongSilang)}).`
+          );
+          window.dispatchEvent(new CustomEvent('erp:data-updated'));
+          handleRefreshAll();
+          if (onSuccessReceipt) {
+            onSuccessReceipt(receipt);
+          }
+        }}
+      />
 
       {previewFotoMitra && (
         <ModalPreviewFotoKaryawan

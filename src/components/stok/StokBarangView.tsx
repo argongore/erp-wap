@@ -10,7 +10,7 @@ import {
   TrendingUp,
   Search,
 } from 'lucide-react';
-import { StokBarang, Produk, isKategoriAlatNonStok } from '../../server/types.ts';
+import { StokBarang, Produk, isProdukTanpaStok } from '../../server/types.ts';
 import { formatTanggalIndo, formatJamIndo, formatRupiah } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 
@@ -91,7 +91,7 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
 
   const handleOpenPriceModal = (item: StokBarang) => {
     const prod = productMap.get(item.kode);
-    const isAlatJasa = isKategoriAlatNonStok(prod?.kategori || item.kategori);
+    const isAlatJasa = Boolean(item.tanpaStok || isProdukTanpaStok(prod || item));
     const hargaJual = prod?.hargaJual || 0;
     const hargaBeli = prod?.hargaBeli || 0;
     const minimum = isAlatJasa ? 0 : item.minimum || 5;
@@ -219,7 +219,7 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
               ) : (
                 filteredStok.map((item) => {
                   const prod = productMap.get(item.kode);
-                  const isAlatJasa = isKategoriAlatNonStok(prod?.kategori || item.kategori);
+                  const isAlatJasa = Boolean(item.tanpaStok || isProdukTanpaStok(prod || item));
                   const isLow = !isAlatJasa && item.stok <= item.minimum;
                   const hj = prod?.hargaJual || 0;
                   const hb = prod?.hargaBeli || 0;
@@ -246,8 +246,8 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                       </td>
                       <td className="py-3 px-4 text-center">
                         {isAlatJasa ? (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-50 text-sky-800 border border-sky-200 whitespace-nowrap">
-                            SEWA JASA
+                          <span className="text-[11px] font-semibold text-sky-700 whitespace-nowrap">
+                            TANPA STOK
                           </span>
                         ) : isLow ? (
                           <span className="inline-flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">

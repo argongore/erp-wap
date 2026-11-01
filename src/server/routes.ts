@@ -5,6 +5,7 @@ import {
   DAFTAR_DIVISI,
   KATEGORI_ALAT_DEFAULT_DESC,
   isKategoriAlatNonStok,
+  isProdukTanpaStok,
   isExcludedFromDivisi,
   normalizeRoleMitra,
   getRoleMitraLabel,
@@ -670,7 +671,12 @@ function normalizeKategoriName(raw: unknown): string {
   return cleaned || 'LAINNYA';
 }
 
-function ensureKategoriRegistered(db: any, namaKategori: string, deskripsi?: string) {
+function ensureKategoriRegistered(
+  db: any,
+  namaKategori: string,
+  deskripsi?: string,
+  tanpaStok?: boolean
+) {
   if (!Array.isArray(db.kategoriProduk)) {
     db.kategoriProduk = [];
   }
@@ -682,10 +688,16 @@ function ensureKategoriRegistered(db: any, namaKategori: string, deskripsi?: str
     db.kategoriProduk.push({
       nama: norm,
       deskripsi: deskripsi ? String(deskripsi).trim() : '',
+      tanpaStok: typeof tanpaStok === 'boolean' ? tanpaStok : isKategoriAlatNonStok(norm),
       createdAt: getWIBDateTime().iso,
     });
-  } else if (deskripsi !== undefined && String(deskripsi).trim()) {
-    existing.deskripsi = String(deskripsi).trim();
+  } else {
+    if (deskripsi !== undefined && String(deskripsi).trim()) {
+      existing.deskripsi = String(deskripsi).trim();
+    }
+    if (typeof tanpaStok === 'boolean') {
+      existing.tanpaStok = tanpaStok;
+    }
   }
   return norm;
 }
@@ -698,7 +710,7 @@ apiRouter.get('/kategori-produk', (_req, res) => {
 
     const map = new Map<
       string,
-      { nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }
+      { nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean; tanpaStok: boolean }
     >();
 
     for (const k of savedList) {
@@ -708,6 +720,7 @@ apiRouter.get('/kategori-produk', (_req, res) => {
         deskripsi: k.deskripsi || '',
         jumlahProduk: 0,
         isSaved: true,
+        tanpaStok: typeof k.tanpaStok === 'boolean' ? k.tanpaStok : isKategoriAlatNonStok(norm),
       });
     }
 
@@ -722,6 +735,7 @@ apiRouter.get('/kategori-produk', (_req, res) => {
           deskripsi: '',
           jumlahProduk: 1,
           isSaved: false,
+          tanpaStok: isKategoriAlatNonStok(norm),
         });
       }
     }
@@ -732,10 +746,12 @@ apiRouter.get('/kategori-produk', (_req, res) => {
         deskripsi: KATEGORI_ALAT_DEFAULT_DESC,
         jumlahProduk: 0,
         isSaved: true,
+        tanpaStok: true,
       });
     } else {
       const alatEntry = map.get('ALAT')!;
       if (!alatEntry.deskripsi) alatEntry.deskripsi = KATEGORI_ALAT_DEFAULT_DESC;
+      if (alatEntry.tanpaStok === undefined) alatEntry.tanpaStok = true;
     }
 
     const result = Array.from(map.values()).sort((a, b) => {
@@ -751,7 +767,7 @@ apiRouter.get('/kategori-produk', (_req, res) => {
 
 apiRouter.post('/kategori-produk', async (req, res) => {
   try {
-    const { nama, deskripsi } = req.body;
+    const { nama, deskripsi, tanpaStok } = req.body;
     if (!nama || !String(nama).trim()) {
       return res.status(400).json({ success: false, message: 'Nama kategori wajib diisi' });
     }
@@ -760,7 +776,9 @@ apiRouter.post('/kategori-produk', async (req, res) => {
     const { iso, tanggal, jam } = getWIBDateTime();
 
     const created = await dbManager.executeTransaction((db) => {
-      ensureKategoriRegistered(db, norm, deskripsi);
+      const parsedTanpaStok =
+        typeof tanpaStok === 'boolean' ? tanpaStok : isKategoriAlatNonStok(norm);
+      ensureKategoriRegistered(db, norm, deskripsi, parsedTanpaStok);
       db.auditLogs.unshift({
         id: `LOG-KAT-${Date.now()}`,
         timestamp: iso,
@@ -769,7 +787,7 @@ apiRouter.post('/kategori-produk', async (req, res) => {
         user: 'Admin / Gudang',
         jenisTransaksi: 'CREATE',
         idTransaksi: `KAT-${norm.slice(0, 12)}`,
-        detail: `Menambahkan kategori produk kustom baru: "${norm}"`,
+        detail: `Menambahkan kategori produk kustom baru: "${norm}" (${parsedTanpaStok ? 'Tanpa Stok' : 'Memerlukan Stok'})`,
         nominal: 0,
       });
       return db.kategoriProduk?.find((k) => normalizeKategoriName(k.nama) === norm);
@@ -783,7 +801,7 @@ apiRouter.post('/kategori-produk', async (req, res) => {
 
 apiRouter.put('/kategori-produk/rename', async (req, res) => {
   try {
-    const { kategoriLama, kategoriBaru, deskripsi } = req.body;
+    const { kategoriLama, kategoriBaru, deskripsi, tanpaStok } = req.body;
     if (!kategoriLama || !kategoriBaru || !String(kategoriBaru).trim()) {
       return res.status(400).json({
         success: false,
@@ -808,31 +826,49 @@ apiRouter.put('/kategori-produk/rename', async (req, res) => {
 
       if (oldIdx >= 0) {
         const oldDesc = db.kategoriProduk[oldIdx].deskripsi;
+        const oldTanpaStok = db.kategoriProduk[oldIdx].tanpaStok;
         if (existingNew && oldNorm !== newNorm) {
           if (deskripsi !== undefined) existingNew.deskripsi = String(deskripsi).trim();
           else if (!existingNew.deskripsi && oldDesc) existingNew.deskripsi = oldDesc;
+          if (typeof tanpaStok === 'boolean') existingNew.tanpaStok = tanpaStok;
+          else if (existingNew.tanpaStok === undefined && typeof oldTanpaStok === 'boolean') {
+            existingNew.tanpaStok = oldTanpaStok;
+          }
           db.kategoriProduk.splice(oldIdx, 1);
         } else {
           db.kategoriProduk[oldIdx].nama = newNorm;
           if (deskripsi !== undefined) {
             db.kategoriProduk[oldIdx].deskripsi = String(deskripsi).trim();
           }
+          if (typeof tanpaStok === 'boolean') {
+            db.kategoriProduk[oldIdx].tanpaStok = tanpaStok;
+          }
         }
       } else {
-        ensureKategoriRegistered(db, newNorm, deskripsi);
+        ensureKategoriRegistered(db, newNorm, deskripsi, typeof tanpaStok === 'boolean' ? tanpaStok : undefined);
       }
+
+      const targetKatObj = db.kategoriProduk.find((k) => normalizeKategoriName(k.nama) === newNorm);
+      const isNewNonStok =
+        typeof tanpaStok === 'boolean'
+          ? tanpaStok
+          : Boolean(targetKatObj?.tanpaStok || isKategoriAlatNonStok(newNorm));
 
       // Update all matching products
       let affectedCount = 0;
-      const isNewAlatNonStok = isKategoriAlatNonStok(newNorm);
       for (const p of db.produk) {
         if (normalizeKategoriName(p.kategori) === oldNorm) {
           p.kategori = newNorm;
+          if (typeof tanpaStok === 'boolean') {
+            p.tanpaStok = tanpaStok;
+          }
           affectedCount += 1;
           const st = db.stokBarang.find((s) => s.kode === p.kode);
           if (st) {
             st.kategori = newNorm;
-            if (isNewAlatNonStok) st.minimum = 0;
+            const prodNonStok = isProdukTanpaStok(p, db.kategoriProduk) || isNewNonStok;
+            st.tanpaStok = prodNonStok;
+            if (prodNonStok) st.minimum = 0;
           }
         }
       }
@@ -845,7 +881,7 @@ apiRouter.put('/kategori-produk/rename', async (req, res) => {
         user: 'Admin / Gudang',
         jenisTransaksi: 'UPDATE',
         idTransaksi: `KAT-${newNorm.slice(0, 12)}`,
-        detail: `Mengubah kategori produk "${oldNorm}" menjadi "${newNorm}" (${affectedCount} produk diperbarui)`,
+        detail: `Mengubah kategori produk "${oldNorm}" menjadi "${newNorm}" (${affectedCount} produk diperbarui, ${isNewNonStok ? 'Tanpa Stok' : 'Memerlukan Stok'})`,
         nominal: 0,
       });
 
@@ -917,7 +953,7 @@ apiRouter.post('/kategori-produk/delete', async (req, res) => {
 
 apiRouter.post('/produk/bulk-kategori', async (req, res) => {
   try {
-    const { kodeProdukList, kategoriBaru, deskripsiKategori } = req.body;
+    const { kodeProdukList, kategoriBaru, deskripsiKategori, tanpaStokKategori } = req.body;
     if (!Array.isArray(kodeProdukList) || kodeProdukList.length === 0) {
       return res.status(400).json({ success: false, message: 'Pilih minimal satu produk' });
     }
@@ -929,19 +965,28 @@ apiRouter.post('/produk/bulk-kategori', async (req, res) => {
     const { iso, tanggal, jam } = getWIBDateTime();
 
     const result = await dbManager.executeTransaction((db) => {
-      ensureKategoriRegistered(db, newNorm, deskripsiKategori);
+      ensureKategoriRegistered(
+        db,
+        newNorm,
+        deskripsiKategori,
+        typeof tanpaStokKategori === 'boolean' ? tanpaStokKategori : undefined
+      );
       const targetCodes = new Set(kodeProdukList.map((c: any) => String(c).trim().toUpperCase()));
       let updatedCount = 0;
 
-      const isNewAlatNonStok = isKategoriAlatNonStok(newNorm);
       for (const p of db.produk) {
         if (targetCodes.has(p.kode.toUpperCase())) {
           p.kategori = newNorm;
+          if (typeof tanpaStokKategori === 'boolean') {
+            p.tanpaStok = tanpaStokKategori;
+          }
           updatedCount += 1;
+          const isNonStok = isProdukTanpaStok(p, db.kategoriProduk);
           const st = db.stokBarang.find((s) => s.kode.toUpperCase() === p.kode.toUpperCase());
           if (st) {
             st.kategori = newNorm;
-            if (isNewAlatNonStok) st.minimum = 0;
+            st.tanpaStok = isNonStok;
+            if (isNonStok) st.minimum = 0;
           }
         }
       }
@@ -978,7 +1023,20 @@ apiRouter.get('/produk', (_req, res) => {
 
 apiRouter.post('/produk', async (req, res) => {
   try {
-    const { kode, kategori, nama, satuan, hargaBeli, hargaJual, hargaKhususRekanan, stokAwal, minimum } = req.body;
+    const {
+      kode,
+      kategori,
+      deskripsiKategori,
+      tanpaStok,
+      tanpaStokKategori,
+      nama,
+      satuan,
+      hargaBeli,
+      hargaJual,
+      hargaKhususRekanan,
+      stokAwal,
+      minimum,
+    } = req.body;
     if (!kode || !nama || !satuan || hargaJual === undefined) {
       return res.status(400).json({ success: false, message: 'Kode, nama, satuan, dan harga jual wajib diisi' });
     }
@@ -991,13 +1049,29 @@ apiRouter.post('/produk', async (req, res) => {
       if (db.produk.some((p) => p.kode === cleanKode)) {
         throw new Error(`Produk dengan kode ${cleanKode} sudah terdaftar`);
       }
+
+      const existingKat = (db.kategoriProduk || []).find(
+        (k: any) => normalizeKategoriName(k.nama) === cleanKategori
+      );
+      const katTanpaStok =
+        typeof tanpaStokKategori === 'boolean'
+          ? tanpaStokKategori
+          : existingKat === undefined && typeof tanpaStok === 'boolean'
+          ? tanpaStok
+          : undefined;
+
       ensureKategoriRegistered(
         db,
         cleanKategori,
-        cleanKategori === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : undefined
+        deskripsiKategori || (cleanKategori === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : undefined),
+        katTanpaStok
       );
 
-      const isAlatNonStok = isKategoriAlatNonStok(cleanKategori);
+      const effectiveTanpaStok =
+        typeof tanpaStok === 'boolean'
+          ? tanpaStok
+          : isProdukTanpaStok({ kategori: cleanKategori }, db.kategoriProduk);
+
       const buyVal = Math.max(0, Number(hargaBeli) || 0);
       const rawSell = Math.max(0, Number(hargaJual) || 0);
       const sellVal = rawSell > 0 ? rawSell : buyVal;
@@ -1015,6 +1089,7 @@ apiRouter.post('/produk', async (req, res) => {
         hargaJual: sellVal,
         hargaKhususRekanan: rekananVal,
         status: 'AKTIF',
+        tanpaStok: effectiveTanpaStok,
       };
       db.produk.push(newProd);
 
@@ -1023,8 +1098,9 @@ apiRouter.post('/produk', async (req, res) => {
         namaProduk: newProd.nama,
         satuan: newProd.satuan,
         kategori: cleanKategori,
-        stok: isAlatNonStok ? 0 : Math.max(0, Number(stokAwal) || 0),
-        minimum: isAlatNonStok ? 0 : minimum !== undefined ? Math.max(0, Number(minimum) || 0) : 5,
+        stok: effectiveTanpaStok ? 0 : Math.max(0, Number(stokAwal) || 0),
+        minimum: effectiveTanpaStok ? 0 : minimum !== undefined ? Math.max(0, Number(minimum) || 0) : 5,
+        tanpaStok: effectiveTanpaStok,
         updateTerakhir: iso,
       };
       db.stokBarang.push(newStok);
@@ -1041,7 +1117,19 @@ apiRouter.post('/produk', async (req, res) => {
 apiRouter.put('/produk/:kode', async (req, res) => {
   try {
     const { kode } = req.params;
-    const { nama, kategori, satuan, hargaBeli, hargaJual, hargaKhususRekanan, status, minimum } = req.body;
+    const {
+      nama,
+      kategori,
+      deskripsiKategori,
+      tanpaStok,
+      tanpaStokKategori,
+      satuan,
+      hargaBeli,
+      hargaJual,
+      hargaKhususRekanan,
+      status,
+      minimum,
+    } = req.body;
     const { iso, tanggal, jam } = getWIBDateTime();
 
     const updated = await dbManager.executeTransaction((db) => {
@@ -1051,12 +1139,25 @@ apiRouter.put('/produk/:kode', async (req, res) => {
       if (nama) prod.nama = String(nama).trim();
       if (kategori && String(kategori).trim()) {
         const cleanKategori = normalizeKategoriName(kategori);
+        const existingKat = (db.kategoriProduk || []).find(
+          (k: any) => normalizeKategoriName(k.nama) === cleanKategori
+        );
+        const katTanpaStok =
+          typeof tanpaStokKategori === 'boolean'
+            ? tanpaStokKategori
+            : existingKat === undefined && typeof tanpaStok === 'boolean'
+            ? tanpaStok
+            : undefined;
         prod.kategori = cleanKategori;
         ensureKategoriRegistered(
           db,
           cleanKategori,
-          cleanKategori === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : undefined
+          deskripsiKategori || (cleanKategori === 'ALAT' ? KATEGORI_ALAT_DEFAULT_DESC : undefined),
+          katTanpaStok
         );
+      }
+      if (typeof tanpaStok === 'boolean') {
+        prod.tanpaStok = tanpaStok;
       }
       if (satuan) prod.satuan = String(satuan).trim();
       if (hargaBeli !== undefined) prod.hargaBeli = Math.max(0, Number(hargaBeli) || 0);
@@ -1064,7 +1165,7 @@ apiRouter.put('/produk/:kode', async (req, res) => {
       if (hargaKhususRekanan !== undefined) prod.hargaKhususRekanan = Math.max(0, Number(hargaKhususRekanan) || 0);
       if (status) prod.status = status;
 
-      const isAlatNonStok = isKategoriAlatNonStok(prod.kategori);
+      const isNonStok = isProdukTanpaStok(prod, db.kategoriProduk);
 
       // Sync name, unit, category & minimum to stokBarang (or create if missing)
       let stok = db.stokBarang.find((s) => s.kode === kode);
@@ -1072,7 +1173,8 @@ apiRouter.put('/produk/:kode', async (req, res) => {
         stok.namaProduk = prod.nama;
         stok.satuan = prod.satuan;
         stok.kategori = prod.kategori;
-        if (isAlatNonStok) {
+        stok.tanpaStok = isNonStok;
+        if (isNonStok) {
           stok.stok = 0;
           stok.minimum = 0;
         } else if (minimum !== undefined) {
@@ -1086,11 +1188,12 @@ apiRouter.put('/produk/:kode', async (req, res) => {
           satuan: prod.satuan,
           kategori: prod.kategori,
           stok: 0,
-          minimum: isAlatNonStok
+          minimum: isNonStok
             ? 0
             : minimum !== undefined
             ? Math.max(0, Number(minimum) || 0)
             : 5,
+          tanpaStok: isNonStok,
           updateTerakhir: iso,
         };
         db.stokBarang.push(stok);
@@ -1104,7 +1207,7 @@ apiRouter.put('/produk/:kode', async (req, res) => {
         user: 'Kasir & Gudang',
         jenisTransaksi: 'UPDATE',
         idTransaksi: `PRD-${kode}`,
-        detail: `Pembaruan data produk ${prod.nama} [${prod.kategori}]: Harga Jual Rp ${(prod.hargaJual || 0).toLocaleString('id-ID')}, HPP Rp ${(prod.hargaBeli || 0).toLocaleString('id-ID')}`,
+        detail: `Pembaruan data produk ${prod.nama} [${prod.kategori} · ${isNonStok ? 'Tanpa Stok' : 'Memerlukan Stok'}]: Harga Jual Rp ${(prod.hargaJual || 0).toLocaleString('id-ID')}, HPP Rp ${(prod.hargaBeli || 0).toLocaleString('id-ID')}`,
         nominal: prod.hargaJual || 0,
       });
 
@@ -1121,10 +1224,14 @@ apiRouter.get('/stok', (_req, res) => {
   try {
     const db = dbManager.get();
     const prodMap = new Map((db.produk || []).map((p) => [p.kode, p]));
-    const enriched = (db.stokBarang || []).map((s) => ({
-      ...s,
-      kategori: prodMap.get(s.kode)?.kategori || s.kategori || 'LAINNYA',
-    }));
+    const enriched = (db.stokBarang || []).map((s) => {
+      const p = prodMap.get(s.kode);
+      return {
+        ...s,
+        kategori: p?.kategori || s.kategori || 'LAINNYA',
+        tanpaStok: isProdukTanpaStok(p || s, db.kategoriProduk),
+      };
+    });
     res.json({ success: true, data: enriched });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
@@ -1140,9 +1247,9 @@ apiRouter.post('/stok/adjust', async (req, res) => {
       const stokItem = db.stokBarang.find((s) => s.kode === kode);
       if (!stokItem) throw new Error('Item stok tidak ditemukan');
       const prod = db.produk.find((p) => p.kode === kode);
-      if (isKategoriAlatNonStok(prod?.kategori || stokItem.kategori)) {
+      if (isProdukTanpaStok(prod || stokItem, db.kategoriProduk)) {
         throw new Error(
-          `Item "${stokItem.namaProduk}" berkategori ALAT (sewa jasa) sehingga tidak menggunakan stok fisik gudang.`
+          `Item "${stokItem.namaProduk}" didefinisikan Tanpa Stok sehingga tidak menggunakan stok fisik gudang.`
         );
       }
       const qty = Number(penyesuaianQty);
@@ -1233,6 +1340,13 @@ apiRouter.post('/stok-hasil-bumi', async (req, res) => {
       };
       db.stokHasilBumi.push(newKomoditas);
 
+      if (Array.isArray(db.deletedHasilBumiKodes) && db.deletedHasilBumiKodes.length > 0) {
+        const activeKeys = new Set([cleanKode.toUpperCase(), cleanNama.toUpperCase()]);
+        db.deletedHasilBumiKodes = db.deletedHasilBumiKodes.filter(
+          (k) => !activeKeys.has(String(k || '').trim().toUpperCase())
+        );
+      }
+
       db.auditLogs.unshift({
         id: `LOG-HB-ADD-${Date.now()}`,
         timestamp: iso,
@@ -1248,6 +1362,63 @@ apiRouter.post('/stok-hasil-bumi', async (req, res) => {
       return newKomoditas;
     });
     res.json({ success: true, data: created });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+const handleDeleteKomoditasHasilBumi = async (rawKode: string) => {
+  const cleanKode = String(rawKode || '').trim();
+  if (!cleanKode) {
+    throw new Error('Kode komoditas hasil bumi wajib diisi');
+  }
+  const { iso, tanggal, jam } = getWIBDateTime();
+  return await dbManager.executeTransaction((db) => {
+    if (!Array.isArray(db.stokHasilBumi)) db.stokHasilBumi = [];
+    const idx = db.stokHasilBumi.findIndex(
+      (h) => h.kode.toUpperCase() === cleanKode.toUpperCase()
+    );
+    if (idx === -1) {
+      throw new Error(`Komoditas Hasil Bumi dengan kode "${cleanKode}" tidak ditemukan`);
+    }
+    const [removed] = db.stokHasilBumi.splice(idx, 1);
+
+    if (!Array.isArray(db.deletedHasilBumiKodes)) db.deletedHasilBumiKodes = [];
+    for (const marker of [removed.kode.toUpperCase(), removed.nama.trim().toUpperCase()]) {
+      if (marker && !db.deletedHasilBumiKodes.includes(marker)) {
+        db.deletedHasilBumiKodes.push(marker);
+      }
+    }
+
+    db.auditLogs.unshift({
+      id: `LOG-HB-DEL-${Date.now()}`,
+      timestamp: iso,
+      tanggal,
+      jam,
+      user: 'Admin Gudang',
+      jenisTransaksi: 'VOID',
+      idTransaksi: removed.kode,
+      detail: `Hapus Master Hasil Bumi Tidak Berjalan: ${removed.nama} (${removed.kode}) — Sisa stok tercatat saat dihapus: ${(removed.stok || 0).toLocaleString('id-ID')} ${removed.satuan || 'Kg'} (histori transaksi lama tetap aman)`,
+      nominal: 0,
+    });
+
+    return removed;
+  });
+};
+
+apiRouter.post('/stok-hasil-bumi/delete', async (req, res) => {
+  try {
+    const deleted = await handleDeleteKomoditasHasilBumi(req.body?.kode);
+    res.json({ success: true, data: { deleted } });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/stok-hasil-bumi/:kode', async (req, res) => {
+  try {
+    const deleted = await handleDeleteKomoditasHasilBumi(req.params.kode);
+    res.json({ success: true, data: { deleted } });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -1454,6 +1625,82 @@ apiRouter.post('/transaksi/pembelian-hasil-bumi/putus-harga', async (req, res) =
   try {
     const record = await TransactionService.putusHargaHasilBumi(req.body);
     res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Transaksi BRILink (Uang Masuk: Adm Tarik Tunai | Uang Keluar: Adm Tukar Cash Rupiah PT)
+apiRouter.get('/transaksi/brilink', (_req, res) => {
+  try {
+    const list = TransactionService.getBrilinkList();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/brilink', async (req, res) => {
+  try {
+    const record = await TransactionService.processBrilink(req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/brilink/delete', async (req, res) => {
+  try {
+    const targetId = req.body?.idTransaksi || req.body?.id;
+    const result = await TransactionService.deleteBrilink(String(targetId || ''));
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/transaksi/brilink/:id', async (req, res) => {
+  try {
+    const result = await TransactionService.deleteBrilink(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Transaksi Uang Masuk (+) & Realisasi Penjualan Hasil Bumi Belum Putus Harga
+apiRouter.get('/transaksi/uang-masuk', (_req, res) => {
+  try {
+    const list = TransactionService.getUangMasukList();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/uang-masuk', async (req, res) => {
+  try {
+    const record = await TransactionService.processUangMasuk(req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/uang-masuk/delete', async (req, res) => {
+  try {
+    const targetId = req.body?.idTransaksi || req.body?.id;
+    const result = await TransactionService.deleteUangMasuk(String(targetId || ''));
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/transaksi/uang-masuk/:id', async (req, res) => {
+  try {
+    const result = await TransactionService.deleteUangMasuk(req.params.id);
+    res.json({ success: true, data: result });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -3162,7 +3409,7 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
     const produkArr = Array.isArray(db.produk) ? db.produk : [];
     const katMap = new Map<
       string,
-      { nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }
+      { nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean; tanpaStok: boolean }
     >();
     for (const k of savedKat) {
       const norm = normalizeKategoriName(k.nama);
@@ -3171,6 +3418,7 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
         deskripsi: k.deskripsi || '',
         jumlahProduk: 0,
         isSaved: true,
+        tanpaStok: typeof k.tanpaStok === 'boolean' ? k.tanpaStok : isKategoriAlatNonStok(norm),
       });
     }
     for (const p of produkArr) {
@@ -3184,8 +3432,18 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
           deskripsi: '',
           jumlahProduk: 1,
           isSaved: false,
+          tanpaStok: isKategoriAlatNonStok(norm),
         });
       }
+    }
+    if (!katMap.has('ALAT')) {
+      katMap.set('ALAT', {
+        nama: 'ALAT',
+        deskripsi: KATEGORI_ALAT_DEFAULT_DESC,
+        jumlahProduk: 0,
+        isSaved: true,
+        tanpaStok: true,
+      });
     }
     const kategoriProduk = Array.from(katMap.values()).sort((a, b) => {
       if (b.jumlahProduk !== a.jumlahProduk) return b.jumlahProduk - a.jumlahProduk;
@@ -3203,12 +3461,21 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
         upahHarian: db.upahHarian || [],
         produk: db.produk || [],
         kategoriProduk,
-        stokBarang: db.stokBarang || [],
+        stokBarang: (db.stokBarang || []).map((s) => {
+          const p = produkArr.find((pr) => pr.kode === s.kode);
+          return {
+            ...s,
+            kategori: p?.kategori || s.kategori || 'LAINNYA',
+            tanpaStok: isProdukTanpaStok(p || s, savedKat),
+          };
+        }),
         stokHasilBumi: db.stokHasilBumi || [],
         penjualan: db.penjualan || [],
         pembelianHasilBumi: db.pembelianHasilBumi || [],
         penjualanHasilBumi: db.penjualanHasilBumi || [],
         pembelianBarang: db.pembelianBarang || [],
+        brilink: TransactionService.getBrilinkList(),
+        uangMasuk: TransactionService.getUangMasukList(),
         pencairanTitipan: TransactionService.getPencairanTitipanList(),
         kasbonUang: db.kasbonUang || [],
         bayarBon: db.bayarBon || [],

@@ -8,6 +8,7 @@ import {
   Camera,
   CheckCircle2,
   AlertCircle,
+  ArrowRightLeft,
 } from 'lucide-react';
 import {
   getRoleMitraLabel,
@@ -33,6 +34,7 @@ interface RekapMitraViewProps {
     currentCatatan?: string;
   }) => void;
   onOpenInputNotaLalu: (opts?: { mitraId?: string; defaultNgunci?: boolean }) => void;
+  onOpenKliringSilang?: (mitra: RekapMitraItem) => void;
   onPreviewFotoMitra?: (payload: { nama: string; roleLabel?: string; fotoUrl: string }) => void;
 }
 
@@ -42,38 +44,68 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
   onOpenStatement,
   onRequestToggleNgunci,
   onOpenInputNotaLalu,
+  onOpenKliringSilang,
   onPreviewFotoMitra,
 }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<
-    'SEMUA' | 'ADA_NOMINAL' | 'NOTA_AKTIF' | 'NOTA_NGUNCI' | 'NOTA_SUPPLIER'
+    'SEMUA' | 'NOTA_AKTIF' | 'PIUTANG' | 'HUTANG' | 'SIAP_KLIRING' | 'NGUNCI'
   >('SEMUA');
 
-  const totalSeluruhPiutang =
+  const totalSeluruhPiutangKotor =
     rekapData?.totalSeluruhPiutangMitra ?? rekapData?.totalBonMitra ?? 0;
   const totalNotaNgunci = rekapData?.totalNominalNotaNgunci ?? 0;
   const totalPiutangAktif =
-    rekapData?.totalPiutangAktifMitra ?? Math.max(0, totalSeluruhPiutang - totalNotaNgunci);
-  const totalNotaSupplierHutangKita =
+    rekapData?.totalPiutangAktifGlobal ??
+    rekapData?.totalPiutangAktifMitra ??
+    Math.max(0, totalSeluruhPiutangKotor - totalNotaNgunci);
+  const totalHutangPt =
     rekapData?.totalNotaSupplierRekeningMitra ??
     rekapData?.totalHutangPerusahaanKeMitra ??
     0;
-  const uangKitaDiMitra =
-    rekapData?.uangKitaDiMitra ?? totalSeluruhPiutang - totalNotaSupplierHutangKita;
-  const uangKitaEfektif =
-    rekapData?.uangKitaDiMitraEfektif ?? totalPiutangAktif - totalNotaSupplierHutangKita;
+  // Rumus Resmi: Jumlah Piutang Aktif dikurangi Jumlah Hutang PT (TIDAK melibatkan Status Nota Ngunci)
+  const totalRekeningMitraNotaSupplier =
+    rekapData?.totalRekeningMitraNotaSupplier ?? totalPiutangAktif - totalHutangPt;
+
+  const counts = useMemo(() => {
+    let notaAktif = 0;
+    let piutang = 0;
+    let hutang = 0;
+    let siapKliring = 0;
+    let ngunci = 0;
+    for (const m of items) {
+      const pTotal = m.totalBonMitra || 0;
+      const nKunci = m.nominalNotaNgunci || 0;
+      const pAktif = m.nominalPiutangAktif ?? Math.max(0, pTotal - nKunci);
+      const hPt = m.totalHutangTitipPanen || 0;
+      const pBanding = pAktif > 0 ? pAktif : hPt > 0 && pTotal > 0 ? pTotal : 0;
+      const isKunci = Boolean(m.isNotaNgunci || nKunci > 0);
+      if (pBanding > hPt) piutang += 1;
+      if (hPt > pBanding) hutang += 1;
+      if (pTotal > 0 && hPt > 0) siapKliring += 1;
+      if (pAktif > 0 || hPt > 0) notaAktif += 1;
+      if (isKunci) ngunci += 1;
+    }
+    return { notaAktif, piutang, hutang, siapKliring, ngunci };
+  }, [items]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((m) => {
-      const piutang = m.totalBonMitra || 0;
-      const hutangSupplier = m.totalHutangTitipPanen || 0;
-      const isNgunci = Boolean(m.isNotaNgunci || (m.nominalNotaNgunci || 0) > 0);
+      const piutangTotal = m.totalBonMitra || 0;
+      const nominalNgunci = m.nominalNotaNgunci || 0;
+      const piutangAktif = m.nominalPiutangAktif ?? Math.max(0, piutangTotal - nominalNgunci);
+      const hutangPt = m.totalHutangTitipPanen || 0;
+      const piutangBanding =
+        piutangAktif > 0 ? piutangAktif : hutangPt > 0 && piutangTotal > 0 ? piutangTotal : 0;
+      const isNgunci = Boolean(m.isNotaNgunci || nominalNgunci > 0);
+      const isNotaAktif = piutangAktif > 0 || hutangPt > 0;
 
-      if (statusFilter === 'ADA_NOMINAL' && piutang === 0 && hutangSupplier === 0) return false;
-      if (statusFilter === 'NOTA_NGUNCI' && !isNgunci) return false;
-      if (statusFilter === 'NOTA_AKTIF' && !(piutang > 0 && !isNgunci)) return false;
-      if (statusFilter === 'NOTA_SUPPLIER' && hutangSupplier === 0) return false;
+      if (statusFilter === 'NOTA_AKTIF' && !isNotaAktif) return false;
+      if (statusFilter === 'PIUTANG' && !(piutangBanding > hutangPt)) return false;
+      if (statusFilter === 'HUTANG' && !(hutangPt > piutangBanding)) return false;
+      if (statusFilter === 'SIAP_KLIRING' && !(piutangTotal > 0 && hutangPt > 0)) return false;
+      if (statusFilter === 'NGUNCI' && !isNgunci) return false;
 
       if (!q) return true;
       const roleLabel = getRoleMitraLabel(m.role, {
@@ -90,14 +122,21 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
     });
   }, [items, search, statusFilter]);
 
-  const filteredSumPiutang = useMemo(
-    () => filteredRows.reduce((s, r) => s + (r.totalBonMitra || 0), 0),
+  const filteredSumPiutangAktif = useMemo(
+    () =>
+      filteredRows.reduce((s, r) => {
+        const pTotal = r.totalBonMitra || 0;
+        const nKunci = r.nominalNotaNgunci || 0;
+        const pAktif = r.nominalPiutangAktif ?? Math.max(0, pTotal - nKunci);
+        return s + pAktif;
+      }, 0),
     [filteredRows]
   );
-  const filteredSumNotaSupplier = useMemo(
+  const filteredSumHutangPt = useMemo(
     () => filteredRows.reduce((s, r) => s + (r.totalHutangTitipPanen || 0), 0),
     [filteredRows]
   );
+  const filteredSumSelisihRekening = filteredSumPiutangAktif - filteredSumHutangPt;
 
   return (
     <div className="space-y-5">
@@ -106,14 +145,14 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-zinc-100">
           <div>
             <h2 className="text-base font-bold text-zinc-900 tracking-tight">
-              Rekap Mitra Bisnis &amp; Perhitungan Uang Kita di Mitra
+              2. Rekap Mitra &amp; Total Rekening Mitra / Nota Supplier
             </h2>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Daftar lengkap status nota, nama, alamat, nomor HP, nominal piutang mitra, serta total nota supplier / rekening mitra
+            <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">
+              <strong>Nota Aktif</strong> adalah nota yang masih berjalan baik <strong>1. Piutang (Mitra Berhutang)</strong> maupun <strong>2. Hutang (PT Berhutang: Uang Titip &amp; HB Titip)</strong>. Rumus Total Rekening Mitra / Nota Supplier hanya mengurangkan Jumlah Piutang dengan Jumlah Hutang <strong>tanpa melibatkan 3. Ngunci</strong>.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => onOpenInputNotaLalu({ defaultNgunci: false })}
@@ -125,29 +164,29 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             {[
               { id: 'SEMUA', label: `Semua Mitra (${items.length})` },
               {
-                id: 'ADA_NOMINAL',
-                label: `Ada Saldo Nota (${
-                  items.filter((i) => (i.totalBonMitra || 0) > 0 || (i.totalHutangTitipPanen || 0) > 0).length
-                })`,
-              },
-              {
                 id: 'NOTA_AKTIF',
-                label: `Nota Aktif (${
-                  items.filter((i) => (i.totalBonMitra || 0) > 0 && !i.isNotaNgunci).length
-                })`,
+                label: `Nota Aktif: Piutang & Hutang (${counts.notaAktif})`,
               },
               {
-                id: 'NOTA_NGUNCI',
-                label: `Nota Ngunci (${rekapData?.mitraNotaNgunciCount || 0})`,
+                id: 'PIUTANG',
+                label: `Status Piutang (${counts.piutang})`,
               },
               {
-                id: 'NOTA_SUPPLIER',
-                label: `Nota Supplier / Rekening Mitra (${rekapData?.mitraDenganHutangTitipCount || 0})`,
+                id: 'HUTANG',
+                label: `Status Hutang (${counts.hutang})`,
+              },
+              {
+                id: 'SIAP_KLIRING',
+                label: `Siap Kliring Silang (${counts.siapKliring})`,
+              },
+              {
+                id: 'NGUNCI',
+                label: `3. Ngunci (${counts.ngunci})`,
               },
             ].map((tab) => (
               <button
@@ -156,8 +195,16 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                 onClick={() => setStatusFilter(tab.id as any)}
                 className={`px-3 py-1.5 rounded-lg font-semibold transition-colors cursor-pointer ${
                   statusFilter === tab.id
-                    ? tab.id === 'NOTA_NGUNCI'
+                    ? tab.id === 'NGUNCI'
                       ? 'bg-rose-700 text-white'
+                      : tab.id === 'PIUTANG'
+                      ? 'bg-amber-800 text-white'
+                      : tab.id === 'HUTANG'
+                      ? 'bg-purple-800 text-white'
+                      : tab.id === 'SIAP_KLIRING'
+                      ? 'bg-indigo-700 text-white'
+                      : tab.id === 'NOTA_AKTIF'
+                      ? 'bg-emerald-800 text-white'
                       : 'bg-zinc-900 text-white'
                     : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
                 }`}
@@ -167,7 +214,7 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
             ))}
           </div>
 
-          <div className="relative w-full md:w-72">
+          <div className="relative w-full xl:w-72">
             <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-2.5" />
             <input
               type="text"
@@ -192,15 +239,21 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                 <th className="py-3 px-4">ALAMAT</th>
                 <th className="py-3 px-3">NOMOR HP</th>
                 <th className="py-3 px-4 text-right">
-                  NOMINAL PIUTANG MITRA
+                  1. PIUTANG (MITRA BERHUTANG)
                   <div className="text-[9px] font-normal text-amber-700 normal-case">
-                    (Uang Kita di Nota Mitra)
+                    (Piutang Aktif Berjalan)
                   </div>
                 </th>
                 <th className="py-3 px-4 text-right">
-                  NOTA SUPPLIER / REKENING MITRA
+                  2. HUTANG (PT BERHUTANG)
                   <div className="text-[9px] font-normal text-purple-700 normal-case">
-                    (Hutang Kita ke Mitra)
+                    (Uang Titip + HB Titip + Supplier)
+                  </div>
+                </th>
+                <th className="py-3 px-4 text-right">
+                  REKENING MITRA / NOTA SUPPLIER
+                  <div className="text-[9px] font-normal text-emerald-700 normal-case">
+                    (Piutang − Hutang, Tanpa Ngunci)
                   </div>
                 </th>
                 <th className="py-3 px-3 text-center">AKSI NOTA</th>
@@ -209,7 +262,7 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
             <tbody className="divide-y divide-zinc-100 text-zinc-800">
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-10 text-center text-zinc-500">
+                  <td colSpan={9} className="py-10 text-center text-zinc-500">
                     Tidak ada data mitra yang sesuai dengan filter atau pencarian.
                   </td>
                 </tr>
@@ -220,6 +273,8 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                   const nominalAktif = m.nominalPiutangAktif ?? Math.max(0, piutangTotal - nominalNgunci);
                   const hutangSupplier = m.totalHutangTitipPanen || 0;
                   const isNgunci = Boolean(m.isNotaNgunci || nominalNgunci > 0);
+                  const isNotaAktif = nominalAktif > 0 || hutangSupplier > 0;
+                  const rekeningIndividu = nominalAktif - hutangSupplier;
                   const roleLabel = getRoleMitraLabel(m.role, {
                     isAnakPerusahaan: m.isAnakPerusahaan,
                     isKaryawan: m.isKaryawan || Boolean(m.idKaryawanTerkait),
@@ -229,50 +284,69 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                     <tr
                       key={m.id}
                       className={`hover:bg-zinc-50/80 transition-colors ${
-                        isNgunci ? 'bg-rose-50/30' : ''
+                        isNgunci && !isNotaAktif ? 'bg-rose-50/30' : ''
                       }`}
                     >
                       <td className="py-3 px-3 text-center font-mono text-zinc-400 tabular-nums">
                         {idx + 1}
                       </td>
 
-                      {/* Status Nota */}
+                      {/* Status Rekening Mitra (Disesuaikan: Piutang > Hutang -> PIUTANG, Hutang > Piutang -> HUTANG) */}
                       <td className="py-3 px-3 whitespace-nowrap">
-                        {isNgunci ? (
-                          <div>
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-800">
-                              <Lock className="w-3 h-3 text-rose-700" />
-                              <span>NOTA NGUNCI</span>
-                            </span>
-                            <div className="text-[10px] text-rose-700 mt-0.5">
-                              Tidak ada respon / macet
-                              {(m.jumlahNotaNgunci || 0) > 0 ? ` · ${m.jumlahNotaNgunci} nota` : ''}
+                        {(() => {
+                          const pBanding =
+                            nominalAktif > 0
+                              ? nominalAktif
+                              : hutangSupplier > 0 && piutangTotal > 0
+                                ? piutangTotal
+                                : 0;
+                          const adaDuaSisi = piutangTotal > 0 && hutangSupplier > 0;
+                          return (
+                            <div className="space-y-0.5">
+                              {pBanding > hutangSupplier ? (
+                                <div className="text-xs font-extrabold uppercase tracking-wide text-amber-800">
+                                  PIUTANG
+                                  <span className="block text-[10px] font-normal text-zinc-500 normal-case">
+                                    {adaDuaSisi ? 'Piutang > Hutang' : '1. Mitra Berhutang'}
+                                  </span>
+                                </div>
+                              ) : hutangSupplier > pBanding ? (
+                                <div className="text-xs font-extrabold uppercase tracking-wide text-purple-800">
+                                  HUTANG
+                                  <span className="block text-[10px] font-normal text-zinc-500 normal-case">
+                                    {adaDuaSisi ? 'Hutang > Piutang' : '2. PT Berhutang (Titip)'}
+                                  </span>
+                                </div>
+                              ) : pBanding > 0 && hutangSupplier > 0 ? (
+                                <div className="text-xs font-extrabold uppercase tracking-wide text-sky-800">
+                                  SEIMBANG
+                                  <span className="block text-[10px] font-normal text-zinc-500 normal-case">
+                                    Piutang = Hutang
+                                  </span>
+                                </div>
+                              ) : isNgunci ? (
+                                <div className="text-xs font-extrabold uppercase tracking-wide text-rose-800 flex items-center gap-1">
+                                  <Lock className="w-3 h-3 text-rose-700 shrink-0" />
+                                  <span>NGUNCI</span>
+                                </div>
+                              ) : (
+                                <span className="text-xs font-bold uppercase tracking-wide text-emerald-800">
+                                  LUNAS
+                                </span>
+                              )}
+                              {adaDuaSisi && (
+                                <div className="text-[10px] font-semibold text-indigo-700">
+                                  Ada Piutang &amp; Hutang
+                                </div>
+                              )}
+                              {isNgunci && isNotaAktif && (
+                                <div className="text-[10px] text-rose-700 font-mono tabular-nums">
+                                  + Ngunci: {formatRupiah(nominalNgunci)}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        ) : piutangTotal > 0 ? (
-                          <div>
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800">
-                              <CheckCircle2 className="w-3 h-3 text-amber-600" />
-                              <span>NOTA AKTIF</span>
-                            </span>
-                            <div className="text-[10px] text-zinc-500 mt-0.5">
-                              Piutang berjalan{hutangSupplier > 0 ? ' · +Titipan' : ''}
-                            </div>
-                          </div>
-                        ) : hutangSupplier > 0 ? (
-                          <div>
-                            <span className="text-[11px] font-bold text-purple-800">
-                              NOTA SUPPLIER
-                            </span>
-                            <div className="text-[10px] text-zinc-500 mt-0.5">
-                              Saldo rekening mitra
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-[11px] font-medium text-zinc-400">
-                            LUNAS / IMPAS
-                          </span>
-                        )}
+                          );
+                        })()}
                       </td>
 
                       {/* Nama Mitra */}
@@ -321,38 +395,26 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                         {m.telepon && m.telepon !== '-' ? m.telepon : '-'}
                       </td>
 
-                      {/* Nominal Piutang Mitra */}
+                      {/* 1. Piutang Aktif Mitra */}
                       <td className="py-3 px-4 text-right whitespace-nowrap">
-                        {piutangTotal > 0 ? (
+                        {nominalAktif > 0 ? (
                           <div>
-                            <div
-                              className={`font-mono font-bold text-sm tabular-nums ${
-                                isNgunci ? 'text-rose-700' : 'text-amber-800'
-                              }`}
-                            >
-                              {formatRupiah(piutangTotal)}
+                            <div className="font-mono font-bold text-sm text-amber-800 tabular-nums">
+                              {formatRupiah(nominalAktif)}
                             </div>
-                            {nominalNgunci > 0 && nominalAktif > 0 ? (
-                              <div className="text-[10px] font-mono tabular-nums text-zinc-500 mt-0.5">
-                                Aktif {formatRupiah(nominalAktif)} ·{' '}
-                                <span className="text-rose-700 font-semibold">
-                                  Ngunci {formatRupiah(nominalNgunci)}
-                                </span>
-                              </div>
-                            ) : isNgunci ? (
-                              <div className="text-[10px] text-rose-700 font-medium">
-                                Uang tertahan (Nota Ngunci)
-                              </div>
-                            ) : (
-                              <div className="text-[10px] text-zinc-500">Piutang aktif</div>
-                            )}
+                            <div className="text-[10px] text-zinc-500">1. Piutang berjalan</div>
                           </div>
                         ) : (
                           <span className="font-mono text-zinc-400">Rp 0</span>
                         )}
+                        {nominalNgunci > 0 && (
+                          <div className="text-[10px] font-mono tabular-nums text-rose-700 mt-0.5">
+                            3. Ngunci: {formatRupiah(nominalNgunci)}
+                          </div>
+                        )}
                       </td>
 
-                      {/* Nominal Nota Supplier / Rekening Mitra */}
+                      {/* 2. Hutang PT Berhutang (Uang Titip & HB Titip) */}
                       <td className="py-3 px-4 text-right whitespace-nowrap">
                         {hutangSupplier > 0 ? (
                           <div>
@@ -361,12 +423,36 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                             </div>
                             <div className="text-[10px] text-zinc-500">
                               {(m.totalTitipPanenMurni || 0) > 0 && (m.totalUpahBelumDibayar || 0) > 0
-                                ? `Nota Supplier ${formatRupiah(m.totalTitipPanenMurni || 0)} · Upah ${formatRupiah(
+                                ? `Titip/HB ${formatRupiah(m.totalTitipPanenMurni || 0)} · Upah ${formatRupiah(
                                     m.totalUpahBelumDibayar || 0
                                   )}`
                                 : (m.totalUpahBelumDibayar || 0) > 0
                                 ? 'Hak upah kerja belum cair'
-                                : 'Nota supplier / titipan panen'}
+                                : 'Uang titip & HB titip'}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="font-mono text-zinc-400">Rp 0</span>
+                        )}
+                      </td>
+
+                      {/* Total Rekening Mitra / Nota Supplier Individu */}
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        {rekeningIndividu !== 0 ? (
+                          <div>
+                            <div
+                              className={`font-mono font-bold text-sm tabular-nums ${
+                                rekeningIndividu > 0 ? 'text-emerald-800' : 'text-purple-800'
+                              }`}
+                            >
+                              {rekeningIndividu < 0
+                                ? `-${formatRupiah(Math.abs(rekeningIndividu))}`
+                                : formatRupiah(rekeningIndividu)}
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              {rekeningIndividu > 0
+                                ? 'Selisih piutang aktif'
+                                : 'Selisih hutang PT'}
                             </div>
                           </div>
                         ) : (
@@ -377,6 +463,18 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                       {/* Aksi */}
                       <td className="py-3 px-3 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">
+                          {piutangTotal > 0 && hutangSupplier > 0 && onOpenKliringSilang && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenKliringSilang(m)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-white bg-indigo-700 hover:bg-indigo-800 transition-colors cursor-pointer"
+                              title="Kliring Silang Otomatis Piutang vs Hutang Mitra"
+                            >
+                              <ArrowRightLeft className="w-3 h-3" />
+                              <span>Kliring Silang</span>
+                            </button>
+                          )}
+
                           {piutangTotal > 0 && (
                             <button
                               type="button"
@@ -396,8 +494,8 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                               }`}
                               title={
                                 isNgunci
-                                  ? 'Pulihkan status nota mitra ini menjadi Nota Aktif'
-                                  : 'Tandai piutang mitra ini sebagai NOTA NGUNCI (tidak ada respon & kepastian bayar)'
+                                  ? 'Pulihkan status nota mitra ini menjadi 1. Piutang (Nota Aktif)'
+                                  : 'Tandai piutang mitra ini sebagai 3. Ngunci'
                               }
                             >
                               {isNgunci ? (
@@ -436,10 +534,15 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                     Subtotal Baris Ditampilkan ({filteredRows.length} Mitra):
                   </td>
                   <td className="py-3.5 px-4 text-right font-mono text-sm text-amber-900 tabular-nums whitespace-nowrap">
-                    {formatRupiah(filteredSumPiutang)}
+                    {formatRupiah(filteredSumPiutangAktif)}
                   </td>
                   <td className="py-3.5 px-4 text-right font-mono text-sm text-purple-900 tabular-nums whitespace-nowrap">
-                    {formatRupiah(filteredSumNotaSupplier)}
+                    {formatRupiah(filteredSumHutangPt)}
+                  </td>
+                  <td className="py-3.5 px-4 text-right font-mono text-sm text-emerald-900 tabular-nums whitespace-nowrap">
+                    {filteredSumSelisihRekening < 0
+                      ? `-${formatRupiah(Math.abs(filteredSumSelisihRekening))}`
+                      : formatRupiah(filteredSumSelisihRekening)}
                   </td>
                   <td className="py-3.5 px-3"></td>
                 </tr>
@@ -449,15 +552,19 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
         </div>
       </div>
 
-      {/* BAGIAN BAWAH: REKAPITULASI TOTAL & RUMUS UANG KITA YANG MASIH ADA DI MITRA */}
+      {/* BAGIAN BAWAH: REKAPITULASI TOTAL REKENING MITRA / NOTA SUPPLIER (TANPA NOTA NGUNCI) */}
       <div className="bg-zinc-900 text-white rounded-2xl p-5 sm:p-6 border border-zinc-800 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-zinc-800">
           <div>
             <h3 className="text-sm sm:text-base font-bold tracking-tight text-white">
-              Perhitungan Akhir Posisi Uang Kita di Mitra (Seluruh Master Mitra)
+              Total Rekening Mitra / Nota Supplier (Seluruh Master Mitra)
             </h3>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Rumus: <span className="text-zinc-200 font-semibold">Total Seluruh Piutang Mitra − Total Hutang Kita ke Mitra (Nota Supplier / Rekening Mitra)</span>
+              Rumus Resmi:{' '}
+              <span className="text-zinc-200 font-semibold">
+                Jumlah Piutang (1. Mitra Berhutang) − Jumlah Hutang (2. PT Berhutang: Uang Titip &amp; HB Titip)
+              </span>{' '}
+              — <strong className="text-amber-300">TIDAK melibatkan Status Nota Ngunci</strong>
             </p>
           </div>
           <span className="text-[11px] font-mono text-zinc-400">
@@ -466,65 +573,59 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Komponen 1: Total Seluruh Piutang Mitra */}
+          {/* Komponen 1: Jumlah Piutang Aktif (Mitra Berhutang) */}
           <div className="p-4 rounded-xl bg-zinc-800/80 border border-zinc-700/80 space-y-1.5">
             <div className="text-[11px] font-semibold text-amber-300 uppercase tracking-wider">
-              1. Total Seluruh Piutang Mitra
+              1. Piutang (Mitra Berhutang)
             </div>
             <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
-              {formatRupiah(totalSeluruhPiutang)}
-            </div>
-            <div className="text-[11px] text-zinc-400 font-mono tabular-nums pt-1 border-t border-zinc-700/70 flex flex-wrap justify-between gap-2">
-              <span>Aktif: {formatRupiah(totalPiutangAktif)}</span>
-              <span className="text-rose-300">Ngunci: {formatRupiah(totalNotaNgunci)}</span>
-            </div>
-          </div>
-
-          {/* Komponen 2: Total dari Nota Supplier / Rekening Mitra (Hutang Kita ke Mitra) */}
-          <div className="p-4 rounded-xl bg-zinc-800/80 border border-zinc-700/80 space-y-1.5">
-            <div className="text-[11px] font-semibold text-purple-300 uppercase tracking-wider">
-              2. Total Nota Supplier / Rekening Mitra
-            </div>
-            <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
-              {formatRupiah(totalNotaSupplierHutangKita)}
+              {formatRupiah(totalPiutangAktif)}
             </div>
             <div className="text-[11px] text-zinc-400 pt-1 border-t border-zinc-700/70">
-              Total hutang kita ke mitra ({rekapData?.mitraDenganHutangTitipCount || 0} rekening mitra/supplier)
+              Nota piutang aktif berjalan ({counts.piutang} mitra, tidak termasuk Ngunci)
             </div>
           </div>
 
-          {/* Hasil Rumus: Uang Kita yang Masih Ada di Mitra */}
+          {/* Komponen 2: Jumlah Hutang PT (Uang Titip & HB Titip) */}
+          <div className="p-4 rounded-xl bg-zinc-800/80 border border-zinc-700/80 space-y-1.5">
+            <div className="text-[11px] font-semibold text-purple-300 uppercase tracking-wider">
+              2. Hutang (PT Berhutang: Uang Titip &amp; HB Titip)
+            </div>
+            <div className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
+              {formatRupiah(totalHutangPt)}
+            </div>
+            <div className="text-[11px] text-zinc-400 pt-1 border-t border-zinc-700/70">
+              Termasuk uang titip, HB titip &amp; hutang supplier ({counts.hutang} mitra)
+            </div>
+          </div>
+
+          {/* Hasil Rumus: Total Rekening Mitra / Nota Supplier */}
           <div className="p-4 rounded-xl bg-emerald-950/70 border border-emerald-700/70 space-y-1.5">
             <div className="text-[11px] font-semibold text-emerald-300 uppercase tracking-wider">
-              3. Uang Kita yang Masih Ada di Mitra
+              Total Rekening Mitra / Nota Supplier
             </div>
             <div
               className={`text-xl sm:text-2xl font-bold font-mono tabular-nums ${
-                uangKitaDiMitra >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                totalRekeningMitraNotaSupplier >= 0 ? 'text-emerald-300' : 'text-purple-300'
               }`}
             >
-              {uangKitaDiMitra < 0
-                ? `-${formatRupiah(Math.abs(uangKitaDiMitra))}`
-                : formatRupiah(uangKitaDiMitra)}
+              {totalRekeningMitraNotaSupplier < 0
+                ? `-${formatRupiah(Math.abs(totalRekeningMitraNotaSupplier))}`
+                : formatRupiah(totalRekeningMitraNotaSupplier)}
             </div>
             <div className="text-[11px] text-emerald-100/80 font-mono tabular-nums pt-1 border-t border-emerald-800/70">
-              {formatRupiah(totalSeluruhPiutang)} − {formatRupiah(totalNotaSupplierHutangKita)}
+              {formatRupiah(totalPiutangAktif)} − {formatRupiah(totalHutangPt)}
             </div>
           </div>
         </div>
 
-        {/* Informasi Tambahan Eksekutif: Posisi Bersih Jika Nota Ngunci Dikeluarkan */}
+        {/* Catatan Khusus Status Nota 3. Ngunci */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-3 border-t border-zinc-800 text-xs text-zinc-300">
           <div>
-            Catatan Realisasi Penagihan (di luar <strong className="text-rose-300">Nota Ngunci {formatRupiah(totalNotaNgunci)}</strong> yang tidak bisa kembali):
+            <strong>3. Status Nota Ngunci ({counts.ngunci} mitra):</strong> Tidak dilibatkan dalam pengurangan Total Rekening Mitra / Nota Supplier. Hanya berguna apabila mitra terkait melakukan pembayaran (otomatis mengurangi nominal Ngunci).
           </div>
-          <div className="font-mono font-bold tabular-nums text-sm text-white">
-            Uang Efektif Dapat Kembali:{' '}
-            <span className={uangKitaEfektif >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-              {uangKitaEfektif < 0
-                ? `-${formatRupiah(Math.abs(uangKitaEfektif))}`
-                : formatRupiah(uangKitaEfektif)}
-            </span>
+          <div className="font-mono font-bold tabular-nums text-sm text-rose-300 shrink-0">
+            Nominal Ngunci: {formatRupiah(totalNotaNgunci)}
           </div>
         </div>
       </div>

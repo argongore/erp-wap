@@ -49,6 +49,8 @@ import { PrintReceiptModal, ReceiptData } from './components/common/PrintReceipt
 import { api, DashboardStatsResponse } from './api/client.ts';
 import { BayarTitipanHasilBumiView } from './components/kasir/BayarTitipanHasilBumiView.tsx';
 import { PengeluaranView } from './components/kasir/PengeluaranView.tsx';
+import { UangMasukView } from './components/kasir/UangMasukView.tsx';
+import { BrilinkView } from './components/kasir/BrilinkView.tsx';
 import { ProfilPerusahaanModal } from './components/master/ProfilPerusahaanModal.tsx';
 import { ModalPinjamUangMitra } from './components/common/ModalPinjamUangMitra.tsx';
 import { PublicSharePortal } from './components/public/PublicSharePortal.tsx';
@@ -75,6 +77,8 @@ import {
   TransaksiTransferRekening,
   TransaksiPencairanTitipan,
   TransaksiPengeluaran,
+  TransaksiBrilink,
+  TransaksiUangMasuk,
   FullErpModularDataset,
   ProfilPerusahaan,
   ItemInventaris,
@@ -156,6 +160,8 @@ export default function App() {
   const [pengeluaranList, setPengeluaranList] = useState<TransaksiPengeluaran[]>([]);
   const [transferList, setTransferList] = useState<TransaksiTransferRekening[]>([]);
   const [penggajianList, setPenggajianList] = useState<TransaksiPenggajian[]>([]);
+  const [brilinkList, setBrilinkList] = useState<TransaksiBrilink[]>([]);
+  const [uangMasukList, setUangMasukList] = useState<TransaksiUangMasuk[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
   const [inventarisList, setInventarisList] = useState<ItemInventaris[]>([]);
@@ -166,6 +172,7 @@ export default function App() {
   const [selectedMitraForStatement, setSelectedMitraForStatement] = useState<string>('');
   const [selectedMitraForBayarTitipan, setSelectedMitraForBayarTitipan] = useState<string>('');
   const [selectedMitraForBayarBon, setSelectedMitraForBayarBon] = useState<string>('');
+  const [selectedNoPenjualanHbForUangMasuk, setSelectedNoPenjualanHbForUangMasuk] = useState<string | undefined>(undefined);
   const [selectedKaryawanForBayarGaji, setSelectedKaryawanForBayarGaji] = useState<string | undefined>(undefined);
   const [kontrolKasirTarget, setKontrolKasirTarget] = useState<{
     subTab: 'kliring' | 'duplikat' | 'opname';
@@ -319,6 +326,8 @@ export default function App() {
     if (Array.isArray(snap.pengeluaran)) setPengeluaranList(snap.pengeluaran);
     if (Array.isArray(snap.transferRekening)) setTransferList(snap.transferRekening);
     if (Array.isArray(snap.penggajian)) setPenggajianList(snap.penggajian);
+    if (Array.isArray((snap as any).brilink)) setBrilinkList((snap as any).brilink);
+    if (Array.isArray((snap as any).uangMasuk)) setUangMasukList((snap as any).uangMasuk);
     if (Array.isArray(snap.auditLogs)) setAuditLogs(snap.auditLogs);
     if (snap.profilPerusahaan) setProfilPerusahaan(snap.profilPerusahaan);
     if (Array.isArray(snap.inventaris)) setInventarisList(snap.inventaris);
@@ -708,6 +717,8 @@ export default function App() {
       pencairanTitipan: pencairanTitipanList,
       pengeluaran: pengeluaranList,
       transferRekening: transferList,
+      brilink: brilinkList,
+      uangMasuk: uangMasukList,
       auditLogs,
     }),
     [
@@ -732,6 +743,8 @@ export default function App() {
       pencairanTitipanList,
       pengeluaranList,
       transferList,
+      brilinkList,
+      uangMasukList,
       auditLogs,
     ]
   );
@@ -1010,6 +1023,30 @@ export default function App() {
 
               {activeTab === 'billboard-monitor' && (
                 <BillboardMonitoringView onClose={() => setActiveTab('dashboard')} />
+              )}
+
+              {activeTab === 'kasir-uang-masuk' && (
+                <UangMasukView
+                  rekeningList={rekeningList}
+                  mitraList={mitraList}
+                  penjualanHasilBumiList={penjualanHasilBumiList}
+                  uangMasukList={uangMasukList}
+                  initialNoPenjualanHb={selectedNoPenjualanHbForUangMasuk}
+                  onClearInitialNoPenjualanHb={() => setSelectedNoPenjualanHbForUangMasuk(undefined)}
+                  onSuccess={handleTransactionSuccess}
+                  onRefresh={loadAllData}
+                  onNavigateToStokHb={() => setActiveTab('stok-hasil-bumi')}
+                />
+              )}
+
+              {activeTab === 'kasir-brilink' && (
+                <BrilinkView
+                  rekeningList={rekeningList}
+                  mitraList={mitraList}
+                  brilinkList={brilinkList}
+                  onSuccess={handleTransactionSuccess}
+                  onRefresh={loadAllData}
+                />
               )}
 
               {activeTab === 'kasir-penjualan' && (
@@ -1327,6 +1364,10 @@ export default function App() {
                   rekeningList={rekeningList}
                   onRefresh={loadAllData}
                   onPrintReceipt={handleTransactionSuccess}
+                  onInputUangMasuk={(noPenjualan) => {
+                    setSelectedNoPenjualanHbForUangMasuk(noPenjualan);
+                    setActiveTab('kasir-uang-masuk');
+                  }}
                 />
               )}
 

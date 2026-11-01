@@ -14,6 +14,8 @@ import {
   AlertCircle,
   Pencil,
   Plus,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import {
   Mitra,
@@ -43,6 +45,7 @@ interface Props {
   rekeningList?: Rekening[];
   onRefresh: () => void;
   onPrintReceipt?: (receipt: ReceiptData) => void;
+  onInputUangMasuk?: (noPenjualan: string) => void;
 }
 
 const NAMA_BULAN = [
@@ -78,6 +81,83 @@ function formatKgSingkat(kg: number): string {
   return `${val.toLocaleString('id-ID', { maximumFractionDigits: 2 })} Kg`;
 }
 
+function formatKgBukuMutasi(kg: number): string {
+  return (Number(kg) || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatAngkaBukuMutasi(num: number): string {
+  return Math.round(Number(num) || 0).toLocaleString('en-US');
+}
+
+function parseTanggalSortKey(tanggal?: string): number {
+  if (!tanggal) return 0;
+  const parts = String(tanggal).trim().split('/');
+  if (parts.length === 3) {
+    const d = parseInt(parts[0], 10) || 1;
+    const m = parseInt(parts[1], 10) || 1;
+    const y = parseInt(parts[2], 10) || 2026;
+    return y * 10000 + m * 100 + d;
+  }
+  const isoParts = String(tanggal).trim().split('-');
+  if (isoParts.length === 3 && isoParts[0].length === 4) {
+    const y = parseInt(isoParts[0], 10) || 2026;
+    const m = parseInt(isoParts[1], 10) || 1;
+    const d = parseInt(isoParts[2], 10) || 1;
+    return y * 10000 + m * 100 + d;
+  }
+  return 0;
+}
+
+type BukuMutasiRow =
+  | {
+      kind: 'PURCHASE';
+      key: string;
+      nama: string;
+      tanggalDisplay: string;
+      tanggalAsli: string;
+      beratKg: number;
+      hargaPerKg: number;
+      jumlahRp: number;
+      showRpPrefix: boolean;
+      isBelumPutus?: boolean;
+      txPurchase?: TransaksiPembelianHasilBumi;
+    }
+  | {
+      kind: 'SPACER';
+      key: string;
+    }
+  | {
+      kind: 'JUMLAH';
+      key: string;
+      label: string;
+      beratKg: number;
+      rataHargaPerKg: number;
+      jumlahRp: number;
+    }
+  | {
+      kind: 'MUAT';
+      key: string;
+      label: string;
+      tanggalDisplay: string;
+      beratKg: number;
+      jumlahRp: number;
+      txSale: TransaksiPenjualanHasilBumi;
+    }
+  | {
+      kind: 'SISA';
+      key: string;
+      beratKg: number;
+      jumlahRp: number;
+    }
+  | {
+      kind: 'SUSUT';
+      key: string;
+      beratKg: number;
+    };
+
 export const StokHasilBumiView: React.FC<Props> = ({
   stokList,
   pembelianList,
@@ -86,6 +166,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
   rekeningList = [],
   onRefresh,
   onPrintReceipt,
+  onInputUangMasuk,
 }) => {
   const activeStokList = useMemo(
     () =>
@@ -114,14 +195,42 @@ export const StokHasilBumiView: React.FC<Props> = ({
   const [selectedModalKode, setSelectedModalKode] = useState<string | undefined>(undefined);
   const [showTambahBarangModal, setShowTambahBarangModal] = useState<boolean>(false);
 
+  const [showHapusHbModal, setShowHapusHbModal] = useState<boolean>(false);
+  const [hapusHbKode, setHapusHbKode] = useState<string>('');
+  const [hapusHbLoading, setHapusHbLoading] = useState<boolean>(false);
+  const [successBanner, setSuccessBanner] = useState<string>('');
+
   const [showJualModal, setShowJualModal] = useState<boolean>(false);
   const [jualInitialKode, setJualInitialKode] = useState<string | undefined>(undefined);
 
-  const [activeHistoryTab, setActiveHistoryTab] = useState<'PENJUALAN' | 'PEMBELIAN'>('PENJUALAN');
+  const [selectedCardKode, setSelectedCardKode] = useState<string>('');
+  const [activeHistoryTab, setActiveHistoryTab] = useState<
+    'MUTASI_KOMODITAS' | 'PENJUALAN' | 'PEMBELIAN'
+  >('MUTASI_KOMODITAS');
   const [confirmVoidNo, setConfirmVoidNo] = useState<string | null>(null);
   const [voidLoading, setVoidLoading] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string>('');
   const [editTxTarget, setEditTxTarget] = useState<{ id: string; jenis: string } | null>(null);
+
+  useEffect(() => {
+    if (activeStokList.length === 0) {
+      setSelectedCardKode('');
+      return;
+    }
+    if (!selectedCardKode || !activeStokList.some((h) => h.kode === selectedCardKode)) {
+      const preferred =
+        activeStokList.find((h) =>
+          physicalPembelianList.some(
+            (p) =>
+              p.komoditasKode === h.kode ||
+              p.komoditasNama.toUpperCase().trim() === h.nama.toUpperCase().trim()
+          )
+        ) ||
+        activeStokList.find((h) => (h.stok || 0) > 0) ||
+        activeStokList[0];
+      setSelectedCardKode(preferred.kode);
+    }
+  }, [activeStokList, selectedCardKode, physicalPembelianList]);
 
   const loadRingkasan = useCallback(async (silent = false) => {
     if (!silent) {
@@ -254,32 +363,63 @@ export const StokHasilBumiView: React.FC<Props> = ({
 
   const handleOpenReceipt = (j: TransaksiPenjualanHasilBumi) => {
     if (!onPrintReceipt) return;
+    const isBelumPutus =
+      j.isBelumPutusHargaJual || j.metodePembayaran === 'BELUM_PUTUS_HARGA';
+    const nilaiPengurang =
+      Number(j.nilaiModalPengurangStok) ||
+      Math.round((Number(j.beratBersih) || 0) * (Number(j.modalRataRataPerKg) || 0));
+    const sudahCair = Number(j.nominalUangMasukTerkumpul) || 0;
+
     onPrintReceipt({
-      title: 'NOTA PENJUALAN HASIL BUMI',
+      title: isBelumPutus
+        ? 'NOTA MUAT / JUAL HASIL BUMI (BELUM PUTUS HARGA)'
+        : 'NOTA PENJUALAN HASIL BUMI',
       subtitle: `Pengiriman Stok Fisik Keluar Gudang${j.divisi ? ` | Divisi: ${j.divisi}` : ''}`,
       nomorTransaksi: j.noPenjualan,
       tanggal: j.tanggal,
       jam: j.jam,
       mitra: j.namaMitra,
-      rekening: `${j.metodePembayaran} (${j.rekeningTujuan})`,
+      rekening: isBelumPutus
+        ? sudahCair > 0
+          ? `UANG MASUK (${formatRupiahSingkat(sudahCair)})`
+          : 'MENUNGGU UANG MASUK'
+        : `${j.metodePembayaran} (${j.rekeningTujuan})`,
       kategori: 'PENJUALAN_HASIL_BUMI',
-      total: j.totalNominal,
+      total: isBelumPutus ? (sudahCair > 0 ? sudahCair : nilaiPengurang) : j.totalNominal,
       items: [
         {
-          nama: `${j.komoditasNama}${j.noSuratJalan ? ` [DO: ${j.noSuratJalan}]` : ''}`,
+          nama: `MUAT ${j.namaMitra.toUpperCase()} — ${j.komoditasNama}${
+            j.noSuratJalan ? ` [DO: ${j.noSuratJalan}]` : ''
+          }`,
           qty: j.beratBersih,
           satuan: 'Kg',
-          harga: j.hargaJualPerKg,
-          subtotal: j.totalNominal,
+          harga: isBelumPutus ? j.modalRataRataPerKg : j.hargaJualPerKg,
+          subtotal: isBelumPutus ? nilaiPengurang : j.totalNominal,
         },
       ],
       detailRows: [
         { label: 'Berat Kotor Timbangan', value: `${j.beratKotor.toLocaleString('id-ID')} Kg` },
         { label: 'Potongan Rafaksi', value: `${j.potonganRafaksi}%` },
-        { label: 'Berat Bersih Keluar', value: `${j.beratBersih.toLocaleString('id-ID')} Kg`, highlight: true },
+        {
+          label: 'Berat Bersih Keluar',
+          value: `${j.beratBersih.toLocaleString('id-ID')} Kg`,
+          highlight: true,
+        },
         { label: 'Stok Gudang Sebelum', value: `${j.stokGudangSebelum.toLocaleString('id-ID')} Kg` },
         { label: 'Sisa Ready di Gudang', value: `${j.stokGudangSetelah.toLocaleString('id-ID')} Kg` },
-        { label: 'Total Penjualan', value: formatRupiah(j.totalNominal), isTotal: true },
+        ...(isBelumPutus
+          ? [
+              {
+                label: 'Nilai Pengurang Stok (Rata2 Beli)',
+                value: formatRupiah(nilaiPengurang),
+              },
+              {
+                label: 'Realisasi Uang Masuk',
+                value: sudahCair > 0 ? formatRupiah(sudahCair) : 'Rp 0 (Menunggu Uang Masuk)',
+                isTotal: true,
+              },
+            ]
+          : [{ label: 'Total Penjualan', value: formatRupiah(j.totalNominal), isTotal: true }]),
       ],
       catatan: j.keterangan,
     });
@@ -290,6 +430,313 @@ export const StokHasilBumiView: React.FC<Props> = ({
     if (kodeKomoditasFilter === 'ALL') return items;
     return items.filter((it) => it.kode === kodeKomoditasFilter);
   }, [ringkasan, kodeKomoditasFilter]);
+
+  const selectedCardHb = useMemo(
+    () => activeStokList.find((h) => h.kode === selectedCardKode) || activeStokList[0] || null,
+    [activeStokList, selectedCardKode]
+  );
+
+  // Buku Mutasi Gudang per Komoditas (Format Gambar 2: Baris Petani -> JUMLAH Hijau -> MUAT Kuning -> SISA Biru -> SUSUT Merah)
+  const bukuMutasiSelectedHb = useMemo((): BukuMutasiRow[] => {
+    if (!selectedCardHb) return [];
+    const targetKode = selectedCardHb.kode;
+    const targetNamaUpper = selectedCardHb.nama.toUpperCase().trim();
+
+    const purchases = physicalPembelianList.filter(
+      (p) =>
+        p.komoditasKode === targetKode ||
+        p.komoditasNama.toUpperCase().trim() === targetNamaUpper
+    );
+    const sales = penjualanHasilBumiList.filter(
+      (j) =>
+        j.komoditasKode === targetKode ||
+        j.komoditasNama.toUpperCase().trim() === targetNamaUpper
+    );
+
+    type CombinedEvent =
+      | { type: 'BUY'; dateKey: number; createdAt: string; record: TransaksiPembelianHasilBumi }
+      | { type: 'SELL'; dateKey: number; createdAt: string; record: TransaksiPenjualanHasilBumi };
+
+    const events: CombinedEvent[] = [
+      ...purchases.map((p) => ({
+        type: 'BUY' as const,
+        dateKey: parseTanggalSortKey(p.tanggal),
+        createdAt: p.createdAt || '',
+        record: p,
+      })),
+      ...sales.map((j) => ({
+        type: 'SELL' as const,
+        dateKey: parseTanggalSortKey(j.tanggal),
+        createdAt: j.createdAt || '',
+        record: j,
+      })),
+    ];
+
+    events.sort((a, b) => {
+      if (a.dateKey !== b.dateKey) return a.dateKey - b.dateKey;
+      // Pada tanggal yang sama, pembelian petani umumnya masuk gudang sebelum truk MUAT berangkat
+      if (a.type !== b.type) {
+        const createdDayA = (a.createdAt || '').slice(0, 10);
+        const createdDayB = (b.createdAt || '').slice(0, 10);
+        if (createdDayA && createdDayA === createdDayB) {
+          return a.createdAt.localeCompare(b.createdAt);
+        }
+        return a.type === 'BUY' ? -1 : 1;
+      }
+      return (a.createdAt || '').localeCompare(b.createdAt || '');
+    });
+
+    const rows: BukuMutasiRow[] = [];
+    let batchKg = 0;
+    let batchRp = 0;
+    let lastDateShownInBatch = '';
+    let hasClosedAtLeastOneBatch = false;
+
+    const stokAwalKg = Number(selectedCardHb.stokAwal) || 0;
+    const rataModalAwal = Number(selectedCardHb.rataRataModalAwal) || 0;
+    const modalAwalRp =
+      Number(selectedCardHb.modalAwalTotal) || Math.round(stokAwalKg * rataModalAwal);
+
+    if (stokAwalKg > 0) {
+      rows.push({
+        kind: 'PURCHASE',
+        key: `STOK-AWAL-${selectedCardHb.kode}`,
+        nama: 'STOK AWAL GUDANG',
+        tanggalDisplay: formatTanggalIndo(selectedCardHb.updateTerakhir),
+        tanggalAsli: formatTanggalIndo(selectedCardHb.updateTerakhir),
+        beratKg: stokAwalKg,
+        hargaPerKg: rataModalAwal,
+        jumlahRp: modalAwalRp,
+        showRpPrefix: false,
+      });
+      batchKg = Math.round((batchKg + stokAwalKg) * 100) / 100;
+      batchRp += modalAwalRp;
+    }
+
+    for (const ev of events) {
+      if (ev.type === 'BUY') {
+        const p = ev.record;
+        const tgl = p.tanggal || '-';
+        const tanggalDisplay = tgl === lastDateShownInBatch ? '' : tgl;
+        lastDateShownInBatch = tgl;
+        const berat = Number(p.beratBersih) || 0;
+        const harga = Number(p.hargaPerKg) || 0;
+        const jumlah = Number(p.totalNominal) || 0;
+        const isBelumPutus = Boolean(p.isBelumPutusHarga || p.status === 'BELUM_PUTUS_HARGA');
+
+        rows.push({
+          kind: 'PURCHASE',
+          key: `BUY-${p.noPembelian}`,
+          nama: p.namaMitra,
+          tanggalDisplay,
+          tanggalAsli: tgl,
+          beratKg: berat,
+          hargaPerKg: harga,
+          jumlahRp: jumlah,
+          showRpPrefix: hasClosedAtLeastOneBatch,
+          isBelumPutus,
+          txPurchase: p,
+        });
+
+        batchKg = Math.round((batchKg + berat) * 100) / 100;
+        batchRp += jumlah;
+      } else {
+        const j = ev.record;
+        lastDateShownInBatch = '';
+
+        const jumlahKg =
+          batchKg > 0 ? batchKg : Math.max(0, Number(j.stokGudangSebelum) || 0);
+        const exactAvgRate =
+          jumlahKg > 0 && batchRp > 0
+            ? batchRp / jumlahKg
+            : Number(j.modalRataRataPerKg) || Number(j.hargaJualPerKg) || 0;
+        const rataHargaPerKg = Math.round(exactAvgRate);
+        const jumlahRp =
+          batchKg > 0 ? Math.round(batchRp) : Math.round(jumlahKg * exactAvgRate);
+
+        const muatKg = Number(j.beratBersih) || 0;
+        const muatRp =
+          exactAvgRate > 0
+            ? Math.round(muatKg * exactAvgRate)
+            : Number(j.nilaiModalPengurangStok) || Number(j.totalNominal) || 0;
+
+        const diffKg = Math.round(Math.abs(jumlahKg - muatKg) * 100) / 100;
+        const diffRp = Math.abs(jumlahRp - muatRp);
+
+        const isClosedHabis = Boolean(
+          j.isHabisMuatSusut ||
+            muatKg >= jumlahKg ||
+            (Number(j.stokGudangSetelah) === 0 && jumlahKg > 0)
+        );
+        const susutKg = isClosedHabis
+          ? j.beratSusutKg !== undefined && Number(j.beratSusutKg) > 0
+            ? Number(j.beratSusutKg)
+            : diffKg
+          : 0;
+
+        const cleanBuyer = (j.namaMitra || '').trim();
+        const cleanDo = (j.noSuratJalan || '').trim();
+        const isGenericBuyer =
+          !cleanBuyer ||
+          cleanBuyer.toUpperCase() === 'PABRIK / PEMBELI UMUM' ||
+          cleanBuyer.toUpperCase() === 'PETANI UMUM' ||
+          cleanBuyer.toUpperCase() === 'UMUM';
+        let muatLabel = 'MUAT';
+        if (!isGenericBuyer && cleanDo) {
+          muatLabel = cleanBuyer.toUpperCase().startsWith('MUAT')
+            ? `${cleanBuyer.toUpperCase()} (${cleanDo.toUpperCase()})`
+            : `MUAT ${cleanBuyer.toUpperCase()} (${cleanDo.toUpperCase()})`;
+        } else if (cleanDo) {
+          muatLabel = cleanDo.toUpperCase().startsWith('MUAT')
+            ? cleanDo.toUpperCase()
+            : `MUAT ${cleanDo.toUpperCase()}`;
+        } else if (cleanBuyer) {
+          muatLabel = cleanBuyer.toUpperCase().startsWith('MUAT')
+            ? cleanBuyer.toUpperCase()
+            : `MUAT ${cleanBuyer.toUpperCase()}`;
+        }
+
+        rows.push({ kind: 'SPACER', key: `SPC-${j.noPenjualan}` });
+        rows.push({
+          kind: 'JUMLAH',
+          key: `JML-${j.noPenjualan}`,
+          label: 'JUMLAH',
+          beratKg: jumlahKg,
+          rataHargaPerKg,
+          jumlahRp,
+        });
+        rows.push({
+          kind: 'MUAT',
+          key: `MUAT-${j.noPenjualan}`,
+          label: muatLabel,
+          tanggalDisplay: j.tanggal || '-',
+          beratKg: muatKg,
+          jumlahRp: muatRp,
+          txSale: j,
+        });
+        rows.push({
+          kind: 'SISA',
+          key: `SISA-${j.noPenjualan}`,
+          beratKg: diffKg,
+          jumlahRp: diffRp,
+        });
+        rows.push({
+          kind: 'SUSUT',
+          key: `SUSUT-${j.noPenjualan}`,
+          beratKg: susutKg,
+        });
+
+        hasClosedAtLeastOneBatch = true;
+        if (isClosedHabis) {
+          batchKg = 0;
+          batchRp = 0;
+        } else {
+          batchKg = diffKg;
+          batchRp = Math.max(0, jumlahRp - muatRp);
+        }
+      }
+    }
+
+    if (batchKg > 0) {
+      const avgOpen = batchKg > 0 && batchRp > 0 ? Math.round(batchRp / batchKg) : 0;
+      rows.push({ kind: 'SPACER', key: 'SPC-OPEN-END' });
+      rows.push({
+        kind: 'JUMLAH',
+        key: 'JML-OPEN-END',
+        label: 'JUMLAH (STOK READY)',
+        beratKg: batchKg,
+        rataHargaPerKg: avgOpen,
+        jumlahRp: Math.round(batchRp),
+      });
+    }
+
+    return rows;
+  }, [selectedCardHb, physicalPembelianList, penjualanHasilBumiList]);
+
+  const handleSelectCardKomoditas = (kode: string) => {
+    setSelectedCardKode(kode);
+    setActiveHistoryTab('MUTASI_KOMODITAS');
+    const el = document.getElementById('riwayat-mutasi-gudang-hb');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const handleOpenDeleteHbModal = (kode?: string) => {
+    const target = kode || selectedCardKode || activeStokList[0]?.kode || '';
+    setHapusHbKode(target);
+    setActionError('');
+    setShowHapusHbModal(true);
+  };
+
+  const handleConfirmDeleteHb = async () => {
+    if (!hapusHbKode) return;
+    setHapusHbLoading(true);
+    setActionError('');
+    try {
+      const res = await api.deleteKomoditasHasilBumi(hapusHbKode);
+      setShowHapusHbModal(false);
+      setSuccessBanner(
+        `Hasil Bumi "${res.deleted.nama} (${res.deleted.kode})" berhasil dihapus dari daftar aktif.`
+      );
+      if (kodeKomoditasFilter === hapusHbKode) {
+        setKodeKomoditasFilter('ALL');
+      }
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      onRefresh();
+      loadRingkasan();
+    } catch (err: any) {
+      setActionError(err?.message || 'Gagal menghapus komoditas hasil bumi.');
+    } finally {
+      setHapusHbLoading(false);
+    }
+  };
+
+  const handleExportBukuMutasiCsv = () => {
+    if (!selectedCardHb) return;
+    const csvRows: string[][] = [
+      ['NAMA / KETERANGAN', 'TANGGAL', 'BERAT (KG)', 'HARGA / KG', 'JUMLAH (RP)'],
+    ];
+    for (const r of bukuMutasiSelectedHb) {
+      if (r.kind === 'SPACER') {
+        csvRows.push(['', '', '', '', '-']);
+      } else if (r.kind === 'PURCHASE') {
+        csvRows.push([
+          r.nama,
+          r.tanggalDisplay,
+          String(r.beratKg),
+          String(r.hargaPerKg),
+          String(r.jumlahRp),
+        ]);
+      } else if (r.kind === 'JUMLAH') {
+        csvRows.push([
+          r.label,
+          '',
+          String(r.beratKg),
+          String(r.rataHargaPerKg),
+          String(r.jumlahRp),
+        ]);
+      } else if (r.kind === 'MUAT') {
+        csvRows.push([r.label, r.tanggalDisplay, String(r.beratKg), '', String(r.jumlahRp)]);
+      } else if (r.kind === 'SISA') {
+        csvRows.push(['SISA', '', String(r.beratKg), '', String(r.jumlahRp)]);
+      } else if (r.kind === 'SUSUT') {
+        csvRows.push(['SUSUT', '', String(r.beratKg), '', '']);
+      }
+    }
+    const content = csvRows
+      .map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Mutasi_Gudang_${selectedCardHb.nama.replace(/\s+/g, '_')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-6">
@@ -313,6 +760,18 @@ export const StokHasilBumiView: React.FC<Props> = ({
             <Plus className="w-4 h-4" />
             <span>Tambah Barang Hasil Bumi</span>
           </button>
+
+          {activeStokList.length > 0 && (
+            <button
+              type="button"
+              onClick={() => handleOpenDeleteHbModal()}
+              className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 font-semibold text-xs rounded-lg transition-colors flex items-center space-x-1.5 cursor-pointer"
+              title="Hapus komoditas hasil bumi yang sudah tidak berjalan"
+            >
+              <Trash2 className="w-4 h-4 text-rose-600" />
+              <span>Hapus Hasil Bumi</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -339,6 +798,22 @@ export const StokHasilBumiView: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {successBanner && (
+        <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{successBanner}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSuccessBanner('')}
+            className="text-emerald-700 font-semibold hover:underline cursor-pointer"
+          >
+            Tutup
+          </button>
+        </div>
+      )}
 
       {actionError && (
         <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between">
@@ -652,18 +1127,35 @@ export const StokHasilBumiView: React.FC<Props> = ({
                         {formatRupiahSingkat(it.nilaiModalReadyGudang)}
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <button
-                        type="button"
-                        disabled={it.readyGudangSaatIniKg <= 0}
-                        onClick={() => {
-                          setJualInitialKode(it.kode);
-                          setShowJualModal(true);
-                        }}
-                        className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-emerald-700 hover:bg-emerald-800 disabled:bg-zinc-200 disabled:text-zinc-400 text-white transition-colors cursor-pointer"
-                      >
-                        Jual
-                      </button>
+                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectCardKomoditas(it.kode)}
+                          className="px-2 py-1 rounded-md text-[11px] font-semibold bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white transition-colors cursor-pointer"
+                          title="Lihat Buku Mutasi Gudang komoditas ini"
+                        >
+                          Mutasi
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setJualInitialKode(it.kode);
+                            setShowJualModal(true);
+                          }}
+                          className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-emerald-700 hover:bg-emerald-800 text-white transition-colors cursor-pointer"
+                        >
+                          Jual / Muat
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDeleteHbModal(it.kode)}
+                          className="p-1.5 rounded-md text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Hapus Hasil Bumi ini jika sudah tidak berjalan"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -792,156 +1284,230 @@ export const StokHasilBumiView: React.FC<Props> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* KARTU PERSEDIAAN FISIK PER KOMODITAS (READY GUDANG & MODAL RATA-RATA)     */}
+      {/* KARTU PERSEDIAAN FISIK PER KOMODITAS (KLIK CARD UNTUK BUKA BUKU MUTASI)    */}
       {/* ========================================================================= */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {activeStokList.map((hb, idx) => {
-          const isKopiTitip = hb.kode === 'HB-08' || hb.isBelumPutusHarga;
-
-          const purchases = physicalPembelianList.filter(
-            (p) =>
-              p.komoditasKode === hb.kode ||
-              p.komoditasNama.toUpperCase().trim() === hb.nama.toUpperCase().trim()
-          );
-
-          const sales = penjualanHasilBumiList.filter(
-            (j) =>
-              j.komoditasKode === hb.kode ||
-              j.komoditasNama.toUpperCase().trim() === hb.nama.toUpperCase().trim()
-          );
-
-          const totalUangKeluarBaru = purchases.reduce((sum, p) => sum + (p.totalNominal || 0), 0);
-          const totalKgBeliBaru = purchases.reduce((sum, p) => sum + (p.beratBersih || 0), 0);
-          const totalKgTerjual = sales.reduce((sum, j) => sum + (j.beratBersih || 0), 0);
-
-          const stokAwalKg = hb.stokAwal || 0;
-          const modalAwalUang = hb.modalAwalTotal || stokAwalKg * (hb.rataRataModalAwal || 0);
-
-          const totalUangKeluar = modalAwalUang + totalUangKeluarBaru;
-          const totalKgBeli = stokAwalKg + totalKgBeliBaru;
-
-          const rataRataModalPerKg =
-            totalKgBeli > 0 && totalUangKeluar > 0
-              ? Math.round(totalUangKeluar / totalKgBeli)
-              : hb.rataRataModalAwal || 0;
-
-          return (
-            <div
-              key={hb.kode}
-              className={`bg-white rounded-xl border p-4 space-y-2.5 flex flex-col justify-between min-w-0 overflow-hidden ${
-                isKopiTitip ? 'border-amber-300 bg-amber-50/20' : 'border-zinc-200'
-              }`}
-            >
-              <div className="space-y-2.5 min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200 truncate">
-                    #{idx + 1} · {hb.kode}
-                  </span>
-                  {isKopiTitip ? (
-                    <span className="text-[10px] font-bold text-amber-800 shrink-0">TITIP PANEN</span>
-                  ) : (
-                    <Wheat className="w-4 h-4 text-amber-600 shrink-0" />
-                  )}
-                </div>
-
-                <div className="font-bold text-zinc-900 text-sm truncate">{hb.nama}</div>
-
-                {/* Ready di Gudang */}
-                <div className="min-w-0">
-                  <span className="text-[10px] text-zinc-500 uppercase font-semibold block">
-                    Ready di Gudang:
-                  </span>
-                  <div className="text-2xl font-bold font-mono tabular-nums text-emerald-800 tracking-tight truncate whitespace-nowrap">
-                    {hb.stok.toLocaleString('id-ID')}{' '}
-                    <span className="text-xs font-medium text-zinc-500">{hb.satuan}</span>
-                  </div>
-                </div>
-
-                {/* Ringkasan Masuk vs Terjual & Modal Rata-rata */}
-                <div className="p-2.5 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1.5 text-xs min-w-0 overflow-hidden">
-                  <div className="flex items-center justify-between gap-2 text-[11px] min-w-0">
-                    <span className="text-zinc-600 font-medium shrink-0">Modal Rata-rata:</span>
-                    <span
-                      className="font-bold font-mono tabular-nums text-zinc-900 truncate whitespace-nowrap"
-                      title={
-                        rataRataModalPerKg > 0 ? `${formatRupiah(rataRataModalPerKg)} / Kg` : undefined
-                      }
-                    >
-                      {rataRataModalPerKg > 0
-                        ? `${formatRupiahSingkat(rataRataModalPerKg)}/Kg`
-                        : isKopiTitip
-                        ? 'Belum Putus'
-                        : 'Rp 0'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 pt-1 border-t border-zinc-200/80 min-w-0">
-                    <span className="shrink-0">Total Masuk:</span>
-                    <span className="font-mono tabular-nums font-semibold text-zinc-800 truncate">
-                      {totalKgBeli.toLocaleString('id-ID')} Kg
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 min-w-0">
-                    <span className="shrink-0">Total Terjual:</span>
-                    <span className="font-mono tabular-nums font-semibold text-sky-800 truncate">
-                      {totalKgTerjual.toLocaleString('id-ID')} Kg
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 min-w-0">
-                    <span className="shrink-0">Total Modal Beli:</span>
-                    <span
-                      className="font-mono tabular-nums font-semibold text-zinc-800 truncate whitespace-nowrap"
-                      title={formatRupiah(totalUangKeluar)}
-                    >
-                      {formatRupiahSingkat(totalUangKeluar)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-2.5 border-t border-zinc-100 flex items-center justify-between gap-2 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedModalKode(hb.kode);
-                    setShowSaldoAwalModal(true);
-                  }}
-                  className="text-zinc-600 hover:text-zinc-900 font-medium hover:underline cursor-pointer truncate"
-                >
-                  Saldo Awal ({formatTanggalIndo(hb.updateTerakhir)})
-                </button>
-                <button
-                  type="button"
-                  disabled={hb.stok <= 0}
-                  onClick={() => {
-                    setJualInitialKode(hb.kode);
-                    setShowJualModal(true);
-                  }}
-                  className="px-2.5 py-1 rounded-md bg-emerald-700 hover:bg-emerald-800 disabled:bg-zinc-200 disabled:text-zinc-400 text-white font-semibold shrink-0 cursor-pointer transition-colors"
-                >
-                  Jual Ready
-                </button>
-              </div>
+      <div className="space-y-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="text-xs font-bold text-zinc-800">
+            Pilih Salah Satu Card Hasil Bumi untuk Menampilkan Rincian Buku Mutasi Gudang di Bawah:
+          </div>
+          {selectedCardHb && (
+            <div className="text-xs text-emerald-800 font-semibold">
+              Aktif Ditampilkan: <strong>{selectedCardHb.nama}</strong> ({selectedCardHb.kode})
             </div>
-          );
-        })}
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {activeStokList.map((hb, idx) => {
+            const isKopiTitip = hb.kode === 'HB-08' || hb.isBelumPutusHarga;
+            const isSelectedCard =
+              selectedCardHb?.kode === hb.kode && activeHistoryTab === 'MUTASI_KOMODITAS';
+
+            const purchases = physicalPembelianList.filter(
+              (p) =>
+                p.komoditasKode === hb.kode ||
+                p.komoditasNama.toUpperCase().trim() === hb.nama.toUpperCase().trim()
+            );
+
+            const sales = penjualanHasilBumiList.filter(
+              (j) =>
+                j.komoditasKode === hb.kode ||
+                j.komoditasNama.toUpperCase().trim() === hb.nama.toUpperCase().trim()
+            );
+
+            const totalUangKeluarBaru = purchases.reduce((sum, p) => sum + (p.totalNominal || 0), 0);
+            const totalKgBeliBaru = purchases.reduce((sum, p) => sum + (p.beratBersih || 0), 0);
+            const totalKgTerjual = sales.reduce((sum, j) => sum + (j.beratBersih || 0), 0);
+
+            const stokAwalKg = hb.stokAwal || 0;
+            const modalAwalUang = hb.modalAwalTotal || stokAwalKg * (hb.rataRataModalAwal || 0);
+
+            const totalUangKeluar = modalAwalUang + totalUangKeluarBaru;
+            const totalKgBeli = stokAwalKg + totalKgBeliBaru;
+
+            const rataRataModalPerKg =
+              totalKgBeli > 0 && totalUangKeluar > 0
+                ? Math.round(totalUangKeluar / totalKgBeli)
+                : hb.rataRataModalAwal || 0;
+
+            return (
+              <div
+                key={hb.kode}
+                onClick={() => handleSelectCardKomoditas(hb.kode)}
+                className={`bg-white rounded-xl border p-4 space-y-2.5 flex flex-col justify-between min-w-0 overflow-hidden cursor-pointer transition-all ${
+                  isSelectedCard
+                    ? 'border-emerald-700 ring-2 ring-emerald-700/80 shadow-sm'
+                    : isKopiTitip
+                    ? 'border-amber-300 bg-amber-50/20 hover:border-amber-500'
+                    : 'border-zinc-200 hover:border-emerald-500'
+                }`}
+              >
+                <div className="space-y-2.5 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[10px] font-bold text-zinc-600 truncate">
+                      #{idx + 1} · {hb.kode}
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isKopiTitip ? (
+                        <span className="text-[10px] font-bold text-amber-800">TITIP PANEN</span>
+                      ) : (
+                        <Wheat className="w-4 h-4 text-amber-600" />
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenDeleteHbModal(hb.kode);
+                        }}
+                        className="p-1 rounded text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        title={`Hapus Hasil Bumi ${hb.nama} jika sudah tidak berjalan`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="font-bold text-zinc-900 text-sm truncate">{hb.nama}</div>
+
+                  {/* Ready di Gudang */}
+                  <div className="min-w-0">
+                    <span className="text-[10px] text-zinc-500 uppercase font-semibold block">
+                      Ready di Gudang:
+                    </span>
+                    <div className="text-2xl font-bold font-mono tabular-nums text-emerald-800 tracking-tight truncate whitespace-nowrap">
+                      {hb.stok.toLocaleString('id-ID')}{' '}
+                      <span className="text-xs font-medium text-zinc-500">{hb.satuan}</span>
+                    </div>
+                  </div>
+
+                  {/* Ringkasan Masuk vs Terjual & Modal Rata-rata */}
+                  <div className="p-2.5 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1.5 text-xs min-w-0 overflow-hidden">
+                    <div className="flex items-center justify-between gap-2 text-[11px] min-w-0">
+                      <span className="text-zinc-600 font-medium shrink-0">Modal Rata-rata:</span>
+                      <span
+                        className="font-bold font-mono tabular-nums text-zinc-900 truncate whitespace-nowrap"
+                        title={
+                          rataRataModalPerKg > 0
+                            ? `${formatRupiah(rataRataModalPerKg)} / Kg`
+                            : undefined
+                        }
+                      >
+                        {rataRataModalPerKg > 0
+                          ? `${formatRupiahSingkat(rataRataModalPerKg)}/Kg`
+                          : isKopiTitip
+                          ? 'Belum Putus'
+                          : 'Rp 0'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 pt-1 border-t border-zinc-200/80 min-w-0">
+                      <span className="shrink-0">Total Masuk:</span>
+                      <span className="font-mono tabular-nums font-semibold text-zinc-800 truncate">
+                        {totalKgBeli.toLocaleString('id-ID')} Kg
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 min-w-0">
+                      <span className="shrink-0">Total Terjual:</span>
+                      <span className="font-mono tabular-nums font-semibold text-sky-800 truncate">
+                        {totalKgTerjual.toLocaleString('id-ID')} Kg
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 min-w-0">
+                      <span className="shrink-0">Total Modal Beli:</span>
+                      <span
+                        className="font-mono tabular-nums font-semibold text-zinc-800 truncate whitespace-nowrap"
+                        title={formatRupiah(totalUangKeluar)}
+                      >
+                        {formatRupiahSingkat(totalUangKeluar)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2.5 border-t border-zinc-100 flex items-center justify-between gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedModalKode(hb.kode);
+                      setShowSaldoAwalModal(true);
+                    }}
+                    className="text-zinc-600 hover:text-zinc-900 font-medium hover:underline cursor-pointer truncate"
+                  >
+                    Saldo Awal ({formatTanggalIndo(hb.updateTerakhir)})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setJualInitialKode(hb.kode);
+                      setShowJualModal(true);
+                    }}
+                    className="px-2.5 py-1 rounded-md bg-emerald-700 hover:bg-emerald-800 text-white font-semibold shrink-0 cursor-pointer transition-colors"
+                  >
+                    Jual / Muat
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* RIWAYAT TRANSAKSI KELUAR (PENJUALAN) & MASUK (PEMBELIAN PETANI)           */}
+      {/* RIWAYAT MUTASI GUDANG HASIL BUMI (FORMAT SPREADSHEET BUKU MUTASI GAMBAR 2) */}
       {/* ========================================================================= */}
-      <div className="bg-white rounded-xl border border-zinc-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center space-x-2">
-            <History className="w-4 h-4 text-zinc-700" />
+      <div
+        id="riwayat-mutasi-gudang-hb"
+        className="bg-white rounded-xl border border-zinc-200 overflow-hidden"
+      >
+        <div className="px-4 py-3 border-b border-zinc-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <History className="w-4 h-4 text-zinc-700 shrink-0" />
             <h2 className="text-sm font-bold text-zinc-900">
               Riwayat Mutasi Gudang Hasil Bumi
             </h2>
+            {activeHistoryTab === 'MUTASI_KOMODITAS' && activeStokList.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={selectedCardHb?.kode || ''}
+                  onChange={(e) => setSelectedCardKode(e.target.value)}
+                  className="px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50/70 text-xs font-bold text-emerald-950 focus:outline-none cursor-pointer"
+                >
+                  {activeStokList.map((hb) => (
+                    <option key={hb.kode} value={hb.kode}>
+                      {hb.kode} — {hb.nama} (Ready: {(hb.stok || 0).toLocaleString('id-ID')} {hb.satuan})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleExportBukuMutasiCsv}
+                  className="px-2.5 py-1 rounded-lg border border-zinc-300 hover:bg-zinc-50 text-zinc-700 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                  title="Unduh Buku Mutasi Komoditas ini ke CSV / Excel"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>CSV</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 text-xs">
+          <div className="inline-flex flex-wrap rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setActiveHistoryTab('MUTASI_KOMODITAS')}
+              className={`px-3 py-1.5 rounded-md font-semibold transition-colors cursor-pointer ${
+                activeHistoryTab === 'MUTASI_KOMODITAS'
+                  ? 'bg-white text-zinc-900 shadow-2xs'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
+            >
+              Buku Mutasi: {selectedCardHb?.nama || 'Pilih Card'}
+            </button>
             <button
               type="button"
               onClick={() => setActiveHistoryTab('PENJUALAN')}
@@ -951,7 +1517,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
                   : 'text-zinc-600 hover:text-zinc-900'
               }`}
             >
-              Penjualan Keluar Gudang ({penjualanHasilBumiList.length})
+              Semua Penjualan Keluar ({penjualanHasilBumiList.length})
             </button>
             <button
               type="button"
@@ -962,12 +1528,313 @@ export const StokHasilBumiView: React.FC<Props> = ({
                   : 'text-zinc-600 hover:text-zinc-900'
               }`}
             >
-              Pembelian Masuk Petani ({physicalPembelianList.length})
+              Semua Pembelian Masuk ({physicalPembelianList.length})
             </button>
           </div>
         </div>
 
-        {activeHistoryTab === 'PENJUALAN' ? (
+        {activeHistoryTab === 'MUTASI_KOMODITAS' ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-zinc-100 border-b border-zinc-400 text-zinc-800 font-bold uppercase text-[11px]">
+                  <th className="py-2.5 px-3 text-left border-r border-zinc-400 min-w-[200px]">
+                    Nama / Keterangan
+                  </th>
+                  <th className="py-2.5 px-3 text-right border-r border-zinc-400 w-32">
+                    Tanggal
+                  </th>
+                  <th className="py-2.5 px-3 text-right border-r border-zinc-400 w-32">
+                    Berat (Kg)
+                  </th>
+                  <th className="py-2.5 px-3 text-right border-r border-zinc-400 w-36">
+                    Harga / Kg
+                  </th>
+                  <th className="py-2.5 px-3 text-right border-r border-zinc-400 w-44">
+                    Jumlah (Rp)
+                  </th>
+                  <th className="py-2.5 px-3 text-center w-36">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono tabular-nums text-zinc-950">
+                {bukuMutasiSelectedHb.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="py-10 text-center font-sans text-zinc-500 border-b border-zinc-200"
+                    >
+                      Belum ada mutasi pembelian masuk maupun muat keluar untuk{' '}
+                      <strong className="text-zinc-800">
+                        {selectedCardHb?.nama || 'Hasil Bumi ini'}
+                      </strong>
+                      .
+                    </td>
+                  </tr>
+                ) : (
+                  bukuMutasiSelectedHb.map((row) => {
+                    if (row.kind === 'SPACER') {
+                      return (
+                        <tr key={row.key} className="bg-white border-b border-zinc-400 h-6">
+                          <td className="border-r border-zinc-400" />
+                          <td className="border-r border-zinc-400" />
+                          <td className="border-r border-zinc-400" />
+                          <td className="border-r border-zinc-400" />
+                          <td className="py-1 px-3 text-right border-r border-zinc-400 text-zinc-500">
+                            -
+                          </td>
+                          <td />
+                        </tr>
+                      );
+                    }
+
+                    if (row.kind === 'PURCHASE') {
+                      return (
+                        <tr
+                          key={row.key}
+                          className="bg-white hover:bg-zinc-50 border-b border-zinc-300"
+                        >
+                          <td
+                            className={`py-1.5 px-3 font-sans font-medium text-zinc-950 border-r border-zinc-400 ${
+                              row.showRpPrefix ? 'text-center uppercase' : 'text-left'
+                            }`}
+                          >
+                            {row.nama}
+                          </td>
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-400 text-zinc-900 whitespace-nowrap">
+                            {row.tanggalDisplay}
+                          </td>
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-400 text-zinc-950">
+                            {formatKgBukuMutasi(row.beratKg)}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-400 text-zinc-950 whitespace-nowrap">
+                            {row.isBelumPutus && row.hargaPerKg === 0 ? (
+                              <span className="block text-right text-amber-800 font-sans text-[11px] font-semibold">
+                                Titip
+                              </span>
+                            ) : row.showRpPrefix ? (
+                              <div className="flex items-center justify-between gap-2">
+                                <span>Rp</span>
+                                <span>{formatAngkaBukuMutasi(row.hargaPerKg)}</span>
+                              </div>
+                            ) : (
+                              <div className="text-right">
+                                {formatAngkaBukuMutasi(row.hargaPerKg)}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-400 text-zinc-950 whitespace-nowrap">
+                            {row.isBelumPutus && row.jumlahRp === 0 ? (
+                              <span className="block text-right text-amber-800 font-sans text-[11px]">
+                                Belum Putus
+                              </span>
+                            ) : row.showRpPrefix ? (
+                              <div className="flex items-center justify-between gap-2">
+                                <span>Rp</span>
+                                <span>{formatAngkaBukuMutasi(row.jumlahRp)}</span>
+                              </div>
+                            ) : (
+                              <div className="text-right">
+                                {formatAngkaBukuMutasi(row.jumlahRp)}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-1 px-2 text-center font-sans whitespace-nowrap">
+                            {row.txPurchase && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditTxTarget({
+                                    id: row.txPurchase!.noPembelian,
+                                    jenis: 'PEMBELIAN_HASIL_BUMI',
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer"
+                                title={`Edit Nota ${row.txPurchase.noPembelian} (${row.tanggalAsli})`}
+                              >
+                                <Pencil className="w-2.5 h-2.5" />
+                                <span>Edit</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    if (row.kind === 'JUMLAH') {
+                      return (
+                        <tr
+                          key={row.key}
+                          className="bg-[#6AA84F] text-zinc-950 font-bold border-b border-zinc-700"
+                        >
+                          <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
+                            {row.label}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700" />
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-700">
+                            {formatKgBukuMutasi(row.beratKg)}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
+                            <div className="flex items-center justify-between gap-2">
+                              <span>Rp</span>
+                              <span>{formatAngkaBukuMutasi(row.rataHargaPerKg)}</span>
+                            </div>
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
+                            <div className="flex items-center justify-between gap-2">
+                              <span>Rp</span>
+                              <span>{formatAngkaBukuMutasi(row.jumlahRp)}</span>
+                            </div>
+                          </td>
+                          <td className="bg-white border-b border-zinc-200" />
+                        </tr>
+                      );
+                    }
+
+                    if (row.kind === 'MUAT') {
+                      const j = row.txSale;
+                      const isBelumPutus =
+                        j.isBelumPutusHargaJual || j.metodePembayaran === 'BELUM_PUTUS_HARGA';
+                      const sudahLunasUangMasuk = j.statusUangMasuk === 'LUNAS';
+
+                      return (
+                        <tr
+                          key={row.key}
+                          className="bg-[#FFFF00] text-zinc-950 font-bold border-b border-zinc-700"
+                        >
+                          <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
+                            {row.label}
+                          </td>
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-700 whitespace-nowrap">
+                            {row.tanggalDisplay}
+                          </td>
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-700">
+                            {formatKgBukuMutasi(row.beratKg)}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700" />
+                          <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
+                            <div className="flex items-center justify-between gap-2">
+                              <span>Rp</span>
+                              <span>{formatAngkaBukuMutasi(row.jumlahRp)}</span>
+                            </div>
+                          </td>
+                          <td className="py-1 px-2 text-center font-sans bg-white border-b border-zinc-200 whitespace-nowrap">
+                            {confirmVoidNo === j.noPenjualan ? (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={voidLoading}
+                                  onClick={() => handleVoidPenjualan(j.noPenjualan)}
+                                  className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-bold cursor-pointer"
+                                >
+                                  {voidLoading ? '...' : 'Ya'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={voidLoading}
+                                  onClick={() => setConfirmVoidNo(null)}
+                                  className="px-2 py-0.5 rounded bg-zinc-200 text-zinc-700 text-[10px] font-bold cursor-pointer"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1">
+                                {isBelumPutus && !sudahLunasUangMasuk && onInputUangMasuk && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onInputUangMasuk(j.noPenjualan)}
+                                    className="px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-bold cursor-pointer"
+                                    title="Input Uang Masuk hasil penjualan muat ini"
+                                  >
+                                    + Uang Masuk
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditTxTarget({
+                                      id: j.noPenjualan,
+                                      jenis: 'PENJUALAN_HASIL_BUMI',
+                                    })
+                                  }
+                                  className="p-1 rounded hover:bg-zinc-100 text-zinc-700 cursor-pointer"
+                                  title="Edit Muat / Jual"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                                {onPrintReceipt && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenReceipt(j)}
+                                    className="p-1 rounded hover:bg-zinc-100 text-zinc-700 cursor-pointer"
+                                    title="Cetak Nota Muat"
+                                  >
+                                    <Printer className="w-3 h-3" />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmVoidNo(j.noPenjualan)}
+                                  className="p-1 rounded hover:bg-rose-50 text-rose-600 cursor-pointer"
+                                  title="Batalkan Muat"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    if (row.kind === 'SISA') {
+                      return (
+                        <tr
+                          key={row.key}
+                          className="bg-[#00B0F0] text-zinc-950 font-bold border-b border-zinc-700"
+                        >
+                          <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
+                            SISA
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700" />
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-700">
+                            {formatKgBukuMutasi(row.beratKg)}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700" />
+                          <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
+                            <div className="flex items-center justify-between gap-2">
+                              <span>Rp</span>
+                              <span>{formatAngkaBukuMutasi(row.jumlahRp)}</span>
+                            </div>
+                          </td>
+                          <td className="bg-white border-b border-zinc-200" />
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <tr
+                        key={row.key}
+                        className="bg-[#FF0000] text-zinc-950 font-bold border-b border-zinc-700"
+                      >
+                        <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
+                          SUSUT
+                        </td>
+                        <td className="py-1.5 px-3 border-r border-zinc-700" />
+                        <td className="py-1.5 px-3 text-right border-r border-zinc-700">
+                          {formatKgBukuMutasi(row.beratKg)}
+                        </td>
+                        <td className="py-1.5 px-3 border-r border-zinc-700" />
+                        <td className="py-1.5 px-3 border-r border-zinc-700" />
+                        <td className="bg-white border-b border-zinc-200" />
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : activeHistoryTab === 'PENJUALAN' ? (
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left border-collapse">
               <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold uppercase tracking-wider text-[10px]">
@@ -994,124 +1861,205 @@ export const StokHasilBumiView: React.FC<Props> = ({
                     </td>
                   </tr>
                 ) : (
-                  penjualanHasilBumiList.slice(0, 60).map((j) => (
-                    <tr key={j.noPenjualan} className="hover:bg-zinc-50/80">
-                      <td className="py-3 px-4">
-                        <div className="font-mono font-bold text-zinc-900">{j.noPenjualan}</div>
-                        {j.noSuratJalan && (
-                          <div className="text-[10px] font-mono text-zinc-500">DO: {j.noSuratJalan}</div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-zinc-600 whitespace-nowrap font-mono tabular-nums">
-                        {j.tanggal} <span className="text-[10px] text-zinc-400">{j.jam}</span>
-                      </td>
-                      <td className="py-3 px-4 font-semibold text-zinc-800">{j.namaMitra}</td>
-                      <td className="py-3 px-4 font-bold text-zinc-900">{j.komoditasNama}</td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-sky-800">
-                        -{j.beratBersih.toLocaleString('id-ID')} Kg
-                      </td>
-                      <td
-                        className="py-3 px-4 text-right font-mono tabular-nums text-zinc-600"
-                        title={formatRupiah(j.modalRataRataPerKg)}
-                      >
-                        {formatRupiahSingkat(j.modalRataRataPerKg)}
-                      </td>
-                      <td
-                        className="py-3 px-4 text-right font-mono tabular-nums text-zinc-800"
-                        title={formatRupiah(j.hargaJualPerKg)}
-                      >
-                        {formatRupiahSingkat(j.hargaJualPerKg)}
-                      </td>
-                      <td
-                        className="py-3 px-4 text-right font-mono tabular-nums font-bold text-zinc-900"
-                        title={formatRupiah(j.totalNominal)}
-                      >
-                        {formatRupiahSingkat(j.totalNominal)}
-                      </td>
-                      <td
-                        className={`py-3 px-4 text-right font-mono tabular-nums font-semibold ${
-                          j.labaKotor >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                        }`}
-                        title={formatRupiah(j.labaKotor)}
-                      >
-                        {j.labaKotor >= 0 ? '+' : ''}
-                        {formatRupiahSingkat(j.labaKotor)}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            j.statusPembayaran === 'LUNAS'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
+                  penjualanHasilBumiList.slice(0, 60).map((j) => {
+                    const isBelumPutus =
+                      j.isBelumPutusHargaJual || j.metodePembayaran === 'BELUM_PUTUS_HARGA';
+                    const nilaiPengurangStok =
+                      Number(j.nilaiModalPengurangStok) ||
+                      Math.round((Number(j.beratBersih) || 0) * (Number(j.modalRataRataPerKg) || 0));
+                    const uangMasukCair = Number(j.nominalUangMasukTerkumpul) || 0;
+                    const sudahLunasUangMasuk = j.statusUangMasuk === 'LUNAS';
+
+                    return (
+                      <tr key={j.noPenjualan} className="hover:bg-zinc-50/80">
+                        <td className="py-3 px-4">
+                          <div className="font-mono font-bold text-zinc-900">{j.noPenjualan}</div>
+                          {j.noSuratJalan && (
+                            <div className="text-[10px] font-mono text-zinc-500">
+                              DO: {j.noSuratJalan}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-zinc-600 whitespace-nowrap font-mono tabular-nums">
+                          {j.tanggal} <span className="text-[10px] text-zinc-400">{j.jam}</span>
+                        </td>
+                        <td className="py-3 px-4 font-semibold text-zinc-800">
+                          {isBelumPutus ? `MUAT ${j.namaMitra.toUpperCase()}` : j.namaMitra}
+                        </td>
+                        <td className="py-3 px-4 font-bold text-zinc-900">{j.komoditasNama}</td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-sky-800">
+                          -{j.beratBersih.toLocaleString('id-ID')} Kg
+                        </td>
+                        <td
+                          className="py-3 px-4 text-right font-mono tabular-nums text-zinc-600"
+                          title={formatRupiah(j.modalRataRataPerKg)}
                         >
-                          {j.metodePembayaran} ({j.rekeningTujuan})
-                        </span>
-                        {j.divisi && (
-                          <div className="text-[10px] text-sky-800 font-semibold mt-0.5">
-                            {j.divisi}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-center whitespace-nowrap">
-                        {confirmVoidNo === j.noPenjualan ? (
-                          <div className="inline-flex items-center space-x-1">
-                            <button
-                              type="button"
-                              disabled={voidLoading}
-                              onClick={() => handleVoidPenjualan(j.noPenjualan)}
-                              className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-semibold cursor-pointer"
-                            >
-                              {voidLoading ? '...' : 'Ya, Batal'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={voidLoading}
-                              onClick={() => setConfirmVoidNo(null)}
-                              className="px-2 py-1 rounded bg-zinc-200 hover:bg-zinc-300 text-zinc-700 text-[10px] font-semibold cursor-pointer"
-                            >
-                              Tidak
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="inline-flex items-center space-x-1.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditTxTarget({
-                                  id: j.noPenjualan,
-                                  jenis: 'PENJUALAN_HASIL_BUMI',
-                                })
-                              }
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer transition-colors"
-                              title="Edit detail tonase, rafaksi, harga jual, atau rekening"
-                            >
-                              <Pencil className="w-3 h-3" />
-                              <span>Edit</span>
-                            </button>
-                            {onPrintReceipt && (
+                          {formatRupiahSingkat(j.modalRataRataPerKg)}
+                        </td>
+                        <td
+                          className="py-3 px-4 text-right font-mono tabular-nums text-zinc-800"
+                          title={formatRupiah(j.hargaJualPerKg)}
+                        >
+                          {isBelumPutus && uangMasukCair <= 0 ? (
+                            <span className="text-sky-800 font-semibold">
+                              Rata2: {formatRupiahSingkat(j.modalRataRataPerKg)}
+                            </span>
+                          ) : (
+                            formatRupiahSingkat(j.hargaJualPerKg)
+                          )}
+                        </td>
+                        <td
+                          className="py-3 px-4 text-right font-mono tabular-nums font-bold text-zinc-900"
+                          title={
+                            isBelumPutus
+                              ? `Pengurang Stok: ${formatRupiah(nilaiPengurangStok)} | Uang Masuk: ${formatRupiah(uangMasukCair)}`
+                              : formatRupiah(j.totalNominal)
+                          }
+                        >
+                          {isBelumPutus ? (
+                            <div>
+                              <div className="text-zinc-900">
+                                {uangMasukCair > 0
+                                  ? formatRupiahSingkat(uangMasukCair)
+                                  : 'Rp 0 (Menunggu)'}
+                              </div>
+                              <div className="text-[10px] font-normal text-zinc-500">
+                                Stok: -{formatRupiahSingkat(nilaiPengurangStok)}
+                              </div>
+                            </div>
+                          ) : (
+                            formatRupiahSingkat(j.totalNominal)
+                          )}
+                        </td>
+                        <td
+                          className={`py-3 px-4 text-right font-mono tabular-nums font-semibold ${
+                            isBelumPutus && uangMasukCair <= 0
+                              ? 'text-zinc-400'
+                              : j.labaKotor >= 0
+                              ? 'text-emerald-700'
+                              : 'text-rose-700'
+                          }`}
+                          title={formatRupiah(j.labaKotor)}
+                        >
+                          {isBelumPutus && uangMasukCair <= 0 ? (
+                            'Belum Putus'
+                          ) : (
+                            <>
+                              {j.labaKotor >= 0 ? '+' : ''}
+                              {formatRupiahSingkat(j.labaKotor)}
+                            </>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {isBelumPutus ? (
+                            <div className="space-y-0.5">
+                              <div
+                                className={`text-[10px] font-bold ${
+                                  sudahLunasUangMasuk ? 'text-emerald-800' : 'text-amber-800'
+                                }`}
+                              >
+                                {sudahLunasUangMasuk
+                                  ? 'SUDAH CAIR (UANG MASUK)'
+                                  : uangMasukCair > 0
+                                  ? 'CAIR SEBAGIAN'
+                                  : 'MENUNGGU UANG MASUK'}
+                              </div>
+                              {j.divisi && (
+                                <div className="text-[10px] text-sky-800 font-semibold">
+                                  {j.divisi}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <>
+                              <span
+                                className={`text-[10px] font-bold ${
+                                  j.statusPembayaran === 'LUNAS'
+                                    ? 'text-emerald-800'
+                                    : 'text-amber-800'
+                                }`}
+                              >
+                                {j.metodePembayaran} ({j.rekeningTujuan})
+                              </span>
+                              {j.divisi && (
+                                <div className="text-[10px] text-sky-800 font-semibold mt-0.5">
+                                  {j.divisi}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-center whitespace-nowrap">
+                          {confirmVoidNo === j.noPenjualan ? (
+                            <div className="inline-flex items-center space-x-1">
                               <button
                                 type="button"
-                                onClick={() => handleOpenReceipt(j)}
-                                className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 cursor-pointer"
-                                title="Cetak Nota Pengiriman"
+                                disabled={voidLoading}
+                                onClick={() => handleVoidPenjualan(j.noPenjualan)}
+                                className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-semibold cursor-pointer"
                               >
-                                <Printer className="w-3.5 h-3.5" />
+                                {voidLoading ? '...' : 'Ya, Batal'}
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => setConfirmVoidNo(j.noPenjualan)}
-                              className="p-1.5 rounded hover:bg-rose-50 text-zinc-400 hover:text-rose-600 cursor-pointer"
-                              title="Batalkan & Kembalikan Stok ke Gudang"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                              <button
+                                type="button"
+                                disabled={voidLoading}
+                                onClick={() => setConfirmVoidNo(null)}
+                                className="px-2 py-1 rounded bg-zinc-200 hover:bg-zinc-300 text-zinc-700 text-[10px] font-semibold cursor-pointer"
+                              >
+                                Tidak
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center space-x-1.5">
+                              {isBelumPutus && !sudahLunasUangMasuk && onInputUangMasuk && (
+                                <button
+                                  type="button"
+                                  onClick={() => onInputUangMasuk(j.noPenjualan)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-semibold cursor-pointer transition-colors"
+                                  title="Input pencairan uang hasil penjualan nota ini di menu Uang Masuk"
+                                >
+                                  <ArrowDownLeft className="w-3 h-3" />
+                                  <span>+ Uang Masuk</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditTxTarget({
+                                    id: j.noPenjualan,
+                                    jenis: 'PENJUALAN_HASIL_BUMI',
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer transition-colors"
+                                title="Edit detail tonase, rafaksi, harga jual, atau rekening"
+                              >
+                                <Pencil className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
+                              {onPrintReceipt && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenReceipt(j)}
+                                  className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 cursor-pointer"
+                                  title="Cetak Nota Pengiriman"
+                                >
+                                  <Printer className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setConfirmVoidNo(j.noPenjualan)}
+                                className="p-1.5 rounded hover:bg-rose-50 text-zinc-400 hover:text-rose-600 cursor-pointer"
+                                title="Batalkan & Kembalikan Stok ke Gudang"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -1254,6 +2202,10 @@ export const StokHasilBumiView: React.FC<Props> = ({
             onPrintReceipt(receipt);
           }
         }}
+        onDeleted={() => {
+          onRefresh();
+          loadRingkasan();
+        }}
       />
 
       {/* Modal Tambah Barang Hasil Bumi Baru */}
@@ -1266,6 +2218,85 @@ export const StokHasilBumiView: React.FC<Props> = ({
           loadRingkasan();
         }}
       />
+
+      {/* Modal Hapus Hasil Bumi yang Sudah Tidak Berjalan */}
+      {showHapusHbModal && (
+        <div className="fixed inset-0 z-50 bg-zinc-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl max-w-md w-full border border-zinc-200 shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 bg-rose-800 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4" />
+                <h3 className="text-sm font-bold">Hapus Barang Hasil Bumi</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHapusHbModal(false)}
+                disabled={hapusHbLoading}
+                className="text-rose-200 hover:text-white p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <p className="text-zinc-600 leading-relaxed">
+                Pilih komoditas hasil bumi yang sudah tidak berjalan untuk dihapus dari menu Stok &amp; Jual Hasil Bumi. Histori transaksi pembelian/penjualan masa lalu tetap aman di pembukuan.
+              </p>
+
+              <div>
+                <label className="block font-bold text-zinc-800 mb-1">
+                  Pilih Komoditas Hasil Bumi
+                </label>
+                <select
+                  value={hapusHbKode}
+                  onChange={(e) => setHapusHbKode(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold text-zinc-900"
+                >
+                  {activeStokList.map((hb) => (
+                    <option key={hb.kode} value={hb.kode}>
+                      {hb.kode} — {hb.nama} (Ready: {(hb.stok || 0).toLocaleString('id-ID')} {hb.satuan})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {(() => {
+                const targetHb = activeStokList.find((h) => h.kode === hapusHbKode);
+                if (!targetHb || (targetHb.stok || 0) <= 0) return null;
+                return (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-amber-950">
+                    <strong>Perhatian:</strong> Komoditas <strong>{targetHb.nama}</strong> saat ini masih tercatat memiliki stok{' '}
+                    <strong className="font-mono">
+                      {targetHb.stok.toLocaleString('id-ID')} {targetHb.satuan}
+                    </strong>{' '}
+                    di gudang. Pastikan stok fisik memang sudah selesai sebelum menghapus master komoditas.
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setShowHapusHbModal(false)}
+                  disabled={hapusHbLoading}
+                  className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-lg font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteHb}
+                  disabled={hapusHbLoading || !hapusHbKode}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white rounded-lg font-bold cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{hapusHbLoading ? 'Menghapus...' : 'Ya, Hapus Hasil Bumi'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Universal Edit Detail Transaksi */}
       <ModalEditTransaksiUniversal

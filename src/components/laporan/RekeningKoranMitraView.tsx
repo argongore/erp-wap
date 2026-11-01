@@ -60,6 +60,7 @@ import { ShareLinkModal } from '../public/ShareLinkModal.tsx';
 import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { ModalKliringSilangMitra } from '../common/ModalKliringSilangMitra.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalToggleNotaNgunci } from '../master/RekapKhususMitraNgunciSection.tsx';
 
@@ -98,6 +99,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [modalPinjamUangOpen, setModalPinjamUangOpen] = useState<boolean>(false);
   const [modalBersihkanNotaOpen, setModalBersihkanNotaOpen] = useState<boolean>(false);
   const [anakPerusahaanModalOpen, setAnakPerusahaanModalOpen] = useState<boolean>(false);
+  const [kliringModalOpen, setKliringModalOpen] = useState<boolean>(false);
   const [shareModalOpen, setShareModalOpen] = useState<boolean>(false);
   const [quickCopied, setQuickCopied] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'TABEL' | 'LEMBAR_CETAK'>('TABEL');
@@ -888,46 +890,95 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           </select>
         </div>
 
-        {statement && (
-          <div className="flex flex-col sm:items-end gap-2">
-            <div className="text-xs text-zinc-600 sm:text-right space-y-0.5">
-              <div>
-                Status: <strong className="text-emerald-700 font-bold">{statement.status}</strong> (
-                {getRoleMitraLabel(statement.role, {
-                  isAnakPerusahaan: statement.isAnakPerusahaan,
-                  isKaryawan: statement.isKaryawan,
-                })}
-                )
+        {statement && (() => {
+          const sTotalBon = statement.totalBonKeseluruhan || 0;
+          const sNomKunci = statement.nominalNotaNgunci || 0;
+          const sNomPiutangAktif =
+            statement.nominalPiutangAktif ?? Math.max(0, sTotalBon - sNomKunci);
+          const sNomHutang = statement.totalTitip || 0;
+          const sPiutangBanding =
+            sNomPiutangAktif > 0
+              ? sNomPiutangAktif
+              : sNomHutang > 0 && sTotalBon > 0
+                ? sTotalBon
+                : 0;
+          const sAdaDuaSisi = sTotalBon > 0 && sNomHutang > 0;
+          const sStatusLabel =
+            sPiutangBanding > sNomHutang
+              ? 'PIUTANG'
+              : sNomHutang > sPiutangBanding
+                ? 'HUTANG'
+                : sPiutangBanding > 0 && sNomHutang > 0
+                  ? 'SEIMBANG'
+                  : sNomKunci > 0 || statement.isNotaNgunci
+                    ? 'NGUNCI'
+                    : 'LUNAS';
+          const sStatusColor =
+            sStatusLabel === 'PIUTANG'
+              ? 'text-amber-800'
+              : sStatusLabel === 'HUTANG'
+                ? 'text-purple-800'
+                : sStatusLabel === 'SEIMBANG'
+                  ? 'text-sky-800'
+                  : sStatusLabel === 'NGUNCI'
+                    ? 'text-rose-800'
+                    : 'text-emerald-700';
+
+          return (
+            <div className="flex flex-col sm:items-end gap-2">
+              <div className="text-xs text-zinc-600 sm:text-right space-y-0.5">
+                <div>
+                  Status Rekening:{' '}
+                  <strong className={`${sStatusColor} font-extrabold uppercase`}>
+                    {sStatusLabel}
+                  </strong>
+                  {sAdaDuaSisi ? ' (Ada Piutang & Hutang)' : ''} ·{' '}
+                  {getRoleMitraLabel(statement.role, {
+                    isAnakPerusahaan: statement.isAnakPerusahaan,
+                    isKaryawan: statement.isKaryawan,
+                  })}
+                </div>
+                <div>
+                  Alamat: <span className="text-zinc-800 font-medium">{statement.alamat || '-'}</span>
+                </div>
+                <div>
+                  Kontak HP/WA: <span className="font-mono text-zinc-800">{statement.telepon || '-'}</span>
+                </div>
               </div>
-              <div>
-                Alamat: <span className="text-zinc-800 font-medium">{statement.alamat || '-'}</span>
-              </div>
-              <div>
-                Kontak HP/WA: <span className="font-mono text-zinc-800">{statement.telepon || '-'}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {sAdaDuaSisi && (
+                  <button
+                    type="button"
+                    onClick={() => setKliringModalOpen(true)}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded-lg transition-colors cursor-pointer shadow-2xs"
+                    title="Kliring Silang Otomatis Piutang vs Hutang pada akun mitra ini"
+                  >
+                    <ArrowRightLeft className="w-3.5 h-3.5" />
+                    <span>Kliring Silang</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetOpen(true)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors cursor-pointer"
+                  title="Kosongkan seluruh saldo, bon, piutang & titipan mitra ini ke Rp 0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Kosongkan Saldo Mitra</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteOpen(true)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 rounded-lg transition-colors cursor-pointer"
+                  title="Hapus data mitra ini dari sistem"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Hapus Mitra</span>
+                </button>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmResetOpen(true)}
-                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors cursor-pointer"
-                title="Kosongkan seluruh saldo, bon, piutang & titipan mitra ini ke Rp 0"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
-                <span>Kosongkan Saldo Mitra</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDeleteOpen(true)}
-                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 rounded-lg transition-colors cursor-pointer"
-                title="Hapus data mitra ini dari sistem"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                <span>Hapus Mitra</span>
-              </button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {editSuccessMsg && !editingEntry && (
@@ -962,217 +1013,225 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
       {statement && !loading && (
         <div className="space-y-6">
-          {/* Panel Kontrol Status Nota Piutang <-> Status Nota Kunci & Terima Pembayaran di Rekening Mitra */}
-          {(statement.totalBonKeseluruhan > 0 || statement.isNotaNgunci || (statement.nominalNotaNgunci || 0) > 0) && (() => {
+          {/* Panel Standar Status Nota (Nota Aktif: 1. Piutang & 2. Hutang | 3. Ngunci) & Aksi Rekening Mitra */}
+          {(() => {
             const nomKunci = statement.nominalNotaNgunci || 0;
-            const nomAktif = statement.nominalPiutangAktif ?? Math.max(0, statement.totalBonKeseluruhan - nomKunci);
+            const nomPiutangAktif =
+              statement.nominalPiutangAktif ??
+              Math.max(0, (statement.totalBonKeseluruhan || 0) - nomKunci);
+            const nomHutangPt = statement.totalTitip || 0;
+            const totalRekeningMitraNotaSupplier = nomPiutangAktif - nomHutangPt;
             const hasKunci = nomKunci > 0 || Boolean(statement.isNotaNgunci);
-            const hasAktif = nomAktif > 0;
+            const hasPiutangAktif = nomPiutangAktif > 0;
+            const hasHutangAktif = nomHutangPt > 0;
+            const isNotaAktif = hasPiutangAktif || hasHutangAktif;
 
             return (
-              <div
-                className={`rounded-xl p-4 sm:p-5 border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
-                  hasKunci
-                    ? 'bg-rose-50/75 border-rose-200'
-                    : 'bg-amber-50/60 border-amber-200'
-                }`}
-              >
-                <div className="space-y-1.5 min-w-0">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold">
-                    {hasKunci ? (
-                      <>
-                        <Lock className="w-4 h-4 text-rose-700 shrink-0" />
-                        <span className="text-rose-900">
-                          {hasAktif
-                            ? 'STATUS NOTA CAMPURAN (NOTA KUNCI + PIUTANG AKTIF)'
-                            : 'STATUS NOTA KUNCI (NGUNCI)'}
+              <>
+                <div
+                  className={`rounded-xl p-4 sm:p-5 border flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
+                    hasKunci
+                      ? 'bg-rose-50/75 border-rose-200'
+                      : isNotaAktif
+                      ? 'bg-emerald-50/50 border-emerald-200'
+                      : 'bg-zinc-50 border-zinc-200'
+                  }`}
+                >
+                  <div className="space-y-1.5 min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-bold">
+                      {isNotaAktif && (
+                        <span className="inline-flex items-center gap-1 text-emerald-800">
+                          <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                          <span>NOTA AKTIF (BERJALAN)</span>
                         </span>
-                        <span className="text-rose-300" aria-hidden="true">·</span>
-                        <span className="text-rose-800">
-                          Uang Tidak Bisa Kembali:{' '}
-                          <strong className="font-mono tabular-nums">{formatRupiah(nomKunci)}</strong>
-                        </span>
-                        {hasAktif && (
-                          <>
-                            <span className="text-rose-300" aria-hidden="true">·</span>
-                            <span className="text-amber-900">
-                              Piutang Aktif:{' '}
-                              <strong className="font-mono tabular-nums">{formatRupiah(nomAktif)}</strong>
-                            </span>
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <Unlock className="w-4 h-4 text-amber-700 shrink-0" />
-                        <span className="text-amber-950">STATUS NOTA PIUTANG (AKTIF)</span>
-                        <span className="text-amber-300" aria-hidden="true">·</span>
+                      )}
+                      {hasPiutangAktif && (
                         <span className="text-amber-900">
-                          Total Piutang Aktif:{' '}
-                          <strong className="font-mono tabular-nums">{formatRupiah(nomAktif)}</strong>
+                          1. Piutang (Mitra Berhutang):{' '}
+                          <strong className="font-mono tabular-nums">{formatRupiah(nomPiutangAktif)}</strong>
                         </span>
-                      </>
-                    )}
+                      )}
+                      {hasHutangAktif && (
+                        <span className="text-purple-900">
+                          2. Hutang (PT Berhutang: Uang Titip &amp; HB Titip):{' '}
+                          <strong className="font-mono tabular-nums">{formatRupiah(nomHutangPt)}</strong>
+                        </span>
+                      )}
+                      {hasKunci && (
+                        <span className="inline-flex items-center gap-1 text-rose-800">
+                          <Lock className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                          <span>
+                            3. Ngunci:{' '}
+                            <strong className="font-mono tabular-nums">{formatRupiah(nomKunci)}</strong>
+                          </span>
+                        </span>
+                      )}
+                      {!isNotaAktif && !hasKunci && (
+                        <span className="text-zinc-600">STATUS NOTA: LUNAS / IMPAS (Rp 0)</span>
+                      )}
+                    </div>
+
+                    <p className={`text-[11px] leading-relaxed ${hasKunci ? 'text-rose-900/90' : 'text-zinc-600'}`}>
+                      {hasKunci ? (
+                        <>
+                          <strong>Status Nota 3. Ngunci</strong> tidak dilibatkan dalam rumus <strong>Total Rekening Mitra / Nota Supplier</strong>. Status Ngunci hanya berguna apabila mitra terkait melakukan pembayaran (otomatis mengurangi nominal Ngunci).
+                          {statement.catatanNgunci ? ` Kronologi: ${statement.catatanNgunci}` : ''}
+                        </>
+                      ) : (
+                        <>
+                          <strong>Nota Aktif</strong> mencakup nota yang masih berjalan baik <strong>1. Piutang (Mitra Berhutang)</strong> maupun <strong>2. Hutang (PT Berhutang: Uang Titip &amp; HB Titip)</strong>. Rumus Total Rekening Mitra / Nota Supplier hanya mengurangkan Jumlah Piutang dengan Jumlah Hutang.
+                        </>
+                      )}
+                    </p>
                   </div>
 
-                  <p className={`text-[11px] leading-relaxed ${hasKunci ? 'text-rose-900/90' : 'text-zinc-600'}`}>
-                    {hasKunci ? (
-                      <>
-                        Mitra ini tercatat memiliki <strong>Nota Kunci</strong> (tidak ada respon/kepastian membayar). Apabila mitra melakukan pembayaran cicilan atau lunas, nominal uang tidak bisa kembali otomatis langsung berkurang.
-                        {statement.catatanNgunci ? ` Kronologi: ${statement.catatanNgunci}` : ''}
-                      </>
-                    ) : (
-                      <>
-                        Apabila mitra sudah tidak ada respon dan tidak ada kepastian membayar, Anda dapat mengubah status piutang ini menjadi <strong>Nota Kunci</strong> langsung dari Rekening Mitra atau per baris nota di bawah.
-                      </>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {statement.totalBonKeseluruhan > 0 && nomHutangPt > 0 && (
+                      <button
+                        type="button"
+                        disabled={partnerActionBusy}
+                        onClick={() => setKliringModalOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                        title="Potong silang langsung antara Piutang Mitra dengan Hutang / Titipan PT"
+                      >
+                        <ArrowRightLeft className="w-3.5 h-3.5" />
+                        <span>
+                          Kliring Silang ({formatRupiahSingkat(Math.min(statement.totalBonKeseluruhan, nomHutangPt))})
+                        </span>
+                      </button>
                     )}
-                  </p>
+
+                    {statement.totalBonKeseluruhan > 0 && (
+                      <button
+                        type="button"
+                        disabled={partnerActionBusy}
+                        onClick={() => openQuickPayModal()}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                      >
+                        <HandCoins className="w-3.5 h-3.5" />
+                        <span>
+                          {hasKunci
+                            ? '+ Terima Pembayaran (Kurangi Ngunci)'
+                            : '+ Terima Pembayaran Piutang'}
+                        </span>
+                      </button>
+                    )}
+
+                    {hasPiutangAktif && (
+                      <button
+                        type="button"
+                        disabled={partnerActionBusy}
+                        onClick={() =>
+                          openModalUbahStatusNota({
+                            nominal: nomPiutangAktif,
+                            targetNgunci: true,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>
+                          {hasKunci
+                            ? 'Ubah Sisa Piutang Jadi Ngunci'
+                            : 'Ubah Status Piutang Jadi Ngunci'}
+                        </span>
+                      </button>
+                    )}
+
+                    {hasKunci && (
+                      <button
+                        type="button"
+                        disabled={partnerActionBusy}
+                        onClick={() =>
+                          openModalUbahStatusNota({
+                            nominal: nomKunci,
+                            targetNgunci: false,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        <Unlock className="w-3.5 h-3.5" />
+                        <span>Pulihkan ke 1. Piutang Aktif</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  {statement.totalBonKeseluruhan > 0 && (
-                    <button
-                      type="button"
-                      disabled={partnerActionBusy}
-                      onClick={() => openQuickPayModal()}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                {/* Summary Balance Cards (Standar 1. Piutang, 2. Hutang, Total Rekening Mitra/Nota Supplier, 3. Ngunci) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Card 1: 1. Piutang (Mitra Berhutang) */}
+                  <div className="bg-amber-50/60 p-4 rounded-xl border border-amber-200 shadow-2xs min-w-0 overflow-hidden">
+                    <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider block truncate">
+                      1. PIUTANG (MITRA BERHUTANG)
+                    </span>
+                    <div
+                      className="text-xl font-black text-amber-950 mt-1 font-mono tabular-nums truncate whitespace-nowrap"
+                      title={formatRupiah(nomPiutangAktif)}
                     >
-                      <HandCoins className="w-3.5 h-3.5" />
-                      <span>
-                        {hasKunci
-                          ? '+ Terima Pembayaran (Kurangi Nota Kunci)'
-                          : '+ Terima Pembayaran Piutang'}
-                      </span>
-                    </button>
-                  )}
+                      {formatRupiahSingkat(nomPiutangAktif)}
+                    </div>
+                    <div className="text-[11px] text-amber-800/90 mt-1 truncate">
+                      Barang {formatRupiahSingkat(statement.totalKasbonBarang)} · Uang {formatRupiahSingkat(statement.totalKasbonUang)} (Aktif)
+                    </div>
+                  </div>
 
-                  {hasAktif && (
-                    <button
-                      type="button"
-                      disabled={partnerActionBusy}
-                      onClick={() =>
-                        openModalUbahStatusNota({
-                          nominal: nomAktif,
-                          targetNgunci: true,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                  {/* Card 2: 2. Hutang (PT Berhutang: Uang Titip & HB Titip) */}
+                  <div className="bg-purple-50/70 p-4 rounded-xl border border-purple-200 shadow-2xs min-w-0 overflow-hidden">
+                    <span className="text-[10px] font-bold text-purple-900 uppercase tracking-wider block truncate">
+                      2. HUTANG (PT BERHUTANG)
+                    </span>
+                    <div
+                      className="text-xl font-black text-purple-950 mt-1 font-mono tabular-nums truncate whitespace-nowrap"
+                      title={formatRupiah(nomHutangPt)}
                     >
-                      <Lock className="w-3.5 h-3.5" />
-                      <span>
-                        {hasKunci
-                          ? 'Ubah Sisa Piutang Jadi Kunci'
-                          : 'Ubah Status Piutang Jadi Kunci'}
-                      </span>
-                    </button>
-                  )}
+                      {formatRupiahSingkat(nomHutangPt)}
+                    </div>
+                    <div className="text-[11px] text-purple-800 font-medium mt-1 truncate">
+                      {statement.isKaryawan
+                        ? 'Uang titip + HB titip + upah belum cair'
+                        : 'Termasuk Uang Titip & HB Titip'}
+                    </div>
+                  </div>
 
-                  {hasKunci && (
-                    <button
-                      type="button"
-                      disabled={partnerActionBusy}
-                      onClick={() =>
-                        openModalUbahStatusNota({
-                          nominal: nomKunci,
-                          targetNgunci: false,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer"
+                  {/* Card 3: TOTAL REKENING MITRA / NOTA SUPPLIER (Piutang - Hutang, Tanpa Ngunci) */}
+                  <div className="bg-emerald-50/70 p-4 rounded-xl border border-emerald-300 shadow-2xs min-w-0 overflow-hidden">
+                    <span className="text-[10px] font-bold text-emerald-900 uppercase tracking-wider block truncate">
+                      TOTAL REKENING MITRA / NOTA SUPPLIER
+                    </span>
+                    <div
+                      className={`text-xl font-black mt-1 font-mono tabular-nums truncate whitespace-nowrap ${
+                        totalRekeningMitraNotaSupplier >= 0 ? 'text-emerald-900' : 'text-purple-900'
+                      }`}
+                      title={formatRupiah(totalRekeningMitraNotaSupplier)}
                     >
-                      <Unlock className="w-3.5 h-3.5" />
-                      <span>Pulihkan ke Nota Piutang Aktif</span>
-                    </button>
-                  )}
+                      {totalRekeningMitraNotaSupplier < 0
+                        ? `-${formatRupiahSingkat(Math.abs(totalRekeningMitraNotaSupplier))}`
+                        : formatRupiahSingkat(totalRekeningMitraNotaSupplier)}
+                    </div>
+                    <div className="text-[11px] text-emerald-800 font-medium mt-1 truncate">
+                      Rumus: 1. Piutang − 2. Hutang (Tanpa Ngunci)
+                    </div>
+                  </div>
+
+                  {/* Card 4: 3. Ngunci */}
+                  <div className="bg-white p-4 rounded-xl border border-rose-200 shadow-2xs min-w-0 overflow-hidden">
+                    <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider block truncate">
+                      3. NGUNCI (TAK KEMBALI)
+                    </span>
+                    <div
+                      className="text-xl font-black text-rose-800 mt-1 font-mono tabular-nums truncate whitespace-nowrap"
+                      title={formatRupiah(nomKunci)}
+                    >
+                      {formatRupiahSingkat(nomKunci)}
+                    </div>
+                    <div className="text-[11px] text-zinc-500 mt-1 truncate">
+                      Hanya berkurang otomatis jika mitra membayar
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </>
             );
           })()}
-
-          {/* Summary Balance Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Total Kasbon Barang */}
-            <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs min-w-0 overflow-hidden">
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block truncate">
-                Kasbon Barang (Toko)
-              </span>
-              <div
-                className="text-lg font-bold text-zinc-900 mt-1 font-mono tabular-nums truncate whitespace-nowrap"
-                title={formatRupiah(statement.totalKasbonBarang)}
-              >
-                {formatRupiahSingkat(statement.totalKasbonBarang)}
-              </div>
-              <div className="text-[11px] text-zinc-500 mt-1 truncate">Pupuk &amp; obat saprotan belum lunas</div>
-            </div>
-
-            {/* Total Kasbon Uang */}
-            <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs min-w-0 overflow-hidden">
-              <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider block truncate">
-                Kasbon Uang Tunai
-              </span>
-              <div
-                className="text-lg font-bold text-rose-700 mt-1 font-mono tabular-nums truncate whitespace-nowrap"
-                title={formatRupiah(statement.totalKasbonUang)}
-              >
-                {formatRupiahSingkat(statement.totalKasbonUang)}
-              </div>
-              <div className="text-[11px] text-zinc-500 mt-1 truncate">Pinjaman kas operasional aktif</div>
-            </div>
-
-            {/* SISA BON BERSIH MITRA */}
-            <div className="bg-amber-50/70 p-4 rounded-xl border border-amber-200 shadow-2xs min-w-0 overflow-hidden">
-              <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider block truncate">
-                SISA BON BERSIH MITRA
-              </span>
-              <div
-                className="text-xl font-black text-amber-900 mt-1 font-mono tabular-nums truncate whitespace-nowrap"
-                title={formatRupiah(
-                  statement.sisaBonBersih ??
-                    Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)
-                )}
-              >
-                {formatRupiahSingkat(
-                  statement.sisaBonBersih ??
-                    Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)
-                )}
-              </div>
-              <div className="text-[11px] text-amber-800 font-medium mt-1 truncate">
-                {(statement.potonganTitipanOtomatis ??
-                  Math.min(statement.totalBonKeseluruhan, statement.totalTitip)) > 0
-                  ? `Bon awal ${formatRupiahSingkat(statement.totalBonKeseluruhan)} sudah potong titipan`
-                  : 'Total piutang yang wajib dibayar mitra'}
-              </div>
-            </div>
-
-            {/* SISA WAJIB BAYAR PT KE MITRA (TITIPAN BERSIH) */}
-            <div className="bg-purple-50/70 p-4 rounded-xl border border-purple-200 shadow-2xs min-w-0 overflow-hidden">
-              <span className="text-[10px] font-bold text-purple-900 uppercase tracking-wider block truncate">
-                SISA BAYAR PT KE MITRA
-              </span>
-              <div
-                className="text-xl font-black text-purple-950 mt-1 font-mono tabular-nums truncate whitespace-nowrap"
-                title={formatRupiah(
-                  statement.sisaTitipanBersih ??
-                    Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)
-                )}
-              >
-                {formatRupiahSingkat(
-                  statement.sisaTitipanBersih ??
-                    Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)
-                )}
-              </div>
-              <div className="text-[11px] text-purple-800 font-medium mt-1 truncate">
-                {(statement.potonganTitipanOtomatis ??
-                  Math.min(statement.totalBonKeseluruhan, statement.totalTitip)) > 0
-                  ? `Hak awal ${formatRupiahSingkat(statement.totalTitip)} - Bon ${formatRupiahSingkat(
-                      statement.potonganTitipanOtomatis ??
-                        Math.min(statement.totalBonKeseluruhan, statement.totalTitip)
-                    )}`
-                  : statement.isKaryawan
-                  ? 'Gabungan titip panen + upah kerja belum cair'
-                  : 'Hasil bumi titipan belum diambil uangnya'}
-              </div>
-            </div>
-          </div>
 
           {/* PANEL REKAP TERPADU: KARYAWAN SEKALIGUS MITRA (GAJI + TITIP PANEN + KASBON) */}
           {(statement.isKaryawan || statement.role === 'KARYAWAN') && (
@@ -2846,6 +2905,35 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           </div>
         );
       })()}
+      <ModalKliringSilangMitra
+        isOpen={kliringModalOpen && Boolean(statement)}
+        onClose={() => setKliringModalOpen(false)}
+        mitra={
+          statement
+            ? {
+                id: statement.idMitra,
+                kode: statement.kodeMitra,
+                nama: statement.namaMitra,
+                totalBonMitra: statement.totalBonKeseluruhan || 0,
+                nominalPiutangAktif: statement.nominalPiutangAktif,
+                nominalNotaNgunci: statement.nominalNotaNgunci,
+                totalHutangTitipPanen: statement.totalTitip || 0,
+                totalTitipPanenMurni: statement.totalTitipPanenMurni,
+                totalUpahBelumDibayar: statement.totalUpahBelumDibayar,
+              }
+            : null
+        }
+        rekeningList={rekeningList}
+        onSuccess={(res, receipt) => {
+          setEditSuccessMsg(
+            `Kliring Silang ${res.namaMitra} berhasil diproses (${formatRupiah(res.nominalPotongSilang)}).`
+          );
+          loadStatementData(currentMitraId, true);
+          window.dispatchEvent(new CustomEvent('erp:data-updated'));
+          if (onRefreshParent) onRefreshParent();
+          if (onSuccessReceipt) onSuccessReceipt(receipt);
+        }}
+      />
     </div>
   );
 };

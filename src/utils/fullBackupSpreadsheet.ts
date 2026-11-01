@@ -132,6 +132,8 @@ export function countTotalErpRecords(rawDb: Record<string, any> | null | undefin
     'pembelianBarang',
     'pembelianHasilBumi',
     'penjualanHasilBumi',
+    'brilink',
+    'uangMasuk',
     'kasbonUang',
     'bayarBon',
     'pencairanTitipan',
@@ -216,14 +218,15 @@ function buildFallbackMitraRecapRows(rawDb: Record<string, any>) {
     }
 
     const totalPiutang = totalKasbonBarang + totalKasbonUang;
+    const isMitraLevelKunci = Boolean(m.isNotaNgunci || m.statusNota === 'NOTA_NGUNCI');
+    const nominalNotaNgunci = isMitraLevelKunci
+      ? totalPiutang
+      : Math.min(totalPiutang, nominalNotaKunciTx);
+    const nominalPiutangAktif = Math.max(0, totalPiutang - nominalNotaNgunci);
     const kliring = Math.min(totalPiutang, totalHutangTitipPanen);
     const sisaBonBersih = Math.max(0, totalPiutang - kliring);
     const sisaTitipanBersih = Math.max(0, totalHutangTitipPanen - kliring);
-    const isMitraLevelKunci = Boolean(m.isNotaNgunci || m.statusNota === 'NOTA_NGUNCI');
-    const nominalNotaNgunci = isMitraLevelKunci
-      ? sisaBonBersih
-      : Math.min(sisaBonBersih, nominalNotaKunciTx);
-    const isNotaNgunci = nominalNotaNgunci > 0 || (isMitraLevelKunci && sisaBonBersih > 0);
+    const isNotaNgunci = nominalNotaNgunci > 0;
 
     return {
       id,
@@ -240,15 +243,18 @@ function buildFallbackMitraRecapRows(rawDb: Record<string, any>) {
       totalKasbonBarang,
       totalKasbonUang,
       totalBonMitra: totalPiutang,
+      nominalPiutangAktif,
       totalHutangTitipPanen,
       sisaBonBersih,
       sisaTitipanBersih,
       nominalNotaNgunci,
       isNotaNgunci,
+      totalRekeningMitraIndividu: nominalPiutangAktif - totalHutangTitipPanen,
     };
   });
 
   const totalPiutang = items.reduce((s, x) => s + x.totalBonMitra, 0);
+  const totalPiutangAktif = items.reduce((s, x) => s + x.nominalPiutangAktif, 0);
   const totalHutang = items.reduce((s, x) => s + x.totalHutangTitipPanen, 0);
   const totalNgunci = items.reduce((s, x) => s + x.nominalNotaNgunci, 0);
   const jumlahNgunci = items.filter((x) => x.isNotaNgunci && x.nominalNotaNgunci > 0).length;
@@ -256,8 +262,11 @@ function buildFallbackMitraRecapRows(rawDb: Record<string, any>) {
   return {
     items,
     totalPiutang,
+    totalPiutangAktif,
     totalHutang,
-    uangKitaDiMitra: totalPiutang - totalHutang,
+    // Rumus Resmi: Jumlah Piutang Aktif dikurangi Jumlah Hutang (TIDAK melibatkan Status Nota Ngunci)
+    totalRekeningMitraNotaSupplier: totalPiutangAktif - totalHutang,
+    uangKitaDiMitra: totalPiutangAktif - totalHutang,
     totalNominalNotaNgunci: totalNgunci,
     jumlahMitraNotaNgunci: jumlahNgunci,
   };
@@ -294,6 +303,8 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
   const cashOpnameArr: any[] = Array.isArray(rawDb.cashOpnameLogs) ? rawDb.cashOpnameLogs : [];
   const upahHarianArr: any[] = Array.isArray(rawDb.upahHarian) ? rawDb.upahHarian : [];
   const penggajianArr: any[] = Array.isArray(rawDb.penggajian) ? rawDb.penggajian : [];
+  const brilinkArr: any[] = Array.isArray(rawDb.brilink) ? rawDb.brilink : [];
+  const uangMasukArr: any[] = Array.isArray(rawDb.uangMasuk) ? rawDb.uangMasuk : [];
   const auditArr: any[] = Array.isArray(rawDb.auditLogs) ? rawDb.auditLogs : [];
 
   // Financial summaries
@@ -316,16 +327,17 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
   // Mitra recap (prefer exact server calculation, fallback to deterministic local calculation)
   const fallbackRecap = buildFallbackMitraRecapRows(rawDb);
   const rekapItems: any[] = bundle.rekapMitra?.items || fallbackRecap.items;
-  const totalPiutangMitra =
-    bundle.rekapMitra?.totalSeluruhPiutangMitra ??
-    bundle.rekapMitra?.totalBonMitra ??
-    fallbackRecap.totalPiutang;
+  const totalPiutangMitraAktif =
+    bundle.rekapMitra?.totalPiutangAktifGlobal ??
+    fallbackRecap.totalPiutangAktif;
   const totalHutangKeMitra =
     bundle.rekapMitra?.totalNotaSupplierRekeningMitra ??
     bundle.rekapMitra?.totalHutangPerusahaanKeMitra ??
     fallbackRecap.totalHutang;
-  const uangKitaDiMitra =
-    bundle.rekapMitra?.uangKitaDiMitra ?? totalPiutangMitra - totalHutangKeMitra;
+  const totalRekeningMitraNotaSupplier =
+    bundle.rekapMitra?.totalRekeningMitraNotaSupplier ??
+    bundle.rekapMitra?.uangKitaDiMitra ??
+    (totalPiutangMitraAktif - totalHutangKeMitra);
   const totalNominalNotaNgunci =
     bundle.rekapMitra?.totalNominalNotaNgunci ?? fallbackRecap.totalNominalNotaNgunci;
   const jumlahMitraNotaNgunci =
@@ -347,17 +359,17 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
       ['INFO BACKUP', 'Waktu Pembuatan Backup (WIB)', `${tanggalBackup} ${jamBackup} WIB`, sourceLabel],
       ['INFO BACKUP', 'Nama Perusahaan', safeCell(profil.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'), safeCell(profil.badanHukum || 'PT')],
       ['INFO BACKUP', 'Alamat Kantor', safeCell(profil.alamat || profil.alamatLengkap || '-'), safeCell(profil.telepon || '-')],
-      ['INFO BACKUP', 'Total Seluruh Record Tersimpan', countTotalErpRecords(rawDb), 'Mencakup seluruh 21 sheet transaksi, master, stok & log'],
+      ['INFO BACKUP', 'Total Seluruh Record Tersimpan', countTotalErpRecords(rawDb), 'Mencakup seluruh 22 sheet transaksi, master, stok & log'],
       ['', '', '', ''],
       ['POSISI KAS & BANK PT', 'Saldo Kas Fisik Kasir (KAS01)', kasUtama, 'Uang tunai brankas & laci kasir pusat'],
       ['POSISI KAS & BANK PT', 'Total Saldo Rekening Bank PT', bankPtTotal, 'Akumulasi seluruh rekening bank perusahaan aktif'],
       ['POSISI KAS & BANK PT', 'Total Likuiditas Kas + Bank PT', kasUtama + bankPtTotal, 'Total dana likuid perusahaan saat backup dibuat'],
       ['POSISI KAS & BANK PT', 'Total Saldo Kas Operasional Divisi', kasDivisiTotal, 'Saldo buku kas operasional masing-masing divisi'],
       ['', '', '', ''],
-      ['REKAP REKENING MITRA', 'Total Seluruh Piutang Mitra', totalPiutangMitra, 'Seluruh piutang barang, kasbon uang & nota lalu mitra'],
-      ['REKAP REKENING MITRA', 'Total Hutang Kita ke Mitra (Titipan / Supplier)', totalHutangKeMitra, 'Saldo titip panen, pinjaman mitra & hak upah belum cair'],
-      ['REKAP REKENING MITRA', 'UANG KITA YANG MASIH DI MITRA (Piutang - Hutang)', uangKitaDiMitra, 'Rumus: Total Seluruh Piutang Mitra dikurangi Total Hutang Kita ke Mitra'],
-      ['KHUSUS NOTA KUNCI', 'NOMINAL UANG TIDAK BISA KEMBALI (NOTA KUNCI)', totalNominalNotaNgunci, `${jumlahMitraNotaNgunci} Mitra berstatus Nota Kunci (otomatis berkurang jika ada cicilan masuk)`],
+      ['REKAP REKENING MITRA', '1. Piutang Aktif (Mitra Berhutang)', totalPiutangMitraAktif, 'Seluruh piutang aktif berjalan (tidak termasuk Nota Ngunci)'],
+      ['REKAP REKENING MITRA', '2. Hutang PT Berhutang (Uang Titip & HB Titip)', totalHutangKeMitra, 'Saldo uang titip, HB titip panen, hutang supplier & hak upah belum cair'],
+      ['REKAP REKENING MITRA', 'TOTAL REKENING MITRA / NOTA SUPPLIER (Piutang - Hutang)', totalRekeningMitraNotaSupplier, 'Rumus: Jumlah Piutang dikurangi Jumlah Hutang (Tidak melibatkan Status Nota Ngunci)'],
+      ['3. STATUS NOTA NGUNCI', 'NOMINAL NOTA NGUNCI (UANG TIDAK BISA KEMBALI)', totalNominalNotaNgunci, `${jumlahMitraNotaNgunci} Mitra berstatus Nota Ngunci (hanya berkurang jika mitra terkait melakukan pembayaran)`],
       ['', '', '', ''],
       ['JUMLAH DATA PER TABEL', '02. Master Rekening Kas & Bank', rekeningArr.length, 'Rekening perusahaan, divisi, anak perusahaan & sistem'],
       ['JUMLAH DATA PER TABEL', '05. Master Mitra (Supplier/Customer/dll)', mitraArr.length, 'Seluruh mitra terdaftar'],
@@ -377,6 +389,7 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
       ['JUMLAH DATA PER TABEL', '19. Absensi & Input Upah Harian Kerja', upahHarianArr.length, 'Input gaji karyawan per hari kerja masuk'],
       ['JUMLAH DATA PER TABEL', '20. Realisasi Slip Gaji Karyawan', penggajianArr.length, 'Pembayaran slip gaji & potong kasbon karyawan'],
       ['JUMLAH DATA PER TABEL', '21. Audit Log Aktivitas Sistem', auditArr.length, 'Rekam jejak kronologis seluruh aktivitas sistem'],
+      ['JUMLAH DATA PER TABEL', '22. Transaksi BRILink (Adm Tarik Tunai & Tukar Cash)', brilinkArr.length, 'Uang masuk Adm Tarik Tunai & uang keluar Adm Tukar Cash PT'],
     ],
   };
 
@@ -428,7 +441,7 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
   // 3. 03_REKAP_SALDO_MITRA
   const sheet03: BackupSheetTab = {
     sheetName: '03_REKAP_SALDO_MITRA',
-    description: 'Rekapitulasi Piutang, Hutang Titipan, Uang Kita di Mitra & Status Nota Kunci',
+    description: 'Rekapitulasi Status Nota (1. Piutang, 2. Hutang, 3. Ngunci) & Total Rekening Mitra / Nota Supplier',
     headers: [
       'KODE MITRA',
       'NAMA MITRA',
@@ -438,20 +451,26 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
       'NO HP / TELEPON',
       'PIUTANG BARANG (RP)',
       'KASBON UANG (RP)',
-      'TOTAL PIUTANG MITRA (RP)',
-      'NOMINAL NOTA KUNCI / TAK KEMBALI (RP)',
-      'TOTAL HUTANG / TITIPAN MITRA (RP)',
-      'SISA BERSIH (PIUTANG - HUTANG)',
-      'CATATAN NOTA KUNCI',
+      '1. PIUTANG AKTIF MITRA (RP)',
+      '3. NOMINAL NOTA NGUNCI (RP)',
+      '2. HUTANG PT (UANG TITIP & HB TITIP) (RP)',
+      'TOTAL REKENING MITRA / NOTA SUPPLIER (PIUTANG - HUTANG)',
+      'CATATAN NOTA NGUNCI',
     ],
     rows: [
       ...rekapItems.map((m) => {
         const piutangBarang = safeNum(m.totalKasbonBarang ?? m.bonBarang);
         const kasbonUang = safeNum(m.totalKasbonUang ?? m.kasbonUang);
         const totalBon = safeNum(m.totalBonMitra ?? piutangBarang + kasbonUang);
-        const totalTitip = safeNum(m.totalHutangTitipPanen);
         const nomKunci = safeNum(m.nominalNotaNgunci);
+        const piutangAktif = safeNum(m.nominalPiutangAktif ?? Math.max(0, totalBon - nomKunci));
+        const totalTitip = safeNum(m.totalHutangTitipPanen);
         const isKunci = Boolean(m.isNotaNgunci || nomKunci > 0);
+        const statusParts: string[] = [];
+        if (piutangAktif > 0) statusParts.push('1. PIUTANG (MITRA BERHUTANG)');
+        if (totalTitip > 0) statusParts.push('2. HUTANG (PT BERHUTANG)');
+        if (isKunci) statusParts.push('3. NGUNCI');
+        const statusNotaLabel = statusParts.length > 0 ? statusParts.join(' + ') : 'LUNAS / NIHIL';
         const roleLbl = getRoleMitraLabel(m.role, {
           isAnakPerusahaan: m.isAnakPerusahaan,
           isKaryawan: m.isKaryawan,
@@ -460,33 +479,33 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
           safeCell(m.kode),
           safeCell(m.nama),
           safeCell(roleLbl),
-          isKunci ? 'NOTA KUNCI' : 'PIUTANG AKTIF / NORMAL',
+          statusNotaLabel,
           safeCell(m.alamat || '-'),
           safeCell(m.telepon || '-'),
           piutangBarang,
           kasbonUang,
-          totalBon,
+          piutangAktif,
           nomKunci,
           totalTitip,
-          totalBon - totalTitip,
+          piutangAktif - totalTitip,
           safeCell(m.catatanNgunci || m.catatanNotaNgunci || ''),
         ];
       }),
       ['', '', '', '', '', '', '', '', '', '', '', '', ''],
       [
         'REKAP TOTAL',
-        'TOTAL SELURUH REKENING MITRA',
+        'TOTAL REKENING MITRA / NOTA SUPPLIER',
         `${rekapItems.length} Mitra`,
-        `${jumlahMitraNotaNgunci} Nota Kunci`,
+        `${jumlahMitraNotaNgunci} Nota Ngunci`,
         '-',
         '-',
         rekapItems.reduce((s, x) => s + safeNum(x.totalKasbonBarang ?? x.bonBarang), 0),
         rekapItems.reduce((s, x) => s + safeNum(x.totalKasbonUang ?? x.kasbonUang), 0),
-        totalPiutangMitra,
+        totalPiutangMitraAktif,
         totalNominalNotaNgunci,
         totalHutangKeMitra,
-        uangKitaDiMitra,
-        `UANG TAK BISA KEMBALI (NOTA KUNCI): Rp ${totalNominalNotaNgunci.toLocaleString('id-ID')}`,
+        totalRekeningMitraNotaSupplier,
+        `Rumus: Piutang Aktif - Hutang PT (Tanpa Nota Ngunci Rp ${totalNominalNotaNgunci.toLocaleString('id-ID')})`,
       ],
     ],
   };
@@ -976,7 +995,7 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
   // 13. 13_JUAL_HASIL_BUMI
   const sheet13: BackupSheetTab = {
     sheetName: '13_JUAL_HASIL_BUMI',
-    description: 'Seluruh Transaksi Penjualan Partai Komoditas Hasil Bumi ke Pabrik / Pembeli',
+    description: 'Seluruh Transaksi Penjualan / Muat Komoditas Hasil Bumi (Termasuk Belum Putus Harga & Realisasi Uang Masuk)',
     headers: [
       'NO PENJUALAN',
       'TANGGAL',
@@ -988,7 +1007,8 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
       'BERAT BERSIH (KG)',
       'HARGA JUAL / KG (RP)',
       'MODAL RATA-RATA / KG (RP)',
-      'TOTAL OMZET (RP)',
+      'NILAI MODAL PENGURANG STOK (RP)',
+      'TOTAL OMZET / UANG MASUK (RP)',
       'LABA KOTOR (RP)',
       'METODE PEMBAYARAN',
       'REKENING TUJUAN',
@@ -1008,7 +1028,12 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
       safeNum(jh.beratBersih),
       safeNum(jh.hargaJualPerKg),
       safeNum(jh.modalRataRataPerKg),
-      safeNum(jh.totalNominal),
+      safeNum(jh.nilaiModalPengurangStok || jh.totalModalHpp),
+      safeNum(
+        jh.metodePembayaran === 'BELUM_PUTUS_HARGA'
+          ? jh.nominalUangMasukTerkumpul
+          : jh.totalNominal
+      ),
       safeNum(jh.labaKotor),
       safeCell(jh.metodePembayaran),
       safeCell(jh.rekeningTujuan || '-'),
@@ -1300,6 +1325,87 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
     ]),
   };
 
+  // 22. 22_TRANSAKSI_BRILINK
+  const sheet22: BackupSheetTab = {
+    sheetName: '22_TRANSAKSI_BRILINK',
+    description: 'Riwayat Transaksi BRILink (Uang Masuk: Adm Tarik Tunai | Uang Keluar: Adm Tukar Cash Rupiah PT)',
+    headers: [
+      'ID TRANSAKSI',
+      'TANGGAL',
+      'JAM',
+      'JENIS LAYANAN BRILINK',
+      'ARUS ADMIN',
+      'NASABAH / MITRA',
+      'TELEPON',
+      'NOMINAL POKOK (RP)',
+      'NOMINAL ADMIN (RP)',
+      'REKENING ADMIN',
+      'REKENING BANK POKOK',
+      'DIVISI',
+      'KETERANGAN',
+    ],
+    rows: brilinkArr.map((br) => {
+      const jenis = br.jenisBrilink || br.jenisTransaksi;
+      return [
+        safeCell(br.idTransaksi),
+        safeCell(br.tanggal),
+        safeCell(br.jam),
+        jenis === 'TARIK_TUNAI'
+          ? 'ADM TARIK TUNAI (UANG MASUK)'
+          : 'ADM TUKAR CASH RUPIAH PT (UANG KELUAR)',
+        safeCell(br.arusAdmin || (jenis === 'TARIK_TUNAI' ? 'MASUK' : 'KELUAR')),
+        safeCell(br.namaPelanggan || '-'),
+        safeCell(br.teleponPelanggan || '-'),
+        safeNum(br.nominalPokok),
+        safeNum(br.nominalAdmin),
+        safeCell(br.rekeningAdmin || 'KAS01'),
+        safeCell(br.rekeningBank || br.rekeningPokokBank || '-'),
+        safeCell(br.divisi || 'BRILink'),
+        safeCell(br.keterangan || ''),
+      ];
+    }),
+  };
+
+  // 23. 23_TRANSAKSI_UANG_MASUK
+  const sheet23: BackupSheetTab = {
+    sheetName: '23_TRANSAKSI_UANG_MASUK',
+    description: 'Riwayat Transaksi Uang Masuk (+) & Pencairan Realisasi Penjualan Hasil Bumi',
+    headers: [
+      'ID TRANSAKSI',
+      'TANGGAL',
+      'JAM',
+      'DIVISI',
+      'KATEGORI',
+      'PENGIRIM / MITRA',
+      'NOMINAL UANG MASUK (RP)',
+      'METODE',
+      'REKENING TUJUAN',
+      'NOTA HASIL BUMI TERKAIT',
+      'KOMODITAS',
+      'BERAT MUAT (KG)',
+      'NILAI MODAL STOK (RP)',
+      'HARGA REALISASI / KG (RP)',
+      'KETERANGAN',
+    ],
+    rows: uangMasukArr.map((um) => [
+      safeCell(um.idTransaksi),
+      safeCell(um.tanggal),
+      safeCell(um.jam),
+      safeCell(um.divisi || '-'),
+      safeCell(um.kategori || '-'),
+      safeCell(um.namaPengirim || '-'),
+      safeNum(um.nominal),
+      safeCell(um.metode || '-'),
+      safeCell(um.rekeningTujuan || 'KAS01'),
+      safeCell(um.noPenjualanHasilBumi || '-'),
+      safeCell(um.komoditasNama || '-'),
+      safeNum(um.beratMuatKg),
+      safeNum(um.nilaiModalStok),
+      safeNum(um.hargaRealisasiPerKg),
+      safeCell(um.keterangan || ''),
+    ]),
+  };
+
   return [
     sheet01,
     sheet02,
@@ -1322,6 +1428,8 @@ export function buildFullErpSpreadsheetSheets(bundle: FullBackupBundlePayload): 
     sheet19,
     sheet20,
     sheet21,
+    sheet22,
+    sheet23,
   ];
 }
 

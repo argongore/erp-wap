@@ -32,6 +32,7 @@ import {
   Truck,
   LogOut,
   FileSpreadsheet,
+  CreditCard,
 } from 'lucide-react';
 
 export type ActiveTab =
@@ -39,6 +40,8 @@ export type ActiveTab =
   | 'billboard-monitor'
   | 'rekap-semua-transaksi'
   | 'pusat-kontrol-kasir'
+  | 'kasir-uang-masuk'
+  | 'kasir-brilink'
   | 'kasir-penjualan'
   | 'kasir-pembelian-barang'
   | 'kasir-pembelian'
@@ -70,6 +73,8 @@ export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   'billboard-monitor': 'Layar Monitor TV',
   'rekap-semua-transaksi': 'Rekap Transaksi Harian',
   'pusat-kontrol-kasir': 'Kliring & Cash Opname',
+  'kasir-uang-masuk': 'Uang Masuk & Pencairan Jual HB',
+  'kasir-brilink': 'Agen BRILink (Adm Tarik Tunai & Tukar Cash)',
   'kasir-penjualan': 'Kasir Penjualan Toko',
   'kasir-pembelian-barang': 'Pembelian Stok Pemasok',
   'kasir-pembelian': 'Pembelian Hasil Bumi',
@@ -100,6 +105,8 @@ export const ACTIVE_TAB_CASH_FLOW: Record<ActiveTab, CashFlowDirection> = {
   'billboard-monitor': null,
   'rekap-semua-transaksi': null,
   'pusat-kontrol-kasir': null,
+  'kasir-uang-masuk': 'MASUK',
+  'kasir-brilink': null,
   'kasir-penjualan': 'MASUK',
   'kasir-bayar-bon': 'MASUK',
   'kasir-pembelian-barang': 'KELUAR',
@@ -148,6 +155,7 @@ interface NavItemConfig {
   keywords: string;
   icon: React.ComponentType<{ className?: string }>;
   flow?: CashFlowDirection;
+  bothFlows?: boolean;
   tab?: ActiveTab;
   matchTabs?: ActiveTab[];
   action?: () => void;
@@ -235,6 +243,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
         title: 'Jalan Uang Masuk (+)',
         groupTone: 'masuk',
         items: [
+          {
+            id: 'kasir-uang-masuk',
+            label: 'Uang Masuk',
+            sublabel: 'Pencairan jual HB & kas masuk',
+            keywords: 'uang masuk pencairan penjualan hasil bumi muat belum putus harga kas in pendapatan',
+            icon: ArrowDownLeft,
+            flow: 'MASUK',
+            tab: 'kasir-uang-masuk',
+          },
+          {
+            id: 'kasir-brilink',
+            label: 'BRILink',
+            sublabel: 'Adm tarik tunai (+) & tukar cash (−)',
+            keywords: 'brilink agen edc adm admin tarik tunai tukar cash rupiah uang masuk keluar',
+            icon: CreditCard,
+            flow: 'MASUK',
+            bothFlows: true,
+            tab: 'kasir-brilink',
+          },
           {
             id: 'kasir-penjualan',
             label: 'Penjualan Toko',
@@ -527,7 +554,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => {
-          if (flowFilter !== 'ALL' && item.flow !== flowFilter) {
+          if (flowFilter !== 'ALL' && !item.bothFlows && item.flow !== flowFilter) {
             return false;
           }
           if (!normalizedSearch) return true;

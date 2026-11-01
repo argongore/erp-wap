@@ -115,6 +115,9 @@ export interface Rekening {
 }
 
 export type StatusNotaRekapMitra =
+  | 'PIUTANG'
+  | 'HUTANG'
+  | 'SEIMBANG'
   | 'NOTA_NGUNCI'
   | 'NOTA_AKTIF'
   | 'NOTA_SUPPLIER'
@@ -199,14 +202,22 @@ export interface RekapMitraItem {
   catatanNgunci?: string;
   tanggalNgunci?: string;
   statusNotaLabel?: StatusNotaRekapMitra;
-  nominalPiutangAktif?: number;       // Piutang berjalan di luar nota ngunci
-  nominalNotaNgunci?: number;         // Piutang macet (uang tidak bisa kembali)
+  nominalPiutangAktif?: number;       // 1. Piutang aktif berjalan (Mitra berhutang, TIDAK melibatkan Ngunci)
+  nominalNotaNgunci?: number;         // 3. Ngunci (hanya berkurang jika mitra terkait melakukan pembayaran)
   jumlahNotaNgunci?: number;          // Banyaknya lembar nota ngunci pada mitra ini
+  hasPiutangAktif?: boolean;          // true jika memiliki 1. Piutang aktif (nominalPiutangAktif > 0)
+  hasHutangAktif?: boolean;           // true jika memiliki 2. Hutang PT ke mitra (uang titip / HB titip > 0)
+  hasNotaNgunci?: boolean;            // true jika memiliki 3. Ngunci (nominalNotaNgunci > 0)
+  isNotaAktif?: boolean;              // true jika memiliki nota aktif berjalan baik Hutang maupun Piutang
+  statusRekeningMitra?: 'PIUTANG' | 'HUTANG' | 'SEIMBANG' | 'NGUNCI' | 'LUNAS';
+  bisaKliringSilang?: boolean;        // true jika satu mitra memiliki Piutang (>0) sekaligus Hutang (>0)
+  potensiKliringSilang?: number;      // Math.min(totalBonMitra, totalHutangTitipPanen)
   // Posisi Bersih: totalHutangTitipPanen - totalBonMitra
   potonganSilangOtomatis?: number;
   sisaBonBersih?: number;
   sisaTitipanBersih?: number;
-  uangKitaDiMitraIndividu?: number;   // totalBonMitra - totalHutangTitipPanen (+ uang kita di mitra, - hutang kita ke mitra)
+  uangKitaDiMitraIndividu?: number;   // Rumus: nominalPiutangAktif - totalHutangTitipPanen (TIDAK melibatkan Ngunci)
+  totalRekeningMitraIndividu?: number; // Alias eksplisit: Piutang Aktif - Hutang PT ke Mitra
   saldoBersih: number;
   posisiStatus: 'KITA_BERHUTANG' | 'MITRA_BERHUTANG' | 'LUNAS_IMPAS';
   totalTransaksiCount: number;
@@ -214,22 +225,27 @@ export interface RekapMitraItem {
 
 export interface RekapMasterMitraSummary {
   totalMitra: number;
-  totalHutangPerusahaanKeMitra: number; // Total hak mitra belum cair (Titip Hasil Panen + Upah Kerja Belum Cair)
+  totalHutangPerusahaanKeMitra: number; // 2. Hutang (PT berhutang): Uang Titip + HB Titip + Hutang Supplier + Hak Upah
   totalTitipPanenMurni?: number;        // Khusus saldo titip panen/pinjaman murni (sinkron ke TIT01)
   totalUpahKaryawanBelumDibayar?: number; // Khusus saldo hak gaji/upah karyawan belum cair
   totalBonMitra: number;                // Total seluruh piutang mitra (Aktif + Nota Ngunci)
   saldoBersihKemitraan: number;         // Total hak mitra - Total bon
-  mitraDenganHutangTitipCount: number;  // Jumlah mitra yang punya saldo hak belum cair
-  mitraDenganBonCount: number;          // Jumlah mitra yang memiliki kewajiban bon aktif
-  // Rekap Khusus Posisi Uang Kita di Mitra & Nota Ngunci
+  mitraDenganHutangTitipCount: number;  // Jumlah mitra dengan 2. Hutang (PT berhutang)
+  mitraDenganBonCount: number;          // Jumlah mitra dengan kewajiban bon keseluruhan
+  mitraPiutangAktifCount?: number;      // Jumlah mitra dengan 1. Piutang aktif (di luar Ngunci)
+  mitraNotaAktifCount?: number;         // Jumlah mitra dengan Nota Aktif berjalan (baik Piutang maupun Hutang)
+  mitraSiapKliringSilangCount?: number; // Jumlah mitra yang punya Piutang & Hutang sekaligus (siap Kliring Silang)
+  // Rekap Khusus Total Rekening Mitra / Nota Supplier & Status Nota Ngunci
   totalSeluruhPiutangMitra?: number;       // Total seluruh piutang mitra (Piutang Aktif + Nota Ngunci)
-  totalPiutangAktifMitra?: number;         // Piutang mitra yang masih aktif / dapat ditagih
-  totalNominalNotaNgunci?: number;         // Total nominal uang tidak bisa kembali (Status Nota Ngunci)
-  mitraNotaNgunciCount?: number;           // Jumlah mitra berstatus Nota Ngunci
+  totalPiutangAktifMitra?: number;         // 1. Piutang (Mitra berhutang) aktif di luar Ngunci
+  totalPiutangAktifGlobal?: number;        // Alias kompatibel untuk totalPiutangAktifMitra
+  totalNominalNotaNgunci?: number;         // 3. Ngunci (Hanya berguna/berkurang jika mitra terkait melakukan pembayaran)
+  mitraNotaNgunciCount?: number;           // Jumlah mitra berstatus 3. Ngunci
   totalLembarNotaNgunci?: number;          // Jumlah lembar nota berstatus Ngunci
-  totalNotaSupplierRekeningMitra?: number; // Total dari Nota Supplier / Rekening Mitra (Total Hutang Kita ke Mitra)
-  uangKitaDiMitra?: number;                // Rumus: Total Seluruh Piutang Mitra - Total Hutang Kita ke Mitra
-  uangKitaDiMitraEfektif?: number;         // Rumus di luar Nota Ngunci: Total Piutang Aktif - Total Hutang Kita ke Mitra
+  totalNotaSupplierRekeningMitra?: number; // Jumlah Hutang PT ke Mitra (Uang Titip & HB Titip)
+  totalRekeningMitraNotaSupplier?: number; // RUMUS UTAMA: Jumlah Piutang Aktif - Jumlah Hutang (TIDAK melibatkan Ngunci)
+  uangKitaDiMitra?: number;                // Diselaraskan ke rumus: Jumlah Piutang Aktif - Jumlah Hutang (tanpa Ngunci)
+  uangKitaDiMitraEfektif?: number;         // Sama dengan totalRekeningMitraNotaSupplier (Piutang Aktif - Hutang)
   daftarNotaNgunci?: NotaNgunciDetailItem[];
   items: RekapMitraItem[];
 }
@@ -391,6 +407,7 @@ export interface RekapPayrollBulananSummary {
 export interface ItemKategoriProduk {
   nama: string;
   deskripsi?: string;
+  tanpaStok?: boolean; // true jika kategori produk tanpa stok fisik (seperti kategori Alat)
   createdAt?: string;
 }
 
@@ -416,6 +433,35 @@ export function isKategoriAlatNonStok(kategori?: string | null): boolean {
     norm === 'SEWA JASA' ||
     norm === 'JASA'
   );
+}
+
+/**
+ * Mengecek apakah suatu produk didefinisikan TANPA STOK (seperti Kategori Alat):
+ * - Jika `item.tanpaStok` bernilai boolean eksplisit (`true` / `false`), ikuti nilai tersebut.
+ * - Jika belum diset pada produk, cek apakah kategorinya bertanda `tanpaStok: true` di `kategoriList`
+ *   atau termasuk kategori Alat/Jasa non-stok bawaan.
+ */
+export function isProdukTanpaStok(
+  item?: { kategori?: string | null; tanpaStok?: boolean } | null,
+  kategoriList?: Array<{ nama: string; tanpaStok?: boolean }> | null
+): boolean {
+  if (!item) return false;
+  if (typeof item.tanpaStok === 'boolean') {
+    return item.tanpaStok;
+  }
+  const katNorm = String(item.kategori || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+  if (kategoriList && katNorm) {
+    const matchedKat = kategoriList.find(
+      (k) => String(k.nama || '').trim().replace(/\s+/g, ' ').toUpperCase() === katNorm
+    );
+    if (matchedKat && typeof matchedKat.tanpaStok === 'boolean') {
+      return matchedKat.tanpaStok;
+    }
+  }
+  return isKategoriAlatNonStok(item.kategori);
 }
 
 export function isExcludedFromDivisi(rawNama?: string | null): boolean {
@@ -444,6 +490,7 @@ export interface Produk {
   hargaBeli: number; // HPP Modal / Harga Kulakan Terakhir
   hargaJual: number; // Sugesti Harga Jual Umum / Eceran
   hargaKhususRekanan?: number; // Sugesti Harga Khusus Mitra / Rekanan
+  tanpaStok?: boolean; // true = Tanpa Stok (seperti Kategori Alat), false = Memerlukan Stok Gudang
   status: StatusAktif;
 }
 
@@ -452,6 +499,7 @@ export interface StokBarang {
   namaProduk: string;
   satuan: string;
   kategori?: string;
+  tanpaStok?: boolean;
   stok: number;
   minimum: number;
   updateTerakhir: string;
@@ -693,14 +741,22 @@ export interface TransaksiPenjualanHasilBumi {
   beratBersih: number;   // Kg keluar dari gudang
   modalRataRataPerKg: number; // HPP modal rata-rata beli gudang saat transaksi (Rp/Kg)
   totalModalHpp: number; // beratBersih * modalRataRataPerKg
-  hargaJualPerKg: number; // Harga jual deal per Kg
-  totalNominal: number;  // Omzet penjualan (beratBersih * hargaJualPerKg)
-  labaKotor: number;     // totalNominal - totalModalHpp
+  nilaiModalPengurangStok?: number; // Nilai pengurang stok menggunakan harga rata-rata pembelian
+  hargaJualPerKg: number; // Harga jual deal per Kg (atau acuan modal rata-rata saat belum putus harga)
+  totalNominal: number;  // Omzet penjualan langsung (0 jika BELUM_PUTUS_HARGA karena uang masuk dicatat lewat menu Uang Masuk)
+  labaKotor: number;     // Realisasi selisih terhadap modal HPP
   divisi?: string;       // Divisi usaha terkait saat penjualan hasil bumi
-  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG';
-  rekeningTujuan: string; // KAS01 for TUNAI, bank for TRANSFER, BON01 for PIUTANG
-  statusPembayaran: 'LUNAS' | 'BELUM_BAYAR';
+  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA';
+  rekeningTujuan: string; // KAS01, bank, BON01, atau MENUNGGU_UANG_MASUK
+  statusPembayaran: 'LUNAS' | 'BELUM_BAYAR' | 'MENUNGGU_UANG_MASUK';
   sisaPiutang: number;
+  isBelumPutusHargaJual?: boolean;
+  selisihTimbangMuatKg?: number; // Jika berat muat melebihi stok buku gudang (contoh: Stok 3.064,1 Kg -> Muat 3.094,0 Kg -> Selisih 29,9 Kg)
+  isHabisMuatSusut?: boolean;    // true jika gudang dikuras habis saat muat & sisa selisih masuk ke SUSUT
+  beratSusutKg?: number;         // Tonase susut saat kloter muat ditutup habis
+  nominalUangMasukTerkumpul?: number; // Akumulasi uang hasil penjualan yang sudah masuk lewat menu Uang Masuk
+  statusUangMasuk?: 'BELUM_MASUK' | 'SEBAGIAN' | 'LUNAS';
+  idUangMasukList?: string[];
   isNotaNgunci?: boolean;
   tanggalNgunci?: string;
   catatanNgunci?: string;
@@ -1376,6 +1432,61 @@ export interface TransaksiPencairanTitipan {
   createdAt: string;
 }
 // ==========================================
+// TRANSAKSI AGEN BRILINK (ADM TARIK TUNAI & ADM TUKAR CASH RUPIAH PT)
+// ==========================================
+export type JenisTransaksiBrilink = 'TARIK_TUNAI' | 'TUKAR_CASH';
+
+export interface TransaksiBrilink {
+  idTransaksi: string;           // e.g. "BRI-261031-001"
+  tanggal: string;               // DD/MM/YYYY
+  jam: string;                   // HH:mm:ss
+  jenisBrilink: JenisTransaksiBrilink;
+  arusAdmin: 'MASUK' | 'KELUAR'; // MASUK = Adm Tarik Tunai (+), KELUAR = Adm Tukar Cash PT (-)
+  idMitra: string;               // 'UMUM' atau ID Mitra terdaftar
+  namaPelanggan: string;         // Nama nasabah / agen tempat tukar cash
+  teleponPelanggan?: string;
+  divisi: string;                // Default "BRILink"
+  rekeningAdmin: string;         // Rekening tempat uang masuk/keluar Admin (KAS01 atau Bank PT)
+  rekeningBank?: string;         // Rekening Bank PT jika melibatkan mutasi pokok Bank <-> Kas Tunai
+  rekeningKasTunai?: string;     // Default "KAS01" jika melibatkan mutasi pokok
+  nominalAdmin: number;          // Fokus utama: Uang Masuk Adm Tarik Tunai (+) atau Uang Keluar Adm Tukar Cash (-)
+  nominalPokok: number;          // Opsional (0 jika hanya catat admin; >0 jika mutasi pokok Bank <-> KAS01 sekaligus)
+  keterangan: string;
+  fotoBukti?: string;            // Foto struk EDC / bukti transfer BRILink
+  status: 'BERHASIL';
+  createdAt: string;
+}
+
+// ==========================================
+// TRANSAKSI UANG MASUK (HASIL PENJUALAN HASIL BUMI & PENERIMAAN DIVISI)
+// ==========================================
+export interface TransaksiUangMasuk {
+  idTransaksi: string;           // e.g. "UMS-261101-001"
+  tanggal: string;               // DD/MM/YYYY
+  jam: string;                   // HH:mm:ss
+  divisi: string;                // Divisi penerima arus kas masuk
+  kategori: string;              // e.g. "Penjualan Hasil Bumi", "Penerimaan Operasional", dll.
+  namaPengirim: string;          // Nama pembeli / pabrik / bandar / penyetor
+  pengirim?: string;             // Alias kompatibel
+  idMitra?: string;              // 'UMUM' atau ID Mitra terdaftar
+  metode: 'TUNAI' | 'TRANSFER';
+  rekeningTujuan: string;        // KAS01 atau Rekening Bank PT
+  nominal: number;               // Nominal uang riil masuk (+)
+  noPenjualanHasilBumi?: string; // Opsional link ke nota muat/jual hasil bumi (JHB-...)
+  komoditasNama?: string;
+  beratMuatKg?: number;
+  modalRataRataPerKg?: number;
+  nilaiModalStok?: number;
+  totalModalStok?: number;
+  hargaRealisasiPerKg?: number;
+  tandaiPutusLunas?: boolean;
+  keterangan: string;
+  fotoBukti?: string;
+  status?: 'BERHASIL';
+  createdAt: string;
+}
+
+// ==========================================
 // UNIFIED TRANSACTION JURNAL REKAPITULASI
 // ==========================================
 export type ArusUangType = 'MASUK' | 'KELUAR' | 'MUTASI' | 'NON_TUNAI';
@@ -1393,10 +1504,12 @@ export interface UnifiedTransactionItem {
     | 'KASBON_UANG'
     | 'BAYAR_BON'
     | 'PENGELUARAN_DIVISI'
+    | 'UANG_MASUK'
     | 'PENCAIRAN_TITIPAN'
     | 'UPAH_HARIAN'
     | 'PENGGAJIAN'
-    | 'TRANSFER_REKENING';
+    | 'TRANSFER_REKENING'
+    | 'BRILINK';
   jenisLabel: string;
   arusUang: ArusUangType;
   arusUangLabel: string;
@@ -1440,7 +1553,13 @@ export interface FullErpDataset {
   upahHarianList: CatatanUpahHarian[];
   penggajianList: TransaksiPenggajian[];
   produkList: Produk[];
-  kategoriProdukList?: Array<{ nama: string; deskripsi: string; jumlahProduk: number; isSaved: boolean }>;
+  kategoriProdukList?: Array<{
+    nama: string;
+    deskripsi: string;
+    tanpaStok?: boolean;
+    jumlahProduk: number;
+    isSaved: boolean;
+  }>;
   stokList: StokBarang[];
   stokHasilBumiList: StokHasilBumi[];
   pembelianList: TransaksiPembelianHasilBumi[];
@@ -1453,6 +1572,8 @@ export interface FullErpDataset {
   pengeluaranList?: TransaksiPengeluaran[];
   inventarisList?: ItemInventaris[];
   transferList: TransaksiTransferRekening[];
+  brilinkList?: TransaksiBrilink[];
+  uangMasukList?: TransaksiUangMasuk[];
   auditLogs: AuditLog[];
 }
 
@@ -1482,7 +1603,9 @@ export interface DatabaseIntegrityStatus {
     kasbonUang: number;
     bayarBon: number;
     pengeluaran: number;
+    uangMasuk?: number;
     transferRekening: number;
+    brilink?: number;
     upahHarian: number;
     penggajian: number;
     auditLogs: number;
