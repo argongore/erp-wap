@@ -132,6 +132,7 @@ export interface ArusKasDivisiSelectorCardProps {
   rekeningList: Rekening[];
   theme?: 'dark' | 'light';
   isBelumPutusHarga?: boolean;
+  lockedDivisi?: boolean;
   onDivisiCreated?: () => void;
 }
 
@@ -150,6 +151,7 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
   rekeningList,
   theme = 'dark',
   isBelumPutusHarga = false,
+  lockedDivisi = false,
   onDivisiCreated,
 }) => {
   const isDark = theme === 'dark';
@@ -159,13 +161,14 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
   const [extraOptions, setExtraOptions] = useState<string[]>([]);
 
   const allOptions = useMemo(() => {
+    if (lockedDivisi && divisi) return [divisi];
     const set = new Set<string>(divisiOptions);
     for (const ex of extraOptions) {
       if (ex) set.add(ex);
     }
     if (divisi) set.add(divisi);
     return Array.from(set);
-  }, [divisiOptions, extraOptions, divisi]);
+  }, [divisiOptions, extraOptions, divisi, lockedDivisi]);
 
   const isNonTunai =
     isBelumPutusHarga ||
@@ -173,7 +176,9 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
     metode === 'PIUTANG' ||
     metode === 'TITIP' ||
     metode === 'HUTANG' ||
-    metode === 'INTERNAL_PT';
+    metode === 'INTERNAL_PT' ||
+    metode === 'SINKRON' ||
+    metode === 'PEMAKAIAN_PENGELUARAN';
 
   const effectiveKind =
     transactionKind ?? (direction === 'MASUK' ? 'PENJUALAN' : 'MODAL_PEMBELIAN');
@@ -298,19 +303,31 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
             </span>
           )}
 
-          <button
-            type="button"
-            onClick={() => setShowAddInput((v) => !v)}
-            className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded border cursor-pointer transition-colors ${
-              isDark
-                ? 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-700'
-                : 'bg-white hover:bg-zinc-100 text-zinc-700 border-zinc-300'
-            }`}
-            title="Tambah Divisi Baru"
-          >
-            <Plus className="w-3 h-3" />
-            <span>Divisi Baru</span>
-          </button>
+          {!lockedDivisi ? (
+            <button
+              type="button"
+              onClick={() => setShowAddInput((v) => !v)}
+              className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded border cursor-pointer transition-colors ${
+                isDark
+                  ? 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-700'
+                  : 'bg-white hover:bg-zinc-100 text-zinc-700 border-zinc-300'
+              }`}
+              title="Tambah Divisi Baru"
+            >
+              <Plus className="w-3 h-3" />
+              <span>Divisi Baru</span>
+            </button>
+          ) : (
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                isDark
+                  ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                  : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+              }`}
+            >
+              Terkunci: {divisi}
+            </span>
+          )}
         </div>
       </div>
 
@@ -518,6 +535,7 @@ export interface DoubleCheckVerifikasiPanelProps {
   onToggleVerified: (checked: boolean) => void;
   theme?: 'dark' | 'light';
   isBelumPutusHarga?: boolean;
+  lockedDivisi?: boolean;
 }
 
 export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProps> = ({
@@ -535,6 +553,7 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
   onToggleVerified,
   theme = 'light',
   isBelumPutusHarga = false,
+  lockedDivisi = false,
 }) => {
   const isDark = theme === 'dark';
 
@@ -550,6 +569,8 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
     metode === 'TITIP' ||
     metode === 'HUTANG' ||
     metode === 'INTERNAL_PT' ||
+    metode === 'SINKRON' ||
+    metode === 'PEMAKAIAN_PENGELUARAN' ||
     nominal === 0;
 
   const effectiveKind =
@@ -599,6 +620,12 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
 
   const nonTunaiLabel = useMemo(() => {
     if (isBelumPutusHarga) return 'TIT01 — Titip Timbang (Belum Putus Harga · Rp 0 Uang Keluar)';
+    if (metode === 'SINKRON') {
+      return 'SINKRON — Terhitung LUNAS Tanpa Uang Fisik Masuk (Rp 0 Kas/Bank)';
+    }
+    if (metode === 'PEMAKAIAN_PENGELUARAN') {
+      return 'PEMAKAIAN KE PENGELUARAN — Potong Stok & Otomatis Catat Pengeluaran (Rp 0 Kas)';
+    }
     if (metode === 'INTERNAL_PT' || nominal === 0) {
       return 'INTERNAL_PT — Pemakaian Operasional PT (Rp 0 Uang Masuk)';
     }
@@ -615,7 +642,11 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
   }, [isBelumPutusHarga, metode, nominal]);
 
   const ringkasanRekeningText = isNonTunai
-    ? 'Non-Tunai (Rp 0 Uang Riil)'
+    ? metode === 'SINKRON'
+      ? 'SINKRON (Lunas Rp 0 Kas)'
+      : metode === 'PEMAKAIAN_PENGELUARAN'
+      ? 'STOK -> PENGELUARAN (Rp 0 Kas)'
+      : 'Non-Tunai (Rp 0 Uang Riil)'
     : activeRealAccount
     ? `${activeRealAccount.kode} (${activeRealAccount.nama})`
     : metode;
@@ -872,13 +903,15 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
 
         <select
           value={divisi}
+          disabled={lockedDivisi}
           onChange={(e) => {
+            if (lockedDivisi) return;
             onToggleVerified(false);
             onChangeDivisi(e.target.value);
           }}
-          className={selectCls}
+          className={`${selectCls} ${lockedDivisi ? 'opacity-90 cursor-not-allowed' : ''}`}
         >
-          {mergedDivisiOptions.map((d) => {
+          {(lockedDivisi ? [divisi] : mergedDivisiOptions).map((d) => {
             const dAcc = resolveDivisiAccount(d, rekeningList);
             return (
               <option key={d} value={d}>

@@ -11,15 +11,26 @@ import {
   Package,
   Wallet,
   Calendar,
+  ArrowLeftRight,
+  Truck,
+  Flame,
+  Landmark,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import {
+  DAFTAR_24_ITEM_PENGELUARAN,
+  ItemInventaris,
+  JenisTransaksiBrilink,
+  Karyawan,
+  KelompokItemPengeluaran,
+  MasterItemPengeluaran,
   Mitra,
   Produk,
   Rekening,
   StokBarang,
   StokHasilBumi,
   isProdukTanpaStok,
+  resolveKelompokItemPengeluaran,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 
@@ -33,6 +44,7 @@ export interface ModalEditTransaksiUniversalProps {
 
 type JenisTransaksiEdit =
   | 'PENJUALAN'
+  | 'NOTA_SILANG'
   | 'PEMBELIAN_BARANG'
   | 'PEMBELIAN_HASIL_BUMI'
   | 'PENJUALAN_HASIL_BUMI'
@@ -40,6 +52,8 @@ type JenisTransaksiEdit =
   | 'BAYAR_BON'
   | 'PENCAIRAN_TITIPAN'
   | 'PENGELUARAN_DIVISI'
+  | 'UANG_MASUK'
+  | 'BRILINK'
   | 'TRANSFER_REKENING'
   | 'UPAH_HARIAN'
   | 'PENGGAJIAN';
@@ -76,14 +90,17 @@ function isoToDmyDate(iso: string): string {
 }
 
 const JENIS_LABEL_MAP: Record<JenisTransaksiEdit, string> = {
+  NOTA_SILANG: 'Nota Silang (Mitra ⇄ Anak Perusahaan / Sesama Mitra)',
   PEMBELIAN_HASIL_BUMI: 'Pembelian Hasil Bumi (Timbangan / Dana Mitra)',
   PENJUALAN_HASIL_BUMI: 'Penjualan Hasil Bumi Keluar Gudang',
   PEMBELIAN_BARANG: 'Pembelian Barang Dagang (Kulakan Pemasok)',
-  PENJUALAN: 'Penjualan Kasir Toko / Saprotan',
+  PENJUALAN: 'Penjualan Kasir Toko / Saprotan / Pemakaian Stok',
   KASBON_UANG: 'Kasbon Uang & Piutang Nota Lalu',
   BAYAR_BON: 'Pelunasan / Pembayaran Bon Mitra',
   PENCAIRAN_TITIPAN: 'Pencairan Saldo Titipan Hasil Bumi',
-  PENGELUARAN_DIVISI: 'Pengeluaran & Biaya Operasional Divisi',
+  PENGELUARAN_DIVISI: 'Pengeluaran (Hijau Inventaris & Oranye Biasa)',
+  UANG_MASUK: 'Transaksi Uang Masuk (+)',
+  BRILINK: 'Transaksi Agen BRILink (Admin & Mutasi Pokok)',
   TRANSFER_REKENING: 'Mutasi / Transfer Antar Rekening',
   UPAH_HARIAN: 'Catatan Upah Kerja Harian Karyawan',
   PENGGAJIAN: 'Slip Pencairan Gaji Karyawan',
@@ -103,6 +120,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
   const [saveSuccess, setSaveSuccess] = useState('');
 
   const [jenis, setJenis] = useState<JenisTransaksiEdit | null>(null);
+  const [resolvedId, setResolvedId] = useState<string>('');
   const [record, setRecord] = useState<any>(null);
   const [masters, setMasters] = useState<{
     rekeningList: Rekening[];
@@ -110,6 +128,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     stokBarangList: StokBarang[];
     stokHasilBumiList: StokHasilBumi[];
     mitraList: Mitra[];
+    karyawanList?: Karyawan[];
+    masterItemPengeluaranList?: MasterItemPengeluaran[];
+    inventarisList?: ItemInventaris[];
     divisiList: Array<{ id: string; nama: string; kodeRekening: string }>;
   }>({
     rekeningList: [],
@@ -117,6 +138,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     stokBarangList: [],
     stokHasilBumiList: [],
     mitraList: [],
+    karyawanList: [],
+    masterItemPengeluaranList: [],
+    inventarisList: [],
     divisiList: [],
   });
 
@@ -126,6 +150,15 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
   const [modePihak, setModePihak] = useState<'MITRA' | 'MANUAL'>('MITRA');
   const [idMitra, setIdMitra] = useState('');
   const [namaMitraManual, setNamaMitraManual] = useState('');
+
+  // Nota Silang Specific Fields
+  const [modeNotaSilang, setModeNotaSilang] = useState<'ANAK_PERUSAHAAN' | 'SESAMA_MITRA'>('ANAK_PERUSAHAAN');
+  const [idMitraAnakPerusahaan, setIdMitraAnakPerusahaan] = useState('');
+  const [noNotaToko, setNoNotaToko] = useState('');
+
+  // Karyawan Specific Fields
+  const [idKaryawan, setIdKaryawan] = useState('');
+  const [namaKaryawanManual, setNamaKaryawanManual] = useState('');
 
   // Payment & Account Fields
   const [metode, setMetode] = useState('');
@@ -149,10 +182,24 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
   const [noFakturSupplier, setNoFakturSupplier] = useState('');
   const [lineItems, setLineItems] = useState<EditableLineItem[]>([]);
 
-  // Pengeluaran / Upah / Gaji Fields
+  // Pengeluaran / BRILink / Uang Masuk / Upah / Gaji Fields
   const [divisi, setDivisi] = useState('');
+  const [kelompokPengeluaran, setKelompokPengeluaran] = useState<KelompokItemPengeluaran>('BIASA');
   const [kategoriBiaya, setKategoriBiaya] = useState('');
+  const [arahMutasi, setArahMutasi] = useState<'TAMBAH' | 'KURANG'>('TAMBAH');
+  const [qtyPengeluaranInput, setQtyPengeluaranInput] = useState('');
+  const [satuanPengeluaranInput, setSatuanPengeluaranInput] = useState('');
+  const [hargaSatuanPengeluaranInput, setHargaSatuanPengeluaranInput] = useState('');
+  const [idInventaris, setIdInventaris] = useState('');
   const [penerima, setPenerima] = useState('');
+
+  // BRILink Fields
+  const [jenisBrilink, setJenisBrilink] = useState<JenisTransaksiBrilink>('TARIK_TUNAI');
+  const [nominalPokokInput, setNominalPokokInput] = useState('0');
+  const [rekeningAdmin, setRekeningAdmin] = useState('KAS01');
+  const [rekeningBank, setRekeningBank] = useState('');
+
+  // Payroll / Upah Fields
   const [itemKerja, setItemKerja] = useState('');
   const [kuantitiUpahInput, setKuantitiUpahInput] = useState('');
   const [hargaSatuanUpahInput, setHargaSatuanUpahInput] = useState('');
@@ -180,13 +227,15 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         const r = res.record;
         const j = res.jenis;
         setJenis(j);
+        setResolvedId(res.id || transactionId);
         setRecord(r);
         setMasters(res.masters);
 
-        // Hydrate common fields
         setTanggalDmy(r.tanggal || r.tanggalKerja || '');
         setKeterangan(r.keterangan || '');
 
+        const partyNameFromRec =
+          r.namaMitra || r.namaPengirim || r.namaPelanggan || r.namaDistributorManual || '';
         const hasRegisteredMitra =
           r.idMitra &&
           r.idMitra !== 'UMUM' &&
@@ -195,9 +244,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
 
         setModePihak(hasRegisteredMitra ? 'MITRA' : 'MANUAL');
         setIdMitra(hasRegisteredMitra ? r.idMitra : res.masters.mitraList[0]?.id || '');
-        setNamaMitraManual(r.namaMitra || r.namaDistributorManual || '');
+        setNamaMitraManual(partyNameFromRec);
 
-        // Hydrate per-type fields
         const defaultTransferBank =
           res.masters.rekeningList.find(
             (rk) =>
@@ -210,7 +258,23 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               rk.status === 'AKTIF'
           )?.kode || 'BNI01';
 
-        if (j === 'PEMBELIAN_HASIL_BUMI') {
+        if (j === 'NOTA_SILANG') {
+          setModePihak('MITRA');
+          setIdMitra(r.idMitra || res.masters.mitraList[0]?.id || '');
+          setModeNotaSilang(r.modeNotaSilang === 'SESAMA_MITRA' ? 'SESAMA_MITRA' : 'ANAK_PERUSAHAAN');
+          setIdMitraAnakPerusahaan(r.idMitraAnakPerusahaan || 'MTR-DPPARABOT');
+          setNoNotaToko(r.noNotaToko || '');
+          setNominalInput(String(Number(r.totalNominal) || 0));
+          setLineItems(
+            (r.items || []).map((it: any) => ({
+              kodeProduk: 'NOTA-SILANG',
+              namaProduk: it.namaBarang || it.namaProduk || '',
+              satuan: it.satuan || 'PCS',
+              qty: String(Number(it.qty) || 1),
+              hargaSatuan: String(Number(it.harga) || 0),
+            }))
+          );
+        } else if (j === 'PEMBELIAN_HASIL_BUMI') {
           setDivisi(r.divisi || 'Gudang Wijaya Agro');
           setKomoditasKode(r.komoditasKode || res.masters.stokHasilBumiList[0]?.kode || '');
           const kotor = Number(r.beratKotor) || 0;
@@ -248,7 +312,10 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           setNoSuratJalan(r.noSuratJalan || '');
           setMetode(r.metodePembayaran || 'TUNAI');
           setRekeningTujuan(
-            r.rekeningTujuan && r.rekeningTujuan !== 'BON01' && r.rekeningTujuan !== 'KAS01'
+            r.rekeningTujuan &&
+              r.rekeningTujuan !== 'BON01' &&
+              r.rekeningTujuan !== 'KAS01' &&
+              r.rekeningTujuan !== 'MENUNGGU_TRANSFER'
               ? r.rekeningTujuan
               : defaultTransferBank
           );
@@ -267,7 +334,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
             (r.items || []).map((it: any) => ({
               kodeProduk: it.kodeProduk || '',
               namaProduk: it.namaProduk || '',
-              satuan: it.satuan || 'Unit',
+              satuan: it.satuan || 'PCS',
               qty: String(Number(it.qty) || 1),
               hargaSatuan: String(Number(it.hargaBeliSatuan) || 0),
             }))
@@ -278,10 +345,14 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               (r.metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro')
           );
           setMetode(r.metode || 'TUNAI');
+          setKategoriBiaya(r.kategoriPengeluaran || 'SOLAR');
+          setIdInventaris(r.idInventaris || '');
           setRekeningTujuan(
             r.rekeningTujuan &&
               r.rekeningTujuan !== 'BON01' &&
               r.rekeningTujuan !== 'KAS01' &&
+              r.rekeningTujuan !== 'SINKRON' &&
+              r.rekeningTujuan !== 'PENGELUARAN' &&
               r.rekeningTujuan !== 'INTERNAL_PT'
               ? r.rekeningTujuan
               : defaultTransferBank
@@ -291,7 +362,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
             (r.items || []).map((it: any) => ({
               kodeProduk: it.kodeProduk || '',
               namaProduk: it.namaProduk || '',
-              satuan: it.satuan || 'Unit',
+              satuan: it.satuan || 'PCS',
               qty: String(Number(it.qty) || 1),
               hargaSatuan: String(Number(it.harga) || 0),
             }))
@@ -302,42 +373,79 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           setRekeningSumber(
             r.rekeningSumber && r.rekeningSumber !== 'BON01' && r.rekeningSumber !== 'KAS01'
               ? r.rekeningSumber
-              : res.masters.rekeningList.find((rk) => !rk.isVirtual && rk.kode !== 'KAS01' && rk.status === 'AKTIF')?.kode || 'BNI01'
+              : defaultTransferBank
           );
           setNoNotaLalu(r.noNotaLalu || '');
           setRincianBarangNotaLalu(r.rincianBarangNotaLalu || '');
         } else if (j === 'BAYAR_BON') {
+          setModePihak('MITRA');
+          setIdMitra(r.idMitra || res.masters.mitraList[0]?.id || '');
+          setNamaMitraManual(r.namaMitra || '');
           setNominalInput(String(Number(r.nominalBayar) || 0));
           setMetode(r.metode || 'TUNAI');
           setRekeningTujuan(
-            r.rekeningTujuan && r.rekeningTujuan !== 'BON01' && r.rekeningTujuan !== 'KAS01'
+            r.rekeningTujuan &&
+              r.rekeningTujuan !== 'BON01' &&
+              r.rekeningTujuan !== 'KAS01' &&
+              r.rekeningTujuan !== 'SINKRON'
               ? r.rekeningTujuan
-              : res.masters.rekeningList.find((rk) => !rk.isVirtual && rk.kode !== 'KAS01' && rk.status === 'AKTIF')?.kode || 'BNI01'
+              : defaultTransferBank
           );
         } else if (j === 'PENCAIRAN_TITIPAN') {
+          setModePihak('MITRA');
+          setIdMitra(r.idMitra || res.masters.mitraList[0]?.id || '');
+          setNamaMitraManual(r.namaMitra || '');
           setNominalInput(String(Number(r.nominalPencairan) || 0));
           setMetode(r.metodePembayaran || 'TUNAI');
           setRekeningSumber(
-            r.rekeningSumber && r.rekeningSumber !== 'TIT01' && r.rekeningSumber !== 'KAS01'
+            r.rekeningSumber &&
+              r.rekeningSumber !== 'TIT01' &&
+              r.rekeningSumber !== 'KAS01' &&
+              r.rekeningSumber !== 'SINKRON'
               ? r.rekeningSumber
-              : res.masters.rekeningList.find((rk) => !rk.isVirtual && rk.kode !== 'KAS01' && rk.status === 'AKTIF')?.kode || 'BNI01'
+              : defaultTransferBank
           );
         } else if (j === 'PENGELUARAN_DIVISI') {
-          setNominalInput(String(Number(r.nominal) || 0));
+          const rawNom = Number(r.nominal) || 0;
+          setArahMutasi(r.arahMutasi === 'KURANG' || rawNom < 0 ? 'KURANG' : 'TAMBAH');
+          setNominalInput(String(Math.abs(rawNom)));
           setRekeningSumber(r.rekeningSumber || 'KAS01');
           setDivisi(r.divisi || 'Gudang Wijaya Agro');
-          setKategoriBiaya(r.kategori || 'Operasional Umum');
+          const kat = r.kategori || 'SOLAR';
+          setKategoriBiaya(kat);
+          setKelompokPengeluaran(resolveKelompokItemPengeluaran(kat, r.kelompokPengeluaran));
+          setQtyPengeluaranInput(r.qty !== undefined ? String(r.qty) : '');
+          setSatuanPengeluaranInput(r.satuan || '');
+          setHargaSatuanPengeluaranInput(r.hargaSatuan !== undefined ? String(r.hargaSatuan) : '');
+          setIdInventaris(r.idInventaris || '');
           setPenerima(r.penerima || '');
+        } else if (j === 'UANG_MASUK') {
+          setNominalInput(String(Number(r.nominal) || 0));
+          setMetode(r.metode || 'TUNAI');
+          setRekeningTujuan(
+            r.rekeningTujuan && r.rekeningTujuan !== 'KAS01' ? r.rekeningTujuan : defaultTransferBank
+          );
+          setDivisi(r.divisi || 'PT Wijaya Agro Perkasa');
+          setKategoriBiaya(r.kategori || 'Penerimaan Operasional');
+        } else if (j === 'BRILINK') {
+          setJenisBrilink(r.jenisBrilink === 'TUKAR_CASH' ? 'TUKAR_CASH' : 'TARIK_TUNAI');
+          setNominalInput(String(Number(r.nominalAdmin) || 0));
+          setNominalPokokInput(String(Number(r.nominalPokok) || 0));
+          setRekeningAdmin(r.rekeningAdmin || 'KAS01');
+          setRekeningBank(r.rekeningBank || defaultTransferBank);
+          setDivisi(r.divisi || 'BRILink');
         } else if (j === 'TRANSFER_REKENING') {
           setNominalInput(String(Number(r.nominal) || 0));
           setRekeningSumber(r.rekeningSumber || 'KAS01');
-          setRekeningTujuan(r.rekeningTujuan || 'BNI01');
+          setRekeningTujuan(r.rekeningTujuan || defaultTransferBank);
         } else if (j === 'UPAH_HARIAN') {
           const qty = r.kuantiti !== undefined ? Number(r.kuantiti) : 1;
           const harga =
             r.harga !== undefined
               ? Number(r.harga)
               : Number(r.upahHarian || r.totalUpahHarian || 0);
+          setIdKaryawan(r.idKaryawan || '');
+          setNamaKaryawanManual(r.namaKaryawan || '');
           setDivisi(r.divisi || 'Gudang Wijaya Agro');
           setItemKerja(r.item || r.keterangan || '');
           setKuantitiUpahInput(String(qty));
@@ -345,6 +453,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           setUangMakanLemburInput(String(Number(r.uangMakanLembur) || 0));
           setCatatanKerja(r.catatan || '');
         } else if (j === 'PENGGAJIAN') {
+          setIdKaryawan(r.idKaryawan || '');
+          setNamaKaryawanManual(r.namaKaryawan || '');
           setDivisi(r.divisi || 'Gudang Wijaya Agro');
           setPeriodeBulan(r.periodeBulan || '');
           setGajiPokokInput(String(Number(r.gajiPokok) || 0));
@@ -371,6 +481,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     };
   }, [isOpen, transactionId, jenisHint]);
 
+  // ALL HOOKS MUST BE DECLARED UNCONDITIONALLY ABOVE ANY EARLY RETURN!
   const activeRealAccounts = useMemo(
     () =>
       masters.rekeningList.filter(
@@ -392,6 +503,54 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     [masters.mitraList]
   );
 
+  const anakPerusahaanOptions = useMemo(() => {
+    const anak = activeMitras.filter(
+      (m) =>
+        m.id === 'MTR-DPPARABOT' ||
+        Boolean(m.isAnakPerusahaan) ||
+        m.role === 'ANAK_PERUSAHAAN' ||
+        m.nama.toLowerCase().includes('parabot')
+    );
+    return anak.length > 0 ? anak : activeMitras;
+  }, [activeMitras]);
+
+  const activeKaryawans = useMemo(
+    () => (masters.karyawanList || []).filter((k) => k.status === 'AKTIF'),
+    [masters.karyawanList]
+  );
+
+  const allPengeluaranItems = useMemo(() => {
+    const fromMaster = masters.masterItemPengeluaranList || [];
+    if (fromMaster.length > 0) return fromMaster;
+    return DAFTAR_24_ITEM_PENGELUARAN.map((d) => ({
+      id: d.kode,
+      kode: d.kode,
+      nama: d.nama,
+      kelompok: d.kelompok,
+      nomorUrut: d.nomorUrut,
+      satuanDefault: d.satuanDefault,
+      deskripsi: d.deskripsi,
+      createdAt: '',
+    }));
+  }, [masters.masterItemPengeluaranList]);
+
+  const allDivisiOptions = useMemo(() => {
+    const names = new Set<string>([
+      'Gudang Wijaya Agro',
+      'Wijaya Transport',
+      'Wijaya Karya',
+      'PT Wijaya Agro Perkasa',
+      'CV Wijaya Agro',
+      'Okussa',
+      'BRILink',
+    ]);
+    masters.divisiList.forEach((d) => {
+      if (d.nama) names.add(d.nama);
+    });
+    if (divisi) names.add(divisi);
+    return Array.from(names);
+  }, [masters.divisiList, divisi]);
+
   const isNonPhysicalHasilBumi = useMemo(() => {
     if (jenis !== 'PEMBELIAN_HASIL_BUMI' || !record) return false;
     return (
@@ -407,7 +566,6 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     return lineItems.length === 1 && lineItems[0]?.kodeProduk === 'REKAP-NOTA';
   }, [jenis, record, lineItems]);
 
-  // Live Calculations for Hasil Bumi
   const computedBeratBersih = useMemo(() => {
     if (useManualNetto) {
       return Math.max(0, Math.round((Number(beratBersihManualInput) || 0) * 100) / 100);
@@ -422,7 +580,6 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     [masters.stokHasilBumiList, komoditasKode]
   );
 
-  // Live Total Nominal Preview across types
   const liveNominalBaru = useMemo(() => {
     if (!jenis) return 0;
     if ((jenis === 'PEMBELIAN_HASIL_BUMI' && !isNonPhysicalHasilBumi) || jenis === 'PENJUALAN_HASIL_BUMI') {
@@ -431,7 +588,10 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
       }
       return Math.round(computedBeratBersih * (Number(hargaPerKgInput) || 0));
     }
-    if ((jenis === 'PENJUALAN' || jenis === 'PEMBELIAN_BARANG') && !isRekapNotaBarang) {
+    if (
+      jenis === 'NOTA_SILANG' ||
+      ((jenis === 'PENJUALAN' || jenis === 'PEMBELIAN_BARANG') && !isRekapNotaBarang)
+    ) {
       return lineItems.reduce((sum, it) => {
         const q = Math.max(0, Number(it.qty) || 0);
         const h = Math.max(0, Number(it.hargaSatuan) || 0);
@@ -474,6 +634,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     if (!record || !jenis) return 0;
     if (jenis === 'BAYAR_BON') return Number(record.nominalBayar) || 0;
     if (jenis === 'PENCAIRAN_TITIPAN') return Number(record.nominalPencairan) || 0;
+    if (jenis === 'BRILINK') return Number(record.nominalAdmin) || 0;
+    if (jenis === 'PENGELUARAN_DIVISI') return Math.abs(Number(record.nominal) || 0);
     if (jenis === 'UPAH_HARIAN') {
       return Number(record.totalUpahHarian || record.jumlah || record.upahHarian) || 0;
     }
@@ -481,9 +643,25 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     return Number(record.totalNominal ?? record.nominal ?? 0);
   }, [record, jenis]);
 
+  // Early return strictly AFTER all hooks!
   if (!isOpen || !transactionId) return null;
 
   const handleProductRowChange = (index: number, newKode: string) => {
+    if (newKode === 'CUSTOM-ITEM') {
+      setLineItems((prev) =>
+        prev.map((row, idx) =>
+          idx === index
+            ? {
+                ...row,
+                kodeProduk: 'CUSTOM-ITEM',
+                namaProduk: row.namaProduk || '',
+                satuan: row.satuan || 'PCS',
+              }
+            : row
+        )
+      );
+      return;
+    }
     const prod = masters.produkList.find((p) => p.kode === newKode);
     setLineItems((prev) =>
       prev.map((row, idx) => {
@@ -507,8 +685,33 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
   };
 
   const handleAddLineItem = () => {
+    if (jenis === 'NOTA_SILANG') {
+      setLineItems((prev) => [
+        ...prev,
+        {
+          kodeProduk: 'NOTA-SILANG',
+          namaProduk: '',
+          satuan: 'PCS',
+          qty: '1',
+          hargaSatuan: '0',
+        },
+      ]);
+      return;
+    }
     const firstProd = masters.produkList.find((p) => p.status === 'AKTIF') || masters.produkList[0];
-    if (!firstProd) return;
+    if (!firstProd) {
+      setLineItems((prev) => [
+        ...prev,
+        {
+          kodeProduk: 'CUSTOM-ITEM',
+          namaProduk: '',
+          satuan: 'PCS',
+          qty: '1',
+          hargaSatuan: '0',
+        },
+      ]);
+      return;
+    }
     const defaultHarga =
       jenis === 'PEMBELIAN_BARANG'
         ? firstProd.hargaBeli || 0
@@ -532,6 +735,16 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     setLineItems((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  const handlePengeluaranQtyOrHargaChange = (nextQtyStr: string, nextHargaStr: string) => {
+    setQtyPengeluaranInput(nextQtyStr);
+    setHargaSatuanPengeluaranInput(nextHargaStr);
+    const q = Number(nextQtyStr) || 0;
+    const h = Number(nextHargaStr) || 0;
+    if (q > 0 && h > 0) {
+      setNominalInput(String(Math.round(q * h)));
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!jenis || !record) return;
@@ -542,7 +755,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
 
     try {
       const payload: Parameters<typeof api.editTransactionDetail>[0] = {
-        idTransaksi: transactionId,
+        idTransaksi: resolvedId || transactionId,
         jenis,
         tanggal: tanggalDmy.trim() || undefined,
         keterangan,
@@ -554,17 +767,46 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         jenis === 'PENJUALAN_HASIL_BUMI' ||
         jenis === 'PEMBELIAN_BARANG' ||
         jenis === 'PENJUALAN' ||
-        jenis === 'KASBON_UANG'
+        jenis === 'KASBON_UANG' ||
+        jenis === 'UANG_MASUK' ||
+        jenis === 'BRILINK'
       ) {
         if (modePihak === 'MITRA' && idMitra) {
           payload.idMitra = idMitra;
+          if (namaMitraManual.trim()) {
+            payload.namaMitraManual = namaMitraManual.trim();
+          }
         } else {
           payload.idMitra = jenis === 'PEMBELIAN_BARANG' ? 'MANUAL' : 'UMUM';
-          payload.namaMitraManual = namaMitraManual.trim() || record.namaMitra || 'Umum';
+          payload.namaMitraManual =
+            namaMitraManual.trim() ||
+            record.namaMitra ||
+            record.namaPengirim ||
+            record.namaPelanggan ||
+            'Umum';
+        }
+      } else if (jenis === 'BAYAR_BON' || jenis === 'PENCAIRAN_TITIPAN') {
+        if (idMitra) {
+          payload.idMitra = idMitra;
+        }
+        if (namaMitraManual.trim()) {
+          payload.namaMitraManual = namaMitraManual.trim();
         }
       }
 
-      if (jenis === 'PEMBELIAN_HASIL_BUMI') {
+      if (jenis === 'NOTA_SILANG') {
+        payload.idMitra = idMitra;
+        payload.modeNotaSilang = modeNotaSilang;
+        payload.idMitraAnakPerusahaan = idMitraAnakPerusahaan;
+        payload.noNotaToko = noNotaToko.trim();
+        payload.items = lineItems.map((it) => ({
+          kodeProduk: 'NOTA-SILANG',
+          namaProduk: it.namaProduk.trim(),
+          satuan: (it.satuan || 'PCS').trim().toUpperCase(),
+          qty: Number(it.qty) || 0,
+          harga: Math.round(Number(it.hargaSatuan) || 0),
+        }));
+      } else if (jenis === 'PEMBELIAN_HASIL_BUMI') {
         payload.divisi = divisi;
         if (isNonPhysicalHasilBumi) {
           payload.nominal = Math.round(Number(nominalInput) || 0);
@@ -612,8 +854,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
             {
               kodeProduk: 'REKAP-NOTA',
               namaProduk: lineItems[0]?.namaProduk || 'Rekapan Nota Pembelian',
-              satuan: 'Nota',
-              qty: 1,
+              satuan: lineItems[0]?.satuan || 'Nota',
+              qty: Number(lineItems[0]?.qty) || 1,
               hargaBeliSatuan: Math.round(Number(nominalInput) || 0),
             },
           ];
@@ -631,6 +873,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         payload.metode = metode;
         if (metode === 'TRANSFER') {
           payload.rekeningTujuan = rekeningTujuan;
+        } else if (metode === 'PEMAKAIAN_PENGELUARAN') {
+          payload.kategoriPengeluaran = kategoriBiaya || 'SOLAR';
+          payload.idInventaris = idInventaris || undefined;
         }
         payload.items = lineItems.map((it) => ({
           kodeProduk: it.kodeProduk,
@@ -651,34 +896,66 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         }
       } else if (jenis === 'BAYAR_BON') {
         payload.nominal = Math.round(Number(nominalInput) || 0);
-        const isNonTunaiBon =
+        const isLockedSpecial =
           record.metode === 'KOMPENSASI_TITIP' ||
           record.metode === 'POTONG_GAJI' ||
           Boolean(record.isKompensasiTitipan) ||
           Boolean(record.isPotongGaji);
-        if (!isNonTunaiBon) {
+        if (!isLockedSpecial) {
           payload.metode = metode;
-          payload.rekeningTujuan = metode === 'TUNAI' ? 'KAS01' : rekeningTujuan;
+          payload.rekeningTujuan =
+            metode === 'TUNAI'
+              ? 'KAS01'
+              : metode === 'SINKRON'
+              ? 'SINKRON'
+              : rekeningTujuan;
         }
       } else if (jenis === 'PENCAIRAN_TITIPAN') {
         payload.nominal = Math.round(Number(nominalInput) || 0);
-        const isKompensasi =
+        const isLockedSpecial =
           record.metodePembayaran === 'KOMPENSASI_BON' || Boolean(record.isKompensasiBon);
-        if (!isKompensasi) {
+        if (!isLockedSpecial) {
           payload.metode = metode;
-          payload.rekeningSumber = metode === 'TUNAI' ? 'KAS01' : rekeningSumber;
+          payload.rekeningSumber =
+            metode === 'TUNAI'
+              ? 'KAS01'
+              : metode === 'SINKRON'
+              ? 'SINKRON'
+              : rekeningSumber;
         }
       } else if (jenis === 'PENGELUARAN_DIVISI') {
-        payload.nominal = Math.round(Number(nominalInput) || 0);
+        payload.nominal = Math.abs(Math.round(Number(nominalInput) || 0));
+        payload.arahMutasi = arahMutasi;
+        payload.kelompokPengeluaran = kelompokPengeluaran;
+        payload.kategori = kategoriBiaya;
+        payload.qtyPengeluaran = Number(qtyPengeluaranInput) > 0 ? Number(qtyPengeluaranInput) : 0;
+        payload.satuanPengeluaran = satuanPengeluaranInput;
+        payload.hargaSatuanPengeluaran =
+          Number(hargaSatuanPengeluaranInput) > 0 ? Math.round(Number(hargaSatuanPengeluaranInput)) : 0;
+        payload.idInventaris = idInventaris;
         payload.rekeningSumber = rekeningSumber;
         payload.divisi = divisi;
-        payload.kategori = kategoriBiaya;
         payload.penerima = penerima;
+      } else if (jenis === 'UANG_MASUK') {
+        payload.nominal = Math.round(Number(nominalInput) || 0);
+        payload.metode = metode;
+        payload.rekeningTujuan = metode === 'TUNAI' ? 'KAS01' : rekeningTujuan;
+        payload.divisi = divisi;
+        payload.kategori = kategoriBiaya;
+      } else if (jenis === 'BRILINK') {
+        payload.jenisBrilink = jenisBrilink;
+        payload.nominal = Math.round(Number(nominalInput) || 0);
+        payload.nominalPokok = Math.max(0, Math.round(Number(nominalPokokInput) || 0));
+        payload.rekeningAdmin = rekeningAdmin;
+        payload.rekeningBank = rekeningBank;
+        payload.divisi = divisi;
       } else if (jenis === 'TRANSFER_REKENING') {
         payload.nominal = Math.round(Number(nominalInput) || 0);
         payload.rekeningSumber = rekeningSumber;
         payload.rekeningTujuan = rekeningTujuan;
       } else if (jenis === 'UPAH_HARIAN') {
+        if (idKaryawan) payload.idKaryawan = idKaryawan;
+        if (namaKaryawanManual.trim()) payload.namaKaryawanManual = namaKaryawanManual.trim();
         payload.divisi = divisi;
         payload.itemKerja = itemKerja;
         payload.kuantiti = Number(kuantitiUpahInput) || 0;
@@ -686,6 +963,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         payload.uangMakanLembur = Math.round(Number(uangMakanLemburInput) || 0);
         payload.catatanKerja = catatanKerja;
       } else if (jenis === 'PENGGAJIAN') {
+        if (idKaryawan) payload.idKaryawan = idKaryawan;
+        if (namaKaryawanManual.trim()) payload.namaKaryawanManual = namaKaryawanManual.trim();
         payload.divisi = divisi;
         payload.periodeBulan = periodeBulan;
         payload.gajiPokok = Math.round(Number(gajiPokokInput) || 0);
@@ -709,23 +988,6 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     }
   };
 
-  const allDivisiOptions = useMemo(() => {
-    const names = new Set<string>([
-      'Gudang Wijaya Agro',
-      'Wijaya Transport',
-      'Wijaya Karya',
-      'PT Wijaya Agro Perkasa',
-      'CV Wijaya Agro',
-      'Okussa',
-      'BRILink',
-    ]);
-    masters.divisiList.forEach((d) => {
-      if (d.nama) names.add(d.nama);
-    });
-    if (divisi) names.add(divisi);
-    return Array.from(names);
-  }, [masters.divisiList, divisi]);
-
   const oldKg = Number(record?.beratBersih) || 0;
   const selisihKgGudang =
     jenis === 'PEMBELIAN_HASIL_BUMI' && !isNonPhysicalHasilBumi
@@ -736,15 +998,17 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 overflow-y-auto">
-      <div className="bg-white border border-zinc-200 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col text-zinc-900 overflow-hidden">
+      <div className="bg-white border border-zinc-200 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col text-zinc-900 overflow-hidden">
         {/* Header */}
         <div className="px-5 py-4 bg-zinc-900 text-white flex items-start justify-between gap-3 border-b border-zinc-800">
           <div className="min-w-0">
             <h2 className="text-sm font-bold text-white truncate">
-              Edit Detail Transaksi
+              Edit Fleksibel Detail Transaksi (Nama, Qty, Harga, Nominal &amp; Rekening)
             </h2>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-300 mt-0.5">
-              <span className="font-mono font-semibold text-amber-300">{transactionId}</span>
+              <span className="font-mono font-semibold text-amber-300">
+                {resolvedId || transactionId}
+              </span>
               {jenis && (
                 <>
                   <span aria-hidden="true">·</span>
@@ -881,7 +1145,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                       {formatRupiahSingkat(liveNominalBaru - oldNominal)}
                     </div>
                     <div className="text-[10px] text-zinc-500 truncate">
-                      Sinkron otomatis ke buku kas &amp; stok
+                      Sinkron otomatis ke buku kas, mitra &amp; stok
                     </div>
                   </div>
                 )}
@@ -919,11 +1183,13 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                   jenis === 'PENJUALAN_HASIL_BUMI' ||
                   jenis === 'PEMBELIAN_BARANG' ||
                   jenis === 'PENJUALAN' ||
-                  jenis === 'KASBON_UANG') && (
+                  jenis === 'KASBON_UANG' ||
+                  jenis === 'UANG_MASUK' ||
+                  jenis === 'BRILINK') && (
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="font-semibold text-zinc-700">
-                        Mitra / Pihak Terkait
+                        Nama Mitra / Pihak Terkait
                       </label>
                       <div className="flex items-center gap-1 p-0.5 bg-zinc-100 rounded-md">
                         <button
@@ -935,7 +1201,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                               : 'text-zinc-600 hover:text-zinc-900'
                           }`}
                         >
-                          Terdaftar
+                          Mitra Terdaftar
                         </button>
                         <button
                           type="button"
@@ -946,33 +1212,35 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                               : 'text-zinc-600 hover:text-zinc-900'
                           }`}
                         >
-                          Umum / Manual
+                          Ketik Nama Bebas
                         </button>
                       </div>
                     </div>
 
                     {modePihak === 'MITRA' ? (
-                      <select
-                        value={idMitra}
-                        onChange={(e) => {
-                          setIdMitra(e.target.value);
-                          const found = activeMitras.find((m) => m.id === e.target.value);
-                          if (found) setNamaMitraManual(found.nama);
-                        }}
-                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-semibold text-xs bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                      >
-                        {activeMitras.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.nama} ({m.role})
-                          </option>
-                        ))}
-                      </select>
+                      <div className="space-y-1.5">
+                        <select
+                          value={idMitra}
+                          onChange={(e) => {
+                            setIdMitra(e.target.value);
+                            const found = activeMitras.find((m) => m.id === e.target.value);
+                            if (found) setNamaMitraManual(found.nama);
+                          }}
+                          className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-semibold text-xs bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                        >
+                          {activeMitras.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.nama} ({m.role})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     ) : (
                       <input
                         type="text"
                         value={namaMitraManual}
                         onChange={(e) => setNamaMitraManual(e.target.value)}
-                        placeholder="Ketik nama petani / pembeli / pemasok..."
+                        placeholder="Ketik nama petani / pembeli / pengirim / nasabah..."
                         className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-600"
                       />
                     )}
@@ -982,28 +1250,278 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                 {(jenis === 'BAYAR_BON' || jenis === 'PENCAIRAN_TITIPAN') && (
                   <div>
                     <label className="block font-semibold text-zinc-700 mb-1">
-                      Mitra Terkait
+                      Nama Mitra Terkait (Dapat Diubah)
                     </label>
-                    <div className="px-3 py-2 bg-zinc-100 border border-zinc-200 rounded-lg font-semibold text-zinc-800">
-                      {record.namaMitra} <span className="font-mono text-zinc-500">({record.idMitra})</span>
-                    </div>
+                    <select
+                      value={idMitra}
+                      onChange={(e) => {
+                        setIdMitra(e.target.value);
+                        const found = activeMitras.find((m) => m.id === e.target.value);
+                        if (found) setNamaMitraManual(found.nama);
+                      }}
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-semibold text-xs bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                    >
+                      {activeMitras.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.nama} ({m.id})
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 )}
 
                 {(jenis === 'UPAH_HARIAN' || jenis === 'PENGGAJIAN') && (
                   <div>
                     <label className="block font-semibold text-zinc-700 mb-1">
-                      Karyawan
+                      Nama Karyawan (Dapat Diubah)
                     </label>
-                    <div className="px-3 py-2 bg-zinc-100 border border-zinc-200 rounded-lg font-semibold text-zinc-800">
-                      {record.namaKaryawan}
-                      {record.slipNomor ? (
-                        <span className="font-mono text-zinc-500 ml-1">· {record.slipNomor}</span>
-                      ) : null}
-                    </div>
+                    {activeKaryawans.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <select
+                          value={idKaryawan}
+                          onChange={(e) => {
+                            setIdKaryawan(e.target.value);
+                            const found = activeKaryawans.find((k) => k.id === e.target.value);
+                            if (found) setNamaKaryawanManual(found.nama);
+                          }}
+                          className="w-full px-2.5 py-2 border border-zinc-300 rounded-lg font-semibold text-xs bg-white"
+                        >
+                          {activeKaryawans.map((k) => (
+                            <option key={k.id} value={k.id}>
+                              {k.nama} ({k.jabatan})
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={namaKaryawanManual}
+                          onChange={(e) => setNamaKaryawanManual(e.target.value)}
+                          placeholder="Nama di slip / catatan"
+                          className="w-full px-2.5 py-2 border border-zinc-300 rounded-lg text-xs font-medium"
+                        />
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={namaKaryawanManual}
+                        onChange={(e) => setNamaKaryawanManual(e.target.value)}
+                        placeholder="Nama karyawan..."
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-semibold"
+                      />
+                    )}
                   </div>
                 )}
               </div>
+
+              {/* =================================================================
+                  SECTION 0: NOTA SILANG (MITRA ⇄ ANAK PERUSAHAAN / SESAMA MITRA)
+              ================================================================= */}
+              {jenis === 'NOTA_SILANG' && (
+                <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/40 space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200/70 pb-2.5">
+                    <div className="flex items-center gap-2 font-bold text-emerald-950">
+                      <ArrowLeftRight className="w-4 h-4 text-emerald-700" />
+                      <span>Koreksi Pihak &amp; Keranjang Nota Silang</span>
+                    </div>
+                    <div className="flex items-center gap-1 p-1 bg-white border border-emerald-200 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setModeNotaSilang('ANAK_PERUSAHAAN');
+                          if (anakPerusahaanOptions[0]) {
+                            setIdMitraAnakPerusahaan(anakPerusahaanOptions[0].id);
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold cursor-pointer ${
+                          modeNotaSilang === 'ANAK_PERUSAHAAN'
+                            ? 'bg-emerald-700 text-white'
+                            : 'text-zinc-700 hover:bg-zinc-100'
+                        }`}
+                      >
+                        Utama: Mitra ⇄ Anak Perusahaan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModeNotaSilang('SESAMA_MITRA')}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold cursor-pointer ${
+                          modeNotaSilang === 'SESAMA_MITRA'
+                            ? 'bg-amber-600 text-white'
+                            : 'text-zinc-700 hover:bg-zinc-100'
+                        }`}
+                      >
+                        Opsi: Sesama Mitra
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Mitra Pengambil (+Bon ke PT)
+                      </label>
+                      <select
+                        value={idMitra}
+                        onChange={(e) => setIdMitra(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        {activeMitras.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.nama}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        {modeNotaSilang === 'SESAMA_MITRA'
+                          ? 'Mitra Penyedia (+Jml Uang/Titip)'
+                          : 'Anak Perusahaan (+Jml Uang)'}
+                      </label>
+                      <select
+                        value={idMitraAnakPerusahaan}
+                        onChange={(e) => setIdMitraAnakPerusahaan(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        {(modeNotaSilang === 'SESAMA_MITRA'
+                          ? activeMitras.filter((m) => m.id !== idMitra)
+                          : anakPerusahaanOptions
+                        ).map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.nama}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        No. Nota Toko (Opsional)
+                      </label>
+                      <input
+                        type="text"
+                        value={noNotaToko}
+                        onChange={(e) => setNoNotaToko(e.target.value)}
+                        placeholder="Misal: 16581"
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="font-bold text-zinc-800">Rincian Barang Nota Silang</span>
+                    <button
+                      type="button"
+                      onClick={handleAddLineItem}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-[11px] font-semibold cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Item</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {lineItems.map((it, idx) => {
+                      const rowSub = Math.round(
+                        (Number(it.qty) || 0) * (Number(it.hargaSatuan) || 0)
+                      );
+                      return (
+                        <div
+                          key={`nsl-row-${idx}`}
+                          className="p-2.5 rounded-xl bg-white border border-zinc-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                        >
+                          <div className="sm:col-span-5">
+                            <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                              Nama Barang
+                            </label>
+                            <input
+                              type="text"
+                              value={it.namaProduk}
+                              onChange={(e) =>
+                                setLineItems((prev) =>
+                                  prev.map((r, rIdx) =>
+                                    rIdx === idx ? { ...r, namaProduk: e.target.value } : r
+                                  )
+                                )
+                              }
+                              placeholder="Contoh: TV Politron 24in Set"
+                              className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg font-medium"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                              Qty &amp; Satuan
+                            </label>
+                            <div className="flex gap-1">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.01"
+                                value={it.qty}
+                                onChange={(e) =>
+                                  setLineItems((prev) =>
+                                    prev.map((r, rIdx) =>
+                                      rIdx === idx ? { ...r, qty: e.target.value } : r
+                                    )
+                                  )
+                                }
+                                className="w-1/2 px-2 py-1.5 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-right"
+                              />
+                              <input
+                                type="text"
+                                value={it.satuan}
+                                onChange={(e) =>
+                                  setLineItems((prev) =>
+                                    prev.map((r, rIdx) =>
+                                      rIdx === idx ? { ...r, satuan: e.target.value } : r
+                                    )
+                                  )
+                                }
+                                className="w-1/2 px-1.5 py-1.5 border border-zinc-300 rounded-lg font-mono text-[11px] uppercase"
+                              />
+                            </div>
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                              Harga Satuan (Rp)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={it.hargaSatuan}
+                              onChange={(e) =>
+                                setLineItems((prev) =>
+                                  prev.map((r, rIdx) =>
+                                    rIdx === idx ? { ...r, hargaSatuan: e.target.value } : r
+                                  )
+                                )
+                              }
+                              className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-right"
+                            />
+                          </div>
+                          <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2">
+                            <div className="text-right min-w-0">
+                              <span className="block text-[10px] text-zinc-400">Subtotal</span>
+                              <span className="font-mono tabular-nums font-bold text-zinc-900 text-[11px] truncate block">
+                                {formatRupiahSingkat(rowSub)}
+                              </span>
+                            </div>
+                            {lineItems.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveLineItem(idx)}
+                                className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* =================================================================
                   SECTION A: TIMBANGAN FISIK HASIL BUMI (PEMBELIAN & PENJUALAN)
@@ -1180,8 +1698,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                       <Package className="w-4 h-4 text-emerald-700" />
                       <span>
                         {isRekapNotaBarang
-                          ? 'Koreksi Nominal Rekapan Nota Pembelian'
-                          : 'Rincian Item, Qty & Harga Satuan'}
+                          ? 'Koreksi Nama & Nominal Rekapan Nota Pembelian'
+                          : 'Rincian Item, Nama Barang, Qty & Harga Satuan'}
                       </span>
                     </div>
                     {!isRekapNotaBarang && (
@@ -1215,7 +1733,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block font-semibold text-zinc-700 mb-1">
-                          Deskripsi Rekapan Nota
+                          Nama / Deskripsi Rekapan Nota
                         </label>
                         <input
                           type="text"
@@ -1244,10 +1762,11 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-2.5">
                       {lineItems.map((it, idx) => {
-                        const rowSub =
-                          Math.round((Number(it.qty) || 0) * (Number(it.hargaSatuan) || 0));
+                        const rowSub = Math.round(
+                          (Number(it.qty) || 0) * (Number(it.hargaSatuan) || 0)
+                        );
                         const stokRef = masters.stokBarangList.find(
                           (s) =>
                             String(s.kode || '').trim().toUpperCase() ===
@@ -1256,110 +1775,151 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         return (
                           <div
                             key={`${it.kodeProduk}-${idx}`}
-                            className="p-3 rounded-xl bg-zinc-50 border border-zinc-200 grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end"
+                            className="p-3 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2"
                           >
-                            <div className="sm:col-span-5">
-                              <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
-                                Produk ({stokRef ? `Sisa Stok: ${stokRef.stok} ${stokRef.satuan}` : it.satuan})
-                              </label>
-                              <select
-                                value={it.kodeProduk}
-                                onChange={(e) => handleProductRowChange(idx, e.target.value)}
-                                className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-semibold text-xs"
-                              >
-                                {Array.from(
-                                  masters.produkList.reduce((acc, p) => {
-                                    const cat = String(p.kategori || 'LAINNYA')
-                                      .trim()
-                                      .toUpperCase()
-                                      .replace(/_/g, ' ');
-                                    if (!acc.has(cat)) acc.set(cat, []);
-                                    acc.get(cat)!.push(p);
-                                    return acc;
-                                  }, new Map<string, Produk[]>())
-                                ).map(([catLabel, items]) => (
-                                  <optgroup key={catLabel} label={`KATEGORI: ${catLabel}`}>
-                                    {items.map((p) => {
-                                      const stObj = masters.stokBarangList.find(
-                                        (s) =>
-                                          String(s.kode || '').trim().toUpperCase() ===
-                                          String(p.kode || '').trim().toUpperCase()
-                                      );
-                                      const tanpaStok = Boolean(stObj?.tanpaStok || isProdukTanpaStok(p));
-                                      const sisaQty = Math.max(0, Number(stObj?.stok) || 0);
-                                      return (
-                                        <option key={p.kode} value={p.kode}>
-                                          {p.nama} — {tanpaStok ? 'Tanpa Stok' : `Sisa: ${sisaQty} ${p.satuan}`}
-                                        </option>
-                                      );
-                                    })}
-                                  </optgroup>
-                                ))}
-                              </select>
-                            </div>
-
-                            <div className="sm:col-span-2">
-                              <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
-                                Qty ({it.satuan})
-                              </label>
-                              <input
-                                type="number"
-                                step="any"
-                                min="0.01"
-                                value={it.qty}
-                                onChange={(e) =>
-                                  setLineItems((prev) =>
-                                    prev.map((row, rIdx) =>
-                                      rIdx === idx ? { ...row, qty: e.target.value } : row
-                                    )
-                                  )
-                                }
-                                className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-mono tabular-nums font-bold text-right"
-                              />
-                            </div>
-
-                            <div className="sm:col-span-3">
-                              <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
-                                {jenis === 'PEMBELIAN_BARANG'
-                                  ? 'Harga Modal / Satuan (Rp)'
-                                  : 'Harga Jual / Satuan (Rp)'}
-                              </label>
-                              <input
-                                type="number"
-                                step="1"
-                                min="0"
-                                value={it.hargaSatuan}
-                                onChange={(e) =>
-                                  setLineItems((prev) =>
-                                    prev.map((row, rIdx) =>
-                                      rIdx === idx ? { ...row, hargaSatuan: e.target.value } : row
-                                    )
-                                  )
-                                }
-                                className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-mono tabular-nums font-bold text-right"
-                              />
-                            </div>
-
-                            <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2">
-                              <div className="text-right min-w-0">
-                                <span className="block text-[10px] text-zinc-400">Subtotal</span>
-                                <span
-                                  className="font-mono tabular-nums font-bold text-zinc-900 text-[11px] truncate block"
-                                  title={formatRupiah(rowSub)}
+                            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                              <div className="sm:col-span-5">
+                                <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                                  Pilih Master Produk ({stokRef ? `Stok: ${stokRef.stok} ${stokRef.satuan}` : 'Manual'})
+                                </label>
+                                <select
+                                  value={
+                                    masters.produkList.some((p) => p.kode === it.kodeProduk)
+                                      ? it.kodeProduk
+                                      : 'CUSTOM-ITEM'
+                                  }
+                                  onChange={(e) => handleProductRowChange(idx, e.target.value)}
+                                  className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-semibold text-xs"
                                 >
-                                  {formatRupiahSingkat(rowSub)}
-                                </span>
+                                  <option value="CUSTOM-ITEM">— Ketik Nama Barang Manual —</option>
+                                  {Array.from(
+                                    masters.produkList.reduce((acc, p) => {
+                                      const cat = String(p.kategori || 'LAINNYA')
+                                        .trim()
+                                        .toUpperCase()
+                                        .replace(/_/g, ' ');
+                                      if (!acc.has(cat)) acc.set(cat, []);
+                                      acc.get(cat)!.push(p);
+                                      return acc;
+                                    }, new Map<string, Produk[]>())
+                                  ).map(([catLabel, items]) => (
+                                    <optgroup key={catLabel} label={`KATEGORI: ${catLabel}`}>
+                                      {items.map((p) => {
+                                        const stObj = masters.stokBarangList.find(
+                                          (s) =>
+                                            String(s.kode || '').trim().toUpperCase() ===
+                                            String(p.kode || '').trim().toUpperCase()
+                                        );
+                                        const tanpaStok = Boolean(stObj?.tanpaStok || isProdukTanpaStok(p));
+                                        const sisaQty = Math.max(0, Number(stObj?.stok) || 0);
+                                        return (
+                                          <option key={p.kode} value={p.kode}>
+                                            {p.nama} — {tanpaStok ? 'Tanpa Stok' : `Sisa: ${sisaQty} ${p.satuan}`}
+                                          </option>
+                                        );
+                                      })}
+                                    </optgroup>
+                                  ))}
+                                </select>
                               </div>
-                              {lineItems.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveLineItem(idx)}
-                                  className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
-                                  title="Hapus baris barang"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              )}
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                                  Qty ({it.satuan})
+                                </label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0.01"
+                                  value={it.qty}
+                                  onChange={(e) =>
+                                    setLineItems((prev) =>
+                                      prev.map((row, rIdx) =>
+                                        rIdx === idx ? { ...row, qty: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-mono tabular-nums font-bold text-right"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-3">
+                                <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                                  {jenis === 'PEMBELIAN_BARANG'
+                                    ? 'Harga Modal / Satuan (Rp)'
+                                    : 'Harga Jual / Satuan (Rp)'}
+                                </label>
+                                <input
+                                  type="number"
+                                  step="1"
+                                  min="0"
+                                  value={it.hargaSatuan}
+                                  onChange={(e) =>
+                                    setLineItems((prev) =>
+                                      prev.map((row, rIdx) =>
+                                        rIdx === idx ? { ...row, hargaSatuan: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-mono tabular-nums font-bold text-right"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2">
+                                <div className="text-right min-w-0">
+                                  <span className="block text-[10px] text-zinc-400">Subtotal</span>
+                                  <span
+                                    className="font-mono tabular-nums font-bold text-zinc-900 text-[11px] truncate block"
+                                    title={formatRupiah(rowSub)}
+                                  >
+                                    {formatRupiahSingkat(rowSub)}
+                                  </span>
+                                </div>
+                                {lineItems.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveLineItem(idx)}
+                                    className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                                    title="Hapus baris barang"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Editable Nama Barang & Satuan di Nota */}
+                            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-1 border-t border-zinc-200/70">
+                              <div className="sm:col-span-9">
+                                <input
+                                  type="text"
+                                  value={it.namaProduk}
+                                  onChange={(e) =>
+                                    setLineItems((prev) =>
+                                      prev.map((row, rIdx) =>
+                                        rIdx === idx ? { ...row, namaProduk: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Nama barang di nota (fleksibel dapat diubah)..."
+                                  className="w-full px-2.5 py-1 border border-zinc-200 rounded-md bg-white text-[11px] font-medium"
+                                />
+                              </div>
+                              <div className="sm:col-span-3">
+                                <input
+                                  type="text"
+                                  value={it.satuan}
+                                  onChange={(e) =>
+                                    setLineItems((prev) =>
+                                      prev.map((row, rIdx) =>
+                                        rIdx === idx ? { ...row, satuan: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Satuan"
+                                  className="w-full px-2.5 py-1 border border-zinc-200 rounded-md bg-white text-[11px] font-mono uppercase"
+                                />
+                              </div>
                             </div>
                           </div>
                         );
@@ -1370,7 +1930,465 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               )}
 
               {/* =================================================================
-                  SECTION C: UPAH HARIAN & PENGGAJIAN KARYAWAN
+                  SECTION C: PENGELUARAN (HIJAU INVENTARIS & ORANYE BIASA)
+              ================================================================= */}
+              {jenis === 'PENGELUARAN_DIVISI' && (
+                <div
+                  className={`p-4 rounded-xl border space-y-3.5 ${
+                    kelompokPengeluaran === 'INVENTARIS'
+                      ? 'border-emerald-300 bg-emerald-50/40'
+                      : 'border-amber-300 bg-amber-50/40'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200/70 pb-2.5">
+                    <div className="flex items-center gap-2 font-bold text-zinc-900">
+                      {kelompokPengeluaran === 'INVENTARIS' ? (
+                        <Truck className="w-4 h-4 text-emerald-700" />
+                      ) : (
+                        <Flame className="w-4 h-4 text-amber-700" />
+                      )}
+                      <span>
+                        {kelompokPengeluaran === 'INVENTARIS'
+                          ? 'Pengeluaran Inventaris / Armada (Hijau)'
+                          : 'Pengeluaran Biasa / Operasional (Oranye)'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1 p-1 bg-white border border-zinc-200 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setKelompokPengeluaran('INVENTARIS')}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold cursor-pointer ${
+                          kelompokPengeluaran === 'INVENTARIS'
+                            ? 'bg-emerald-600 text-white'
+                            : 'text-zinc-700 hover:bg-zinc-100'
+                        }`}
+                      >
+                        Hijau: Inventaris (1–16)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setKelompokPengeluaran('BIASA')}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold cursor-pointer ${
+                          kelompokPengeluaran === 'BIASA'
+                            ? 'bg-amber-500 text-zinc-950'
+                            : 'text-zinc-700 hover:bg-zinc-100'
+                        }`}
+                      >
+                        Oranye: Biasa (17–24)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Pilih dari 24 Item Pengeluaran
+                      </label>
+                      <select
+                        value={
+                          allPengeluaranItems.some(
+                            (m) => m.nama.toUpperCase() === kategoriBiaya.trim().toUpperCase()
+                          )
+                            ? allPengeluaranItems.find(
+                                (m) => m.nama.toUpperCase() === kategoriBiaya.trim().toUpperCase()
+                              )!.nama
+                            : '__CUSTOM__'
+                        }
+                        onChange={(e) => {
+                          if (e.target.value !== '__CUSTOM__') {
+                            setKategoriBiaya(e.target.value);
+                            setKelompokPengeluaran(resolveKelompokItemPengeluaran(e.target.value));
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-bold"
+                      >
+                        <optgroup label="HIJAU (1-16): PENGELUARAN INVENTARIS">
+                          {allPengeluaranItems
+                            .filter(
+                              (m) =>
+                                resolveKelompokItemPengeluaran(m.nama, m.kelompok) === 'INVENTARIS'
+                            )
+                            .map((m) => (
+                              <option key={m.id} value={m.nama}>
+                                {m.nomorUrut ? `${m.nomorUrut}. ` : ''}
+                                {m.nama}
+                              </option>
+                            ))}
+                        </optgroup>
+                        <optgroup label="ORANYE (17-24): PENGELUARAN BIASA">
+                          {allPengeluaranItems
+                            .filter(
+                              (m) => resolveKelompokItemPengeluaran(m.nama, m.kelompok) === 'BIASA'
+                            )
+                            .map((m) => (
+                              <option key={m.id} value={m.nama}>
+                                {m.nomorUrut ? `${m.nomorUrut}. ` : ''}
+                                {m.nama}
+                              </option>
+                            ))}
+                        </optgroup>
+                        <option value="__CUSTOM__">— Ketik Nama Item Lainnya —</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Nama Item Pengeluaran
+                      </label>
+                      <input
+                        type="text"
+                        value={kategoriBiaya}
+                        onChange={(e) => setKategoriBiaya(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Arah Pencatatan (+/-)
+                      </label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setArahMutasi('TAMBAH')}
+                          className={`py-2 rounded-lg font-bold text-xs border cursor-pointer ${
+                            arahMutasi === 'TAMBAH'
+                              ? 'bg-zinc-900 text-white border-zinc-900'
+                              : 'bg-white text-zinc-700 border-zinc-300'
+                          }`}
+                        >
+                          + Tambah
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setArahMutasi('KURANG')}
+                          className={`py-2 rounded-lg font-bold text-xs border cursor-pointer ${
+                            arahMutasi === 'KURANG'
+                              ? 'bg-emerald-700 text-white border-emerald-700'
+                              : 'bg-white text-zinc-700 border-zinc-300'
+                          }`}
+                        >
+                          − Kurangi
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Kalkulator Qty x Harga Satuan Opsional + Nominal */}
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Qty (Opsional)
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        value={qtyPengeluaranInput}
+                        onChange={(e) =>
+                          handlePengeluaranQtyOrHargaChange(e.target.value, hargaSatuanPengeluaranInput)
+                        }
+                        placeholder="Misal: 2"
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-mono tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Satuan (Opsional)
+                      </label>
+                      <input
+                        type="text"
+                        value={satuanPengeluaranInput}
+                        onChange={(e) => setSatuanPengeluaranInput(e.target.value)}
+                        placeholder="LITER / PCS"
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-mono uppercase"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Harga Satuan (Rp)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={hargaSatuanPengeluaranInput}
+                        onChange={(e) =>
+                          handlePengeluaranQtyOrHargaChange(qtyPengeluaranInput, e.target.value)
+                        }
+                        placeholder="Opsional"
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-mono tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Total Nominal (Rp)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={nominalInput}
+                        onChange={(e) => setNominalInput(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-900 rounded-lg bg-white font-mono tabular-nums font-bold text-zinc-900"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">Divisi</label>
+                      <select
+                        value={divisi}
+                        onChange={(e) => setDivisi(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        {allDivisiOptions.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Rekening Sumber Dana
+                      </label>
+                      <select
+                        value={rekeningSumber}
+                        onChange={(e) => setRekeningSumber(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        {activeRealAccounts.map((r) => (
+                          <option key={r.kode} value={r.kode}>
+                            {r.nama} ({r.kode}) — {formatRupiah(r.saldoSaatIni)}
+                          </option>
+                        ))}
+                        <option value="SINKRON">SINKRON (Non-Kas / Tanpa Potong Uang)</option>
+                        {record.rekeningSumber === 'STOK_INTERNAL' && (
+                          <option value="STOK_INTERNAL">STOK INTERNAL GUDANG</option>
+                        )}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Oleh / Driver / Penerima
+                      </label>
+                      <input
+                        type="text"
+                        value={penerima}
+                        onChange={(e) => setPenerima(e.target.value)}
+                        placeholder="Nama sopir / petugas..."
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  {(masters.inventarisList || []).length > 0 && (
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Tautkan ke Unit Master Inventaris PT (Opsional)
+                      </label>
+                      <select
+                        value={idInventaris}
+                        onChange={(e) => setIdInventaris(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        <option value="">— Tidak Ditautkan Spesifik —</option>
+                        {(masters.inventarisList || []).map((inv) => (
+                          <option key={inv.id} value={inv.id}>
+                            {inv.namaItem} ({inv.nomorPlat})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* =================================================================
+                  SECTION C2: UANG MASUK (+) & BRILINK
+              ================================================================= */}
+              {jenis === 'UANG_MASUK' && (
+                <div className="p-4 rounded-xl border border-zinc-200 bg-white space-y-3.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Kategori Uang Masuk
+                      </label>
+                      <input
+                        type="text"
+                        value={kategoriBiaya}
+                        onChange={(e) => setKategoriBiaya(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">Divisi</label>
+                      <select
+                        value={divisi}
+                        onChange={(e) => setDivisi(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        {allDivisiOptions.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Nominal Uang Masuk (Rp)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={nominalInput}
+                        onChange={(e) => setNominalInput(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-emerald-900"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Metode Penerimaan
+                      </label>
+                      <select
+                        value={metode}
+                        onChange={(e) => setMetode(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        <option value="TUNAI">TUNAI (Masuk Kas Tunai KAS01)</option>
+                        <option value="TRANSFER">TRANSFER BANK PT</option>
+                      </select>
+                    </div>
+                    {metode === 'TRANSFER' && (
+                      <div>
+                        <label className="block font-semibold text-zinc-700 mb-1">
+                          Rekening Bank Tujuan (Masuk)
+                        </label>
+                        <select
+                          value={rekeningTujuan}
+                          onChange={(e) => setRekeningTujuan(e.target.value)}
+                          className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                        >
+                          {activeBankAccounts.map((b) => (
+                            <option key={b.kode} value={b.kode}>
+                              {b.nama} ({b.kode}) — {formatRupiah(b.saldoSaatIni)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {jenis === 'BRILINK' && (
+                <div className="p-4 rounded-xl border border-zinc-200 bg-white space-y-3.5">
+                  <div className="flex items-center justify-between border-b border-zinc-100 pb-2">
+                    <div className="flex items-center gap-2 font-bold text-zinc-900">
+                      <Landmark className="w-4 h-4 text-sky-700" />
+                      <span>Koreksi Transaksi BRILink (Admin &amp; Mutasi Pokok)</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Jenis Transaksi BRILink
+                      </label>
+                      <select
+                        value={jenisBrilink}
+                        onChange={(e) => setJenisBrilink(e.target.value as JenisTransaksiBrilink)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        <option value="TARIK_TUNAI">Uang Masuk (+) Adm Tarik Tunai</option>
+                        <option value="TUKAR_CASH">Uang Keluar (-) Adm Tukar Cash PT</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Nominal Biaya Admin (Rp)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={nominalInput}
+                        onChange={(e) => setNominalInput(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Nominal Dana Pokok (Rp)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={nominalPokokInput}
+                        onChange={(e) => setNominalPokokInput(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">
+                        Rekening Biaya Admin
+                      </label>
+                      <select
+                        value={rekeningAdmin}
+                        onChange={(e) => setRekeningAdmin(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        {activeRealAccounts.map((r) => (
+                          <option key={r.kode} value={r.kode}>
+                            {r.nama} ({r.kode})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {Number(nominalPokokInput) > 0 && (
+                      <div>
+                        <label className="block font-semibold text-zinc-700 mb-1">
+                          Rekening Bank Mutasi Pokok
+                        </label>
+                        <select
+                          value={rekeningBank}
+                          onChange={(e) => setRekeningBank(e.target.value)}
+                          className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                        >
+                          {activeBankAccounts.map((b) => (
+                            <option key={b.kode} value={b.kode}>
+                              {b.nama} ({b.kode})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1">Divisi</label>
+                      <select
+                        value={divisi}
+                        onChange={(e) => setDivisi(e.target.value)}
+                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                      >
+                        {allDivisiOptions.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* =================================================================
+                  SECTION C3: UPAH HARIAN & PENGGAJIAN KARYAWAN
               ================================================================= */}
               {jenis === 'UPAH_HARIAN' && (
                 <div className="p-4 rounded-xl border border-zinc-200 bg-white space-y-3">
@@ -1535,52 +2553,14 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               )}
 
               {/* =================================================================
-                  SECTION D: NOMINAL TUNGGAL (KASBON, BAYAR BON, TITIPAN, PENGELUARAN, TRANSFER, DANA MITRA)
+                  SECTION D: NOMINAL TUNGGAL (KASBON, BAYAR BON, TITIPAN, TRANSFER, DANA MITRA)
               ================================================================= */}
               {(jenis === 'KASBON_UANG' ||
                 jenis === 'BAYAR_BON' ||
                 jenis === 'PENCAIRAN_TITIPAN' ||
-                jenis === 'PENGELUARAN_DIVISI' ||
                 jenis === 'TRANSFER_REKENING' ||
                 isNonPhysicalHasilBumi) && (
                 <div className="p-4 rounded-xl border border-zinc-200 bg-white space-y-3.5">
-                  {jenis === 'PENGELUARAN_DIVISI' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block font-semibold text-zinc-700 mb-1">Divisi</label>
-                        <select
-                          value={divisi}
-                          onChange={(e) => setDivisi(e.target.value)}
-                          className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
-                        >
-                          {allDivisiOptions.map((d) => (
-                            <option key={d} value={d}>
-                              {d}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block font-semibold text-zinc-700 mb-1">Kategori Biaya</label>
-                        <input
-                          type="text"
-                          value={kategoriBiaya}
-                          onChange={(e) => setKategoriBiaya(e.target.value)}
-                          className="w-full px-3 py-2 border border-zinc-300 rounded-lg"
-                        />
-                      </div>
-                      <div>
-                        <label className="block font-semibold text-zinc-700 mb-1">Oleh / Armada / Penerima</label>
-                        <input
-                          type="text"
-                          value={penerima}
-                          onChange={(e) => setPenerima(e.target.value)}
-                          className="w-full px-3 py-2 border border-zinc-300 rounded-lg"
-                        />
-                      </div>
-                    </div>
-                  )}
-
                   {jenis === 'TRANSFER_REKENING' && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
@@ -1628,23 +2608,6 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                     />
                   </div>
 
-                  {jenis === 'PENGELUARAN_DIVISI' && (
-                    <div>
-                      <label className="block font-semibold text-zinc-700 mb-1">Rekening Sumber Dana</label>
-                      <select
-                        value={rekeningSumber}
-                        onChange={(e) => setRekeningSumber(e.target.value)}
-                        className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
-                      >
-                        {activeRealAccounts.map((r) => (
-                          <option key={r.kode} value={r.kode}>
-                            {r.nama} ({r.kode}) — Saldo: {formatRupiah(r.saldoSaatIni)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
                   {jenis === 'KASBON_UANG' && Boolean(record.isNotaLalu || record.rekeningSumber === 'BON01') && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
@@ -1679,16 +2642,12 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                 jenis === 'PENJUALAN' ||
                 (jenis === 'KASBON_UANG' && !record.isNotaLalu && record.rekeningSumber !== 'BON01') ||
                 (jenis === 'BAYAR_BON' &&
-                  record.metode !== 'SINKRON' &&
                   record.metode !== 'KOMPENSASI_TITIP' &&
                   record.metode !== 'POTONG_GAJI' &&
-                  record.rekeningTujuan !== 'SINKRON' &&
                   !record.isKompensasiTitipan &&
                   !record.isPotongGaji) ||
                 (jenis === 'PENCAIRAN_TITIPAN' &&
-                  record.metodePembayaran !== 'SINKRON' &&
                   record.metodePembayaran !== 'KOMPENSASI_BON' &&
-                  record.rekeningSumber !== 'SINKRON' &&
                   !record.isKompensasiBon)) && (
                 <div className="p-4 rounded-xl border border-zinc-200 bg-white space-y-3">
                   <div className="flex items-center gap-2 font-bold text-zinc-900">
@@ -1710,7 +2669,10 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                           <option value="TITIP">TITIP DANA PETANI (TIT01)</option>
                         )}
                         {jenis === 'PENJUALAN_HASIL_BUMI' && (
-                          <option value="PIUTANG">PIUTANG DAGANG (BON01)</option>
+                          <>
+                            <option value="PIUTANG">PIUTANG DAGANG (BON01)</option>
+                            <option value="BELUM_PUTUS_HARGA">BELUM PUTUS HARGA</option>
+                          </>
                         )}
                         {jenis === 'PEMBELIAN_BARANG' && (
                           <option value="HUTANG">HUTANG SUPPLIER (TIT01)</option>
@@ -1718,8 +2680,13 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         {jenis === 'PENJUALAN' && (
                           <>
                             <option value="KASBON">KASBON MITRA (BON01)</option>
+                            <option value="SINKRON">SINKRON (Lunas Non-Kas)</option>
+                            <option value="PEMAKAIAN_PENGELUARAN">LARI KE PENGELUARAN (Misal Solar)</option>
                             <option value="INTERNAL_PT">KEBUTUHAN INTERNAL PT (Rp 0)</option>
                           </>
+                        )}
+                        {(jenis === 'BAYAR_BON' || jenis === 'PENCAIRAN_TITIPAN') && (
+                          <option value="SINKRON">SINKRON (Tanpa Uang Masuk/Keluar Kas)</option>
                         )}
                       </select>
                     </div>
@@ -1757,6 +2724,26 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                           {activeBankAccounts.map((b) => (
                             <option key={b.kode} value={b.kode}>
                               {b.nama} ({b.kode}) — {formatRupiah(b.saldoSaatIni)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {jenis === 'PENJUALAN' && metode === 'PEMAKAIAN_PENGELUARAN' && (
+                      <div>
+                        <label className="block font-semibold text-zinc-700 mb-1">
+                          Item Pengeluaran Tujuan
+                        </label>
+                        <select
+                          value={kategoriBiaya}
+                          onChange={(e) => setKategoriBiaya(e.target.value)}
+                          className="w-full px-3 py-2 border border-zinc-300 rounded-lg bg-white font-semibold"
+                        >
+                          {allPengeluaranItems.map((m) => (
+                            <option key={m.id} value={m.nama}>
+                              {m.nomorUrut ? `${m.nomorUrut}. ` : ''}
+                              {m.nama}
                             </option>
                           ))}
                         </select>
@@ -1825,7 +2812,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
             {/* Footer */}
             <div className="px-5 py-3.5 bg-zinc-50 border-t border-zinc-200 flex items-center justify-between gap-3">
               <span className="text-[11px] text-zinc-500">
-                Perubahan otomatis memperbarui stok gudang, HPP riil, saldo kas/bank &amp; log audit.
+                Perubahan otomatis memperbarui stok gudang, HPP riil, rekening mitra &amp; saldo kas/bank.
               </span>
               <div className="flex items-center gap-2 shrink-0">
                 <button

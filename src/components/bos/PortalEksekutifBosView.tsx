@@ -2056,6 +2056,53 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                   </div>
                 </div>
 
+                {/* Ringkasan Cepat Piutang Aktif vs Nominal Nota Ngunci vs Saldo Titip */}
+                {rekapMitra && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3.5 py-2.5 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-semibold text-amber-800">
+                          Sisa Bon Aktif ke PT
+                        </div>
+                        <div className="text-[10px] text-amber-700/80">
+                          {rekapMitra.mitraPiutangAktifCount ?? rekapMitra.mitraDenganBonCount ?? 0} mitra piutang aktif
+                        </div>
+                      </div>
+                      <div className="font-mono font-bold text-sm text-amber-900 tabular-nums">
+                        {formatRupiah(rekapMitra.totalPiutangAktifMitra ?? rekapMitra.totalBonMitra ?? 0)}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-3.5 py-2.5 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-bold text-rose-800">
+                          Total Nominal Nota Ngunci
+                        </div>
+                        <div className="text-[10px] text-rose-700/80">
+                          {rekapMitra.mitraNotaNgunciCount || 0} mitra dengan nota ngunci
+                        </div>
+                      </div>
+                      <div className="font-mono font-bold text-sm text-rose-800 tabular-nums">
+                        {formatRupiah(rekapMitra.totalNominalNotaNgunci || 0)}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-purple-200 bg-purple-50/70 px-3.5 py-2.5 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-semibold text-purple-800">
+                          Total Saldo Titip di PT
+                        </div>
+                        <div className="text-[10px] text-purple-700/80">
+                          {rekapMitra.mitraDenganHutangTitipCount || 0} mitra titip/hutang PT
+                        </div>
+                      </div>
+                      <div className="font-mono font-bold text-sm text-purple-900 tabular-nums">
+                        {formatRupiah(rekapMitra.totalHutangPerusahaanKeMitra || 0)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* 5 Canonical Mitra Role Filters */}
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <button
@@ -2104,6 +2151,9 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                         <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
                           <th className="py-3 px-5 font-semibold">Nama &amp; Role Mitra</th>
                           <th className="py-3 px-4 font-semibold text-right">Sisa Bon ke PT</th>
+                          <th className="py-3 px-4 font-bold text-right text-rose-700 bg-rose-50/50">
+                            Nominal Nota Ngunci
+                          </th>
                           <th className="py-3 px-4 font-semibold text-right">Saldo Titip di PT</th>
                           <th className="py-3 px-5 font-semibold text-right">Rekening Koran</th>
                         </tr>
@@ -2176,18 +2226,27 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-amber-700 whitespace-nowrap">
                                 {bonBersih > 0 ? (
-                                  <div>
-                                    <div className={(m.nominalNotaNgunci || 0) > 0 ? 'text-rose-700' : 'text-amber-700'}>
-                                      {formatRupiah(bonBersih)}
-                                    </div>
-                                    {(m.nominalNotaNgunci || 0) > 0 && (
-                                      <div className="text-[10px] font-semibold text-rose-600">
-                                        Ngunci: {formatRupiah(m.nominalNotaNgunci || 0)}
-                                      </div>
-                                    )}
-                                  </div>
+                                  <div className="text-amber-700">{formatRupiah(bonBersih)}</div>
                                 ) : (
                                   '-'
+                                )}
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums whitespace-nowrap bg-rose-50/30">
+                                {(m.nominalNotaNgunci || 0) > 0 ? (
+                                  <div>
+                                    <div className="text-rose-700">
+                                      {formatRupiah(m.nominalNotaNgunci || 0)}
+                                    </div>
+                                    <div className="text-[10px] font-semibold text-rose-600">
+                                      {m.jumlahNotaNgunci || 1} nota ngunci
+                                    </div>
+                                  </div>
+                                ) : m.isNotaNgunci ? (
+                                  <span className="text-[11px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded">
+                                    Status Ngunci
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-300">-</span>
                                 )}
                               </td>
                               <td className="py-3.5 px-4 text-right font-mono font-bold tabular-nums text-purple-800 whitespace-nowrap">

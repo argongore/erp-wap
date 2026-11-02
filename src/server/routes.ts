@@ -1630,6 +1630,43 @@ apiRouter.post('/transaksi/pembelian-hasil-bumi/putus-harga', async (req, res) =
   }
 });
 
+apiRouter.post('/transaksi/pembelian-hasil-bumi/batch', async (req, res) => {
+  try {
+    const result = await TransactionService.processBatchPembelianHasilBumi(req.body);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Pembukuan NOTA SILANG (Mitra Ambil Barang di Anak Perusahaan misal DP Parabot, PT Sebagai Perantara)
+apiRouter.get('/transaksi/nota-silang', (_req, res) => {
+  try {
+    const list = TransactionService.getNotaSilangList();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/nota-silang', async (req, res) => {
+  try {
+    const result = await TransactionService.processNotaSilang(req.body);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/transaksi/nota-silang/:noNotaSilang', async (req, res) => {
+  try {
+    const result = await TransactionService.deleteNotaSilang(req.params.noNotaSilang);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 // Transaksi BRILink (Uang Masuk: Adm Tarik Tunai | Uang Keluar: Adm Tukar Cash Rupiah PT)
 apiRouter.get('/transaksi/brilink', (_req, res) => {
   try {
@@ -1896,6 +1933,34 @@ apiRouter.get('/pengeluaran', (_req, res) => {
 apiRouter.delete('/pengeluaran/:id', async (req, res) => {
   try {
     const result = await TransactionService.deletePengeluaran(req.params.id);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Master Item Pengeluaran (SOLAR, OLI, SPAREPART, dll.)
+apiRouter.get('/master-item-pengeluaran', (_req, res) => {
+  try {
+    const list = TransactionService.getMasterItemPengeluaran();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/master-item-pengeluaran', async (req, res) => {
+  try {
+    const item = await TransactionService.createMasterItemPengeluaran(req.body);
+    res.json({ success: true, data: item });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/master-item-pengeluaran/:id', async (req, res) => {
+  try {
+    const result = await TransactionService.deleteMasterItemPengeluaran(req.params.id);
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
@@ -2252,12 +2317,13 @@ apiRouter.get('/laporan/arus-kas-harian', (req, res) => {
 // Rekapan Semua Transaksi Terpadu (Semua Transaksi Hari Ini / Filter Tanggal, Arus Uang, Jenis, Nama)
 apiRouter.get('/transaksi/semua', (req, res) => {
   try {
-    const { tanggal, arusUang, kategori, pihakTerkait, search } = req.query as {
+    const { tanggal, arusUang, kategori, pihakTerkait, search, hanyaKasir } = req.query as {
       tanggal?: string;
       arusUang?: string;
       kategori?: string;
       pihakTerkait?: string;
       search?: string;
+      hanyaKasir?: string;
     };
     const result = TransactionService.getAllUnifiedTransactions({
       tanggal,
@@ -2265,6 +2331,7 @@ apiRouter.get('/transaksi/semua', (req, res) => {
       kategori,
       pihakTerkait,
       search,
+      hanyaKasir: hanyaKasir === 'true' || hanyaKasir === '1',
     });
     res.json({ success: true, data: result });
   } catch (err: any) {
@@ -3480,6 +3547,8 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
         kasbonUang: db.kasbonUang || [],
         bayarBon: db.bayarBon || [],
         pengeluaran: TransactionService.getPengeluaranList(),
+        masterItemPengeluaran: TransactionService.getMasterItemPengeluaran(),
+        notaSilang: TransactionService.getNotaSilangList(),
         transferRekening: db.transferRekening || [],
         penggajian: db.penggajian || [],
         auditLogs: db.auditLogs || [],

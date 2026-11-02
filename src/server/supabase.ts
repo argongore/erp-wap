@@ -104,20 +104,28 @@ class SupabaseSyncEngine {
   }
 
   private loadConfig() {
+    const isLikelyValidKey = (k?: string | null): boolean => {
+      const s = String(k || '').trim();
+      return s.length >= 20 && !/^https?:\/\//i.test(s);
+    };
+
+    const envKey = [
+      process.env.SUPABASE_KEY,
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      process.env.VITE_SUPABASE_ANON_KEY,
+    ].find((k) => isLikelyValidKey(k)) || '';
+    const envUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+
     const candidateFiles = [CONFIG_FILE, LEGACY_CONFIG_FILE];
     for (const file of candidateFiles) {
       try {
         if (fs.existsSync(file)) {
           const raw = fs.readFileSync(file, 'utf-8');
           const parsed = JSON.parse(raw);
+          const candidateKey = isLikelyValidKey(parsed.key) ? String(parsed.key).trim() : '';
           const rawKey =
-            parsed.key ||
-            process.env.SUPABASE_KEY ||
-            process.env.SUPABASE_SERVICE_ROLE_KEY ||
-            process.env.VITE_SUPABASE_ANON_KEY ||
-            '';
-          const rawUrl =
-            parsed.url || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+            (parsed.lastSyncStatus === 'ERROR' && envKey ? envKey : candidateKey) || envKey;
+          const rawUrl = parsed.url || envUrl;
           if (rawUrl && rawKey) {
             this.config = {
               url: sanitizeSupabaseUrl(rawUrl, rawKey),
@@ -135,12 +143,6 @@ class SupabaseSyncEngine {
       }
     }
 
-    const envKey =
-      process.env.SUPABASE_KEY ||
-      process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.VITE_SUPABASE_ANON_KEY ||
-      '';
-    const envUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
     this.config = {
       url: sanitizeSupabaseUrl(envUrl, envKey),
       key: envKey,
@@ -258,7 +260,9 @@ class SupabaseSyncEngine {
   }
 
   public updateConfig(newConfig: { url: string; key: string; autoSync?: boolean }) {
-    const rawKey = newConfig.key.trim() || this.config.key;
+    const candidateKey = String(newConfig.key || '').trim();
+    const isValidCandidate = candidateKey.length >= 20 && !/^https?:\/\//i.test(candidateKey);
+    const rawKey = isValidCandidate ? candidateKey : this.config.key;
     this.config.key = rawKey;
     this.config.url = sanitizeSupabaseUrl(newConfig.url, rawKey);
     if (newConfig.autoSync !== undefined) {

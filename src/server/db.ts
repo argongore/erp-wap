@@ -3,12 +3,15 @@ import os from 'os';
 import path from 'path';
 import {
   DAFTAR_DIVISI,
+  DAFTAR_24_ITEM_PENGELUARAN,
   DEFAULT_PT_LOGO_URL,
   KATEGORI_ALAT_DEFAULT_DESC,
+  getNomorUrutItemPengeluaran,
   isKategoriAlatNonStok,
   isProdukTanpaStok,
   isExcludedFromDivisi,
   normalizeRoleMitra,
+  resolveKelompokItemPengeluaran,
 } from './types.ts';
 import type {
   AuditLog,
@@ -37,6 +40,7 @@ import type {
   CatatanCashOpname,
   DatabaseIntegrityStatus,
   ItemInventaris,
+  MasterItemPengeluaran,
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
 
@@ -66,6 +70,7 @@ export interface DatabaseSchema {
   kategoriProduk?: ItemKategoriProduk[];
   cashOpnameLogs?: CatatanCashOpname[];
   inventaris?: ItemInventaris[];
+  masterItemPengeluaran?: MasterItemPengeluaran[];
   deletedHasilBumiKodes?: string[];
 }
 
@@ -525,6 +530,7 @@ export function getDefaultDatabase(): DatabaseSchema {
     brilink: [],
     uangMasuk: [],
     inventaris: [],
+    masterItemPengeluaran: [],
     auditLogs: [
       {
         id: 'LOG-INIT',
@@ -592,6 +598,7 @@ class DatabaseManager {
           kategoriProduk: Array.isArray(parsed.kategoriProduk) ? parsed.kategoriProduk : [],
           cashOpnameLogs: Array.isArray(parsed.cashOpnameLogs) ? parsed.cashOpnameLogs : [],
           inventaris: Array.isArray(parsed.inventaris) ? parsed.inventaris : [],
+          masterItemPengeluaran: Array.isArray(parsed.masterItemPengeluaran) ? parsed.masterItemPengeluaran : [],
           deletedHasilBumiKodes: Array.isArray(parsed.deletedHasilBumiKodes) ? parsed.deletedHasilBumiKodes : [],
         };
 
@@ -814,6 +821,9 @@ class DatabaseManager {
     this.db.divisi = Array.isArray(incoming.divisi) ? incoming.divisi : [];
     this.db.cashOpnameLogs = Array.isArray(incoming.cashOpnameLogs) ? incoming.cashOpnameLogs : [];
     this.db.inventaris = Array.isArray(incoming.inventaris) ? incoming.inventaris : (this.db.inventaris || []);
+    this.db.masterItemPengeluaran = Array.isArray(incoming.masterItemPengeluaran)
+      ? incoming.masterItemPengeluaran
+      : (this.db.masterItemPengeluaran || []);
     this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes)
       ? incoming.deletedHasilBumiKodes
       : (this.db.deletedHasilBumiKodes || []);
@@ -958,6 +968,103 @@ class DatabaseManager {
     if (!Array.isArray(this.db.divisi)) this.db.divisi = [];
     if (!Array.isArray(this.db.cashOpnameLogs)) this.db.cashOpnameLogs = [];
     if (!Array.isArray(this.db.inventaris)) this.db.inventaris = [];
+    if (!Array.isArray(this.db.masterItemPengeluaran)) this.db.masterItemPengeluaran = [];
+
+    // Pastikan 24 Item Pengeluaran baku (1-16 Hijau Inventaris & 17-24 Oranye Biasa) selalu tersedia & berurutan rapi
+    const legacyUnusedNames = new Set([
+      'BBM SOLAR & PELUMAS',
+      'SPAREPART & PERBAIKAN ARMADA',
+      'KONSUMSI KARYAWAN',
+      'OPERASIONAL GUDANG',
+      'BONGKAR MUAT & LAPANGAN',
+      'LISTRIK, AIR & INTERNET',
+      'ATK & KANTOR',
+      'LAIN-LAIN',
+    ]);
+    const usedKategoriUpper = new Set(
+      (this.db.pengeluaran || [])
+        .map((ex) => String(ex.kategori || '').trim().toUpperCase())
+        .filter(Boolean)
+    );
+
+    // Bersihkan item placeholder lama yang belum pernah dipakai transaksi agar daftar fokus pada 24 item baku
+    this.db.masterItemPengeluaran = (this.db.masterItemPengeluaran || []).filter((m) => {
+      const uName = String(m.nama || '').trim().toUpperCase();
+      if (!uName) return false;
+      if (legacyUnusedNames.has(uName) && !usedKategoriUpper.has(uName)) {
+        return false;
+      }
+      return true;
+    });
+
+    // Sinkronkan 24 item baku (No. 1 s/d 24)
+    for (const def of DAFTAR_24_ITEM_PENGELUARAN) {
+      const defCompact = def.nama.replace(/\s+/g, '').toUpperCase();
+      const existing = this.db.masterItemPengeluaran.find(
+        (m) =>
+          m.nama.trim().toUpperCase() === def.nama.toUpperCase() ||
+          m.nama.replace(/\s+/g, '').toUpperCase() === defCompact
+      );
+      if (existing) {
+        existing.nomorUrut = def.nomorUrut;
+        existing.kelompok = def.kelompok;
+        existing.isSystemDefault = true;
+        if (!existing.satuanDefault && def.satuanDefault) {
+          existing.satuanDefault = def.satuanDefault;
+        }
+        if (!existing.deskripsi) {
+          existing.deskripsi = def.deskripsi;
+        }
+      } else {
+        this.db.masterItemPengeluaran.push({
+          id: def.kode,
+          kode: def.kode,
+          nama: def.nama,
+          kelompok: def.kelompok,
+          nomorUrut: def.nomorUrut,
+          satuanDefault: def.satuanDefault,
+          deskripsi: def.deskripsi,
+          isSystemDefault: true,
+          createdAt: nowIso,
+        });
+      }
+    }
+
+    const expItemNameSet = new Set(
+      this.db.masterItemPengeluaran.map((m) => m.nama.replace(/\s+/g, '').toUpperCase())
+    );
+    for (const ex of this.db.pengeluaran) {
+      const kName = String(ex.kategori || '').trim();
+      const kCompact = kName.replace(/\s+/g, '').toUpperCase();
+      if (kName && !expItemNameSet.has(kCompact)) {
+        expItemNameSet.add(kCompact);
+        const cleanSlug =
+          kName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase() ||
+          Date.now().toString().slice(-4);
+        this.db.masterItemPengeluaran.push({
+          id: `EXP-${cleanSlug}`,
+          kode: `EXP-${cleanSlug}`,
+          nama: kName,
+          kelompok: resolveKelompokItemPengeluaran(kName, ex.kelompokPengeluaran),
+          nomorUrut: getNomorUrutItemPengeluaran(kName),
+          deskripsi: 'Item pengeluaran terdaftar otomatis dari riwayat transaksi',
+          createdAt: nowIso,
+        });
+      }
+    }
+
+    // Pastikan setiap item memiliki kelompok ('INVENTARIS' / 'BIASA') dan urutkan No. 1..24 terlebih dahulu
+    for (const m of this.db.masterItemPengeluaran) {
+      m.nomorUrut = getNomorUrutItemPengeluaran(m.nama) ?? m.nomorUrut;
+      m.kelompok = resolveKelompokItemPengeluaran(m.nama, m.kelompok);
+    }
+    this.db.masterItemPengeluaran.sort((a, b) => {
+      const ua = a.nomorUrut ?? 999;
+      const ub = b.nomorUrut ?? 999;
+      if (ua !== ub) return ua - ub;
+      if (a.kelompok !== b.kelompok) return a.kelompok === 'INVENTARIS' ? -1 : 1;
+      return a.nama.localeCompare(b.nama);
+    });
 
     // Ensure BON01, TIT01, SINKRON, and KAS01 always exist in rekening
     const defaultRekening = getDefaultRekeningList();
@@ -1215,12 +1322,13 @@ class DatabaseManager {
     const produkMap = new Map(this.db.produk.map((p) => [p.kode, p]));
     const stokMap = new Map(this.db.stokBarang.map((s) => [s.kode, s]));
 
-    // Recover any sold/purchased product code missing from master produk
+    // Recover any sold/purchased product code missing from master produk (skip Nota Silang intermediary items)
     for (const pj of this.db.penjualan) {
+      if (pj.isNotaSilang) continue;
       for (const it of pj.items || []) {
         const cleanKode = String(it.kodeProduk || '').trim().toUpperCase();
         if (cleanKode) it.kodeProduk = cleanKode;
-        if (cleanKode && !produkMap.has(cleanKode)) {
+        if (cleanKode && cleanKode !== 'NOTA-SILANG' && !produkMap.has(cleanKode)) {
           const recovered = {
             kode: cleanKode,
             kategori: ensureKat('LAINNYA'),
@@ -1375,7 +1483,9 @@ class DatabaseManager {
 
     // Sync canonical product name & unit into transaction line items for consistent reporting
     for (const pj of this.db.penjualan) {
+      if (pj.isNotaSilang) continue;
       for (const it of pj.items || []) {
+        if (it.kodeProduk === 'NOTA-SILANG') continue;
         const prod = produkMap.get(it.kodeProduk);
         if (prod) {
           it.namaProduk = prod.nama;
@@ -1621,16 +1731,20 @@ class DatabaseManager {
       tit01.saldoSaatIni = totalTitip;
     }
 
-    const totalSinkronVolume = (this.db.bayarBon || [])
-      .filter(
-        (b) =>
-          b.metode === 'SINKRON' ||
-          b.metode === 'KOMPENSASI_TITIP' ||
-          b.rekeningTujuan === 'SINKRON' ||
-          b.rekeningTujuan === 'KOMPENSASI_TITIP' ||
-          Boolean(b.isKompensasiTitipan)
-      )
-      .reduce((sum, b) => sum + Math.max(0, b.nominalBayar || 0), 0);
+    const totalSinkronVolume =
+      (this.db.bayarBon || [])
+        .filter(
+          (b) =>
+            b.metode === 'SINKRON' ||
+            b.metode === 'KOMPENSASI_TITIP' ||
+            b.rekeningTujuan === 'SINKRON' ||
+            b.rekeningTujuan === 'KOMPENSASI_TITIP' ||
+            Boolean(b.isKompensasiTitipan)
+        )
+        .reduce((sum, b) => sum + Math.max(0, b.nominalBayar || 0), 0) +
+      (this.db.penjualan || [])
+        .filter((p) => p.metode === 'SINKRON' || p.rekeningTujuan === 'SINKRON')
+        .reduce((sum, p) => sum + Math.max(0, p.totalNominal || 0), 0);
 
     const sinkronRek = this.db.rekening.find((r) => r.kode === 'SINKRON');
     if (sinkronRek) {
@@ -1744,6 +1858,7 @@ class DatabaseManager {
     // Lookup map untuk melacak divisi asal nota & rasio HPP saat pelunasan bon barang secara Tunai/Transfer
     const penjualanNotaMetaMap = new Map<string, { divisiNorm: string; totalNominal: number; totalHpp: number }>();
     for (const p of this.db.penjualan || []) {
+      if (p.isNotaSilang || p.metode === 'PEMAKAIAN_PENGELUARAN') continue;
       if (p.noPenjualan) {
         const notaHpp = (p.items || []).reduce((s, it) => {
           const prod = produkMap.get(it.kodeProduk);

@@ -10,19 +10,14 @@ import {
   Coffee,
   Wrench,
   Search,
-  Filter,
-  DollarSign,
-  Calendar,
   Wallet,
   Camera,
   Layers,
-  ArrowUpRight,
   Scale,
-  Sparkles,
   X,
-  Tag,
   Landmark,
   Pencil,
+  Fuel,
 } from 'lucide-react';
 import {
   TransaksiPengeluaran,
@@ -30,6 +25,11 @@ import {
   ItemInventaris,
   Karyawan,
   KategoriInventaris,
+  MasterItemPengeluaran,
+  DAFTAR_24_ITEM_PENGELUARAN,
+  KelompokItemPengeluaran,
+  resolveKelompokItemPengeluaran,
+  getNomorUrutItemPengeluaran,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat, getWIBTodayString } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
@@ -62,18 +62,20 @@ const DEFAULT_DIVISI = [
   'BRILink',
 ];
 
-const PRESET_KATEGORI = [
-  'Dandan & Perbaikan Armada (Truck, Dump Dutro, L300, Exca, Towing, Motor)',
-  'Uang Jalan & Operasional Sopir (Dump Dutro, Truck)',
-  'Konsumsi Karyawan (Nasi/Makan, Gorengan, Gula, Kopi)',
-  'Admin Tarik Cash & Biaya Perbankan (BRILink, Bank)',
-  'Operasional Timbangan & Gudang (Okussa, Karung, Tali, Lakban)',
-  'BBM Solar, Bensin & Pelumas Oli',
-  'Bahan Bangunan & Perlengkapan Kerja (Wijaya Karya)',
-  'ATK, Cetak & Administrasi Kantor',
-  'Pemeliharaan Gedung & Fasilitas',
-  'Lain-lain / Kebutuhan Darurat',
-];
+interface RecapRowItem {
+  nomorUrut: number;
+  nama: string;
+  kelompok: KelompokItemPengeluaran;
+  satuanDefault?: string;
+  netNominal: number;
+  count: number;
+}
+
+function normalizeCompact(str: string): string {
+  return String(str || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
 
 export const PengeluaranView: React.FC<Props> = ({
   rekeningList,
@@ -87,7 +89,7 @@ export const PengeluaranView: React.FC<Props> = ({
   const [list, setList] = useState<TransaksiPengeluaran[]>([]);
   const [localInventaris, setLocalInventaris] = useState<ItemInventaris[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submittingKelompok, setSubmittingKelompok] = useState<KelompokItemPengeluaran | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
 
@@ -108,7 +110,6 @@ export const PengeluaranView: React.FC<Props> = ({
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [editTxId, setEditTxId] = useState<string | null>(null);
 
-  // Combined divisions: default + custom + any division that has appeared in transaction records
   const allDivisiList = useMemo(() => {
     const set = new Set<string>(DEFAULT_DIVISI);
     customDivisi.forEach((d) => set.add(d));
@@ -118,21 +119,54 @@ export const PengeluaranView: React.FC<Props> = ({
     return Array.from(set);
   }, [customDivisi, list]);
 
+  // Master 24 Item Pengeluaran (+ item tambahan jika ada)
+  const [masterItems, setMasterItems] = useState<MasterItemPengeluaran[]>([]);
+  const [showAddMasterItemModal, setShowAddMasterItemModal] = useState<boolean>(false);
+  const [newMasterItemName, setNewMasterItemName] = useState<string>('');
+  const [newMasterItemKelompok, setNewMasterItemKelompok] =
+    useState<KelompokItemPengeluaran>('INVENTARIS');
+  const [newMasterItemSatuan, setNewMasterItemSatuan] = useState<string>('');
+  const [newMasterItemKet, setNewMasterItemKet] = useState<string>('');
+  const [savingMasterItem, setSavingMasterItem] = useState<boolean>(false);
+
   // Filter states
+  const [filterKategoriItem, setFilterKategoriItem] = useState<string>('ALL');
+  const [filterKelompok, setFilterKelompok] = useState<'ALL' | KelompokItemPengeluaran>('ALL');
   const [filterDivisi, setFilterDivisi] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Form states
-  const [divisiInput, setDivisiInput] = useState<string>('Wijaya Transport');
-  const [kategoriInput, setKategoriInput] = useState<string>(PRESET_KATEGORI[0]);
-  const [keteranganInput, setKeteranganInput] = useState<string>('');
-  const [nominalInput, setNominalInput] = useState<string>('');
-  const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
-  const [penerimaOptionValue, setPenerimaOptionValue] = useState<string>('');
-  const [selectedInventarisId, setSelectedInventarisId] = useState<string>('');
-  const [penerimaManualInput, setPenerimaManualInput] = useState<string>('');
-  const [tanggalInput, setTanggalInput] = useState<string>(getWIBTodayString());
-  const [fotoKuitansi, setFotoKuitansi] = useState<string>('');
+  // ============================================================================
+  // FORM 1 (WARNA HIJAU): PENGELUARAN UNTUK INVENTARIS (ITEM 1 - 16)
+  // ============================================================================
+  const [invKategori, setInvKategori] = useState<string>('L300');
+  const [invDivisi, setInvDivisi] = useState<string>('Wijaya Transport');
+  const [invArahMutasi, setInvArahMutasi] = useState<'TAMBAH' | 'KURANG'>('TAMBAH');
+  const [invQty, setInvQty] = useState<string>('');
+  const [invSatuan, setInvSatuan] = useState<string>('PCS');
+  const [invHargaSatuan, setInvHargaSatuan] = useState<string>('');
+  const [invNominal, setInvNominal] = useState<string>('');
+  const [invKeterangan, setInvKeterangan] = useState<string>('');
+  const [invRekeningSumber, setInvRekeningSumber] = useState<string>('KAS01');
+  const [invSelectedUnitId, setInvSelectedUnitId] = useState<string>('');
+  const [invPenerimaManual, setInvPenerimaManual] = useState<string>('');
+  const [invTanggal, setInvTanggal] = useState<string>(getWIBTodayString());
+  const [invFotoKuitansi, setInvFotoKuitansi] = useState<string>('');
+
+  // ============================================================================
+  // FORM 2 (WARNA ORANYE): PENGELUARAN BIASA / HARIAN (ITEM 17 - 24)
+  // ============================================================================
+  const [biasaKategori, setBiasaKategori] = useState<string>('SOLAR');
+  const [biasaDivisi, setBiasaDivisi] = useState<string>('Gudang Wijaya Agro');
+  const [biasaArahMutasi, setBiasaArahMutasi] = useState<'TAMBAH' | 'KURANG'>('TAMBAH');
+  const [biasaQty, setBiasaQty] = useState<string>('');
+  const [biasaSatuan, setBiasaSatuan] = useState<string>('LITER');
+  const [biasaHargaSatuan, setBiasaHargaSatuan] = useState<string>('');
+  const [biasaNominal, setBiasaNominal] = useState<string>('');
+  const [biasaKeterangan, setBiasaKeterangan] = useState<string>('');
+  const [biasaRekeningSumber, setBiasaRekeningSumber] = useState<string>('KAS01');
+  const [biasaPenerima, setBiasaPenerima] = useState<string>('');
+  const [biasaTanggal, setBiasaTanggal] = useState<string>(getWIBTodayString());
+  const [biasaFotoKuitansi, setBiasaFotoKuitansi] = useState<string>('');
 
   // Quick Add Inventaris Modal inside Pengeluaran
   const [showQuickAddInventaris, setShowQuickAddInventaris] = useState<boolean>(false);
@@ -146,6 +180,17 @@ export const PengeluaranView: React.FC<Props> = ({
   const [quickInvSaving, setQuickInvSaving] = useState<boolean>(false);
   const [quickInvError, setQuickInvError] = useState<string>('');
 
+  // Preview Photo Modal
+  const [previewPhoto, setPreviewPhoto] = useState<{
+    imageUrl: string;
+    title: string;
+    nomorBukti?: string;
+    namaMitra?: string;
+    tanggal?: string;
+    nominalText?: string;
+    keterangan?: string;
+  } | null>(null);
+
   const mergedInventarisList = useMemo(() => {
     const map = new Map<string, ItemInventaris>();
     inventarisList.forEach((i) => map.set(i.id, i));
@@ -153,9 +198,9 @@ export const PengeluaranView: React.FC<Props> = ({
     return Array.from(map.values()).filter((i) => i.status === 'AKTIF');
   }, [inventarisList, localInventaris]);
 
-  const selectedInventarisObj = useMemo(
-    () => mergedInventarisList.find((i) => i.id === selectedInventarisId) || null,
-    [mergedInventarisList, selectedInventarisId]
+  const selectedInvUnitObj = useMemo(
+    () => mergedInventarisList.find((i) => i.id === invSelectedUnitId) || null,
+    [mergedInventarisList, invSelectedUnitId]
   );
 
   useEffect(() => {
@@ -165,52 +210,418 @@ export const PengeluaranView: React.FC<Props> = ({
       .catch(() => {});
   }, []);
 
+  // Auto-match inventaris unit when invKategori changes
+  const findMatchingInventarisUnit = (kategoriName: string): ItemInventaris | undefined => {
+    const target = normalizeCompact(kategoriName);
+    if (!target) return undefined;
+    return mergedInventarisList.find((unit) => {
+      const plat = normalizeCompact(unit.nomorPlat || '');
+      const nama = normalizeCompact(unit.namaItem || '');
+      return (
+        (plat && (plat === target || plat.includes(target) || target.includes(plat))) ||
+        (nama && (nama === target || nama.includes(target) || target.includes(nama)))
+      );
+    });
+  };
+
   useEffect(() => {
     if (preselectedInventarisId) {
       const target = mergedInventarisList.find((i) => i.id === preselectedInventarisId);
       if (target) {
-        setPenerimaOptionValue(`INV:${target.id}`);
-        setSelectedInventarisId(target.id);
-        if (target.divisi) setDivisiInput(target.divisi);
+        setInvSelectedUnitId(target.id);
+        if (target.divisi) setInvDivisi(target.divisi);
+        // Match canonical 1-16 item if possible
+        const platNorm = normalizeCompact(target.nomorPlat || '');
+        const namaNorm = normalizeCompact(target.namaItem || '');
+        const matchedDef = DAFTAR_24_ITEM_PENGELUARAN.filter(
+          (d) => d.kelompok === 'INVENTARIS'
+        ).find((d) => {
+          const dn = normalizeCompact(d.nama);
+          return (
+            (platNorm && (dn === platNorm || platNorm.includes(dn))) ||
+            (namaNorm && (dn === namaNorm || namaNorm.includes(dn)))
+          );
+        });
+        if (matchedDef) {
+          setInvKategori(matchedDef.nama);
+        }
         onClearPreselectedInventaris?.();
       }
     }
   }, [preselectedInventarisId, mergedInventarisList, onClearPreselectedInventaris]);
 
-  const formatInventarisPenerimaLabel = (inv: ItemInventaris): string => {
-    const platPart = inv.nomorPlat && inv.nomorPlat !== '-' ? `${inv.nomorPlat} — ` : '';
-    const driverPart =
-      inv.driverPenanggungJawab && inv.driverPenanggungJawab !== '-'
-        ? ` (Driver: ${inv.driverPenanggungJawab})`
-        : '';
-    return `${platPart}${inv.namaItem}${driverPart}`;
+  const loadData = async (silent = false) => {
+    if (!silent && list.length === 0) setLoading(true);
+    try {
+      const [data, divList, masterList] = await Promise.all([
+        api.getPengeluaran(),
+        api.getDivisi().catch(() => []),
+        api.getMasterItemPengeluaran().catch(() => []),
+      ]);
+      setList(data || []);
+      if (Array.isArray(masterList)) {
+        setMasterItems(masterList);
+      }
+      if (Array.isArray(divList) && divList.length > 0) {
+        const customNames = divList.filter((d: any) => d.isCustom).map((d: any) => d.nama);
+        if (customNames.length > 0) {
+          setCustomDivisi((prev) => Array.from(new Set([...prev, ...customNames])));
+        }
+      }
+    } catch (err: any) {
+      console.warn('Gagal memuat daftar pengeluaran:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const resolvedPenerimaValue = useMemo(() => {
-    if (penerimaOptionValue.startsWith('INV:')) {
-      if (selectedInventarisObj) return formatInventarisPenerimaLabel(selectedInventarisObj);
-      return '';
-    }
-    if (penerimaOptionValue.startsWith('KRY:')) {
-      return penerimaOptionValue.slice(4);
-    }
-    if (penerimaOptionValue === 'MANUAL') {
-      return penerimaManualInput.trim();
-    }
-    return '';
-  }, [penerimaOptionValue, selectedInventarisObj, penerimaManualInput]);
+  useEffect(() => {
+    loadData(false);
+    const onErpUpdated = () => loadData(true);
+    window.addEventListener('erp:data-updated', onErpUpdated);
+    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
+  }, []);
 
-  const handlePenerimaSelectChange = (val: string) => {
-    setPenerimaOptionValue(val);
-    if (val.startsWith('INV:')) {
-      const invId = val.slice(4);
-      setSelectedInventarisId(invId);
-      const found = mergedInventarisList.find((i) => i.id === invId);
-      if (found && found.divisi) {
-        setDivisiInput(found.divisi);
+  // Build ordered 24 Canonical Items + any custom MasterItems / Historical Categories
+  const recapRows = useMemo<RecapRowItem[]>(() => {
+    const mapByUpper = new Map<string, RecapRowItem>();
+
+    // 1. Seed exact 24 canonical items first (No 1..16 HIJAU INVENTARIS, No 17..24 ORANYE BIASA)
+    for (const def of DAFTAR_24_ITEM_PENGELUARAN) {
+      mapByUpper.set(def.nama.toUpperCase(), {
+        nomorUrut: def.nomorUrut,
+        nama: def.nama,
+        kelompok: def.kelompok,
+        satuanDefault: def.satuanDefault,
+        netNominal: 0,
+        count: 0,
+      });
+    }
+
+    // 2. Merge custom MasterItemPengeluaran if any beyond the 24
+    let extraOrder = 25;
+    for (const m of masterItems) {
+      const key = (m.nama || '').trim().toUpperCase();
+      if (!key) continue;
+      if (!mapByUpper.has(key)) {
+        mapByUpper.set(key, {
+          nomorUrut: m.nomorUrut || extraOrder++,
+          nama: m.nama.trim().toUpperCase(),
+          kelompok: m.kelompok || resolveKelompokItemPengeluaran(m.nama),
+          satuanDefault: m.satuanDefault,
+          netNominal: 0,
+          count: 0,
+        });
       }
-    } else {
-      setSelectedInventarisId('');
+    }
+
+    // 3. Accumulate transaction totals (respecting filterDivisi if active so Bos can inspect per-divisi or all)
+    const relevantTx =
+      filterDivisi === 'ALL' ? list : list.filter((t) => t.divisi === filterDivisi);
+
+    for (const tx of relevantTx) {
+      const rawKat = (tx.kategori || '').trim();
+      if (!rawKat) continue;
+      const key = rawKat.toUpperCase();
+      const existing = mapByUpper.get(key);
+      if (existing) {
+        existing.netNominal += Number(tx.nominal) || 0;
+        existing.count += 1;
+      } else {
+        const kel = tx.kelompokPengeluaran || resolveKelompokItemPengeluaran(rawKat);
+        mapByUpper.set(key, {
+          nomorUrut: getNomorUrutItemPengeluaran(rawKat) ?? extraOrder++,
+          nama: rawKat,
+          kelompok: kel,
+          netNominal: Number(tx.nominal) || 0,
+          count: 1,
+        });
+      }
+    }
+
+    return Array.from(mapByUpper.values()).sort((a, b) => a.nomorUrut - b.nomorUrut);
+  }, [masterItems, list, filterDivisi]);
+
+  const inventarisItems = useMemo(
+    () => recapRows.filter((r) => r.kelompok === 'INVENTARIS'),
+    [recapRows]
+  );
+
+  const biasaItems = useMemo(
+    () => recapRows.filter((r) => r.kelompok === 'BIASA'),
+    [recapRows]
+  );
+
+  const totalInventarisHijau = useMemo(
+    () => inventarisItems.reduce((s, r) => s + r.netNominal, 0),
+    [inventarisItems]
+  );
+
+  const totalBiasaOranye = useMemo(
+    () => biasaItems.reduce((s, r) => s + r.netNominal, 0),
+    [biasaItems]
+  );
+
+  const totalRecapGrand = useMemo(
+    () => recapRows.reduce((s, r) => s + r.netNominal, 0),
+    [recapRows]
+  );
+
+  const activeCashAccounts = useMemo(
+    () =>
+      rekeningList.filter(
+        (r) => !r.isVirtual && r.kategori !== 'OPERASIONAL_DIVISI' && r.status === 'AKTIF'
+      ),
+    [rekeningList]
+  );
+
+  const handleSelectInvKategori = (katName: string) => {
+    setInvKategori(katName);
+    const foundDef = inventarisItems.find((i) => i.nama.toUpperCase() === katName.toUpperCase());
+    if (foundDef?.satuanDefault) {
+      setInvSatuan(foundDef.satuanDefault);
+    }
+    const matchedUnit = findMatchingInventarisUnit(katName);
+    if (matchedUnit) {
+      setInvSelectedUnitId(matchedUnit.id);
+      if (matchedUnit.divisi) setInvDivisi(matchedUnit.divisi);
+    }
+  };
+
+  const handleSelectBiasaKategori = (katName: string) => {
+    setBiasaKategori(katName);
+    const foundDef = biasaItems.find((i) => i.nama.toUpperCase() === katName.toUpperCase());
+    if (foundDef?.satuanDefault) {
+      setBiasaSatuan(foundDef.satuanDefault);
+    }
+  };
+
+  const handleInvQtyOrHargaChange = (nextQtyStr: string, nextHargaStr: string) => {
+    setInvQty(nextQtyStr);
+    setInvHargaSatuan(nextHargaStr);
+    const q = Number(nextQtyStr);
+    const h = Number(nextHargaStr);
+    if (q > 0 && h > 0) {
+      setInvNominal(String(Math.round(q * h)));
+    }
+  };
+
+  const handleBiasaQtyOrHargaChange = (nextQtyStr: string, nextHargaStr: string) => {
+    setBiasaQty(nextQtyStr);
+    setBiasaHargaSatuan(nextHargaStr);
+    const q = Number(nextQtyStr);
+    const h = Number(nextHargaStr);
+    if (q > 0 && h > 0) {
+      setBiasaNominal(String(Math.round(q * h)));
+    }
+  };
+
+  const handleSubmitFormInventaris = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    const nominal = Math.abs(Number(invNominal));
+    if (!nominal || nominal <= 0) {
+      setErrorMsg('Nominal Pengeluaran Inventaris (Hijau) harus lebih dari Rp 0.');
+      return;
+    }
+
+    const keteranganFinal =
+      invKeterangan.trim() ||
+      `Pengeluaran Inventaris ${invKategori}${
+        Number(invQty) > 0 ? ` (${invQty} ${invSatuan || 'PCS'})` : ''
+      }`;
+
+    const isNonKas = invRekeningSumber === 'SINKRON';
+    const selectedRek = isNonKas
+      ? undefined
+      : rekeningList.find((r) => r.kode === invRekeningSumber);
+    const isRekAnak = Boolean(
+      selectedRek &&
+        (selectedRek.isAnakPerusahaan ||
+          selectedRek.kategori === 'ANAK_PERUSAHAAN' ||
+          selectedRek.kode === 'REK-DPPARABO')
+    );
+
+    if (
+      !isNonKas &&
+      invArahMutasi === 'TAMBAH' &&
+      selectedRek &&
+      !isRekAnak &&
+      selectedRek.saldoSaatIni < nominal
+    ) {
+      setErrorMsg(
+        `Saldo rekening ${selectedRek.nama} tidak mencukupi (Tersedia: ${formatRupiah(
+          selectedRek.saldoSaatIni
+        )}).`
+      );
+      return;
+    }
+
+    const unitLabel = selectedInvUnitObj
+      ? `${
+          selectedInvUnitObj.nomorPlat && selectedInvUnitObj.nomorPlat !== '-'
+            ? `${selectedInvUnitObj.nomorPlat} — `
+            : ''
+        }${selectedInvUnitObj.namaItem}`
+      : invPenerimaManual.trim() || invKategori;
+
+    setSubmittingKelompok('INVENTARIS');
+    try {
+      await api.createPengeluaran({
+        divisi: invDivisi,
+        kategori: invKategori,
+        kelompokPengeluaran: 'INVENTARIS',
+        keterangan: keteranganFinal,
+        nominal,
+        qty: Number(invQty) > 0 ? Number(invQty) : undefined,
+        satuan: Number(invQty) > 0 ? invSatuan.trim().toUpperCase() || 'PCS' : undefined,
+        hargaSatuan: Number(invHargaSatuan) > 0 ? Number(invHargaSatuan) : undefined,
+        arahMutasi: invArahMutasi,
+        isNonKas,
+        rekeningSumber: invRekeningSumber,
+        penerima: unitLabel || undefined,
+        idInventaris: invSelectedUnitId || undefined,
+        tanggal: invTanggal,
+        fotoKuitansi: invFotoKuitansi || undefined,
+      });
+
+      setSuccessMsg(
+        invArahMutasi === 'KURANG'
+          ? `Koreksi Pengeluaran Inventaris (Hijau) "${invKategori}" sebesar −${formatRupiah(nominal)} berhasil disimpan.`
+          : `Pengeluaran Inventaris (Hijau) "${invKategori}" sebesar +${formatRupiah(nominal)} berhasil dicatat!`
+      );
+      setInvQty('');
+      setInvHargaSatuan('');
+      setInvNominal('');
+      setInvKeterangan('');
+      setInvPenerimaManual('');
+      setInvFotoKuitansi('');
+      loadData();
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal menyimpan pengeluaran inventaris');
+    } finally {
+      setSubmittingKelompok(null);
+    }
+  };
+
+  const handleSubmitFormBiasa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    const nominal = Math.abs(Number(biasaNominal));
+    if (!nominal || nominal <= 0) {
+      setErrorMsg('Nominal Pengeluaran Biasa (Oranye) harus lebih dari Rp 0.');
+      return;
+    }
+
+    const keteranganFinal =
+      biasaKeterangan.trim() ||
+      `Pengeluaran ${biasaKategori}${
+        Number(biasaQty) > 0 ? ` (${biasaQty} ${biasaSatuan || 'PCS'})` : ''
+      }`;
+
+    const isNonKas = biasaRekeningSumber === 'SINKRON';
+    const selectedRek = isNonKas
+      ? undefined
+      : rekeningList.find((r) => r.kode === biasaRekeningSumber);
+    const isRekAnak = Boolean(
+      selectedRek &&
+        (selectedRek.isAnakPerusahaan ||
+          selectedRek.kategori === 'ANAK_PERUSAHAAN' ||
+          selectedRek.kode === 'REK-DPPARABO')
+    );
+
+    if (
+      !isNonKas &&
+      biasaArahMutasi === 'TAMBAH' &&
+      selectedRek &&
+      !isRekAnak &&
+      selectedRek.saldoSaatIni < nominal
+    ) {
+      setErrorMsg(
+        `Saldo rekening ${selectedRek.nama} tidak mencukupi (Tersedia: ${formatRupiah(
+          selectedRek.saldoSaatIni
+        )}).`
+      );
+      return;
+    }
+
+    setSubmittingKelompok('BIASA');
+    try {
+      await api.createPengeluaran({
+        divisi: biasaDivisi,
+        kategori: biasaKategori,
+        kelompokPengeluaran: 'BIASA',
+        keterangan: keteranganFinal,
+        nominal,
+        qty: Number(biasaQty) > 0 ? Number(biasaQty) : undefined,
+        satuan: Number(biasaQty) > 0 ? biasaSatuan.trim().toUpperCase() || 'PCS' : undefined,
+        hargaSatuan: Number(biasaHargaSatuan) > 0 ? Number(biasaHargaSatuan) : undefined,
+        arahMutasi: biasaArahMutasi,
+        isNonKas,
+        rekeningSumber: biasaRekeningSumber,
+        penerima: biasaPenerima.trim() || undefined,
+        tanggal: biasaTanggal,
+        fotoKuitansi: biasaFotoKuitansi || undefined,
+      });
+
+      setSuccessMsg(
+        biasaArahMutasi === 'KURANG'
+          ? `Koreksi Pengeluaran Biasa (Oranye) "${biasaKategori}" sebesar −${formatRupiah(nominal)} berhasil disimpan.`
+          : `Pengeluaran Biasa (Oranye) "${biasaKategori}" sebesar +${formatRupiah(nominal)} berhasil dicatat!`
+      );
+      setBiasaQty('');
+      setBiasaHargaSatuan('');
+      setBiasaNominal('');
+      setBiasaKeterangan('');
+      setBiasaPenerima('');
+      setBiasaFotoKuitansi('');
+      loadData();
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal menyimpan pengeluaran biasa');
+    } finally {
+      setSubmittingKelompok(null);
+    }
+  };
+
+  const handleCreateMasterItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newMasterItemName.trim();
+    if (!trimmed) return;
+    setSavingMasterItem(true);
+    setErrorMsg('');
+    try {
+      const created = await api.createMasterItemPengeluaran({
+        nama: trimmed,
+        kelompok: newMasterItemKelompok,
+        satuanDefault: newMasterItemSatuan.trim() || undefined,
+        deskripsi: newMasterItemKet.trim() || undefined,
+      });
+      setMasterItems((prev) => [...prev, created]);
+      if (newMasterItemKelompok === 'INVENTARIS') {
+        setInvKategori(created.nama);
+      } else {
+        setBiasaKategori(created.nama);
+      }
+      setNewMasterItemName('');
+      setNewMasterItemSatuan('');
+      setNewMasterItemKet('');
+      setShowAddMasterItemModal(false);
+      setSuccessMsg(
+        `Item Pengeluaran "${created.nama}" (${
+          newMasterItemKelompok === 'INVENTARIS' ? 'Hijau - Inventaris' : 'Oranye - Biasa'
+        }) berhasil ditambahkan!`
+      );
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal menambah item pengeluaran baru');
+    } finally {
+      setSavingMasterItem(false);
     }
   };
 
@@ -234,13 +645,12 @@ export const PengeluaranView: React.FC<Props> = ({
         merkTipe: quickInvMerk.trim() || '-',
         tahunKeluaran: quickInvTahun.trim() || '-',
         driverPenanggungJawab: quickInvDriver.trim() || '-',
-        divisi: divisiInput || 'Wijaya Transport',
+        divisi: invDivisi || 'Wijaya Transport',
         tanggalPajakTahunan: pajakFormatted,
         kondisi: 'BAIK',
       });
       setLocalInventaris((prev) => [created, ...prev]);
-      setPenerimaOptionValue(`INV:${created.id}`);
-      setSelectedInventarisId(created.id);
+      setInvSelectedUnitId(created.id);
       setShowQuickAddInventaris(false);
       setQuickInvNama('');
       setQuickInvPlat('');
@@ -252,113 +662,6 @@ export const PengeluaranView: React.FC<Props> = ({
       setQuickInvError(err.message || 'Gagal menambah item inventaris');
     } finally {
       setQuickInvSaving(false);
-    }
-  };
-
-  // Preview Photo Modal
-  const [previewPhoto, setPreviewPhoto] = useState<{
-    imageUrl: string;
-    title: string;
-    nomorBukti?: string;
-    namaMitra?: string;
-    tanggal?: string;
-    nominalText?: string;
-    keterangan?: string;
-  } | null>(null);
-
-  const loadData = async (silent = false) => {
-    if (!silent && list.length === 0) setLoading(true);
-    try {
-      const [data, divList] = await Promise.all([
-        api.getPengeluaran(),
-        api.getDivisi().catch(() => []),
-      ]);
-      setList(data || []);
-      if (Array.isArray(divList) && divList.length > 0) {
-        const customNames = divList.filter((d: any) => d.isCustom).map((d: any) => d.nama);
-        if (customNames.length > 0) {
-          setCustomDivisi((prev) => Array.from(new Set([...prev, ...customNames])));
-        }
-      }
-    } catch (err: any) {
-      console.warn('Gagal memuat daftar pengeluaran:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData(false);
-    const onErpUpdated = () => loadData(true);
-    window.addEventListener('erp:data-updated', onErpUpdated);
-    return () => window.removeEventListener('erp:data-updated', onErpUpdated);
-  }, []);
-
-  const selectedRekening = useMemo(() => {
-    return rekeningList.find((r) => r.kode === rekeningSumber);
-  }, [rekeningList, rekeningSumber]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    const nominal = Number(nominalInput);
-    if (!nominal || nominal <= 0) {
-      setErrorMsg('Nominal pengeluaran harus lebih dari Rp 0.');
-      return;
-    }
-
-    if (!keteranganInput.trim()) {
-      setErrorMsg('Keterangan rincian barang/pengeluaran wajib diisi.');
-      return;
-    }
-
-    const isRekAnakPerusahaan = Boolean(
-      selectedRekening &&
-        (selectedRekening.isAnakPerusahaan ||
-          selectedRekening.kategori === 'ANAK_PERUSAHAAN' ||
-          selectedRekening.kode === 'REK-DPPARABO')
-    );
-
-    if (selectedRekening && !isRekAnakPerusahaan && selectedRekening.saldoSaatIni < nominal) {
-      setErrorMsg(
-        `Saldo rekening ${selectedRekening.nama} tidak mencukupi (Tersedia: ${formatRupiah(
-          selectedRekening.saldoSaatIni
-        )}).`
-      );
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      await api.createPengeluaran({
-        divisi: divisiInput,
-        kategori: kategoriInput,
-        keterangan: keteranganInput.trim(),
-        nominal,
-        rekeningSumber,
-        penerima: resolvedPenerimaValue || undefined,
-        idInventaris: selectedInventarisId || undefined,
-        tanggal: tanggalInput,
-        fotoKuitansi: fotoKuitansi || undefined,
-      });
-
-      setSuccessMsg(
-        `Pengeluaran untuk ${divisiInput} sebesar ${formatRupiah(nominal)} berhasil dicatat!`
-      );
-      setKeteranganInput('');
-      setNominalInput('');
-      setPenerimaOptionValue('');
-      setSelectedInventarisId('');
-      setPenerimaManualInput('');
-      setFotoKuitansi('');
-      loadData();
-      onRefresh();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Gagal menyimpan pengeluaran');
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -382,7 +685,6 @@ export const PengeluaranView: React.FC<Props> = ({
     }
   };
 
-  // Helper for division color, icon & description tag
   const getDivisiTheme = (divisi: string) => {
     const d = divisi.toUpperCase();
     if (d.includes('TRANS')) {
@@ -390,8 +692,6 @@ export const PengeluaranView: React.FC<Props> = ({
         icon: Truck,
         bg: 'bg-blue-50/70 border-blue-200 text-blue-900',
         activeBorder: 'border-blue-600 ring-2 ring-blue-500/30 bg-blue-50',
-        badge: 'bg-blue-100 text-blue-800',
-        tag: 'WIJAYA TRANS',
         desc: 'Perbaikan dump/truck, L300, exca, towing & armada',
       };
     }
@@ -400,9 +700,7 @@ export const PengeluaranView: React.FC<Props> = ({
         icon: Coffee,
         bg: 'bg-amber-50/70 border-amber-200 text-amber-900',
         activeBorder: 'border-amber-600 ring-2 ring-amber-500/30 bg-amber-50',
-        badge: 'bg-amber-100 text-amber-800',
-        tag: 'GWA',
-        desc: 'Konsumsi karyawan (nasi, gorengan, gula) & logistik',
+        desc: 'Solar, konsumsi karyawan & logistik gudang',
       };
     }
     if (d.includes('KARYA')) {
@@ -410,8 +708,6 @@ export const PengeluaranView: React.FC<Props> = ({
         icon: Wrench,
         bg: 'bg-orange-50/70 border-orange-200 text-orange-900',
         activeBorder: 'border-orange-600 ring-2 ring-orange-500/30 bg-orange-50',
-        badge: 'bg-orange-100 text-orange-800',
-        tag: 'WIJAYA KARYA',
         desc: 'Bahan bangunan, alat proyek & material teknik',
       };
     }
@@ -420,8 +716,6 @@ export const PengeluaranView: React.FC<Props> = ({
         icon: Wallet,
         bg: 'bg-sky-50/70 border-sky-200 text-sky-900',
         activeBorder: 'border-sky-600 ring-2 ring-sky-500/30 bg-sky-50',
-        badge: 'bg-sky-100 text-sky-800',
-        tag: 'BRILINK',
         desc: 'Admin tarik tunai/cash & perbankan operasional',
       };
     }
@@ -430,8 +724,6 @@ export const PengeluaranView: React.FC<Props> = ({
         icon: Scale,
         bg: 'bg-purple-50/70 border-purple-200 text-purple-900',
         activeBorder: 'border-purple-600 ring-2 ring-purple-500/30 bg-purple-50',
-        badge: 'bg-purple-100 text-purple-800',
-        tag: 'OKUSSA',
         desc: 'Timbangan & operasional unit timbang',
       };
     }
@@ -440,8 +732,6 @@ export const PengeluaranView: React.FC<Props> = ({
         icon: Landmark,
         bg: 'bg-emerald-50/70 border-emerald-200 text-emerald-900',
         activeBorder: 'border-emerald-600 ring-2 ring-emerald-500/30 bg-emerald-50',
-        badge: 'bg-emerald-100 text-emerald-800',
-        tag: 'PTWAP',
         desc: 'Kantor pusat, manajemen & legalitas',
       };
     }
@@ -450,8 +740,6 @@ export const PengeluaranView: React.FC<Props> = ({
         icon: Building,
         bg: 'bg-teal-50/70 border-teal-200 text-teal-900',
         activeBorder: 'border-teal-600 ring-2 ring-teal-500/30 bg-teal-50',
-        badge: 'bg-teal-100 text-teal-800',
-        tag: 'CV WA',
         desc: 'Unit usaha kemitraan & lapangan',
       };
     }
@@ -459,18 +747,15 @@ export const PengeluaranView: React.FC<Props> = ({
       icon: Layers,
       bg: 'bg-zinc-50 border-zinc-200 text-zinc-900',
       activeBorder: 'border-zinc-700 ring-2 ring-zinc-500/30 bg-zinc-100',
-      badge: 'bg-zinc-200 text-zinc-800',
-      tag: 'DIVISI',
       desc: 'Operasional & kebutuhan unit kerja',
     };
   };
 
-  // Grand total across all transactions
-  const totalPengeluaranAll = useMemo(() => {
-    return list.reduce((sum, item) => sum + (item.nominal || 0), 0);
-  }, [list]);
+  const totalPengeluaranAll = useMemo(
+    () => list.reduce((sum, item) => sum + (item.nominal || 0), 0),
+    [list]
+  );
 
-  // Dynamic statistics per division for ALL divisions
   const divisiStats = useMemo(() => {
     return allDivisiList.map((div) => {
       const subList = list.filter((i) => i.divisi === div);
@@ -505,702 +790,1234 @@ export const PengeluaranView: React.FC<Props> = ({
     if (typeof window !== 'undefined') {
       localStorage.setItem('wijaya_agro_custom_divisi', JSON.stringify(updated));
     }
-    setDivisiInput(trimmed);
+    setInvDivisi(trimmed);
+    setBiasaDivisi(trimmed);
     setNewDivisiName('');
     setShowAddDivisiModal(false);
-    setSuccessMsg(`Divisi "${trimmed}" berhasil ditambahkan! Card divisi baru otomatis terbentuk di tampilan dan langsung dipilih.`);
+    setSuccessMsg(`Divisi "${trimmed}" berhasil ditambahkan!`);
     onRefresh();
   };
 
-  // Filtered List
   const filteredList = useMemo(() => {
     return list.filter((item) => {
+      const itemKelompok =
+        item.kelompokPengeluaran || resolveKelompokItemPengeluaran(item.kategori);
       const matchDivisi = filterDivisi === 'ALL' || item.divisi === filterDivisi;
+      const matchKelompok = filterKelompok === 'ALL' || itemKelompok === filterKelompok;
+      const matchKat =
+        filterKategoriItem === 'ALL' ||
+        item.kategori.toUpperCase() === filterKategoriItem.toUpperCase();
       const matchQuery =
         !searchQuery.trim() ||
         item.keterangan.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.kategori.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (item.penerima || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.idTransaksi.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchDivisi && matchQuery;
+      return matchDivisi && matchKelompok && matchKat && matchQuery;
     });
-  }, [list, filterDivisi, searchQuery]);
+  }, [list, filterDivisi, filterKelompok, filterKategoriItem, searchQuery]);
+
+  const formatAngkaTabel = (val: number): string => {
+    if (!val) return '-';
+    const absStr = Math.abs(Math.round(val)).toLocaleString('id-ID');
+    return val < 0 ? `-${absStr}` : absStr;
+  };
 
   return (
     <div className="space-y-6">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl font-bold text-zinc-900 tracking-tight">
-              Menu Pengeluaran &amp; Biaya Operasional Divisi
-            </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-300">
-              PT. WIJAYA AGRO PERKASA
-            </span>
-          </div>
-          <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">
-            Khusus <strong>pengeluaran murni pengurang saldo &amp; laba divisi</strong> (servis armada, BBM, konsumsi, material habis pakai). Untuk pembelian beras/barang yang akan dijual kembali (hitungan Modal Dagang), gunakan menu <strong>Pembelian Stok Pemasok / Hasil Bumi</strong>.
+          <h1 className="text-xl font-bold text-zinc-900 tracking-tight">
+            Rekapan 24 Item Pengeluaran &amp; Dual Form Input (Hijau Inventaris · Oranye Biasa)
+          </h1>
+          <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">
+            Item pengeluaran dibagi tegas menjadi <strong>16 Item Hijau (Pengeluaran Untuk Inventaris / Armada)</strong> dan <strong>8 Item Oranye (Pengeluaran Biasa Harian)</strong> sesuai buku rekapan PT. Klik baris pada tabel rekapan untuk memilih item dan memfilter histori.
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => setShowAddDivisiModal(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-lg transition-colors cursor-pointer shadow-xs"
-            title="Tambah divisi / unit kerja baru agar otomatis membentuk card baru"
+            onClick={() => {
+              setNewMasterItemKelompok('INVENTARIS');
+              setShowAddMasterItemModal(true);
+            }}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white font-semibold text-xs rounded-lg transition-colors cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>+ Tambah Divisi Baru</span>
+            <span>Tambah Item Pengeluaran</span>
           </button>
 
           <button
+            type="button"
+            onClick={() => setShowAddDivisiModal(true)}
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-white hover:bg-zinc-50 border border-zinc-300 text-zinc-800 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Tambah Divisi</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => {
               loadData();
               onRefresh();
             }}
-            className="text-xs font-medium px-3 py-1.5 bg-white hover:bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-700 shadow-2xs cursor-pointer"
+            className="text-xs font-medium px-3 py-1.5 bg-white hover:bg-zinc-50 border border-zinc-200 rounded-lg text-zinc-700 cursor-pointer"
           >
             Muat Ulang
           </button>
         </div>
       </div>
 
-      {/* KPI Cards: Dynamic Grid Displaying ALL Divisions + Grand Total + Add Card */}
-      <div className="space-y-2.5">
-        <div className="flex items-center justify-between text-xs text-zinc-600">
-          <div className="flex items-center space-x-2">
-            <span className="font-bold uppercase tracking-wider text-[11px] text-zinc-800">
-              Tampilan Card Semua Divisi ({allDivisiList.length} Divisi Terdaftar)
-            </span>
-            <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-2 py-0.5 rounded-full">
-              Real-Time
-            </span>
+      {successMsg && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{successMsg}</span>
           </div>
-          <span className="text-[10px] text-zinc-500">
-            {filterDivisi === 'ALL'
-              ? 'Menampilkan semua transaksi divisi · Klik kartu untuk memfilter tabel'
-              : `Sedang memfilter: ${filterDivisi} (Klik kartu lagi untuk menampilkan semua)`}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-          {/* Card 1: TOTAL KESELURUHAN (ALL) */}
-          <div
-            onClick={() => setFilterDivisi('ALL')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer relative min-w-0 overflow-hidden ${
-              filterDivisi === 'ALL'
-                ? 'bg-rose-50 border-rose-600 ring-2 ring-rose-500/30 shadow-xs'
-                : 'bg-rose-500/10 border-rose-500/20 hover:border-rose-400/40'
-            }`}
+          <button
+            type="button"
+            onClick={() => setSuccessMsg('')}
+            className="text-emerald-700 hover:text-emerald-950 cursor-pointer"
           >
-            <div className="flex items-center justify-between gap-2 text-xs text-rose-800 font-bold mb-1 min-w-0">
-              <span className="truncate">TOTAL SEMUA DIVISI</span>
-              <Receipt className="w-4 h-4 text-rose-600 shrink-0" />
-            </div>
-            <div
-              className="text-xl font-black text-rose-950 font-mono tabular-nums truncate whitespace-nowrap"
-              title={formatRupiah(totalPengeluaranAll)}
-            >
-              {formatRupiahSingkat(totalPengeluaranAll)}
-            </div>
-            <div className="flex items-center justify-between text-[11px] text-rose-700 mt-2 pt-1 border-t border-rose-200/60">
-              <span>{list.length} transaksi total</span>
-              {filterDivisi === 'ALL' ? (
-                <span className="font-bold text-[10px] bg-rose-200 text-rose-900 px-1.5 py-0.2 rounded">
-                  ✓ Tampil Semua
-                </span>
-              ) : (
-                <span className="text-[10px] text-rose-600 underline">Lihat Semua</span>
-              )}
-            </div>
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{errorMsg}</span>
           </div>
-
-          {/* Cards for EVERY Single Division in allDivisiList */}
-          {divisiStats.map((stat) => {
-            const Icon = stat.meta.icon;
-            const isSelected = filterDivisi === stat.divisi;
-            const percentage = totalPengeluaranAll > 0 ? ((stat.total / totalPengeluaranAll) * 100).toFixed(1) : '0';
-            return (
-              <div
-                key={stat.divisi}
-                className={`p-4 rounded-xl border transition-all relative flex flex-col justify-between min-w-0 overflow-hidden ${
-                  isSelected ? stat.meta.activeBorder : `${stat.meta.bg} hover:shadow-2xs`
-                }`}
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center justify-between text-xs font-bold mb-1 gap-1 min-w-0">
-                    <span className="truncate text-zinc-900">{stat.divisi}</span>
-                    <Icon className="w-4 h-4 shrink-0 opacity-80" />
-                  </div>
-                  <div
-                    className="text-lg font-black font-mono tabular-nums tracking-tight mt-0.5 text-zinc-900 truncate whitespace-nowrap"
-                    title={formatRupiah(stat.total)}
-                  >
-                    {formatRupiahSingkat(stat.total)}
-                  </div>
-                  <div className="flex items-center justify-between text-[10px] text-zinc-500 mt-0.5">
-                    <span className="line-clamp-1">{stat.meta.desc}</span>
-                    <span className="font-semibold text-zinc-600 shrink-0 ml-1">{percentage}%</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between text-[10px] mt-2.5 pt-2 border-t border-zinc-200/70">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFilterDivisi(isSelected ? 'ALL' : stat.divisi);
-                    }}
-                    className={`px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-zinc-900 text-white'
-                        : 'bg-white text-zinc-700 hover:bg-zinc-100 border border-zinc-200'
-                    }`}
-                  >
-                    {isSelected ? '✓ Difilter' : `${stat.count} Transaksi`}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDivisiInput(stat.divisi);
-                    }}
-                    className="text-[10px] font-bold text-rose-700 hover:text-rose-900 hover:underline cursor-pointer"
-                    title={`Pilih ${stat.divisi} di form input pengeluaran`}
-                  >
-                    + Catat Biaya
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Card "+ Tambah Divisi Baru" */}
-          <div
-            onClick={() => setShowAddDivisiModal(true)}
-            className="p-4 rounded-xl border-2 border-dashed border-rose-300 hover:border-rose-500 bg-rose-50/40 hover:bg-rose-50/80 text-rose-800 transition-all cursor-pointer flex flex-col items-center justify-center text-center space-y-1.5 min-h-[110px] shadow-2xs group"
-            title="Tambah divisi baru agar otomatis membentuk kartu ringkasan baru"
+          <button
+            type="button"
+            onClick={() => setErrorMsg('')}
+            className="text-rose-700 hover:text-rose-950 cursor-pointer"
           >
-            <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center group-hover:scale-110 transition-transform">
-              <Plus className="w-4 h-4" />
-            </div>
-            <span className="text-xs font-bold text-rose-900">+ Tambah Divisi Baru</span>
-            <span className="text-[10px] text-rose-700/80">Card otomatis terbentuk seketika</span>
-          </div>
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
-      </div>
+      )}
 
-      {/* Main Content Grid: Form (5 Cols) + History (7 Cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Form Input Pengeluaran */}
-        <div className="lg:col-span-5 bg-white rounded-xl border border-zinc-200 p-5 shadow-2xs space-y-4">
-          <div className="border-b border-zinc-100 pb-3">
-            <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
-              <Plus className="w-4 h-4 text-rose-600" />
-              <span>Input Pengeluaran Baru</span>
-            </h2>
-            <p className="text-[11px] text-zinc-500 mt-0.5">
-              Setiap pengeluaran langsung memotong rekening kas/bank perusahaan
-            </p>
-          </div>
-
-          {successMsg && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center space-x-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{successMsg}</span>
-            </div>
-          )}
-
-          {errorMsg && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-3.5 text-xs">
-            {/* Divisi & Kategori */}
+      {/* ========================================================================
+          MAIN WORKSPACE: TABEL REKAPAN 24 ITEM (LEFT) + 2 FORM BERBEDA (RIGHT)
+         ======================================================================== */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* LEFT COLUMN (4 Cols): TABEL REKAPAN 24 ITEM PENGELUARAN (PERSIS BUKU REKAPAN) */}
+        <div className="lg:col-span-4 bg-white rounded-xl border border-zinc-300 overflow-hidden">
+          <div className="px-4 py-3 bg-zinc-900 text-white flex items-center justify-between gap-2">
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="font-semibold text-zinc-700">
-                  Unit / Divisi <span className="text-rose-500">*</span>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowAddDivisiModal(true)}
-                  className="text-[11px] font-bold text-rose-700 hover:text-rose-900 cursor-pointer flex items-center space-x-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Tambah Divisi</span>
-                </button>
-              </div>
-              <select
-                required
-                value={divisiInput}
-                onChange={(e) => {
-                  if (e.target.value === 'TAMBAH_BARU') {
-                    setShowAddDivisiModal(true);
-                  } else {
-                    setDivisiInput(e.target.value);
-                  }
-                }}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 text-zinc-800 font-semibold"
-              >
-                {allDivisiList.map((div) => (
-                  <option key={div} value={div}>
-                    {div}
-                  </option>
-                ))}
-                <option value="TAMBAH_BARU" className="text-rose-700 font-bold">
-                  + Tambah Divisi Baru...
-                </option>
-              </select>
-
-              {(() => {
-                const divAcc = resolveDivisiAccount(divisiInput, rekeningList);
-                const nom = Math.max(0, Number(nominalInput) || 0);
-                const saldoAkhirDivisi = divAcc.saldoSaatIni - nom;
-                return (
-                  <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2.5 space-y-1.5 text-[11px]">
-                    <div className="grid grid-cols-3 gap-2 font-mono tabular-nums">
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-sans text-zinc-500 truncate">
-                          Saldo {divAcc.kode}
-                        </div>
-                        <div className="font-semibold text-zinc-800 truncate">
-                          {formatRupiah(divAcc.saldoSaatIni)}
-                        </div>
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-sans text-zinc-500 truncate">
-                          Pengeluaran (−)
-                        </div>
-                        <div className="font-bold text-rose-700 truncate">
-                          −{formatRupiah(nom)}
-                        </div>
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-sans text-zinc-500 truncate">
-                          Saldo Divisi Akhir
-                        </div>
-                        <div
-                          className={`font-bold truncate ${
-                            saldoAkhirDivisi < 0 ? 'text-rose-700' : 'text-zinc-900'
-                          }`}
-                        >
-                          {formatRupiah(saldoAkhirDivisi)}
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-zinc-600 leading-snug">
-                      <strong>Pengeluaran Operasional</strong> pasti mengurangi saldo berjalan &amp; laba bersih divisi <strong>{divisiInput}</strong> (berbeda dengan <em>Pembelian Barang/Beras</em> yang dihitung sebagai modal stok dagang).
-                    </p>
-                  </div>
-                );
-              })()}
-            </div>
-
-            <div>
-              <label className="block font-semibold text-zinc-700 mb-1">
-                Kategori Pengeluaran <span className="text-rose-500">*</span>
-              </label>
-              <select
-                required
-                value={kategoriInput}
-                onChange={(e) => setKategoriInput(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 text-zinc-800"
-              >
-                {PRESET_KATEGORI.map((kat) => (
-                  <option key={kat} value={kat}>
-                    {kat}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Rincian Keterangan */}
-            <div>
-              <label className="block font-semibold text-zinc-700 mb-1">
-                Keterangan &amp; Rincian Barang / Kebutuhan <span className="text-rose-500">*</span>
-              </label>
-              <textarea
-                required
-                rows={2}
-                value={keteranganInput}
-                onChange={(e) => setKeteranganInput(e.target.value)}
-                placeholder="Cth: Beli kampas rem L300 & oli dump truck, atau Gorengan karyawan & gula, atau Admin tarik tunai"
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 text-zinc-800"
-              />
-            </div>
-
-            {/* Nominal */}
-            <div>
-              <label className="block font-semibold text-zinc-700 mb-1">
-                Nominal Biaya (Rp) <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <span className="absolute left-3 top-2.5 font-bold text-zinc-400">Rp</span>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  value={nominalInput}
-                  onChange={(e) => setNominalInput(e.target.value)}
-                  placeholder="0"
-                  className="w-full pl-9 pr-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono font-bold text-sm text-zinc-900"
-                />
-              </div>
-              {Number(nominalInput) > 0 && (
-                <div className="text-[11px] text-rose-700 font-semibold mt-1">
-                  Terbilang: {formatRupiah(Number(nominalInput))}
-                </div>
-              )}
-            </div>
-
-            {/* Sumber Kas & Penerima */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block font-semibold text-zinc-700 mb-1">Sumber Kas / Bank</label>
-                <select
-                  value={rekeningSumber}
-                  onChange={(e) => setRekeningSumber(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 text-zinc-800"
-                >
-                  {rekeningList
-                    .filter((r) => !r.isVirtual && r.status === 'AKTIF')
-                    .map((r) => (
-                      <option key={r.kode} value={r.kode}>
-                        {r.nama} ({formatRupiah(r.saldoSaatIni)})
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <label className="block font-semibold text-zinc-700">
-                    No. Polisi / Armada / Penerima
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setQuickInvError('');
-                        setShowQuickAddInventaris(true);
-                      }}
-                      className="text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md cursor-pointer"
-                    >
-                      + Tambah Unit
-                    </button>
-                    {onOpenInventarisMenu && (
-                      <button
-                        type="button"
-                        onClick={onOpenInventarisMenu}
-                        className="text-[10px] font-semibold text-slate-600 hover:text-slate-900 underline cursor-pointer"
-                      >
-                        Menu Inventaris
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <select
-                  value={penerimaOptionValue}
-                  onChange={(e) => handlePenerimaSelectChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 text-zinc-800 bg-white"
-                >
-                  <option value="">-- Pilih Kendaraan Inventaris / Armada / Penerima --</option>
-                  {mergedInventarisList.length > 0 && (
-                    <optgroup label={`Kendaraan & Inventaris PT (${mergedInventarisList.length} Unit)`}>
-                      {mergedInventarisList.map((inv) => {
-                        const platLabel =
-                          inv.nomorPlat && inv.nomorPlat !== '-' ? `${inv.nomorPlat} — ` : `${inv.kode} — `;
-                        const driverLabel =
-                          inv.driverPenanggungJawab && inv.driverPenanggungJawab !== '-'
-                            ? ` · Driver: ${inv.driverPenanggungJawab}`
-                            : '';
-                        const tahunLabel =
-                          inv.tahunKeluaran && inv.tahunKeluaran !== '-'
-                            ? ` · Thn ${inv.tahunKeluaran}`
-                            : '';
-                        return (
-                          <option key={inv.id} value={`INV:${inv.id}`}>
-                            {platLabel}
-                            {inv.namaItem}
-                            {driverLabel}
-                            {tahunLabel}
-                          </option>
-                        );
-                      })}
-                    </optgroup>
-                  )}
-                  {karyawanList.filter((k) => k.status === 'AKTIF').length > 0 && (
-                    <optgroup label="Karyawan / Personil PT">
-                      {karyawanList
-                        .filter((k) => k.status === 'AKTIF')
-                        .map((k) => (
-                          <option key={k.id} value={`KRY:${k.nama} (${k.jabatan})`}>
-                            {k.nama} — {k.jabatan}
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                  <optgroup label="Penerima Umum / Lainnya">
-                    <option value="MANUAL">-- Ketik Manual Penerima Lainnya (Bengkel / Toko / BRILink) --</option>
-                  </optgroup>
-                </select>
-
-                {mergedInventarisList.length === 0 && !penerimaOptionValue && (
-                  <p className="mt-1 text-[11px] text-amber-700">
-                    Belum ada unit kendaraan di Menu Inventaris PT. Klik <strong>+ Tambah Unit</strong> untuk mendaftarkan armada PT.
-                  </p>
-                )}
-
-                {selectedInventarisObj && (
-                  <div className="mt-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1">
-                    <div className="flex flex-wrap items-center justify-between gap-1">
-                      <span className="font-bold text-slate-900">
-                        {selectedInventarisObj.nomorPlat && selectedInventarisObj.nomorPlat !== '-'
-                          ? `${selectedInventarisObj.nomorPlat} · ${selectedInventarisObj.namaItem}`
-                          : selectedInventarisObj.namaItem}
-                      </span>
-                      {selectedInventarisObj.tahunKeluaran && selectedInventarisObj.tahunKeluaran !== '-' && (
-                        <span className="font-mono text-slate-500">
-                          Thn {selectedInventarisObj.tahunKeluaran}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-slate-600 flex flex-wrap gap-x-3 gap-y-0.5">
-                      <span>
-                        Driver: <strong>{selectedInventarisObj.driverPenanggungJawab || '-'}</strong>
-                      </span>
-                      <span>
-                        Pajak: <strong>{getPajakStatusInfo(selectedInventarisObj.tanggalPajakTahunan).label}</strong>
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {penerimaOptionValue === 'MANUAL' && (
-                  <input
-                    type="text"
-                    value={penerimaManualInput}
-                    onChange={(e) => setPenerimaManualInput(e.target.value)}
-                    placeholder="Ketik nama bengkel, toko, BRILink, atau penerima..."
-                    className="mt-2 w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 text-zinc-800"
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Tanggal */}
-            <div>
-              <label className="block font-semibold text-zinc-700 mb-1">Tanggal Transaksi</label>
-              <input
-                type="text"
-                value={tanggalInput}
-                onChange={(e) => setTanggalInput(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 text-zinc-800 font-mono"
-                placeholder="DD/MM/YYYY"
-              />
-            </div>
-
-            {/* Upload Kuitansi Fisik */}
-            <div>
-              <ImageUploadZone
-                label="Foto Nota / Kuitansi Fisik (Opsional)"
-                sublabel="Ambil foto kuitansi bengkel, struk belanja, atau nota pembelian fisik"
-                value={fotoKuitansi}
-                onChange={setFotoKuitansi}
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={submitting || Number(nominalInput) <= 0 || !keteranganInput.trim()}
-              className="w-full py-2.5 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white font-bold rounded-lg shadow-xs transition-colors flex items-center justify-center space-x-2 cursor-pointer mt-2"
-            >
-              <Receipt className="w-4 h-4" />
-              <span>{submitting ? 'Menyimpan...' : 'Simpan Pengeluaran'}</span>
-            </button>
-          </form>
-        </div>
-
-        {/* History Table */}
-        <div className="lg:col-span-7 bg-white rounded-xl border border-zinc-200 p-5 shadow-2xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-zinc-100 pb-3">
-            <div>
-              <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
-                <Receipt className="w-4 h-4 text-zinc-700" />
-                <span>Histori Pengeluaran &amp; Biaya</span>
+              <h2 className="text-xs font-bold uppercase tracking-wider">
+                Tabel Rekapan {recapRows.length} Item Pengeluaran
               </h2>
-              <p className="text-[11px] text-zinc-500">
-                Semua biaya operasional seluruh divisi perusahaan
+              <p className="text-[11px] text-zinc-300">
+                1–16 Hijau (Inventaris) · 17–24 Oranye (Biasa)
               </p>
             </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <select
-                value={filterDivisi}
-                onChange={(e) => setFilterDivisi(e.target.value)}
-                className="px-2.5 py-1.5 text-xs border border-zinc-200 rounded-lg focus:ring-1 focus:ring-rose-500 font-medium"
+            {(filterKategoriItem !== 'ALL' || filterKelompok !== 'ALL') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterKategoriItem('ALL');
+                  setFilterKelompok('ALL');
+                }}
+                className="px-2.5 py-1 rounded bg-white/15 hover:bg-white/25 text-[11px] font-semibold text-white cursor-pointer"
               >
-                <option value="ALL">Semua Divisi ({list.length})</option>
-                {allDivisiList.map((d) => {
-                  const c = list.filter((i) => i.divisi === d).length;
-                  return (
-                    <option key={d} value={d}>
-                      {d} ({c})
-                    </option>
-                  );
-                })}
-              </select>
-
-              <div className="relative w-full sm:w-44">
-                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
-                <input
-                  type="text"
-                  placeholder="Cari biaya..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-xs border border-zinc-200 rounded-lg focus:ring-1 focus:ring-rose-500"
-                />
-              </div>
-            </div>
+                Reset Filter
+              </button>
+            )}
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left border-collapse">
-              <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold uppercase text-[10px]">
-                <tr>
-                  <th className="py-2.5 px-3">TANGGAL</th>
-                  <th className="py-2.5 px-3">DIVISI</th>
-                  <th className="py-2.5 px-3">RINCIAN BIAYA</th>
-                  <th className="py-2.5 px-3 text-right">NOMINAL</th>
-                  <th className="py-2.5 px-3">SUMBER KAS</th>
-                  <th className="py-2.5 px-3 text-center">BUKTI</th>
-                  <th className="py-2.5 px-3 text-center">AKSI</th>
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-amber-400 text-zinc-950 border-b border-zinc-700">
+                  <th className="py-2 px-2.5 text-center font-bold border-r border-zinc-700 w-10">
+                    NO
+                  </th>
+                  <th className="py-2 px-3 text-left font-black tracking-wide border-r border-zinc-700">
+                    PENGELUARAN
+                  </th>
+                  <th className="py-2 px-3 text-right font-black tracking-wide">
+                    JUMLAH (Rp)
+                  </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-100 text-zinc-800">
-                {filteredList.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-zinc-400">
-                      {loading ? 'Memuat data pengeluaran...' : 'Belum ada catatan pengeluaran'}
-                    </td>
-                  </tr>
-                ) : (
-                  filteredList.map((item) => {
-                    const theme = getDivisiTheme(item.divisi);
-                    return (
-                      <tr key={item.idTransaksi} className="hover:bg-zinc-50/80 transition-colors">
-                        <td className="py-2.5 px-3 whitespace-nowrap text-zinc-600 font-mono">
-                          <div>{item.tanggal}</div>
-                          <div className="text-[10px] text-zinc-400">{item.jam}</div>
-                        </td>
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${theme.badge}`}>
-                            {item.divisi}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <div className="font-semibold text-zinc-900">{item.keterangan}</div>
-                          <div className="text-[10px] text-zinc-500">
-                            {item.kategori} {item.penerima ? `· Oleh/Armada: ${item.penerima}` : ''}
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-700 whitespace-nowrap">
-                          {formatRupiah(item.nominal)}
-                        </td>
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span className="px-2 py-0.5 rounded text-[10px] bg-zinc-100 text-zinc-700 font-mono">
-                            {item.rekeningSumber}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          {item.fotoKuitansi ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPreviewPhoto({
-                                  imageUrl: item.fotoKuitansi!,
-                                  title: `Kuitansi: ${item.keterangan}`,
-                                  nomorBukti: item.idTransaksi,
-                                  namaMitra: item.divisi,
-                                  tanggal: item.tanggal,
-                                  nominalText: formatRupiah(item.nominal),
-                                  keterangan: item.keterangan,
-                                })
-                              }
-                              className="p-1 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded transition-colors cursor-pointer"
-                              title="Lihat Foto Kuitansi"
-                            >
-                              <Camera className="w-3.5 h-3.5 mx-auto" />
-                            </button>
-                          ) : (
-                            <span className="text-zinc-300">-</span>
+              <tbody>
+                {recapRows.map((row) => {
+                  const isHijau = row.kelompok === 'INVENTARIS';
+                  const isSelected =
+                    filterKategoriItem.toUpperCase() === row.nama.toUpperCase();
+
+                  const rowBgClass = isHijau
+                    ? isSelected
+                      ? 'bg-emerald-500 text-zinc-950 ring-2 ring-inset ring-zinc-900'
+                      : 'bg-emerald-300/85 hover:bg-emerald-400/90 text-zinc-950'
+                    : isSelected
+                    ? 'bg-orange-500 text-white ring-2 ring-inset ring-zinc-900'
+                    : 'bg-amber-400/85 hover:bg-amber-400 text-zinc-950';
+
+                  return (
+                    <tr
+                      key={`${row.nomorUrut}-${row.nama}`}
+                      onClick={() => {
+                        const toggleOff =
+                          filterKategoriItem.toUpperCase() === row.nama.toUpperCase();
+                        setFilterKategoriItem(toggleOff ? 'ALL' : row.nama);
+                        if (isHijau) {
+                          handleSelectInvKategori(row.nama);
+                        } else {
+                          handleSelectBiasaKategori(row.nama);
+                        }
+                      }}
+                      title={`Klik untuk pilih ${row.nama} pada Form ${
+                        isHijau ? 'Hijau (Inventaris)' : 'Oranye (Biasa)'
+                      } & filter tabel histori`}
+                      className={`border-b border-zinc-700/70 transition-colors cursor-pointer ${rowBgClass}`}
+                    >
+                      <td className="py-1.5 px-2 text-center font-mono tabular-nums font-bold border-r border-zinc-700/70">
+                        {row.nomorUrut}
+                      </td>
+                      <td className="py-1.5 px-3 font-bold tracking-tight border-r border-zinc-700/70">
+                        <div className="flex items-center justify-between gap-1">
+                          <span>{row.nama}</span>
+                          {row.count > 0 && (
+                            <span className="text-[10px] font-mono opacity-75">
+                              {row.count}x
+                            </span>
                           )}
-                        </td>
-                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                          <div className="inline-flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => setEditTxId(item.idTransaksi)}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold transition-colors cursor-pointer"
-                              title="Edit nominal biaya, divisi, rekening, atau keterangan"
-                            >
-                              <Pencil className="w-3 h-3" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(item.idTransaksi, item.keterangan)}
-                              className="p-1 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
-                              title="Batalkan & Hapus Pengeluaran"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 mx-auto" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
+                        </div>
+                      </td>
+                      <td className="py-1.5 px-3 text-right font-mono tabular-nums font-bold whitespace-nowrap">
+                        {formatAngkaTabel(row.netNominal)}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {/* Subtotal Ringkas Hijau & Oranye */}
+                <tr className="bg-emerald-50 text-emerald-950 border-b border-zinc-300 text-[11px]">
+                  <td colSpan={2} className="py-1.5 px-3 font-bold border-r border-zinc-300">
+                    SUBTOTAL HIJAU (INVENTARIS 1–16)
+                  </td>
+                  <td className="py-1.5 px-3 text-right font-mono tabular-nums font-bold">
+                    {formatAngkaTabel(totalInventarisHijau)}
+                  </td>
+                </tr>
+                <tr className="bg-orange-50 text-orange-950 border-b border-zinc-700 text-[11px]">
+                  <td colSpan={2} className="py-1.5 px-3 font-bold border-r border-zinc-300">
+                    SUBTOTAL ORANYE (BIASA 17–24)
+                  </td>
+                  <td className="py-1.5 px-3 text-right font-mono tabular-nums font-bold">
+                    {formatAngkaTabel(totalBiasaOranye)}
+                  </td>
+                </tr>
+
+                {/* GRAND TOTAL ROW: TOT */}
+                <tr className="bg-white text-zinc-950 font-black text-sm border-t-2 border-zinc-900">
+                  <td className="py-2.5 px-2 text-center border-r border-zinc-700">-</td>
+                  <td className="py-2.5 px-3 tracking-wider border-r border-zinc-700">TOT</td>
+                  <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                    {formatAngkaTabel(totalRecapGrand)}
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
+
+        {/* RIGHT COLUMN (8 Cols): 2 FORM INPUT BERBEDA (HIJAU INVENTARIS & ORANYE BIASA) */}
+        <div className="lg:col-span-8 grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+          {/* ====================================================================
+              FORM 1 (WARNA HIJAU): PENGELUARAN UNTUK INVENTARIS (ITEM 1 - 16)
+             ==================================================================== */}
+          <div className="bg-white rounded-xl border-2 border-emerald-500 overflow-hidden">
+            <div className="px-4 py-3.5 bg-emerald-700 text-white flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Truck className="w-5 h-5 text-emerald-200 shrink-0" />
+                <div className="min-w-0">
+                  <h2 className="text-sm font-black tracking-tight truncate">
+                    Form Hijau: Pengeluaran Inventaris
+                  </h2>
+                  <p className="text-[11px] text-emerald-100 truncate">
+                    Khusus Item No. 1–16 (L300, Traga, Dump, Exca, Plat Mobil &amp; Motor)
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <form
+              onSubmit={handleSubmitFormInventaris}
+              className="p-4 space-y-3.5 text-xs bg-emerald-50/25"
+            >
+              {/* Pilih Item Inventaris (Hijau 1-16) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-emerald-950">
+                    Pilih Item Inventaris (No. 1–16) <span className="text-rose-500">*</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewMasterItemKelompok('INVENTARIS');
+                      setShowAddMasterItemModal(true);
+                    }}
+                    className="text-[11px] font-bold text-emerald-800 hover:underline cursor-pointer"
+                  >
+                    + Item Hijau Baru
+                  </button>
+                </div>
+                <select
+                  required
+                  value={invKategori}
+                  onChange={(e) => handleSelectInvKategori(e.target.value)}
+                  className="w-full px-3 py-2 border-2 border-emerald-400 bg-emerald-100/60 rounded-lg font-bold text-zinc-950 focus:outline-none focus:border-emerald-700"
+                >
+                  {inventarisItems.map((it) => (
+                    <option key={it.nama} value={it.nama}>
+                      {it.nomorUrut}. {it.nama}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Unit Kendaraan PT & Divisi */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-semibold text-zinc-700">
+                      Divisi Beban <span className="text-rose-500">*</span>
+                    </label>
+                  </div>
+                  <select
+                    required
+                    value={invDivisi}
+                    onChange={(e) => {
+                      if (e.target.value === '__ADD_DIVISI__') {
+                        setShowAddDivisiModal(true);
+                      } else {
+                        setInvDivisi(e.target.value);
+                      }
+                    }}
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-semibold text-zinc-900"
+                  >
+                    {allDivisiList.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                    <option value="__ADD_DIVISI__">+ Tambah Divisi Baru...</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-semibold text-zinc-700">Link Aset / Unit PT</label>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickInvError('');
+                          setQuickInvNama(invKategori);
+                          setShowQuickAddInventaris(true);
+                        }}
+                        className="text-[10px] font-bold text-emerald-800 hover:underline cursor-pointer"
+                      >
+                        + Unit Baru
+                      </button>
+                      {onOpenInventarisMenu && (
+                        <button
+                          type="button"
+                          onClick={onOpenInventarisMenu}
+                          className="text-[10px] text-zinc-500 hover:text-zinc-900 underline cursor-pointer"
+                        >
+                          Master
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <select
+                    value={invSelectedUnitId}
+                    onChange={(e) => setInvSelectedUnitId(e.target.value)}
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-800"
+                  >
+                    <option value="">-- Otomatis Sesuai Nama Item ({invKategori}) --</option>
+                    {mergedInventarisList.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.nomorPlat && u.nomorPlat !== '-' ? `${u.nomorPlat} — ` : ''}
+                        {u.namaItem}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {selectedInvUnitObj && (
+                <div className="p-2.5 rounded-lg bg-white border border-emerald-200 text-[11px] text-zinc-700 flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    Driver: <strong>{selectedInvUnitObj.driverPenanggungJawab || '-'}</strong>
+                  </span>
+                  <span>
+                    Pajak STNK:{' '}
+                    <strong>
+                      {getPajakStatusInfo(selectedInvUnitObj.tanggalPajakTahunan).label}
+                    </strong>
+                  </span>
+                </div>
+              )}
+
+              {/* Arah Mutasi (+ / -) */}
+              <div>
+                <label className="block font-semibold text-zinc-700 mb-1">
+                  Jenis Pencatatan Inventaris
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setInvArahMutasi('TAMBAH')}
+                    className={`py-1.5 px-2.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                      invArahMutasi === 'TAMBAH'
+                        ? 'bg-emerald-700 text-white border-emerald-800'
+                        : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
+                    }`}
+                  >
+                    + Tambah Biaya Inventaris
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInvArahMutasi('KURANG')}
+                    className={`py-1.5 px-2.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                      invArahMutasi === 'KURANG'
+                        ? 'bg-zinc-800 text-white border-zinc-900'
+                        : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
+                    }`}
+                  >
+                    − Kurangi / Koreksi
+                  </button>
+                </div>
+              </div>
+
+              {/* Qty x Harga Satuan (Opsional) & Nominal Total */}
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-3">
+                  <label className="block font-semibold text-zinc-700 mb-1">Qty</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={invQty}
+                    onChange={(e) => handleInvQtyOrHargaChange(e.target.value, invHargaSatuan)}
+                    placeholder="1"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-900"
+                  />
+                </div>
+                <div className="col-span-3">
+                  <label className="block font-semibold text-zinc-700 mb-1">Satuan</label>
+                  <input
+                    type="text"
+                    value={invSatuan}
+                    onChange={(e) => setInvSatuan(e.target.value.toUpperCase())}
+                    placeholder="PCS"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono uppercase text-zinc-900"
+                  />
+                </div>
+                <div className="col-span-6">
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Harga Satuan (Opsional)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={invHargaSatuan}
+                    onChange={(e) => handleInvQtyOrHargaChange(invQty, e.target.value)}
+                    placeholder="Otomatis hitung total"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-emerald-950 mb-1">
+                  Total Nominal Pengeluaran Inventaris (Rp) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 font-bold text-zinc-400">Rp</span>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={invNominal}
+                    onChange={(e) => setInvNominal(e.target.value)}
+                    placeholder="0"
+                    className="w-full pl-9 pr-3 py-2 border-2 border-emerald-400 bg-white rounded-lg font-mono tabular-nums font-bold text-sm text-zinc-950 focus:outline-none focus:border-emerald-700"
+                  />
+                </div>
+              </div>
+
+              {/* Keterangan Servis / Sparepart */}
+              <div>
+                <label className="block font-semibold text-zinc-700 mb-1">
+                  Rincian Servis / Sparepart / Kebutuhan Unit
+                </label>
+                <input
+                  type="text"
+                  value={invKeterangan}
+                  onChange={(e) => setInvKeterangan(e.target.value)}
+                  placeholder={`Cth: Ganti oli & filter solar ${invKategori}, servis rem...`}
+                  className="w-full px-3 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-900"
+                />
+              </div>
+
+              {/* Sumber Kas & Tanggal */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Sumber Kas / Bank / Sinkron
+                  </label>
+                  <select
+                    value={invRekeningSumber}
+                    onChange={(e) => setInvRekeningSumber(e.target.value)}
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-800"
+                  >
+                    {activeCashAccounts.map((r) => (
+                      <option key={r.kode} value={r.kode}>
+                        {r.nama} ({formatRupiahSingkat(r.saldoSaatIni)})
+                      </option>
+                    ))}
+                    <option value="SINKRON">SINKRON (Non-Kas / Tanpa Potong Kas)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">Tanggal</label>
+                  <input
+                    type="text"
+                    value={invTanggal}
+                    onChange={(e) => setInvTanggal(e.target.value)}
+                    placeholder="DD/MM/YYYY"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-800"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-zinc-700 mb-1">
+                  Nama Bengkel / Sopir / Penerima (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={invPenerimaManual}
+                  onChange={(e) => setInvPenerimaManual(e.target.value)}
+                  placeholder="Cth: Bengkel Jaya / Sopir Argon"
+                  className="w-full px-3 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-800"
+                />
+              </div>
+
+              <ImageUploadZone
+                label="Foto Nota Bengkel / Struk (Opsional)"
+                sublabel="Bukti kuitansi servis atau sparepart armada"
+                value={invFotoKuitansi}
+                onChange={setInvFotoKuitansi}
+              />
+
+              <button
+                type="submit"
+                disabled={submittingKelompok !== null || Number(invNominal) <= 0}
+                className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Truck className="w-4 h-4" />
+                <span>
+                  {submittingKelompok === 'INVENTARIS'
+                    ? 'Menyimpan...'
+                    : `Simpan Pengeluaran Inventaris (${invKategori})`}
+                </span>
+              </button>
+            </form>
+          </div>
+
+          {/* ====================================================================
+              FORM 2 (WARNA ORANYE): PENGELUARAN BIASA / HARIAN (ITEM 17 - 24)
+             ==================================================================== */}
+          <div className="bg-white rounded-xl border-2 border-orange-500 overflow-hidden">
+            <div className="px-4 py-3.5 bg-orange-600 text-white flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Fuel className="w-5 h-5 text-orange-100 shrink-0" />
+                <div className="min-w-0">
+                  <h2 className="text-sm font-black tracking-tight truncate">
+                    Form Oranye: Pengeluaran Biasa
+                  </h2>
+                  <p className="text-[11px] text-orange-100 truncate">
+                    Khusus Item No. 17–24 (Rumah, Solar, Rokok, Akua, Nasi, Token, Sedekah, Gorengan)
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <form
+              onSubmit={handleSubmitFormBiasa}
+              className="p-4 space-y-3.5 text-xs bg-orange-50/25"
+            >
+              {/* Pilih Item Biasa (Oranye 17-24) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-orange-950">
+                    Pilih Item Pengeluaran Biasa (No. 17–24){' '}
+                    <span className="text-rose-500">*</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewMasterItemKelompok('BIASA');
+                      setShowAddMasterItemModal(true);
+                    }}
+                    className="text-[11px] font-bold text-orange-800 hover:underline cursor-pointer"
+                  >
+                    + Item Oranye Baru
+                  </button>
+                </div>
+                <select
+                  required
+                  value={biasaKategori}
+                  onChange={(e) => handleSelectBiasaKategori(e.target.value)}
+                  className="w-full px-3 py-2 border-2 border-orange-400 bg-amber-100/70 rounded-lg font-bold text-zinc-950 focus:outline-none focus:border-orange-700"
+                >
+                  {biasaItems.map((it) => (
+                    <option key={it.nama} value={it.nama}>
+                      {it.nomorUrut}. {it.nama}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Divisi Beban */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-zinc-700">
+                    Unit / Divisi Beban <span className="text-rose-500">*</span>
+                  </label>
+                  {(() => {
+                    const divAcc = resolveDivisiAccount(biasaDivisi, rekeningList);
+                    return (
+                      <span className="text-[10px] font-mono text-zinc-500">
+                        Saldo {divAcc.kode}: {formatRupiahSingkat(divAcc.saldoSaatIni)}
+                      </span>
+                    );
+                  })()}
+                </div>
+                <select
+                  required
+                  value={biasaDivisi}
+                  onChange={(e) => {
+                    if (e.target.value === '__ADD_DIVISI__') {
+                      setShowAddDivisiModal(true);
+                    } else {
+                      setBiasaDivisi(e.target.value);
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-zinc-300 bg-white rounded-lg font-semibold text-zinc-900"
+                >
+                  {allDivisiList.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                  <option value="__ADD_DIVISI__">+ Tambah Divisi Baru...</option>
+                </select>
+              </div>
+
+              {/* Arah Mutasi (+ / -) */}
+              <div>
+                <label className="block font-semibold text-zinc-700 mb-1">
+                  Jenis Pencatatan Pengeluaran Biasa
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBiasaArahMutasi('TAMBAH')}
+                    className={`py-1.5 px-2.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                      biasaArahMutasi === 'TAMBAH'
+                        ? 'bg-orange-600 text-white border-orange-700'
+                        : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
+                    }`}
+                  >
+                    + Tambah Pengeluaran
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBiasaArahMutasi('KURANG')}
+                    className={`py-1.5 px-2.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                      biasaArahMutasi === 'KURANG'
+                        ? 'bg-zinc-800 text-white border-zinc-900'
+                        : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
+                    }`}
+                  >
+                    − Kurangi / Koreksi
+                  </button>
+                </div>
+              </div>
+
+              {/* Qty x Harga Satuan (Opsional) */}
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-3">
+                  <label className="block font-semibold text-zinc-700 mb-1">Qty</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={biasaQty}
+                    onChange={(e) =>
+                      handleBiasaQtyOrHargaChange(e.target.value, biasaHargaSatuan)
+                    }
+                    placeholder="1"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-900"
+                  />
+                </div>
+                <div className="col-span-3">
+                  <label className="block font-semibold text-zinc-700 mb-1">Satuan</label>
+                  <input
+                    type="text"
+                    value={biasaSatuan}
+                    onChange={(e) => setBiasaSatuan(e.target.value.toUpperCase())}
+                    placeholder="LITER"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono uppercase text-zinc-900"
+                  />
+                </div>
+                <div className="col-span-6">
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Harga Satuan (Opsional)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={biasaHargaSatuan}
+                    onChange={(e) => handleBiasaQtyOrHargaChange(biasaQty, e.target.value)}
+                    placeholder="Otomatis hitung total"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-900"
+                  />
+                </div>
+              </div>
+
+              {/* Total Nominal */}
+              <div>
+                <label className="block font-bold text-orange-950 mb-1">
+                  Total Nominal Pengeluaran Biasa (Rp) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 font-bold text-zinc-400">Rp</span>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={biasaNominal}
+                    onChange={(e) => setBiasaNominal(e.target.value)}
+                    placeholder="0"
+                    className="w-full pl-9 pr-3 py-2 border-2 border-orange-400 bg-white rounded-lg font-mono tabular-nums font-bold text-sm text-zinc-950 focus:outline-none focus:border-orange-700"
+                  />
+                </div>
+              </div>
+
+              {/* Keterangan Kebutuhan Harian */}
+              <div>
+                <label className="block font-semibold text-zinc-700 mb-1">
+                  Rincian Kebutuhan / Catatan Harian
+                </label>
+                <input
+                  type="text"
+                  value={biasaKeterangan}
+                  onChange={(e) => setBiasaKeterangan(e.target.value)}
+                  placeholder={`Cth: Pembelian ${biasaKategori} untuk operasional gudang...`}
+                  className="w-full px-3 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-900"
+                />
+              </div>
+
+              {/* Sumber Kas & Tanggal */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Sumber Kas / Bank / Sinkron
+                  </label>
+                  <select
+                    value={biasaRekeningSumber}
+                    onChange={(e) => setBiasaRekeningSumber(e.target.value)}
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-800"
+                  >
+                    {activeCashAccounts.map((r) => (
+                      <option key={r.kode} value={r.kode}>
+                        {r.nama} ({formatRupiahSingkat(r.saldoSaatIni)})
+                      </option>
+                    ))}
+                    <option value="SINKRON">SINKRON (Non-Kas / Tanpa Potong Kas)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">Tanggal</label>
+                  <input
+                    type="text"
+                    value={biasaTanggal}
+                    onChange={(e) => setBiasaTanggal(e.target.value)}
+                    placeholder="DD/MM/YYYY"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-800"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-zinc-700 mb-1">
+                  Oleh / Penerima (Opsional)
+                </label>
+                <input
+                  type="text"
+                  list="karyawan-penerima-list"
+                  value={biasaPenerima}
+                  onChange={(e) => setBiasaPenerima(e.target.value)}
+                  placeholder="Cth: Dapur Gudang / Kasir / Karyawan"
+                  className="w-full px-3 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-800"
+                />
+                <datalist id="karyawan-penerima-list">
+                  {karyawanList
+                    .filter((k) => k.status === 'AKTIF')
+                    .map((k) => (
+                      <option key={k.id} value={`${k.nama} (${k.jabatan})`} />
+                    ))}
+                </datalist>
+              </div>
+
+              <ImageUploadZone
+                label="Foto Nota / Struk Belanja (Opsional)"
+                sublabel="Bukti kuitansi pembelian harian"
+                value={biasaFotoKuitansi}
+                onChange={setBiasaFotoKuitansi}
+              />
+
+              <button
+                type="submit"
+                disabled={submittingKelompok !== null || Number(biasaNominal) <= 0}
+                className="w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Receipt className="w-4 h-4" />
+                <span>
+                  {submittingKelompok === 'BIASA'
+                    ? 'Menyimpan...'
+                    : `Simpan Pengeluaran Biasa (${biasaKategori})`}
+                </span>
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
 
-      {/* Modal Tambah Divisi Baru (Otomatis Membentuk Card Divisi Baru) */}
+      {/* Ringkasan Per Divisi */}
+      <div className="space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600">
+          <span className="font-bold uppercase tracking-wider text-[11px] text-zinc-800">
+            Ringkasan Beban Pengeluaran Per Divisi ({allDivisiList.length} Divisi)
+          </span>
+          <span className="text-[11px] text-zinc-500">
+            {filterDivisi === 'ALL'
+              ? 'Menampilkan semua divisi · Klik kartu divisi untuk memfilter rekapan & histori'
+              : `Filter aktif: ${filterDivisi} (Klik lagi untuk semua divisi)`}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          <div
+            onClick={() => setFilterDivisi('ALL')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer min-w-0 ${
+              filterDivisi === 'ALL'
+                ? 'bg-zinc-900 text-white border-zinc-900'
+                : 'bg-white border-zinc-200 hover:border-zinc-400 text-zinc-900'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 text-xs font-bold mb-1">
+              <span className="truncate">TOTAL SEMUA DIVISI</span>
+              <Receipt className="w-4 h-4 shrink-0 opacity-80" />
+            </div>
+            <div
+              className="text-xl font-black font-mono tabular-nums truncate"
+              title={formatRupiah(totalPengeluaranAll)}
+            >
+              {formatRupiahSingkat(totalPengeluaranAll)}
+            </div>
+            <div
+              className={`text-[11px] mt-1.5 ${
+                filterDivisi === 'ALL' ? 'text-zinc-300' : 'text-zinc-500'
+              }`}
+            >
+              {list.length} transaksi tercatat
+            </div>
+          </div>
+
+          {divisiStats.map((stat) => {
+            const Icon = stat.meta.icon;
+            const isSelected = filterDivisi === stat.divisi;
+            return (
+              <div
+                key={stat.divisi}
+                onClick={() => setFilterDivisi(isSelected ? 'ALL' : stat.divisi)}
+                className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between min-w-0 ${
+                  isSelected ? stat.meta.activeBorder : `${stat.meta.bg}`
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center justify-between text-xs font-bold mb-1 gap-1">
+                    <span className="truncate text-zinc-900">{stat.divisi}</span>
+                    <Icon className="w-4 h-4 shrink-0 opacity-80" />
+                  </div>
+                  <div
+                    className="text-lg font-black font-mono tabular-nums text-zinc-900 truncate"
+                    title={formatRupiah(stat.total)}
+                  >
+                    {formatRupiahSingkat(stat.total)}
+                  </div>
+                  <div className="text-[11px] text-zinc-600 mt-1">
+                    {stat.count} transaksi · Klik untuk filter
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* History Table Full-Width */}
+      <div className="bg-white rounded-xl border border-zinc-200 p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-zinc-100 pb-3">
+          <div>
+            <h2 className="text-sm font-bold text-zinc-900">
+              Histori Rincian Pengeluaran ({filteredList.length} Transaksi)
+            </h2>
+            <p className="text-[11px] text-zinc-500">
+              Setiap transaksi dapat diubah nama item, qty, harga, nominal, tanggal, dan rekening melalui tombol Edit
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Segmented Filter Kelompok: Semua / Hijau Inventaris / Oranye Biasa */}
+            <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setFilterKelompok('ALL')}
+                className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
+                  filterKelompok === 'ALL'
+                    ? 'bg-white text-zinc-900 shadow-2xs'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                Semua
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterKelompok('INVENTARIS')}
+                className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
+                  filterKelompok === 'INVENTARIS'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-emerald-800 hover:text-emerald-950'
+                }`}
+              >
+                Hijau · Inventaris
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterKelompok('BIASA')}
+                className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
+                  filterKelompok === 'BIASA'
+                    ? 'bg-orange-600 text-white'
+                    : 'text-orange-800 hover:text-orange-950'
+                }`}
+              >
+                Oranye · Biasa
+              </button>
+            </div>
+
+            <div className="relative w-full sm:w-56">
+              <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
+              <input
+                type="text"
+                placeholder="Cari item, rincian, nota..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 text-xs border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold uppercase text-[10px]">
+              <tr>
+                <th className="py-2.5 px-3">TANGGAL</th>
+                <th className="py-2.5 px-3">ITEM &amp; KELOMPOK</th>
+                <th className="py-2.5 px-3">DIVISI</th>
+                <th className="py-2.5 px-3">RINCIAN &amp; QTY</th>
+                <th className="py-2.5 px-3 text-right">NOMINAL</th>
+                <th className="py-2.5 px-3">SUMBER KAS</th>
+                <th className="py-2.5 px-3 text-center">BUKTI</th>
+                <th className="py-2.5 px-3 text-center">AKSI</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 text-zinc-800">
+              {filteredList.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-zinc-400">
+                    {loading ? 'Memuat data pengeluaran...' : 'Belum ada catatan pengeluaran pada filter ini'}
+                  </td>
+                </tr>
+              ) : (
+                filteredList.map((item) => {
+                  const kel =
+                    item.kelompokPengeluaran || resolveKelompokItemPengeluaran(item.kategori);
+                  const noUrut = getNomorUrutItemPengeluaran(item.kategori);
+                  const isHijau = kel === 'INVENTARIS';
+
+                  return (
+                    <tr key={item.idTransaksi} className="hover:bg-zinc-50/80 transition-colors">
+                      <td className="py-2.5 px-3 whitespace-nowrap text-zinc-600 font-mono tabular-nums">
+                        <div>{item.tanggal}</div>
+                        <div className="text-[10px] text-zinc-400">{item.jam}</div>
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <div
+                          className={`font-bold ${
+                            isHijau ? 'text-emerald-800' : 'text-orange-800'
+                          }`}
+                        >
+                          {noUrut ? `${noUrut}. ` : ''}
+                          {item.kategori}
+                        </div>
+                        <div className="text-[10px] text-zinc-500">
+                          {isHijau ? 'Inventaris (Hijau)' : 'Pengeluaran Biasa (Oranye)'}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap font-medium text-zinc-800">
+                        {item.divisi}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="font-semibold text-zinc-900">{item.keterangan}</div>
+                        <div className="text-[11px] text-zinc-500">
+                          {item.qty && item.qty > 0 ? (
+                            <span className="font-mono tabular-nums text-zinc-700">
+                              {item.qty} {item.satuan || 'PCS'}
+                              {item.hargaSatuan && item.hargaSatuan > 0
+                                ? ` × ${formatRupiah(item.hargaSatuan)}`
+                                : ''}
+                              {item.penerima ? ' · ' : ''}
+                            </span>
+                          ) : null}
+                          {item.penerima ? `Oleh/Unit: ${item.penerima}` : ''}
+                        </div>
+                      </td>
+                      <td
+                        className={`py-2.5 px-3 text-right font-mono tabular-nums font-bold whitespace-nowrap ${
+                          item.nominal < 0 ? 'text-emerald-700' : 'text-rose-700'
+                        }`}
+                      >
+                        {item.nominal < 0
+                          ? `−${formatRupiah(Math.abs(item.nominal))}`
+                          : formatRupiah(item.nominal)}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap font-mono text-zinc-700">
+                        {item.rekeningSumber}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        {item.fotoKuitansi ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewPhoto({
+                                imageUrl: item.fotoKuitansi!,
+                                title: `Kuitansi: ${item.keterangan}`,
+                                nomorBukti: item.idTransaksi,
+                                namaMitra: item.divisi,
+                                tanggal: item.tanggal,
+                                nominalText: formatRupiah(item.nominal),
+                                keterangan: item.keterangan,
+                              })
+                            }
+                            className="p-1 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded transition-colors cursor-pointer"
+                            title="Lihat Foto Kuitansi"
+                          >
+                            <Camera className="w-3.5 h-3.5 mx-auto" />
+                          </button>
+                        ) : (
+                          <span className="text-zinc-300">-</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditTxId(item.idTransaksi)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold transition-colors cursor-pointer"
+                            title="Edit item, qty, harga, nominal, tanggal, atau rekening"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(item.idTransaksi, item.keterangan)}
+                            className="p-1 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                            title="Batalkan & Hapus Pengeluaran"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 mx-auto" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal Buat Item Pengeluaran Baru */}
+      {showAddMasterItemModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-zinc-200">
+            <div
+              className={`p-4 text-white font-bold text-sm flex justify-between items-center ${
+                newMasterItemKelompok === 'INVENTARIS' ? 'bg-emerald-700' : 'bg-orange-600'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <Plus className="w-4 h-4" />
+                <span>Tambah Item Pengeluaran Baru</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddMasterItemModal(false)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateMasterItem} className="p-5 space-y-3.5 text-xs">
+              <div>
+                <label className="block font-bold text-zinc-700 mb-1.5">
+                  Pilih Kelompok Warna Item <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewMasterItemKelompok('INVENTARIS')}
+                    className={`py-2 px-3 rounded-lg border font-bold text-xs cursor-pointer ${
+                      newMasterItemKelompok === 'INVENTARIS'
+                        ? 'bg-emerald-600 text-white border-emerald-700'
+                        : 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                    }`}
+                  >
+                    Hijau · Inventaris
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewMasterItemKelompok('BIASA')}
+                    className={`py-2 px-3 rounded-lg border font-bold text-xs cursor-pointer ${
+                      newMasterItemKelompok === 'BIASA'
+                        ? 'bg-orange-600 text-white border-orange-700'
+                        : 'bg-orange-50 text-orange-900 border-orange-300'
+                    }`}
+                  >
+                    Oranye · Biasa
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-zinc-700 mb-1">
+                  Nama Item Pengeluaran <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newMasterItemName}
+                  onChange={(e) => setNewMasterItemName(e.target.value)}
+                  placeholder={
+                    newMasterItemKelompok === 'INVENTARIS'
+                      ? 'Contoh: HINO RANGER / EXC 03'
+                      : 'Contoh: KOPI / GAS LPG'
+                  }
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-bold text-zinc-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">Satuan Default</label>
+                  <input
+                    type="text"
+                    value={newMasterItemSatuan}
+                    onChange={(e) => setNewMasterItemSatuan(e.target.value)}
+                    placeholder="Contoh: PCS / LITER"
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-zinc-800"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">Keterangan</label>
+                  <input
+                    type="text"
+                    value={newMasterItemKet}
+                    onChange={(e) => setNewMasterItemKet(e.target.value)}
+                    placeholder="Opsional"
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-zinc-800"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddMasterItemModal(false)}
+                  className="px-3.5 py-1.5 rounded-lg text-zinc-600 hover:bg-zinc-100 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingMasterItem || !newMasterItemName.trim()}
+                  className={`px-4 py-1.5 rounded-lg disabled:opacity-50 text-white font-bold cursor-pointer ${
+                    newMasterItemKelompok === 'INVENTARIS'
+                      ? 'bg-emerald-700 hover:bg-emerald-800'
+                      : 'bg-orange-600 hover:bg-orange-700'
+                  }`}
+                >
+                  {savingMasterItem ? 'Menyimpan...' : 'Simpan Item'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Tambah Divisi Baru */}
       {showAddDivisiModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-zinc-200 animate-in fade-in">
-            <div className="p-4 bg-rose-700 text-white font-bold text-sm flex justify-between items-center">
-              <div className="flex items-center space-x-2">
-                <Plus className="w-4 h-4 text-rose-200" />
-                <span>Tambah Divisi / Unit Kerja Baru</span>
-              </div>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-zinc-200">
+            <div className="p-4 bg-zinc-900 text-white font-bold text-sm flex justify-between items-center">
+              <span>Tambah Divisi / Unit Kerja Baru</span>
               <button
                 type="button"
                 onClick={() => {
                   setShowAddDivisiModal(false);
                   setNewDivisiName('');
                 }}
-                className="text-rose-200 hover:text-white cursor-pointer"
+                className="text-zinc-300 hover:text-white cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             <form onSubmit={handleAddNewDivisi} className="p-5 space-y-4 text-xs">
-              <p className="text-zinc-600 text-[11px] leading-relaxed">
-                Ketikkan nama divisi baru (misal: <em>Bengkel Las</em>, <em>Logistik Pupuk</em>, atau <em>Armada Truk 02</em>). Card ringkasan akan langsung terbentuk secara otomatis.
-              </p>
-
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
                   Nama Divisi Baru <span className="text-rose-500">*</span>
@@ -1209,10 +2026,10 @@ export const PengeluaranView: React.FC<Props> = ({
                   type="text"
                   required
                   autoFocus
-                  placeholder="Contoh: Wijaya Logistik, Armada 02..."
+                  placeholder="Contoh: Wijaya Logistik"
                   value={newDivisiName}
                   onChange={(e) => setNewDivisiName(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-rose-500 font-semibold text-zinc-900"
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-semibold text-zinc-900"
                 />
               </div>
 
@@ -1230,9 +2047,9 @@ export const PengeluaranView: React.FC<Props> = ({
                 <button
                   type="submit"
                   disabled={!newDivisiName.trim()}
-                  className="px-4 py-1.5 bg-rose-700 text-white font-bold rounded-lg hover:bg-rose-800 disabled:opacity-50 cursor-pointer shadow-xs"
+                  className="px-4 py-1.5 bg-zinc-900 text-white font-bold rounded-lg hover:bg-zinc-800 disabled:opacity-50 cursor-pointer"
                 >
-                  Simpan &amp; Buat Card
+                  Simpan Divisi
                 </button>
               </div>
             </form>
@@ -1267,8 +2084,9 @@ export const PengeluaranView: React.FC<Props> = ({
                 Batalkan &amp; Hapus Pengeluaran?
               </h3>
               <p className="text-xs text-zinc-600 leading-relaxed">
-                Yakin ingin membatalkan pengeluaran <strong className="text-zinc-900">"{deleteTarget.ket}"</strong>?
-                Saldo kas akan dipulihkan secara otomatis.
+                Yakin ingin membatalkan pengeluaran{' '}
+                <strong className="text-zinc-900">"{deleteTarget.ket}"</strong>? Saldo kas akan
+                dipulihkan secara otomatis.
               </p>
             </div>
             <div className="flex items-center space-x-3 pt-2">
@@ -1276,7 +2094,7 @@ export const PengeluaranView: React.FC<Props> = ({
                 type="button"
                 onClick={() => setDeleteTarget(null)}
                 disabled={isDeleting}
-                className="flex-1 py-2 px-3 rounded-xl border border-zinc-300 text-zinc-700 font-semibold text-xs hover:bg-zinc-50 transition-colors"
+                className="flex-1 py-2 px-3 rounded-xl border border-zinc-300 text-zinc-700 font-semibold text-xs hover:bg-zinc-50 cursor-pointer"
               >
                 Batal
               </button>
@@ -1284,13 +2102,9 @@ export const PengeluaranView: React.FC<Props> = ({
                 type="button"
                 onClick={executeConfirmDelete}
                 disabled={isDeleting}
-                className="flex-1 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs transition-colors flex items-center justify-center space-x-2"
+                className="flex-1 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs cursor-pointer"
               >
-                {isDeleting ? (
-                  <span>Menghapus...</span>
-                ) : (
-                  <span>Ya, Hapus</span>
-                )}
+                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
               </button>
             </div>
           </div>
@@ -1319,7 +2133,7 @@ export const PengeluaranView: React.FC<Props> = ({
                   Tambah Kendaraan / Item ke Inventaris PT
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Otomatis tersimpan ke Menu Inventaris &amp; langsung terpilih di form pengeluaran
+                  Otomatis tersimpan ke Menu Inventaris &amp; langsung terpilih di Form Hijau
                 </p>
               </div>
               <button
@@ -1346,11 +2160,13 @@ export const PengeluaranView: React.FC<Props> = ({
                     onChange={(e) => setQuickInvKategori(e.target.value as KategoriInventaris)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
-                    {(Object.keys(KATEGORI_INVENTARIS_LABELS) as KategoriInventaris[]).map((kat) => (
-                      <option key={kat} value={kat}>
-                        {KATEGORI_INVENTARIS_LABELS[kat]}
-                      </option>
-                    ))}
+                    {(Object.keys(KATEGORI_INVENTARIS_LABELS) as KategoriInventaris[]).map(
+                      (kat) => (
+                        <option key={kat} value={kat}>
+                          {KATEGORI_INVENTARIS_LABELS[kat]}
+                        </option>
+                      )
+                    )}
                   </select>
                 </div>
 
@@ -1450,7 +2266,7 @@ export const PengeluaranView: React.FC<Props> = ({
                 <button
                   type="submit"
                   disabled={quickInvSaving}
-                  className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold cursor-pointer disabled:opacity-50"
+                  className="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold cursor-pointer disabled:opacity-50"
                 >
                   {quickInvSaving ? 'Menyimpan...' : 'Simpan & Pilih Unit Ini'}
                 </button>

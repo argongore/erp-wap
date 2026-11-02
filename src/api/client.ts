@@ -47,6 +47,10 @@ import {
   JenisTransaksiBrilink,
   TransaksiUangMasuk,
   RekapHarianBosLengkapResponse,
+  MasterItemPengeluaran,
+  KelompokItemPengeluaran,
+  NotaSilangItemInput,
+  NotaSilangRecordSummary,
 } from '../server/types.ts';
 
 export interface KaryawanWithBon extends Karyawan {
@@ -549,8 +553,10 @@ export const api = {
     namaPembeliManual?: string;
     tipePembeli?: 'UMUM' | 'REKANAN';
     divisi?: string;
-    metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT';
+    metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT' | 'SINKRON' | 'PEMAKAIAN_PENGELUARAN';
     rekeningTujuan?: string;
+    kategoriPengeluaran?: string;
+    idInventaris?: string;
     items: Array<{ kodeProduk: string; qty: number; harga?: number; hargaSugesti?: number }>;
     keterangan?: string;
   }): Promise<TransaksiPenjualan> => {
@@ -652,6 +658,43 @@ export const api = {
       body: JSON.stringify(payload),
     });
     if (!data.success) throw new Error(data.message || 'Gagal memproses pembelian hasil bumi');
+    return data.data;
+  },
+
+  processBatchPembelianHasilBumi: async (payload: {
+    idMitra?: string;
+    namaPetaniManual?: string;
+    teleponPetaniManual?: string;
+    alamatPetaniManual?: string;
+    fotoNota?: string;
+    isNotaLalu?: boolean;
+    noNotaLalu?: string;
+    tanggalNotaLalu?: string;
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    rekeningSumber?: string;
+    keterangan?: string;
+    items: Array<{
+      komoditasKode?: string;
+      namaKomoditasBaru?: string;
+      beratKotor: number;
+      potonganRafaksi: number;
+      hargaPerKg: number;
+      isBelumPutusHarga?: boolean;
+      keteranganItem?: string;
+    }>;
+  }): Promise<{
+    batchId: string;
+    records: TransaksiPembelianHasilBumi[];
+    totalBayarBatch: number;
+    totalNettoBatch: number;
+    divisi: string;
+  }> => {
+    const data = await requestJson('/api/transaksi/pembelian-hasil-bumi/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memproses keranjang pembelian hasil bumi');
     return data.data;
   },
 
@@ -867,6 +910,46 @@ export const api = {
     });
     if (!data.success) throw new Error(data.message || 'Gagal memproses input nota lalu');
     return data.data;
+  },
+
+  // Pembukuan NOTA SILANG (Mitra Ambil Barang di Anak Perusahaan misal DP Parabot, PT Sebagai Perantara)
+  getNotaSilangList: async (): Promise<NotaSilangRecordSummary[]> => {
+    const data = await requestJson('/api/transaksi/nota-silang');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat daftar Nota Silang');
+    return data.data;
+  },
+
+  processNotaSilang: async (payload: {
+    idMitraPengambil: string;
+    idMitraAnakPerusahaan?: string;
+    modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+    tanggal?: string;
+    noNotaToko?: string;
+    fotoNota?: string;
+    keterangan?: string;
+    items: NotaSilangItemInput[];
+  }): Promise<
+    NotaSilangRecordSummary & {
+      penjualanMitra: TransaksiPenjualan;
+      bukuAnakPerusahaan: TransaksiPembelianHasilBumi;
+      mitraPengambilNama: string;
+      anakPerusahaanNama: string;
+    }
+  > => {
+    const data = await requestJson('/api/transaksi/nota-silang', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyimpan pembukuan Nota Silang');
+    return data.data;
+  },
+
+  deleteNotaSilang: async (noNotaSilang: string): Promise<void> => {
+    const data = await requestJson(`/api/transaksi/nota-silang/${encodeURIComponent(noNotaSilang)}`, {
+      method: 'DELETE',
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal membatalkan Nota Silang');
   },
 
   // Pinjam Uang dari PT ke Mitra (Masuk Saldo Titip Mitra)
@@ -1479,8 +1562,14 @@ export const api = {
   createPengeluaran: async (payload: {
     divisi: string;
     kategori: string;
+    kelompokPengeluaran?: KelompokItemPengeluaran;
+    qty?: number;
+    satuan?: string;
+    hargaSatuan?: number;
     keterangan: string;
     nominal: number;
+    arahMutasi?: 'TAMBAH' | 'KURANG';
+    isNonKas?: boolean;
     rekeningSumber: string;
     penerima?: string;
     idInventaris?: string;
@@ -1499,6 +1588,57 @@ export const api = {
   deletePengeluaran: async (id: string): Promise<void> => {
     const data = await requestJson(`/api/pengeluaran/${encodeURIComponent(id)}`, { method: 'DELETE' });
     if (!data.success) throw new Error(data.message || 'Gagal membatalkan pengeluaran');
+  },
+
+  // Master Item Pengeluaran (24 Item: Hijau Inventaris 1-16 & Oranye Biasa 17-24 + Custom)
+  getMasterItemPengeluaran: async (): Promise<
+    Array<
+      MasterItemPengeluaran & {
+        totalNominalBersih?: number;
+        totalTambah?: number;
+        totalKurang?: number;
+        jumlahTransaksi?: number;
+      }
+    >
+  > => {
+    const data = await requestJson('/api/master-item-pengeluaran');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat master item pengeluaran');
+    return data.data;
+  },
+
+  createMasterItemPengeluaran: async (payload: {
+    nama?: string;
+    namaItem?: string;
+    kelompok?: KelompokItemPengeluaran;
+    satuanDefault?: string;
+    deskripsi?: string;
+    keterangan?: string;
+    divisiDefault?: string;
+  }): Promise<MasterItemPengeluaran> => {
+    const cleanNama = (payload.nama || payload.namaItem || '').trim();
+    const cleanDesk = payload.deskripsi ?? payload.keterangan;
+    const data = await requestJson('/api/master-item-pengeluaran', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nama: cleanNama,
+        namaItem: cleanNama,
+        kelompok: payload.kelompok,
+        satuanDefault: payload.satuanDefault,
+        deskripsi: cleanDesk,
+        keterangan: cleanDesk,
+        divisiDefault: payload.divisiDefault,
+      }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menambah item pengeluaran baru');
+    return data.data;
+  },
+
+  deleteMasterItemPengeluaran: async (id: string): Promise<void> => {
+    const data = await requestJson(`/api/master-item-pengeluaran/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus item pengeluaran');
   },
 
   // Master Inventaris & Armada PT
@@ -1601,13 +1741,14 @@ export const api = {
     return data;
   },
 
-  // Universal Lookup & Edit Detail Setiap Transaksi (Nominal, Tonase, Rafaksi, Qty, Harga, Rekening, Tanggal)
+  // Universal Lookup & Edit Detail Setiap Transaksi (Nama, Qty, Harga, Nominal, Tonase, Rafaksi, Rekening, Tanggal)
   getTransactionDetail: async (
     id: string,
     jenis?: string
   ): Promise<{
     jenis:
       | 'PENJUALAN'
+      | 'NOTA_SILANG'
       | 'PEMBELIAN_BARANG'
       | 'PEMBELIAN_HASIL_BUMI'
       | 'PENJUALAN_HASIL_BUMI'
@@ -1615,6 +1756,8 @@ export const api = {
       | 'BAYAR_BON'
       | 'PENCAIRAN_TITIPAN'
       | 'PENGELUARAN_DIVISI'
+      | 'UANG_MASUK'
+      | 'BRILINK'
       | 'TRANSFER_REKENING'
       | 'UPAH_HARIAN'
       | 'PENGGAJIAN';
@@ -1626,6 +1769,9 @@ export const api = {
       stokBarangList: StokBarang[];
       stokHasilBumiList: StokHasilBumi[];
       mitraList: Mitra[];
+      karyawanList?: Karyawan[];
+      masterItemPengeluaranList?: MasterItemPengeluaran[];
+      inventarisList?: ItemInventaris[];
       divisiList: Array<{ id: string; nama: string; kodeRekening: string }>;
     };
   }> => {
@@ -1645,6 +1791,11 @@ export const api = {
     keterangan?: string;
     idMitra?: string;
     namaMitraManual?: string;
+    idMitraAnakPerusahaan?: string;
+    modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+    noNotaToko?: string;
+    idKaryawan?: string;
+    namaKaryawanManual?: string;
     nominal?: number;
     metode?: string;
     rekeningSumber?: string;
@@ -1670,7 +1821,18 @@ export const api = {
     rincianBarangNotaLalu?: string;
     divisi?: string;
     kategori?: string;
+    kategoriPengeluaran?: string;
+    kelompokPengeluaran?: KelompokItemPengeluaran;
+    arahMutasi?: 'TAMBAH' | 'KURANG';
+    qtyPengeluaran?: number;
+    satuanPengeluaran?: string;
+    hargaSatuanPengeluaran?: number;
+    idInventaris?: string;
     penerima?: string;
+    jenisBrilink?: JenisTransaksiBrilink;
+    nominalPokok?: number;
+    rekeningAdmin?: string;
+    rekeningBank?: string;
     itemKerja?: string;
     kuantiti?: number;
     hargaSatuanUpah?: number;
@@ -1704,6 +1866,7 @@ export const api = {
     kategori?: string;
     pihakTerkait?: string;
     search?: string;
+    hanyaKasir?: boolean;
   }): Promise<RekapSemuaTransaksiResponse> => {
     const query = new URLSearchParams();
     if (params?.tanggal) query.append('tanggal', params.tanggal);
@@ -1711,6 +1874,7 @@ export const api = {
     if (params?.kategori) query.append('kategori', params.kategori);
     if (params?.pihakTerkait) query.append('pihakTerkait', params.pihakTerkait);
     if (params?.search) query.append('search', params.search);
+    if (params?.hanyaKasir) query.append('hanyaKasir', 'true');
 
     const queryString = query.toString();
     const url = `/api/transaksi/semua${queryString ? `?${queryString}` : ''}`;

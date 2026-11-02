@@ -48,6 +48,7 @@ export type ActiveTab =
   | 'kasir-cairkan-titipan'
   | 'kasir-bayar-gaji'
   | 'kasir-kasbon-uang'
+  | 'kasir-nota-silang'
   | 'kasir-bayar-bon'
   | 'kasir-pengeluaran'
   | 'kasir-transfer'
@@ -71,23 +72,24 @@ export type CashFlowDirection = 'MASUK' | 'KELUAR' | 'MUTASI' | null;
 export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   dashboard: 'Dashboard Operasional',
   'billboard-monitor': 'Layar Monitor TV',
-  'rekap-semua-transaksi': 'Rekap Transaksi Harian',
+  'rekap-semua-transaksi': 'Rekap Arus Kas Kasir Harian',
   'pusat-kontrol-kasir': 'Kliring & Cash Opname',
   'kasir-uang-masuk': 'Uang Masuk & Pencairan Jual HB',
   'kasir-brilink': 'Agen BRILink (Adm Tarik Tunai & Tukar Cash)',
   'kasir-penjualan': 'Kasir Penjualan Toko',
   'kasir-pembelian-barang': 'Pembelian Stok Pemasok',
-  'kasir-pembelian': 'Pembelian Hasil Bumi',
+  'kasir-pembelian': 'Pembelian Hasil Bumi (Gudang Wijaya Agro)',
   'kasir-cairkan-titipan': 'Pembayaran PT ke Mitra (Titipan)',
   'kasir-bayar-gaji': 'Bayar Gaji Karyawan',
   'kasir-kasbon-uang': 'Kasbon Uang & Nota Lalu',
+  'kasir-nota-silang': 'Pembukuan Nota Silang (DP Parabot)',
   'kasir-bayar-bon': 'Pelunasan Bon Mitra',
-  'kasir-pengeluaran': 'Pengeluaran & Biaya Divisi',
+  'kasir-pengeluaran': 'Inventaris & Pengeluaran',
   'kasir-transfer': 'Transfer Antar Rekening',
   'master-produk': 'Master Produk & Harga',
   'master-mitra': 'Master Mitra & Pelanggan',
   'master-rekening': 'Master Rekening & Kas',
-  'master-inventaris': 'Inventaris & Armada PT',
+  'master-inventaris': 'Inventaris & Pengeluaran',
   'master-profil': 'Profil Perusahaan',
   'master-karyawan': 'Rekap Karyawan & Upah',
   'menu-divisi': 'Divisi & Kas Operasional',
@@ -95,7 +97,7 @@ export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   'stok-hasil-bumi': 'Stok & Rekap Hasil Bumi',
   'laba-rugi-produk': 'Laba & Rugi Per Divisi',
   'rekening-koran-mitra': 'Rekening Koran Mitra',
-  'laporan-transaksi': 'Rekap Semua Transaksi',
+  'laporan-transaksi': 'Rekap Arus Kas Kasir Harian',
   'audit-log': 'Audit Log Transaksi',
   'google-sheets-sync': 'Studio Database Master',
 };
@@ -114,6 +116,7 @@ export const ACTIVE_TAB_CASH_FLOW: Record<ActiveTab, CashFlowDirection> = {
   'kasir-cairkan-titipan': 'KELUAR',
   'kasir-bayar-gaji': 'KELUAR',
   'kasir-kasbon-uang': 'KELUAR',
+  'kasir-nota-silang': null,
   'kasir-pengeluaran': 'KELUAR',
   'kasir-transfer': 'MUTASI',
   'master-produk': null,
@@ -213,9 +216,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           },
           {
             id: 'rekap-harian',
-            label: 'Rekap Transaksi Harian',
-            sublabel: 'Jurnal kas masuk & keluar',
-            keywords: 'rekap harian semua transaksi jurnal laporan edit',
+            label: 'Rekap Arus Kas Kasir',
+            sublabel: 'Uang keluar masuk kasir (KAS01)',
+            keywords: 'rekap harian semua transaksi arus kas kasir kas01 jurnal laporan edit',
             icon: Receipt,
             tab: 'rekap-semua-transaksi',
             matchTabs: ['rekap-semua-transaksi', 'laporan-transaksi'],
@@ -306,8 +309,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {
             id: 'kasir-pembelian',
             label: 'Pembelian Hasil Bumi',
-            sublabel: 'Modal panen komoditas divisi',
-            keywords: 'beli pembelian hasil bumi panen jagung kopi lada timbangan modal uang keluar kas out',
+            sublabel: 'Keranjang panen → Gudang Wijaya Agro',
+            keywords: 'beli pembelian hasil bumi keranjang panen jagung kopi lada timbangan gudang wijaya agro modal uang keluar kas out',
             icon: Wheat,
             flow: 'KELUAR',
             tab: 'kasir-pembelian',
@@ -351,8 +354,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {
             id: 'kasir-pengeluaran',
             label: 'Pengeluaran & Biaya',
-            sublabel: 'Beban pengurang saldo divisi',
-            keywords: 'pengeluaran biaya operasional bensin makan listrik divisi beban uang keluar kas out',
+            sublabel: 'Item pengeluaran, Solar & koreksi +/−',
+            keywords: 'pengeluaran biaya operasional solar bensin makan listrik divisi beban uang keluar kas out item baru',
             icon: FileText,
             flow: 'KELUAR',
             tab: 'kasir-pengeluaran',
@@ -361,9 +364,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
       },
       {
         id: 'kasir-mutasi',
-        title: 'Mutasi Kas Internal (⇄)',
+        title: 'Mutasi Kas & Nota Silang (⇄)',
         groupTone: 'mutasi',
         items: [
+          {
+            id: 'kasir-nota-silang',
+            label: 'Nota Silang (DP Parabot)',
+            sublabel: 'Mitra ambil barang di anak PT',
+            keywords: 'nota silang dp parabot devi perabot anak perusahaan piutang mitra perantara keranjang silang nota',
+            icon: ArrowLeftRight,
+            flow: 'MUTASI',
+            bothFlows: true,
+            tab: 'kasir-nota-silang',
+          },
           {
             id: 'kasir-transfer',
             label: 'Transfer Antar Rekening',
@@ -449,8 +462,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           },
           {
             id: 'master-inventaris',
-            label: 'Inventaris & Armada PT',
-            keywords: 'inventaris armada mobil truck l300 plat polisi driver pajak stnk tahun',
+            label: 'Inventaris & Pengeluaran',
+            sublabel: 'Hijau: Inventaris · Oranye: Pengeluaran',
+            keywords: 'inventaris pengeluaran solar armada mobil truck l300 plat polisi driver pajak stnk tahun biaya item baru',
             icon: Truck,
             tab: 'master-inventaris',
           },

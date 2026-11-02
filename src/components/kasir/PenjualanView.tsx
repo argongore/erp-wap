@@ -32,6 +32,8 @@ import {
   Rekening,
   StokBarang,
   TransaksiPenjualan,
+  ItemInventaris,
+  MasterItemPengeluaran,
   isProdukTanpaStok,
 } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
@@ -53,6 +55,7 @@ interface Props {
   mitraList: Mitra[];
   rekeningList: Rekening[];
   penjualanList?: TransaksiPenjualan[];
+  inventarisList?: ItemInventaris[];
   onSuccess: (receipt: ReceiptData) => void;
   onRefresh: () => void;
   onOpenLabaRugi?: () => void;
@@ -184,12 +187,37 @@ export const PenjualanView: React.FC<Props> = ({
   mitraList,
   rekeningList,
   penjualanList = [],
+  inventarisList = [],
   onSuccess,
   onRefresh,
   onOpenLabaRugi,
   onNavigateToKulakan,
 }) => {
   const [editTxId, setEditTxId] = useState<string | null>(null);
+  const [masterPengeluaranItems, setMasterPengeluaranItems] = useState<MasterItemPengeluaran[]>([]);
+  const [kategoriPengeluaran, setKategoriPengeluaran] = useState<string>('SOLAR');
+  const [selectedInventarisId, setSelectedInventarisId] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getMasterItemPengeluaran()
+      .then((items) => {
+        if (!cancelled && Array.isArray(items) && items.length > 0) {
+          setMasterPengeluaranItems(items);
+          setKategoriPengeluaran((prev) =>
+            items.some((x) => x.nama.toUpperCase() === prev.toUpperCase())
+              ? prev
+              : items[0].nama
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Normalized stock lookup map by uppercase trimmed kode
   const stokByKode = React.useMemo(() => {
     const map = new Map<string, StokBarang>();
@@ -244,7 +272,9 @@ export const PenjualanView: React.FC<Props> = ({
   const [namaPembeliManual, setNamaPembeliManual] = useState<string>('');
   const [pelangganUmumMode, setPelangganUmumMode] = useState<'MANUAL' | 'TERDAFTAR'>('MANUAL');
   const [selectedMitraId, setSelectedMitraId] = useState<string>(mitraList[0]?.id || '');
-  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT'>('TUNAI');
+  const [metode, setMetode] = useState<
+    'TUNAI' | 'TRANSFER' | 'KASBON' | 'SINKRON' | 'INTERNAL_PT' | 'PEMAKAIAN_PENGELUARAN'
+  >('TUNAI');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(availableBanks[0]?.kode || 'BNI01');
   const [divisi, setDivisi] = useState<string>('CV Wijaya Agro');
   const [keterangan, setKeterangan] = useState<string>('');
@@ -637,6 +667,10 @@ export const PenjualanView: React.FC<Props> = ({
       setErrorMsg('Pilih rekening bank tujuan transfer');
       return;
     }
+    if (metode === 'PEMAKAIAN_PENGELUARAN' && !kategoriPengeluaran.trim()) {
+      setErrorMsg('Pilih item pengeluaran tujuan (contoh: SOLAR)');
+      return;
+    }
     setVerifiedDoubleCheck(false);
     setShowConfirmModal(true);
   };
@@ -664,21 +698,53 @@ export const PenjualanView: React.FC<Props> = ({
 
     try {
       const isManualUmum = tipePembeli === 'UMUM' && pelangganUmumMode === 'MANUAL';
-      const effectiveMetode = (totalOmzet === 0 && metode !== 'KASBON') ? 'INTERNAL_PT' : metode;
+      const selectedInv = inventarisList.find((inv) => inv.id === selectedInventarisId);
+      const effectiveMetode =
+        totalOmzet === 0 &&
+        metode !== 'KASBON' &&
+        metode !== 'SINKRON' &&
+        metode !== 'PEMAKAIAN_PENGELUARAN'
+          ? 'INTERNAL_PT'
+          : metode;
+
+      const buyerForExpense =
+        effectiveMetode === 'PEMAKAIAN_PENGELUARAN' && selectedInv
+          ? `${selectedInv.namaItem}${selectedInv.nomorPlat && selectedInv.nomorPlat !== '-' ? ` (${selectedInv.nomorPlat})` : ''}`
+          : finalBuyerName;
+
       const result: TransaksiPenjualan = await api.processPenjualan({
         idMitra: isManualUmum ? 'UMUM' : selectedMitraId,
-        namaPembeliManual: isManualUmum ? finalBuyerName : undefined,
+        namaPembeliManual:
+          effectiveMetode === 'PEMAKAIAN_PENGELUARAN'
+            ? buyerForExpense
+            : isManualUmum
+            ? finalBuyerName
+            : undefined,
         tipePembeli,
         divisi,
         metode: effectiveMetode,
         rekeningTujuan: effectiveMetode === 'TRANSFER' ? rekeningTujuan : undefined,
+        kategoriPengeluaran:
+          effectiveMetode === 'PEMAKAIAN_PENGELUARAN' ? kategoriPengeluaran : undefined,
+        idInventaris:
+          effectiveMetode === 'PEMAKAIAN_PENGELUARAN' && selectedInventarisId
+            ? selectedInventarisId
+            : undefined,
         items: itemsToSell.map((i) => ({
           kodeProduk: i.kodeProduk,
           qty: i.qty,
           harga: i.harga,
           hargaSugesti: i.hargaSugesti,
         })),
-        keterangan: keterangan || (effectiveMetode === 'INTERNAL_PT' ? 'Pemakaian barang toko untuk operasional internal PT' : undefined),
+        keterangan:
+          keterangan ||
+          (effectiveMetode === 'PEMAKAIAN_PENGELUARAN'
+            ? `Pemakaian stok ke Pengeluaran ${kategoriPengeluaran}${selectedInv ? ` (${selectedInv.namaItem})` : ''}`
+            : effectiveMetode === 'SINKRON'
+            ? 'Penjualan metode SINKRON (Lunas tanpa uang fisik masuk)'
+            : effectiveMetode === 'INTERNAL_PT'
+            ? 'Pemakaian barang toko untuk operasional internal PT'
+            : undefined),
       });
 
       setShowConfirmModal(false);
@@ -690,18 +756,32 @@ export const PenjualanView: React.FC<Props> = ({
       }
       onRefresh();
 
-      const isInternalPT = result?.metode === 'INTERNAL_PT' || (result?.totalNominal ?? 0) === 0;
+      const isPemakaianPengeluaran = result?.metode === 'PEMAKAIAN_PENGELUARAN';
+      const isSinkron = result?.metode === 'SINKRON';
+      const isInternalPT =
+        result?.metode === 'INTERNAL_PT' ||
+        ((result?.totalNominal ?? 0) === 0 && !isPemakaianPengeluaran && !isSinkron);
 
       // Trigger print receipt
       const receipt: ReceiptData = {
-        title: isInternalPT ? 'BUKTI PENGELUARAN BARANG (KEBUTUHAN INTERNAL PT)' : 'NOTA PENJUALAN KASIR',
-        subtitle: isInternalPT
+        title: isPemakaianPengeluaran
+          ? `BUKTI PEMAKAIAN STOK KE PENGELUARAN (${kategoriPengeluaran})`
+          : isSinkron
+          ? 'NOTA PENJUALAN SINKRON (LUNAS NON-KAS)'
+          : isInternalPT
+          ? 'BUKTI PENGELUARAN BARANG (KEBUTUHAN INTERNAL PT)'
+          : 'NOTA PENJUALAN KASIR',
+        subtitle: isPemakaianPengeluaran
+          ? `Otomatis Potong Stok & Catat Pengeluaran ${kategoriPengeluaran} | Divisi: ${result?.divisi || divisi}`
+          : isSinkron
+          ? `Metode SINKRON (Lunas Rp 0 Uang Masuk) | Divisi: ${result?.divisi || divisi}`
+          : isInternalPT
           ? 'Pemakaian Sendiri / Operasional PT Wijaya Agro (Harga Rp 0)'
           : `Tipe: ${result?.tipePembeli || tipePembeli} | Divisi: ${result?.divisi || divisi}`,
         nomorTransaksi: result?.noPenjualan || `PJ-${Date.now().toString().slice(-4)}`,
         tanggal: result?.tanggal || new Date().toISOString().split('T')[0],
         jam: result?.jam || '00:00:00',
-        mitra: result?.namaMitra || finalBuyerName,
+        mitra: result?.namaMitra || buyerForExpense,
         rekening: result?.rekeningTujuan || (isInternalPT ? 'INTERNAL_PT' : '-'),
         kategori: 'PENJUALAN',
         items: (result?.items || []).map((i) => ({
@@ -712,27 +792,64 @@ export const PenjualanView: React.FC<Props> = ({
           subtotal: i?.subtotal ?? 0,
         })),
         detailRows: [
-          { label: 'Penerima / Pihak', value: result?.namaMitra || finalBuyerName },
+          { label: 'Penerima / Pihak', value: result?.namaMitra || buyerForExpense },
           { label: 'Divisi Terkait', value: result?.divisi || divisi },
-          { label: 'Jenis Transaksi', value: isInternalPT ? '🏢 PEMAKAIAN KEBUTUHAN INTERNAL PT' : (result?.tipePembeli || tipePembeli) },
+          {
+            label: 'Jenis Transaksi',
+            value: isPemakaianPengeluaran
+              ? `⛽ PEMAKAIAN KE PENGELUARAN (${kategoriPengeluaran})`
+              : isSinkron
+              ? '🔄 PENJUALAN SINKRON (LUNAS NON-KAS)'
+              : isInternalPT
+              ? '🏢 PEMAKAIAN KEBUTUHAN INTERNAL PT'
+              : result?.tipePembeli || tipePembeli,
+          },
           {
             label: 'Metode Transaksi',
-            value: isInternalPT ? 'PEMAKAIAN SENDIRI (HARGA RP 0)' : (result?.metode || effectiveMetode),
+            value: isPemakaianPengeluaran
+              ? `KE PENGELUARAN: ${kategoriPengeluaran}`
+              : isSinkron
+              ? 'SINKRON (LUNAS TANPA UANG MASUK)'
+              : isInternalPT
+              ? 'PEMAKAIAN SENDIRI (HARGA RP 0)'
+              : result?.metode || effectiveMetode,
           },
           {
             label: 'Rekening Uang Riil',
-            value: isInternalPT ? 'BIAYA OPERASIONAL INTERNAL PT' : (result?.rekeningTujuan || '-'),
+            value: isPemakaianPengeluaran
+              ? `STOK GUDANG → PENGELUARAN ${kategoriPengeluaran} (RP 0 KAS)`
+              : isSinkron
+              ? 'SINKRON (RP 0 UANG FISIK MASUK)'
+              : isInternalPT
+              ? 'BIAYA OPERASIONAL INTERNAL PT'
+              : result?.rekeningTujuan || '-',
           },
           {
             label: 'Status Transaksi',
-            value: isInternalPT
+            value: isPemakaianPengeluaran
+              ? `LUNAS & TERCATAT DI PENGELUARAN ${kategoriPengeluaran}`
+              : isSinkron
+              ? 'LUNAS SINKRON (TIDAK ADA UANG FISIK MASUK)'
+              : isInternalPT
               ? 'SELESAI (STOK DIKELUARKAN UNTUK OPERASIONAL PT)'
-              : (result?.statusPembayaran === 'LUNAS' ? 'LUNAS (UANG MASUK)' : 'BELUM BAYAR (PIUTANG KASBON)'),
+              : result?.statusPembayaran === 'LUNAS'
+              ? 'LUNAS (UANG MASUK)'
+              : 'BELUM BAYAR (PIUTANG KASBON)',
             highlight: true,
           },
           {
-            label: isInternalPT ? 'Total Biaya Modal HPP' : 'Total Tagihan Penjualan',
-            value: isInternalPT ? (result?.totalModalHpp ?? totalModalHpp) : (result?.totalNominal ?? 0),
+            label: isPemakaianPengeluaran
+              ? `Nominal Masuk Pengeluaran ${kategoriPengeluaran}`
+              : isInternalPT
+              ? 'Total Biaya Modal HPP'
+              : 'Total Tagihan Penjualan',
+            value: isPemakaianPengeluaran
+              ? (result?.totalNominal || 0) > 0
+                ? result.totalNominal
+                : result?.totalModalHpp ?? totalModalHpp
+              : isInternalPT
+              ? result?.totalModalHpp ?? totalModalHpp
+              : result?.totalNominal ?? 0,
             isTotal: true,
           },
         ],
@@ -1722,7 +1839,7 @@ export const PenjualanView: React.FC<Props> = ({
                 )}
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => setMetode('TUNAI')}
@@ -1761,6 +1878,18 @@ export const PenjualanView: React.FC<Props> = ({
 
                 <button
                   type="button"
+                  onClick={() => setMetode('SINKRON')}
+                  className={`py-2 px-2 text-center rounded-lg font-semibold border transition-all cursor-pointer ${
+                    metode === 'SINKRON'
+                      ? 'bg-teal-600 text-white border-teal-400 shadow-xs'
+                      : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-750'
+                  }`}
+                >
+                  Sinkron (Lunas Rp 0)
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setMetode('INTERNAL_PT')}
                   className={`py-2 px-2 text-center rounded-lg font-semibold border transition-all cursor-pointer ${
                     metode === 'INTERNAL_PT'
@@ -1768,15 +1897,105 @@ export const PenjualanView: React.FC<Props> = ({
                       : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-750'
                   }`}
                 >
-                  🏢 Internal PT (Rp 0)
+                  Ke Divisi PT
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMetode('PEMAKAIAN_PENGELUARAN');
+                    const hasSolar = effectiveSaleItems.some((it) =>
+                      it.nama.toUpperCase().includes('SOLAR')
+                    );
+                    if (hasSolar) {
+                      setKategoriPengeluaran('SOLAR');
+                    }
+                  }}
+                  className={`py-2 px-2 text-center rounded-lg font-semibold border transition-all cursor-pointer ${
+                    metode === 'PEMAKAIAN_PENGELUARAN'
+                      ? 'bg-orange-600 text-white border-orange-400 shadow-xs'
+                      : 'bg-zinc-800 text-orange-300 border-orange-800/70 hover:bg-zinc-750'
+                  }`}
+                >
+                  Ke Pengeluaran
                 </button>
               </div>
+
+              {metode === 'SINKRON' && (
+                <div className="p-2.5 bg-teal-950/70 rounded-lg border border-teal-700 text-[11px] text-teal-100 space-y-1">
+                  <div className="font-bold flex items-center space-x-1.5 text-teal-200">
+                    <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+                    <span>Metode SINKRON — Terhitung LUNAS Tanpa Uang Fisik Masuk</span>
+                  </div>
+                  <p className="text-[10px] text-teal-300 leading-relaxed">
+                    Nota penjualan otomatis berstatus <strong>LUNAS</strong> (tidak menjadi piutang/bon) dan stok gudang tetap berkurang, namun <strong>tidak menambah saldo Kas Kasir (KAS01) maupun Bank</strong>.
+                  </p>
+                </div>
+              )}
+
+              {metode === 'PEMAKAIAN_PENGELUARAN' && (
+                <div className="p-3 bg-orange-950/60 rounded-lg border border-orange-700/80 text-[11px] text-orange-100 space-y-2.5">
+                  <div>
+                    <div className="font-bold text-orange-200">
+                      Aliran Barang ke Pencatatan PENGELUARAN (Contoh: Pemakaian SOLAR Inventaris Gudang)
+                    </div>
+                    <p className="text-[10px] text-orange-300/90 mt-0.5 leading-relaxed">
+                      Otomatis mengurangi stok barang di gudang dan <strong>otomatis menambah nominal pencatatan Pengeluaran</strong> senilai{' '}
+                      <strong className="font-mono">
+                        {formatRupiah(totalOmzet > 0 ? totalOmzet : totalModalHpp)}
+                      </strong>{' '}
+                      tanpa mengurangi uang fisik Kas Kasir (KAS01).
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-orange-200 mb-1">
+                        Pilih Item Pengeluaran Tujuan <span className="text-rose-400">*</span>
+                      </label>
+                      <select
+                        value={kategoriPengeluaran}
+                        onChange={(e) => setKategoriPengeluaran(e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-orange-700 text-zinc-100 text-xs font-semibold focus:outline-hidden focus:border-orange-400"
+                      >
+                        {(masterPengeluaranItems.length > 0
+                          ? masterPengeluaranItems.map((m) => m.nama)
+                          : ['SOLAR', 'BBM & TRANSPORTASI', 'PERAWATAN MESIN / KENDARAAN', 'OPERASIONAL GUDANG']
+                        ).map((itemNama) => (
+                          <option key={itemNama} value={itemNama}>
+                            {itemNama}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-orange-200 mb-1">
+                        Unit Inventaris / Armada Pemakai (Opsional)
+                      </label>
+                      <select
+                        value={selectedInventarisId}
+                        onChange={(e) => setSelectedInventarisId(e.target.value)}
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-orange-700/70 text-zinc-100 text-xs focus:outline-hidden focus:border-orange-400"
+                      >
+                        <option value="">— Gudang / Operasional Umum —</option>
+                        {inventarisList.map((inv) => (
+                          <option key={inv.id} value={inv.id}>
+                            {inv.namaItem}
+                            {inv.nomorPlat && inv.nomorPlat !== '-' ? ` (${inv.nomorPlat})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {metode === 'INTERNAL_PT' && (
                 <div className="p-2.5 bg-blue-950/70 rounded-lg border border-blue-800 text-[11px] text-blue-200 space-y-1">
                   <div className="font-bold flex items-center space-x-1.5 text-blue-100">
                     <Building2 className="w-4 h-4 text-blue-400 shrink-0" />
-                    <span>Pemakaian Sendiri untuk Kebutuhan Operasional PT (Harga Rp 0)</span>
+                    <span>Pemakaian Sendiri ke Divisi PT (Harga Rp 0)</span>
                   </div>
                   <p className="text-[10px] text-blue-300 leading-relaxed">
                     Barang toko dikeluarkan untuk operasional kebun / kantor PT Wijaya Agro tanpa penerimaan uang kas. Stok fisik gudang tetap dipotong secara akurat dan modal HPP barang ({formatRupiah(totalModalHpp)}) dibukukan sebagai beban operasional perusahaan.
@@ -1843,14 +2062,22 @@ export const PenjualanView: React.FC<Props> = ({
                 disabled={effectiveSaleItems.length === 0 || submitting}
                 onClick={handleOpenConfirmSale}
                 className={`w-full py-2.5 disabled:opacity-50 text-white font-bold text-sm rounded-lg shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer ${
-                  metode === 'INTERNAL_PT' || totalOmzet === 0
+                  metode === 'PEMAKAIAN_PENGELUARAN'
+                    ? 'bg-orange-600 hover:bg-orange-500'
+                    : metode === 'SINKRON'
+                    ? 'bg-teal-600 hover:bg-teal-500'
+                    : metode === 'INTERNAL_PT' || totalOmzet === 0
                     ? 'bg-blue-600 hover:bg-blue-500'
                     : 'bg-emerald-600 hover:bg-emerald-500'
                 }`}
               >
                 <CheckCircle2 className="w-4 h-4" />
                 <span>
-                  {metode === 'INTERNAL_PT' || totalOmzet === 0
+                  {metode === 'PEMAKAIAN_PENGELUARAN'
+                    ? `Simpan Pemakaian ke Pengeluaran ${kategoriPengeluaran}`
+                    : metode === 'SINKRON'
+                    ? `Simpan Penjualan Sinkron (${formatRupiah(totalOmzet)})`
+                    : metode === 'INTERNAL_PT' || totalOmzet === 0
                     ? `Simpan Pengeluaran Internal PT (${effectiveSaleItems.length} Item)`
                     : `Simpan Transaksi (${formatRupiah(totalOmzet)})`}
                 </span>
@@ -1875,7 +2102,7 @@ export const PenjualanView: React.FC<Props> = ({
             </div>
           </div>
           <span className="text-xs font-mono text-zinc-400">
-            {penjualanList.length} Transaksi
+            {penjualanList.filter((pj) => !pj.isNotaSilang).length} Transaksi
           </span>
         </div>
 
@@ -1893,50 +2120,55 @@ export const PenjualanView: React.FC<Props> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/80">
-              {penjualanList.length === 0 ? (
+              {penjualanList.filter((pj) => !pj.isNotaSilang).length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-zinc-500">
                     Belum ada transaksi penjualan kasir tercatat.
                   </td>
                 </tr>
               ) : (
-                penjualanList.slice(0, 25).map((pj) => (
-                  <tr key={pj.noPenjualan} className="hover:bg-zinc-800/40">
-                    <td className="py-2.5 px-3 font-mono font-bold text-emerald-400 whitespace-nowrap">
-                      {pj.noPenjualan}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-zinc-400 whitespace-nowrap">
-                      {pj.tanggal} <span className="text-[10px] text-zinc-500">{pj.jam}</span>
-                    </td>
-                    <td className="py-2.5 px-3 font-semibold text-zinc-100">{pj.namaMitra}</td>
-                    <td className="py-2.5 px-3 text-zinc-300">
-                      {(pj.items || [])
-                        .map((it) => `${it.namaProduk} (${it.qty} ${it.satuan})`)
-                        .join(', ')}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-amber-400 whitespace-nowrap">
-                      {formatRupiah(pj.totalNominal)}
-                    </td>
-                    <td className="py-2.5 px-3 text-center text-[11px] font-semibold text-zinc-300 whitespace-nowrap">
-                      <div>
-                        {pj.metode} ({pj.rekeningTujuan})
-                      </div>
-                      {pj.divisi && (
-                        <div className="text-[10px] text-sky-400 font-medium mt-0.5">{pj.divisi}</div>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => setEditTxId(pj.noPenjualan)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[11px] font-semibold transition-colors cursor-pointer"
-                      >
-                        <Pencil className="w-3 h-3" />
-                        <span>Edit Detail</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                penjualanList
+                  .filter((pj) => !pj.isNotaSilang)
+                  .slice(0, 25)
+                  .map((pj) => (
+                    <tr key={pj.noPenjualan} className="hover:bg-zinc-800/40">
+                      <td className="py-2.5 px-3 font-mono font-bold text-emerald-400 whitespace-nowrap">
+                        {pj.noPenjualan}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-zinc-400 whitespace-nowrap">
+                        {pj.tanggal} <span className="text-[10px] text-zinc-500">{pj.jam}</span>
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-zinc-100">{pj.namaMitra}</td>
+                      <td className="py-2.5 px-3 text-zinc-300">
+                        {(pj.items || [])
+                          .map((it) => `${it.namaProduk} (${it.qty} ${it.satuan})`)
+                          .join(', ')}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-amber-400 whitespace-nowrap">
+                        {formatRupiah(pj.totalNominal)}
+                      </td>
+                      <td className="py-2.5 px-3 text-center text-[11px] font-semibold text-zinc-300 whitespace-nowrap">
+                        <div>
+                          {pj.metode === 'PEMAKAIAN_PENGELUARAN'
+                            ? `KE PENGELUARAN (${pj.kategoriPengeluaran || 'BIAYA'})`
+                            : `${pj.metode} (${pj.rekeningTujuan})`}
+                        </div>
+                        {pj.divisi && (
+                          <div className="text-[10px] text-sky-400 font-medium mt-0.5">{pj.divisi}</div>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setEditTxId(pj.noPenjualan)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[11px] font-semibold transition-colors cursor-pointer"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit Detail</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))
               )}
             </tbody>
           </table>
@@ -1949,11 +2181,21 @@ export const PenjualanView: React.FC<Props> = ({
           <div className="bg-zinc-900 rounded-xl shadow-2xl w-full max-w-lg my-auto max-h-[92vh] flex flex-col overflow-hidden border border-zinc-800">
             <div
               className={`p-4 text-white font-bold text-sm flex justify-between items-center shrink-0 ${
-                metode === 'INTERNAL_PT' || totalOmzet === 0 ? 'bg-blue-700' : 'bg-emerald-700'
+                metode === 'PEMAKAIAN_PENGELUARAN'
+                  ? 'bg-orange-700'
+                  : metode === 'SINKRON'
+                  ? 'bg-teal-700'
+                  : metode === 'INTERNAL_PT' || totalOmzet === 0
+                  ? 'bg-blue-700'
+                  : 'bg-emerald-700'
               }`}
             >
               <span>
-                {metode === 'INTERNAL_PT' || totalOmzet === 0
+                {metode === 'PEMAKAIAN_PENGELUARAN'
+                  ? `Verifikasi Pemakaian Stok ke Pengeluaran (${kategoriPengeluaran})`
+                  : metode === 'SINKRON'
+                  ? 'Verifikasi Penjualan Metode SINKRON (Lunas Rp 0 Kas)'
+                  : metode === 'INTERNAL_PT' || totalOmzet === 0
                   ? 'Verifikasi & Konfirmasi Pengeluaran Internal PT'
                   : 'Verifikasi & Konfirmasi Penjualan Kasir'}
               </span>
@@ -1978,15 +2220,43 @@ export const PenjualanView: React.FC<Props> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-400">Metode Transaksi:</span>
-                  <span className={`font-bold ${metode === 'INTERNAL_PT' || totalOmzet === 0 ? 'text-blue-400' : 'text-emerald-400'}`}>
-                    {metode === 'INTERNAL_PT' || totalOmzet === 0 ? '🏢 PEMAKAIAN KEBUTUHAN INTERNAL PT (RP 0)' : metode}
+                  <span
+                    className={`font-bold ${
+                      metode === 'PEMAKAIAN_PENGELUARAN'
+                        ? 'text-orange-400'
+                        : metode === 'SINKRON'
+                        ? 'text-teal-300'
+                        : metode === 'INTERNAL_PT' || totalOmzet === 0
+                        ? 'text-blue-400'
+                        : 'text-emerald-400'
+                    }`}
+                  >
+                    {metode === 'PEMAKAIAN_PENGELUARAN'
+                      ? `KE PENGELUARAN: ${kategoriPengeluaran}`
+                      : metode === 'SINKRON'
+                      ? 'SINKRON (LUNAS TANPA UANG MASUK)'
+                      : metode === 'INTERNAL_PT' || totalOmzet === 0
+                      ? 'PEMAKAIAN KEBUTUHAN INTERNAL PT (RP 0)'
+                      : metode}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-400">Total Modal HPP:</span>
                   <span className="font-mono tabular-nums text-zinc-300">{formatRupiah(totalModalHpp)}</span>
                 </div>
-                {metode === 'INTERNAL_PT' || totalOmzet === 0 ? (
+                {metode === 'PEMAKAIAN_PENGELUARAN' ? (
+                  <div className="flex justify-between pt-1 border-t border-zinc-700 text-orange-300">
+                    <span className="font-semibold">Nominal Masuk Pengeluaran ({kategoriPengeluaran}):</span>
+                    <span className="font-mono font-bold">
+                      +{formatRupiah(totalOmzet > 0 ? totalOmzet : totalModalHpp)}
+                    </span>
+                  </div>
+                ) : metode === 'SINKRON' ? (
+                  <div className="flex justify-between pt-1 border-t border-zinc-700 text-teal-300">
+                    <span className="font-semibold">Status Uang Kas/Bank:</span>
+                    <span className="font-bold">Rp 0 (Lunas Non-Kas)</span>
+                  </div>
+                ) : metode === 'INTERNAL_PT' || totalOmzet === 0 ? (
                   <div className="flex justify-between pt-1 border-t border-zinc-700 text-blue-300">
                     <span className="font-semibold">Alokasi Biaya:</span>
                     <span className="font-bold">Beban Operasional PT Wijaya Agro</span>
@@ -2001,9 +2271,13 @@ export const PenjualanView: React.FC<Props> = ({
                   </div>
                 )}
                 <div className="flex justify-between pt-1.5 border-t border-zinc-700">
-                  <span className="text-zinc-300 font-bold">Total Nilai Penjualan:</span>
+                  <span className="text-zinc-300 font-bold">Total Nilai Transaksi:</span>
                   <span className={`font-bold text-sm font-mono tabular-nums ${totalOmzet === 0 ? 'text-blue-400' : 'text-amber-400'}`}>
-                    {totalOmzet === 0 ? 'Rp 0 (Pemakaian Internal PT)' : formatRupiah(totalOmzet)}
+                    {metode === 'PEMAKAIAN_PENGELUARAN'
+                      ? formatRupiah(totalOmzet > 0 ? totalOmzet : totalModalHpp)
+                      : totalOmzet === 0 && metode !== 'SINKRON'
+                      ? 'Rp 0 (Pemakaian Internal PT)'
+                      : formatRupiah(totalOmzet)}
                   </span>
                 </div>
               </div>
@@ -2011,8 +2285,21 @@ export const PenjualanView: React.FC<Props> = ({
               {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
               <DoubleCheckVerifikasiPanel
                 direction="MASUK"
-                metode={totalOmzet === 0 && metode !== 'KASBON' ? 'INTERNAL_PT' : metode}
-                nominal={totalOmzet}
+                metode={
+                  totalOmzet === 0 &&
+                  metode !== 'KASBON' &&
+                  metode !== 'SINKRON' &&
+                  metode !== 'PEMAKAIAN_PENGELUARAN'
+                    ? 'INTERNAL_PT'
+                    : metode
+                }
+                nominal={
+                  metode === 'PEMAKAIAN_PENGELUARAN'
+                    ? totalOmzet > 0
+                      ? totalOmzet
+                      : totalModalHpp
+                    : totalOmzet
+                }
                 rekeningList={rekeningList}
                 selectedTransferKode={rekeningTujuan}
                 onChangeTransferKode={setRekeningTujuan}
@@ -2041,7 +2328,11 @@ export const PenjualanView: React.FC<Props> = ({
                   disabled={submitting || !verifiedDoubleCheck}
                   onClick={handleProcessSubmit}
                   className={`px-4 py-1.5 text-white font-bold rounded-md shadow-xs disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
-                    metode === 'INTERNAL_PT' || totalOmzet === 0
+                    metode === 'PEMAKAIAN_PENGELUARAN'
+                      ? 'bg-orange-600 hover:bg-orange-500'
+                      : metode === 'SINKRON'
+                      ? 'bg-teal-600 hover:bg-teal-500'
+                      : metode === 'INTERNAL_PT' || totalOmzet === 0
                       ? 'bg-blue-600 hover:bg-blue-500'
                       : 'bg-emerald-600 hover:bg-emerald-500'
                   }`}

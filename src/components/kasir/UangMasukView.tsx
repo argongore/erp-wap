@@ -10,6 +10,7 @@ import {
   Wallet,
   Building2,
   Truck,
+  Pencil,
 } from 'lucide-react';
 import {
   Mitra,
@@ -25,6 +26,7 @@ import {
 } from '../../utils/format.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
+import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import {
   ArusKasDivisiSelectorCard,
   DoubleCheckVerifikasiPanel,
@@ -114,6 +116,7 @@ export const UangMasukView: React.FC<Props> = ({
   const [showAllHbOptions, setShowAllHbOptions] = useState<boolean>(false);
   const [noPenjualanHb, setNoPenjualanHb] = useState<string>('');
   const [tandaiLunasHb, setTandaiLunasHb] = useState<boolean>(true);
+  const [editTxId, setEditTxId] = useState<string | null>(null);
 
   const [tanggal, setTanggal] = useState<string>(getTodayIsoDate());
   const [nominalDisplay, setNominalDisplay] = useState<string>('');
@@ -1181,6 +1184,15 @@ export const UangMasukView: React.FC<Props> = ({
                         <div className="inline-flex items-center space-x-1.5">
                           <button
                             type="button"
+                            onClick={() => setEditTxId(item.idTransaksi)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer transition-colors"
+                            title="Edit nama pengirim, kategori, nominal, rekening, atau tanggal"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => onSuccess(buildReceiptFromRecord(item))}
                             className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 cursor-pointer"
                             title="Cetak Bukti Uang Masuk"
@@ -1205,6 +1217,16 @@ export const UangMasukView: React.FC<Props> = ({
           </table>
         </div>
       </div>
+
+      <ModalEditTransaksiUniversal
+        isOpen={Boolean(editTxId)}
+        transactionId={editTxId}
+        jenisHint="UANG_MASUK"
+        onClose={() => setEditTxId(null)}
+        onSuccess={() => {
+          onRefresh();
+        }}
+      />
     </div>
   );
 };

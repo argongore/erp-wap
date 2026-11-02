@@ -19,6 +19,8 @@ import {
   TrendingUp,
   Pencil,
   Plus,
+  ShoppingCart,
+  Trash2,
 } from 'lucide-react';
 import {
   DAFTAR_ROLE_MITRA,
@@ -99,6 +101,22 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   const [noNotaLalu, setNoNotaLalu] = useState<string>('');
   const [tanggalNotaLalu, setTanggalNotaLalu] = useState<string>(getWIBTodayString());
 
+  // Keranjang Timbangan Multi-Komoditas untuk 1 Petani
+  const [cartHb, setCartHb] = useState<
+    Array<{
+      id: string;
+      komoditasKode: string;
+      komoditasNama: string;
+      beratKotor: number;
+      potonganRafaksi: number;
+      beratBersih: number;
+      hargaPerKg: number;
+      subtotal: number;
+      isBelumPutusHarga: boolean;
+      keteranganItem?: string;
+    }>
+  >([]);
+
   // Quick Add Mitra Modal
   const [showQuickAddMitra, setShowQuickAddMitra] = useState<boolean>(false);
   const [newMitraNama, setNewMitraNama] = useState<string>('');
@@ -158,12 +176,12 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
     }
   }, [activeMitras, selectedMitraId]);
 
-  // Load existing transactions to show pending Belum Putus Harga lots
+  // Load existing transactions to show pending Belum Putus Harga lots (exclude virtual Nota Silang rows)
   const loadTransactions = async (silent = false) => {
     if (!silent && allTransactions.length === 0) setLoadingTx(true);
     try {
       const data = await api.getPembelianHasilBumi();
-      setAllTransactions(data || []);
+      setAllTransactions((data || []).filter((t) => !t.isNotaSilang));
     } catch (e) {
       console.error(e);
     } finally {
@@ -211,12 +229,55 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       ? Math.round(totalBalancedNominal / totalBalancedKg)
       : modalAwalRp || selectedKomoditas?.hargaBeliStandar || 0;
 
-  // Calculations
+  // Calculations for current input form
   const beratKotor = Number(beratKotorInput) || 0;
   const rafaksi = Number(rafaksiInput) || 0;
   const beratBersih = Math.max(0, Math.round(beratKotor * (1 - rafaksi / 100) * 100) / 100);
   const hargaPerKg = Number(hargaPerKgInput) || 0;
-  const totalTagihan = Math.round(beratBersih * hargaPerKg);
+  const totalTagihanInput = isBelumPutusHarga ? 0 : Math.round(beratBersih * hargaPerKg);
+
+  // Totals (Cart if populated, otherwise current input)
+  const isUsingCart = cartHb.length > 0;
+  const totalNettoKeranjang = isUsingCart
+    ? Math.round(cartHb.reduce((s, it) => s + it.beratBersih, 0) * 100) / 100
+    : beratBersih;
+  const totalTagihan = isUsingCart
+    ? cartHb.reduce((s, it) => s + (it.isBelumPutusHarga ? 0 : it.subtotal), 0)
+    : totalTagihanInput;
+  const isEffectiveBelumPutus = isUsingCart
+    ? cartHb.every((it) => it.isBelumPutusHarga)
+    : isBelumPutusHarga;
+
+  const handleAddToCartHb = () => {
+    setErrorMsg('');
+    if (beratKotor <= 0 || beratBersih <= 0) {
+      setErrorMsg('Berat kotor timbangan harus lebih dari 0 Kg sebelum dimasukkan ke keranjang.');
+      return;
+    }
+    if (!isBelumPutusHarga && hargaPerKg <= 0) {
+      setErrorMsg('Harga per Kg harus lebih dari Rp 0 (atau centang Belum Putus Harga).');
+      return;
+    }
+    const newItem = {
+      id: `CHB-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      komoditasKode: selectedKomoditasKode,
+      komoditasNama: selectedKomoditas?.nama || selectedKomoditasKode,
+      beratKotor,
+      potonganRafaksi: rafaksi,
+      beratBersih,
+      hargaPerKg: isBelumPutusHarga ? 0 : hargaPerKg,
+      subtotal: isBelumPutusHarga ? 0 : Math.round(beratBersih * hargaPerKg),
+      isBelumPutusHarga,
+      keteranganItem: keterangan.trim() || undefined,
+    };
+    setCartHb((prev) => [...prev, newItem]);
+    setBeratKotorInput('');
+    setKeterangan('');
+  };
+
+  const handleRemoveCartHbItem = (id: string) => {
+    setCartHb((prev) => prev.filter((it) => it.id !== id));
+  };
 
   const handleKomoditasChange = (kode: string) => {
     if (kode === '__ADD_NEW__') {
@@ -331,14 +392,18 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       setErrorMsg('Harap pilih Petani / Mitra terdaftar atau gunakan opsi Petani Umum');
       return;
     }
-    if (beratKotor <= 0) {
-      setErrorMsg('Berat kotor timbangan harus lebih dari 0 kg');
-      return;
+
+    if (!isUsingCart) {
+      if (beratKotor <= 0) {
+        setErrorMsg('Berat kotor timbangan harus lebih dari 0 kg');
+        return;
+      }
+      if (!isBelumPutusHarga && hargaPerKg <= 0) {
+        setErrorMsg('Harga per kg harus lebih dari Rp 0 (atau centang Belum Putus Harga)');
+        return;
+      }
     }
-    if (!isBelumPutusHarga && hargaPerKg <= 0) {
-      setErrorMsg('Harga per kg harus lebih dari Rp 0 (atau centang Belum Putus Harga)');
-      return;
-    }
+
     if (!verifiedDoubleCheck) {
       setErrorMsg('Harap centang verifikasi rekening uang riil & divisi terkait terlebih dahulu');
       return;
@@ -348,8 +413,94 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
     try {
       const farmerDisplayName =
         tipePetani === 'UMUM'
-          ? (namaPetaniManual.trim() || 'Petani Umum')
-          : (selectedMitra?.nama || 'Petani');
+          ? namaPetaniManual.trim() || 'Petani Umum'
+          : selectedMitra?.nama || 'Petani';
+
+      if (isUsingCart) {
+        const batchRes = await api.processBatchPembelianHasilBumi({
+          idMitra: tipePetani === 'UMUM' ? 'UMUM' : selectedMitraId,
+          namaPetaniManual: tipePetani === 'UMUM' ? farmerDisplayName : undefined,
+          teleponPetaniManual: tipePetani === 'UMUM' ? teleponPetaniManual.trim() || undefined : undefined,
+          alamatPetaniManual: tipePetani === 'UMUM' ? alamatPetaniManual.trim() || undefined : undefined,
+          fotoNota: fotoNota || undefined,
+          isNotaLalu,
+          noNotaLalu: isNotaLalu ? noNotaLalu.trim() || undefined : undefined,
+          tanggalNotaLalu: isNotaLalu ? tanggalNotaLalu.trim() || undefined : undefined,
+          metodePembayaran: isEffectiveBelumPutus ? 'TITIP' : metode,
+          rekeningSumber: metode === 'TRANSFER' ? rekeningSumber : undefined,
+          keterangan: keterangan.trim() || undefined,
+          items: cartHb.map((it) => ({
+            komoditasKode: it.komoditasKode,
+            beratKotor: it.beratKotor,
+            potonganRafaksi: it.potonganRafaksi,
+            hargaPerKg: it.hargaPerKg,
+            isBelumPutusHarga: it.isBelumPutusHarga,
+            keteranganItem: it.keteranganItem,
+          })),
+        });
+
+        const firstRec = batchRes.records[0];
+        setShowConfirmModal(false);
+        setVerifiedDoubleCheck(false);
+        setCartHb([]);
+        setFotoNota('');
+        setIsNotaLalu(false);
+        setNoNotaLalu('');
+        setKeterangan('');
+        if (tipePetani === 'UMUM') {
+          setNamaPetaniManual('');
+          setTeleponPetaniManual('');
+          setAlamatPetaniManual('');
+        }
+        onRefresh();
+        loadTransactions();
+
+        const receipt: ReceiptData = {
+          title: 'SLIP PEMBELIAN HASIL BUMI (GABUNGAN KERANJANG)',
+          subtitle: `${batchRes.records.length} Komoditas | Metode: ${isEffectiveBelumPutus ? 'TITIP' : metode} | Divisi: Gudang Wijaya Agro`,
+          nomorTransaksi: batchRes.batchId,
+          tanggal: firstRec?.tanggal || getWIBTodayString(),
+          jam: firstRec?.jam || '00:00:00',
+          mitra: firstRec?.namaMitra || farmerDisplayName,
+          rekening: firstRec?.rekeningSumber,
+          kategori: 'PEMBELIAN_HASIL_BUMI',
+          fotoNota: firstRec?.fotoNota || fotoNota || undefined,
+          items: batchRes.records.map((r) => ({
+            nama: `${r.komoditasNama}${r.potonganRafaksi > 0 ? ` (Bruto ${r.beratKotor} Kg, Raf ${r.potonganRafaksi}%)` : ''}`,
+            qty: r.beratBersih,
+            satuan: 'Kg',
+            harga: r.hargaPerKg,
+            subtotal: r.totalNominal,
+          })),
+          detailRows: [
+            { label: 'Divisi Terkait', value: 'Gudang Wijaya Agro' },
+            { label: 'Jumlah Komoditas', value: `${batchRes.records.length} Komoditas` },
+            {
+              label: 'Total Berat Bersih',
+              value: `${batchRes.totalNettoBatch.toLocaleString('id-ID')} Kg`,
+              highlight: true,
+            },
+            { label: 'Metode Pembayaran', value: isEffectiveBelumPutus ? 'TITIP' : metode },
+            {
+              label: 'Rekening Uang Riil',
+              value: `${firstRec?.rekeningSumber || '-'} (${firstRec?.status || 'SELESAI'})`,
+            },
+            {
+              label: 'Total Pembayaran Keranjang',
+              value: batchRes.totalBayarBatch,
+              isTotal: true,
+            },
+          ],
+          catatan: keterangan || `Pembelian gabungan ${batchRes.records.length} komoditas`,
+          kasir: 'Kasir Wijaya Agro',
+        };
+        try {
+          onSuccess(receipt);
+        } catch (err) {
+          console.warn('onSuccess callback error in PembelianHasilBumiView:', err);
+        }
+        return;
+      }
 
       const finalKet =
         keterangan ||
@@ -361,9 +512,9 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
 
       const result: TransaksiPembelianHasilBumi = await api.processPembelianHasilBumi({
         idMitra: tipePetani === 'UMUM' ? 'UMUM' : selectedMitraId,
-        namaPetaniManual: tipePetani === 'UMUM' ? (namaPetaniManual.trim() || 'Petani Umum') : undefined,
-        teleponPetaniManual: tipePetani === 'UMUM' ? (teleponPetaniManual.trim() || undefined) : undefined,
-        alamatPetaniManual: tipePetani === 'UMUM' ? (alamatPetaniManual.trim() || undefined) : undefined,
+        namaPetaniManual: tipePetani === 'UMUM' ? farmerDisplayName : undefined,
+        teleponPetaniManual: tipePetani === 'UMUM' ? teleponPetaniManual.trim() || undefined : undefined,
+        alamatPetaniManual: tipePetani === 'UMUM' ? alamatPetaniManual.trim() || undefined : undefined,
         komoditasKode: selectedKomoditasKode,
         beratKotor,
         potonganRafaksi: rafaksi,
@@ -373,7 +524,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         isNotaLalu,
         noNotaLalu: isNotaLalu ? noNotaLalu.trim() || undefined : undefined,
         tanggalNotaLalu: isNotaLalu ? tanggalNotaLalu.trim() || undefined : undefined,
-        divisi,
+        divisi: 'Gudang Wijaya Agro',
         metodePembayaran: isBelumPutusHarga ? 'TITIP' : metode,
         rekeningSumber: metode === 'TRANSFER' ? rekeningSumber : undefined,
         keterangan: finalKet,
@@ -397,8 +548,8 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           ? 'SLIP TITIP TIMBANG HASIL BUMI (BELUM PUTUS HARGA)'
           : 'SLIP PEMBELIAN HASIL BUMI',
         subtitle: isBelumPutusHarga
-          ? `STATUS: TITIP TIMBANG | Divisi: ${result?.divisi || divisi}`
-          : `Metode: ${result?.metodePembayaran || metode} | Divisi: ${result?.divisi || divisi}`,
+          ? `STATUS: TITIP TIMBANG | Divisi: Gudang Wijaya Agro`
+          : `Metode: ${result?.metodePembayaran || metode} | Divisi: Gudang Wijaya Agro`,
         nomorTransaksi: result?.noPembelian || `PHB-${Date.now().toString().slice(-4)}`,
         tanggal: result?.tanggal || new Date().toISOString().split('T')[0],
         jam: result?.jam || '00:00:00',
@@ -407,7 +558,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         kategori: 'PEMBELIAN_HASIL_BUMI',
         fotoNota: result?.fotoNota || fotoNota || undefined,
         detailRows: [
-          { label: 'Divisi Terkait', value: result?.divisi || divisi },
+          { label: 'Divisi Terkait', value: 'Gudang Wijaya Agro' },
           { label: 'Komoditas', value: result?.komoditasNama || selectedKomoditas?.nama || 'Hasil Bumi' },
           { label: 'Berat Timbangan Kotor', value: `${(result?.beratKotor ?? beratKotor ?? 0).toLocaleString('id-ID')} Kg` },
           { label: 'Potongan Rafaksi / Kadar Air', value: `${result?.potonganRafaksi ?? rafaksi ?? 0}%` },
@@ -417,12 +568,12 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             value: isBelumPutusHarga ? 'Belum Putus (Mengambang)' : formatRupiah(result?.hargaPerKg ?? hargaPerKg),
           },
           { label: 'Status Harga', value: result?.statusHarga || (isBelumPutusHarga ? 'BELUM_PUTUS_HARGA' : 'HARGA_PUTUS') },
-          { label: 'Lampiran Foto Fisik', value: (result?.fotoNota || fotoNota) ? '✅ Tersimpan' : 'Tidak Ada' },
+          { label: 'Lampiran Foto Fisik', value: result?.fotoNota || fotoNota ? '✅ Tersimpan' : 'Tidak Ada' },
           { label: 'Metode Pembayaran', value: result?.metodePembayaran || (isBelumPutusHarga ? 'TITIP' : metode) },
           { label: 'Rekening Uang Riil / Status', value: `${result?.rekeningSumber || '-'} (${result?.status || 'SELESAI'})` },
           {
             label: isBelumPutusHarga ? 'Total Tagihan Sementara' : 'Total Pembayaran',
-            value: isBelumPutusHarga ? 'Rp 0 (Mengambang)' : (result?.totalNominal ?? 0),
+            value: isBelumPutusHarga ? 'Rp 0 (Mengambang)' : result?.totalNominal ?? 0,
             isTotal: true,
           },
         ],
@@ -857,9 +1008,9 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 </div>
               </div>
               <div className="text-right">
-                <span className="text-zinc-600">Total Nominal Pembelian:</span>
+                <span className="text-zinc-600">Subtotal Item Ini:</span>
                 <div className="text-lg font-bold text-zinc-900">
-                  {isBelumPutusHarga && totalTagihan === 0 ? 'Rp 0 (Mengambang)' : formatRupiah(totalTagihan)}
+                  {isBelumPutusHarga && totalTagihanInput === 0 ? 'Rp 0 (Mengambang)' : formatRupiah(totalTagihanInput)}
                 </div>
                 {isBelumPutusHarga && (
                   <span className="text-[10px] text-amber-700 font-medium">Status: Belum Putus Harga</span>
@@ -867,21 +1018,96 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               </div>
             </div>
 
-            <div>
-              <label className="block text-[11px] text-zinc-500 mb-1">Keterangan / Nomor Kendaraan</label>
-              <input
-                type="text"
-                placeholder="Misal: Truk Colt Diesel Plat AB 1234 CD / Kopi Titip Panen Kebun Barat"
-                value={keterangan}
-                onChange={(e) => setKeterangan(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs"
-              />
+            <div className="flex flex-col sm:flex-row sm:items-end gap-2.5">
+              <div className="flex-1">
+                <label className="block text-[11px] text-zinc-500 mb-1">Keterangan / Nomor Kendaraan</label>
+                <input
+                  type="text"
+                  placeholder="Misal: Karung 1-4 / Truk Colt Diesel / Catatan Kualitas"
+                  value={keterangan}
+                  onChange={(e) => setKeterangan(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddToCartHb}
+                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Masukkan Keranjang Komoditas</span>
+              </button>
             </div>
           </div>
         </div>
 
-        {/* Right Form: Payment Method & Source Account */}
+        {/* Right Form: Keranjang Multi-Komoditas + Payment Method & Source Account */}
         <div className="lg:col-span-5 space-y-4">
+          {/* Keranjang Pembelian Multi-Komoditas */}
+          <div className="bg-white rounded-xl border border-emerald-200 shadow-2xs overflow-hidden">
+            <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShoppingCart className="w-4 h-4 text-emerald-700" />
+                <span className="text-xs font-bold text-emerald-950 uppercase tracking-wider">
+                  Keranjang Timbangan Petani ({cartHb.length} Komoditas)
+                </span>
+              </div>
+              {cartHb.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCartHb([])}
+                  className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                >
+                  Kosongkan
+                </button>
+              )}
+            </div>
+
+            <div className="p-3.5 text-xs space-y-2 max-h-64 overflow-y-auto divide-y divide-zinc-100">
+              {cartHb.length === 0 ? (
+                <div className="py-3 text-center text-zinc-500 text-[11px]">
+                  Jika 1 petani menjual beberapa komoditas sekaligus (misal KA + KB + Kopi), klik{' '}
+                  <strong className="text-emerald-800">+ Masukkan Keranjang Komoditas</strong> agar diproses dalam 1x pembayaran.
+                </div>
+              ) : (
+                cartHb.map((it, idx) => (
+                  <div key={it.id} className="pt-2 first:pt-0 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-bold text-zinc-900">
+                        {idx + 1}. {it.komoditasNama}
+                      </div>
+                      <div className="text-[11px] font-mono text-zinc-600">
+                        Netto <strong>{it.beratBersih.toLocaleString('id-ID')} Kg</strong> (Bruto {it.beratKotor} Kg · Raf {it.potonganRafaksi}%) ×{' '}
+                        {it.isBelumPutusHarga ? 'Mengambang' : formatRupiah(it.hargaPerKg)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="font-mono font-bold text-emerald-800">
+                        {it.isBelumPutusHarga ? 'Rp 0' : formatRupiah(it.subtotal)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveCartHbItem(it.id)}
+                        className="p-1 text-zinc-400 hover:text-rose-600 rounded cursor-pointer"
+                        title="Hapus komoditas dari keranjang"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {cartHb.length > 0 && (
+              <div className="px-4 py-2.5 bg-emerald-900 text-white flex items-center justify-between text-xs font-mono">
+                <span>Total {cartHb.length} Komoditas ({totalNettoKeranjang.toLocaleString('id-ID')} Kg)</span>
+                <span className="font-bold text-sm text-amber-300">{formatRupiah(totalTagihan)}</span>
+              </div>
+            )}
+          </div>
+
           <div className="bg-white rounded-xl border border-zinc-200 shadow-2xs p-5 space-y-4">
             <label className="block text-xs font-bold text-zinc-700 uppercase tracking-wider">
               3. Metode Pembayaran Hasil Panen
@@ -1025,19 +1251,20 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Arus Kas Divisi Terkait */}
+            {/* Arus Kas Divisi Terkait (Dikunci Otomatis ke Gudang Wijaya Agro) */}
             <div className="pt-2 border-t border-zinc-200">
               <ArusKasDivisiSelectorCard
                 direction="KELUAR"
                 transactionKind="MODAL_PEMBELIAN"
                 metode={metode}
                 nominal={totalTagihan}
-                divisi={divisi}
+                divisi="Gudang Wijaya Agro"
                 divisiOptions={divisiOptions}
-                onChangeDivisi={setDivisi}
+                onChangeDivisi={() => setDivisi('Gudang Wijaya Agro')}
                 rekeningList={rekeningList}
                 theme="light"
-                isBelumPutusHarga={isBelumPutusHarga}
+                isBelumPutusHarga={isEffectiveBelumPutus}
+                lockedDivisi={true}
                 onDivisiCreated={onRefresh}
               />
             </div>
@@ -1055,16 +1282,22 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             {/* Total Recap Card */}
             <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-200 space-y-2 text-xs">
               <div className="flex justify-between">
-                <span className="text-zinc-500">Divisi Terkait:</span>
-                <span className="font-semibold text-sky-900">{divisi}</span>
+                <span className="text-zinc-500">Divisi Tujuan Otomatis:</span>
+                <span className="font-bold text-emerald-800">Gudang Wijaya Agro</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-500">Komoditas:</span>
-                <span className="font-semibold text-zinc-900">{selectedKomoditas?.nama}</span>
+                <span className="font-semibold text-zinc-900 text-right">
+                  {isUsingCart
+                    ? `${cartHb.length} Komoditas (${cartHb.map((c) => c.komoditasNama).join(', ')})`
+                    : selectedKomoditas?.nama}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-500">Berat Bersih:</span>
-                <span className="font-bold font-mono tabular-nums text-zinc-900">{beratBersih.toLocaleString('id-ID')} Kg</span>
+                <span className="text-zinc-500">Total Berat Bersih:</span>
+                <span className="font-bold font-mono tabular-nums text-zinc-900">
+                  {totalNettoKeranjang.toLocaleString('id-ID')} Kg
+                </span>
               </div>
               <div className="flex justify-between text-base font-bold text-zinc-900 pt-2 border-t border-zinc-200">
                 <span>Total Biaya Pembelian:</span>
@@ -1074,14 +1307,25 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
 
             <button
               type="button"
-              disabled={beratBersih <= 0 || (!isBelumPutusHarga && totalTagihan <= 0)}
+              disabled={
+                isUsingCart
+                  ? false
+                  : beratBersih <= 0 || (!isBelumPutusHarga && totalTagihan <= 0)
+              }
               onClick={() => {
                 setVerifiedDoubleCheck(false);
                 setShowConfirmModal(true);
               }}
               className="w-full py-2.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white font-bold text-sm rounded-lg shadow-sm transition-all flex items-center justify-center space-x-2 cursor-pointer"
             >
-              {isBelumPutusHarga ? (
+              {isUsingCart ? (
+                <>
+                  <ShoppingCart className="w-4 h-4" />
+                  <span>
+                    Simpan &amp; Bayar Keranjang ({cartHb.length} Komoditas · {formatRupiah(totalTagihan)})
+                  </span>
+                </>
+              ) : isBelumPutusHarga ? (
                 <>
                   <Coffee className="w-4 h-4" />
                   <span>Simpan Titip Timbang ({beratBersih.toLocaleString('id-ID')} Kg - Belum Putus Harga)</span>
@@ -1320,42 +1564,55 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Komoditas:</span>
-                  <span className="font-semibold text-zinc-900">{selectedKomoditas?.nama}</span>
+                  <span className="font-semibold text-zinc-900 text-right">
+                    {isUsingCart
+                      ? `${cartHb.length} Komoditas (${cartHb.map((c) => c.komoditasNama).join(', ')})`
+                      : selectedKomoditas?.nama}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Berat Bersih:</span>
-                  <span className="font-bold font-mono tabular-nums">{beratBersih.toLocaleString('id-ID')} Kg</span>
+                  <span className="font-bold font-mono tabular-nums">
+                    {totalNettoKeranjang.toLocaleString('id-ID')} Kg
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Status Harga:</span>
                   <span className="font-bold text-amber-800">
-                    {isBelumPutusHarga ? 'BELUM PUTUS HARGA (MENGAMBANG)' : formatRupiah(hargaPerKg) + ' / Kg'}
+                    {isUsingCart
+                      ? `${cartHb.length} Item Keranjang`
+                      : isBelumPutusHarga
+                      ? 'BELUM PUTUS HARGA (MENGAMBANG)'
+                      : formatRupiah(hargaPerKg) + ' / Kg'}
                   </span>
                 </div>
                 <div className="flex justify-between pt-1 border-t border-zinc-200">
                   <span className="text-zinc-500 font-bold">Total Nilai Tagihan:</span>
                   <span className="font-bold text-sm font-mono tabular-nums text-zinc-900">
-                    {isBelumPutusHarga && totalTagihan === 0 ? 'Rp 0 (Mengambang)' : formatRupiah(totalTagihan)}
+                    {isEffectiveBelumPutus && totalTagihan === 0
+                      ? 'Rp 0 (Mengambang)'
+                      : formatRupiah(totalTagihan)}
                   </span>
                 </div>
               </div>
 
-              {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
+              {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait (Dikunci ke Gudang Wijaya Agro) */}
               <DoubleCheckVerifikasiPanel
                 direction="KELUAR"
                 transactionKind="MODAL_PEMBELIAN"
-                metode={isBelumPutusHarga ? 'TITIP' : metode}
+                metode={isEffectiveBelumPutus ? 'TITIP' : metode}
                 nominal={totalTagihan}
                 rekeningList={rekeningList}
                 selectedTransferKode={rekeningSumber}
                 onChangeTransferKode={setRekeningSumber}
-                divisi={divisi}
+                divisi="Gudang Wijaya Agro"
                 divisiOptions={divisiOptions}
-                onChangeDivisi={setDivisi}
+                onChangeDivisi={() => setDivisi('Gudang Wijaya Agro')}
                 verified={verifiedDoubleCheck}
                 onToggleVerified={setVerifiedDoubleCheck}
                 theme="light"
-                isBelumPutusHarga={isBelumPutusHarga}
+                isBelumPutusHarga={isEffectiveBelumPutus}
+                lockedDivisi={true}
               />
 
               <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-200">

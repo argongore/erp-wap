@@ -542,8 +542,8 @@ export interface TransaksiPenjualan {
   namaMitra: string;
   tipePembeli?: 'UMUM' | 'REKANAN'; // Pelanggan Umum atau Mitra Rekanan
   divisi?: string;       // Divisi usaha terkait saat transaksi
-  metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT';
-  rekeningTujuan: string; // KAS01 for TUNAI, bank for TRANSFER, BON01 for KASBON, INTERNAL_PT for internal use
+  metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'SINKRON' | 'INTERNAL_PT' | 'PEMAKAIAN_PENGELUARAN';
+  rekeningTujuan: string; // KAS01, bank, BON01, SINKRON, INTERNAL_PT, PENGELUARAN
   items: ItemPenjualan[];
   totalModalHpp?: number;  // Akumulasi modal HPP
   totalNominal: number;    // Akumulasi harga jual / omzet
@@ -553,6 +553,17 @@ export interface TransaksiPenjualan {
   isNotaNgunci?: boolean;
   tanggalNgunci?: string;
   catatanNgunci?: string;
+  // Aliran pemakaian stok gudang ke pencatatan Pengeluaran (mis. Solar)
+  kategoriPengeluaran?: string;
+  idPengeluaranTerkait?: string;
+  idInventaris?: string;
+  // Pembukuan Nota Silang (Utama: Mitra ⇄ Anak Perusahaan seperti DP Parabot | Opsi: Sesama Mitra)
+  isNotaSilang?: boolean;
+  modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+  idMitraAnakPerusahaan?: string;
+  namaAnakPerusahaan?: string;
+  noNotaToko?: string;
+  fotoNota?: string;
   keterangan: string;
   createdAt: string;
 }
@@ -697,6 +708,7 @@ export interface LabaRugiSummary {
 
 export interface TransaksiPembelianHasilBumi {
   noPembelian: string;
+  batchId?: string;      // ID gabungan keranjang multi-komoditas 1 petani
   tanggal: string;       // DD/MM/YYYY
   jam: string;           // HH:mm:ss
   idMitra: string;
@@ -708,7 +720,7 @@ export interface TransaksiPembelianHasilBumi {
   beratBersih: number;   // Kg
   hargaPerKg: number;
   totalNominal: number;
-  divisi?: string;       // Divisi usaha terkait saat pembelian hasil bumi
+  divisi?: string;       // Divisi usaha terkait saat pembelian hasil bumi (otomatis Gudang Wijaya Agro)
   metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
   rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for TITIP
   status: 'LUNAS' | 'BELUM_DIAMBIL' | 'TITIP' | 'BELUM_PUTUS_HARGA';
@@ -724,7 +736,42 @@ export interface TransaksiPembelianHasilBumi {
   isNotaLalu?: boolean;  // Menandai transaksi titipan panen / saldo titip masa lalu
   noNotaLalu?: string;   // Nomor dokumen fisik / faktur nota lalu manual
   tanggalNotaLalu?: string;
+  // Metadata Nota Silang pada sisi Anak Perusahaan (mis. DP Parabot) atau Sesama Mitra Penyedia
+  isNotaSilang?: boolean;
+  modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+  idNotaSilangRef?: string;
+  idMitraPengambil?: string;
+  namaMitraPengambil?: string;
+  noNotaToko?: string;
+  itemsNotaSilang?: Array<{ namaBarang: string; qty: number; satuan?: string; harga: number; subtotal: number }>;
   keterangan: string;
+  createdAt: string;
+}
+
+export interface NotaSilangItemInput {
+  namaBarang: string;
+  qty: number;
+  satuan?: string;
+  harga: number;
+}
+
+export interface NotaSilangRecordSummary {
+  noNotaSilang: string;
+  noRefAnakPerusahaan: string;
+  modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+  tanggal: string;
+  jam: string;
+  idMitra: string;
+  namaMitra: string;
+  idMitraAnakPerusahaan: string;
+  namaAnakPerusahaan: string;
+  noNotaToko?: string;
+  items: Array<{ namaBarang: string; qty: number; satuan: string; harga: number; subtotal: number }>;
+  totalNominal: number;
+  sisaPiutangMitra: number;
+  statusPiutangMitra: 'LUNAS' | 'BELUM_BAYAR';
+  keterangan: string;
+  fotoNota?: string;
   createdAt: string;
 }
 
@@ -1351,17 +1398,107 @@ export interface ProfilPerusahaan {
 }
 
 // ==========================================
-// PENGELUARAN & BEBAN OPERASIONAL PER DIVISI
+// PENGELUARAN & BEBAN OPERASIONAL PER DIVISI (24 ITEM: HIJAU INVENTARIS & ORANYE BIASA)
 // ==========================================
+export type KelompokItemPengeluaran = 'INVENTARIS' | 'BIASA';
+
+export interface DefinisiItemPengeluaran24 {
+  nomorUrut: number;
+  kode: string;
+  nama: string;
+  kelompok: KelompokItemPengeluaran;
+  satuanDefault?: string;
+  deskripsi: string;
+}
+
+export const DAFTAR_24_ITEM_PENGELUARAN: readonly DefinisiItemPengeluaran24[] = [
+  // WARNA HIJAU (1 - 16): PENGELUARAN UNTUK INVENTARIS / ARMADA
+  { nomorUrut: 1, kode: 'EXP-01-L300', nama: 'L300', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit inventaris Pickup L300' },
+  { nomorUrut: 2, kode: 'EXP-02-TRAGA', nama: 'TRAGA', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit inventaris Isuzu Traga' },
+  { nomorUrut: 3, kode: 'EXP-03-DUMPDUTRO', nama: 'DUMP DUTRO', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit inventaris Dump Truck Dutro' },
+  { nomorUrut: 4, kode: 'EXP-04-DUMPGIGA', nama: 'DUMP GIGA', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit inventaris Dump Truck Giga' },
+  { nomorUrut: 5, kode: 'EXP-05-EXC02', nama: 'EXC 02', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran alat berat Excavator 02' },
+  { nomorUrut: 6, kode: 'EXP-06-EXC01', nama: 'EXC 01', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran alat berat Excavator 01' },
+  { nomorUrut: 7, kode: 'EXP-07-B9241UVZ', nama: 'B9241UVZ', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran armada plat B 9241 UVZ' },
+  { nomorUrut: 8, kode: 'EXP-08-BE8206AMN', nama: 'BE8206AMN', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran armada plat BE 8206 AMN' },
+  { nomorUrut: 9, kode: 'EXP-09-BG8038MY', nama: 'BG8038MY', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran armada plat BG 8038 MY' },
+  { nomorUrut: 10, kode: 'EXP-10-PAJERO', nama: 'PAJERO', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran mobil operasional Pajero' },
+  { nomorUrut: 11, kode: 'EXP-11-RAIZE', nama: 'RAIZE', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran mobil operasional Raize' },
+  { nomorUrut: 12, kode: 'EXP-12-VESPA', nama: 'VESPA', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit motor Vespa' },
+  { nomorUrut: 13, kode: 'EXP-13-AEROX', nama: 'AEROX', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit motor Aerox' },
+  { nomorUrut: 14, kode: 'EXP-14-SCOPY', nama: 'SCOPY', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit motor Scoopy' },
+  { nomorUrut: 15, kode: 'EXP-15-MIO', nama: 'MIO', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit motor Mio' },
+  { nomorUrut: 16, kode: 'EXP-16-KING', nama: 'KING', kelompok: 'INVENTARIS', deskripsi: 'Pengeluaran unit motor RX King' },
+  // WARNA ORANYE (17 - 24): PENGELUARAN BIASA / OPERASIONAL HARIAN
+  { nomorUrut: 17, kode: 'EXP-17-RUMAH', nama: 'RUMAH', kelompok: 'BIASA', deskripsi: 'Pengeluaran kebutuhan rumah tangga / mess kantor' },
+  { nomorUrut: 18, kode: 'EXP-18-SOLAR', nama: 'SOLAR', kelompok: 'BIASA', satuanDefault: 'DRIGENT', deskripsi: 'Pengeluaran BBM Solar operasional & pemakaian gudang' },
+  { nomorUrut: 19, kode: 'EXP-19-ROKOK', nama: 'ROKOK', kelompok: 'BIASA', satuanDefault: 'BKS', deskripsi: 'Pengeluaran rokok operasional lapangan / pekerja' },
+  { nomorUrut: 20, kode: 'EXP-20-AKUA', nama: 'AKUA', kelompok: 'BIASA', satuanDefault: 'DUS', deskripsi: 'Pengeluaran air minum kemasan (Aqua / galon)' },
+  { nomorUrut: 21, kode: 'EXP-21-NASI', nama: 'NASI', kelompok: 'BIASA', satuanDefault: 'BKS', deskripsi: 'Pengeluaran konsumsi nasi pekerja & tamu' },
+  { nomorUrut: 22, kode: 'EXP-22-TOKEN', nama: 'TOKEN', kelompok: 'BIASA', deskripsi: 'Pengeluaran token listrik PLN kantor & gudang' },
+  { nomorUrut: 23, kode: 'EXP-23-SEDEKAH', nama: 'SEDEKAH', kelompok: 'BIASA', deskripsi: 'Pengeluaran sedekah, sumbangan & sosial' },
+  { nomorUrut: 24, kode: 'EXP-24-GORENGAN', nama: 'GORENGAN', kelompok: 'BIASA', deskripsi: 'Pengeluaran snack / gorengan konsumsi harian' },
+];
+
+export function getNomorUrutItemPengeluaran(nama: string): number | undefined {
+  const norm = String(nama || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const compact = norm.replace(/\s+/g, '');
+  const found = DAFTAR_24_ITEM_PENGELUARAN.find(
+    (d) => d.nama.toUpperCase() === norm || d.nama.replace(/\s+/g, '').toUpperCase() === compact
+  );
+  return found?.nomorUrut;
+}
+
+export function resolveKelompokItemPengeluaran(
+  nama: string,
+  explicit?: KelompokItemPengeluaran
+): KelompokItemPengeluaran {
+  if (explicit === 'INVENTARIS' || explicit === 'BIASA') return explicit;
+  const norm = String(nama || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const compact = norm.replace(/\s+/g, '');
+  const found = DAFTAR_24_ITEM_PENGELUARAN.find(
+    (d) => d.nama.toUpperCase() === norm || d.nama.replace(/\s+/g, '').toUpperCase() === compact
+  );
+  if (found) return found.kelompok;
+  if (
+    /\b(L300|TRAGA|DUMP|DUTRO|GIGA|EXC|PAJERO|RAIZE|VESPA|AEROX|SCOPY|SCOOPY|MIO|KING|TRUCK|ARMADA|MOBIL|MOTOR|SPAREPART)\b/.test(
+      norm
+    )
+  ) {
+    return 'INVENTARIS';
+  }
+  return 'BIASA';
+}
+
+export interface MasterItemPengeluaran {
+  id: string;
+  kode: string;
+  nama: string;          // e.g. "L300", "SOLAR", "RUMAH"
+  kelompok?: KelompokItemPengeluaran; // 'INVENTARIS' (Hijau) | 'BIASA' (Oranye)
+  nomorUrut?: number;    // 1..24 untuk item baku
+  satuanDefault?: string;
+  deskripsi?: string;
+  divisiDefault?: string;
+  isSystemDefault?: boolean;
+  createdAt: string;
+}
+
 export interface TransaksiPengeluaran {
   idTransaksi: string;
   tanggal: string;       // DD/MM/YYYY
   jam: string;           // HH:mm:ss
-  divisi: string;        // e.g. "Wijaya Transport", "Gudang Wijaya Agro", "Wijaya Karya", "CV Wijaya Agro", "PT Wijaya Agro Perkasa", "Okussa"
-  kategori: string;      // e.g. "Sparepart & Perbaikan Armada", "Konsumsi Karyawan", "BBM Solar & Pelumas", "Operasional Gudang", "ATK & Kantor", "Lain-lain"
-  keterangan: string;    // e.g. "Beli gorengan karyawan & gula", "Ganti oli dump truck & kampas rem L300"
-  nominal: number;
-  rekeningSumber: string; // KAS01, BNI01, etc.
+  divisi: string;        // e.g. "Wijaya Transport", "Gudang Wijaya Agro"
+  kategori: string;      // Item pengeluaran, e.g. "L300", "TRAGA", "SOLAR", "RUMAH"
+  kelompokPengeluaran?: KelompokItemPengeluaran; // 'INVENTARIS' (Hijau) | 'BIASA' (Oranye)
+  qty?: number;
+  satuan?: string;
+  hargaSatuan?: number;
+  keterangan: string;    // e.g. "Pemakaian Solar Gudang 2 Drigent", "Ganti oli dump truck"
+  nominal: number;       // Positif untuk TAMBAH pengeluaran, Negatif untuk KURANG/koreksi pengeluaran
+  arahMutasi?: 'TAMBAH' | 'KURANG';
+  isNonKas?: boolean;    // true jika berasal dari pemakaian stok internal (STOK_INTERNAL) atau SINKRON non-kas
+  idPenjualanStok?: string; // No penjualan terkait jika berasal dari pemakaian stok barang (mis. Solar)
+  rekeningSumber: string; // KAS01, BNI01, SINKRON, STOK_INTERNAL, etc.
   penerima?: string;
   idInventaris?: string;
   fotoKuitansi?: string;
@@ -1509,7 +1646,8 @@ export interface UnifiedTransactionItem {
     | 'UPAH_HARIAN'
     | 'PENGGAJIAN'
     | 'TRANSFER_REKENING'
-    | 'BRILINK';
+    | 'BRILINK'
+    | 'NOTA_SILANG';
   jenisLabel: string;
   arusUang: ArusUangType;
   arusUangLabel: string;
@@ -1520,6 +1658,12 @@ export interface UnifiedTransactionItem {
   nominal: number;
   nominalMasuk: number;
   nominalKeluar: number;
+  // Fokus Arus Kas Kasir (KAS01)
+  isArusKasKasir?: boolean;
+  arahKasir?: 'MASUK' | 'KELUAR' | 'MUTASI_MASUK' | 'MUTASI_KELUAR' | 'NON_KASIR';
+  arahKasirLabel?: string;
+  nominalKasirMasuk?: number;
+  nominalKasirKeluar?: number;
   metode: string;
   status: string;
   fotoBukti?: string;
@@ -1540,6 +1684,23 @@ export interface RekapSemuaTransaksiResponse {
       mutasiCount: number;
       nonTunaiCount: number;
     };
+  };
+  kasirSummary?: {
+    kodeKasir: string;
+    namaKasir: string;
+    tanggalAcuan: string;
+    isFilteredSingleDate: boolean;
+    saldoAwalKasir: number;
+    uangMasukOperasionalKasir: number;
+    uangKeluarOperasionalKasir: number;
+    mutasiMasukKasir: number;
+    mutasiKeluarKasir: number;
+    totalMasukKasir: number;
+    totalKeluarKasir: number;
+    arusBersihKasir: number;
+    saldoAkhirKasir: number;
+    saldoKasirLiveSaatIni: number;
+    totalTransaksiKasir: number;
   };
   transactions: UnifiedTransactionItem[];
   daftarPihakTerkait: string[];

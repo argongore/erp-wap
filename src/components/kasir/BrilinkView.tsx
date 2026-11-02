@@ -10,6 +10,7 @@ import {
   Search,
   UserPlus,
   CreditCard,
+  Pencil,
 } from 'lucide-react';
 import {
   JenisTransaksiBrilink,
@@ -25,6 +26,7 @@ import {
 } from '../../utils/format.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
+import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import {
   ArusKasDivisiSelectorCard,
   DoubleCheckVerifikasiPanel,
@@ -104,6 +106,7 @@ export const BrilinkView: React.FC<Props> = ({
   const [filterJenis, setFilterJenis] = useState<'ALL' | JenisTransaksiBrilink>('ALL');
   const [confirmVoidId, setConfirmVoidId] = useState<string | null>(null);
   const [voidLoading, setVoidLoading] = useState<boolean>(false);
+  const [editTxId, setEditTxId] = useState<string | null>(null);
 
   const nominalAdmin = parseRupiahInput(nominalAdminDisplay);
   const nominalPokok = catatMutasiPokok ? parseRupiahInput(nominalPokokDisplay) : 0;
@@ -1022,6 +1025,15 @@ export const BrilinkView: React.FC<Props> = ({
                           <div className="inline-flex items-center space-x-1.5">
                             <button
                               type="button"
+                              onClick={() => setEditTxId(item.idTransaksi)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer transition-colors"
+                              title="Edit nama pelanggan, nominal admin, pokok mutasi, rekening, atau tanggal"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => onSuccess(buildReceiptFromRecord(item))}
                               className="p-1.5 rounded hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 cursor-pointer"
                               title="Cetak Struk BRILink"
@@ -1047,6 +1059,16 @@ export const BrilinkView: React.FC<Props> = ({
           </table>
         </div>
       </div>
+
+      <ModalEditTransaksiUniversal
+        isOpen={Boolean(editTxId)}
+        transactionId={editTxId}
+        jenisHint="BRILINK"
+        onClose={() => setEditTxId(null)}
+        onSuccess={() => {
+          onRefresh();
+        }}
+      />
     </div>
   );
 };

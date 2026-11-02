@@ -16,7 +16,7 @@ import { TransferRekeningView } from './components/kasir/TransferRekeningView.ts
 import { MasterRekeningView } from './components/master/MasterRekeningView.tsx';
 import { MasterMitraView } from './components/master/MasterMitraView.tsx';
 import { MasterProdukView } from './components/master/MasterProdukView.tsx';
-import { MasterInventarisView } from './components/master/MasterInventarisView.tsx';
+import { InventarisDanPengeluaranView } from './components/master/InventarisDanPengeluaranView.tsx';
 import { MasterKaryawanView } from './components/karyawan/MasterKaryawanView.tsx';
 import { DivisiKeuanganView } from './components/karyawan/DivisiKeuanganView.tsx';
 import { StokBarangView } from './components/stok/StokBarangView.tsx';
@@ -48,7 +48,7 @@ import { BillboardMonitoringView } from './components/billboard/BillboardMonitor
 import { PrintReceiptModal, ReceiptData } from './components/common/PrintReceiptModal.tsx';
 import { api, DashboardStatsResponse } from './api/client.ts';
 import { BayarTitipanHasilBumiView } from './components/kasir/BayarTitipanHasilBumiView.tsx';
-import { PengeluaranView } from './components/kasir/PengeluaranView.tsx';
+import { NotaSilangView } from './components/kasir/NotaSilangView.tsx';
 import { UangMasukView } from './components/kasir/UangMasukView.tsx';
 import { BrilinkView } from './components/kasir/BrilinkView.tsx';
 import { ProfilPerusahaanModal } from './components/master/ProfilPerusahaanModal.tsx';
@@ -1056,6 +1056,7 @@ export default function App() {
                   mitraList={mitraList}
                   rekeningList={rekeningList}
                   penjualanList={penjualanList}
+                  inventarisList={inventarisList}
                   onSuccess={handleTransactionSuccess}
                   onRefresh={loadAllData}
                   onOpenLabaRugi={() => setActiveTab('laba-rugi-produk')}
@@ -1113,6 +1114,15 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'kasir-nota-silang' && (
+                <NotaSilangView
+                  mitraList={mitraList}
+                  onSuccess={handleTransactionSuccess}
+                  onRefresh={loadAllData}
+                  onOpenRekeningKoranMitra={handleOpenMitraStatement}
+                />
+              )}
+
               {activeTab === 'kasir-bayar-bon' && (
                 <BayarBonView
                   mitraList={mitraList}
@@ -1125,14 +1135,15 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'kasir-pengeluaran' && (
-                <PengeluaranView
-                  rekeningList={rekeningList}
+              {(activeTab === 'kasir-pengeluaran' || activeTab === 'master-inventaris') && (
+                <InventarisDanPengeluaranView
                   inventarisList={inventarisList}
+                  pengeluaranList={pengeluaranList}
+                  rekeningList={rekeningList}
                   karyawanList={karyawanList}
+                  initialSubMenu={activeTab === 'kasir-pengeluaran' ? 'PENGELUARAN' : 'INVENTARIS'}
                   preselectedInventarisId={preselectedInventarisForPengeluaran}
                   onClearPreselectedInventaris={() => setPreselectedInventarisForPengeluaran(null)}
-                  onOpenInventarisMenu={() => setActiveTab('master-inventaris')}
                   onRefresh={loadAllData}
                 />
               )}
@@ -1174,19 +1185,6 @@ export default function App() {
                   onRefresh={loadAllData}
                   onOpenStatement={handleOpenMitraStatement}
                   onSuccessReceipt={handleTransactionSuccess}
-                />
-              )}
-
-              {activeTab === 'master-inventaris' && (
-                <MasterInventarisView
-                  inventarisList={inventarisList}
-                  karyawanList={karyawanList}
-                  pengeluaranList={pengeluaranList}
-                  onRefresh={loadAllData}
-                  onNavigateToPengeluaran={(item) => {
-                    setPreselectedInventarisForPengeluaran(item.id);
-                    setActiveTab('kasir-pengeluaran');
-                  }}
                 />
               )}
 

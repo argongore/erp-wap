@@ -97,6 +97,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
   const [selectedMonth, setSelectedMonth] = useState<string>(defaultMonth);
   const [selectedYear, setSelectedYear] = useState<string>(defaultYear);
   
+  // Fokus Mode: KASIR_ONLY (Default: Uang Keluar Masuk Kasir KAS01) vs SEMUA_REKENING
+  const [fokusMode, setFokusMode] = useState<'KASIR_ONLY' | 'SEMUA_REKENING'>('KASIR_ONLY');
+
   // Arus Uang: ALL, MASUK, KELUAR, MUTASI, NON_TUNAI
   const [filterArusUang, setFilterArusUang] = useState<string>('ALL');
   
@@ -172,6 +175,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
       setErrorMsg(null);
       const res = await api.getSemuaTransaksi({
         tanggal: activeTanggalParam,
+        hanyaKasir: fokusMode === 'KASIR_ONLY',
       });
       setRekapData(res);
     } catch (err: any) {
@@ -180,7 +184,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
     } finally {
       setLoading(false);
     }
-  }, [activeTanggalParam]);
+  }, [activeTanggalParam, fokusMode]);
 
   useEffect(() => {
     loadData(Boolean(rekapData));
@@ -208,7 +212,17 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
 
     // Filter Arus Uang
     if (filterArusUang !== 'ALL') {
-      list = list.filter((tx) => tx.arusUang === filterArusUang);
+      if (fokusMode === 'KASIR_ONLY') {
+        if (filterArusUang === 'MASUK') {
+          list = list.filter((tx) => tx.arahKasir === 'MASUK' || tx.arahKasir === 'MUTASI_MASUK');
+        } else if (filterArusUang === 'KELUAR') {
+          list = list.filter((tx) => tx.arahKasir === 'KELUAR' || tx.arahKasir === 'MUTASI_KELUAR');
+        } else {
+          list = list.filter((tx) => tx.arusUang === filterArusUang);
+        }
+      } else {
+        list = list.filter((tx) => tx.arusUang === filterArusUang);
+      }
     }
 
     // Filter Jenis Transaksi
@@ -251,6 +265,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
     filterNama,
     searchQueryNama,
     searchTransaksi,
+    fokusMode,
   ]);
 
   useEffect(() => {
@@ -265,6 +280,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
     filterNama,
     searchQueryNama,
     searchTransaksi,
+    fokusMode,
   ]);
 
   const displayedTransactions = useMemo(
@@ -272,9 +288,45 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
     [filteredTransactions, visibleLimit]
   );
 
-  // Computed Totals for filtered view
+  // Computed Totals for filtered view (Kasir-centric when fokusMode === 'KASIR_ONLY')
   const computedSummary = useMemo(() => {
     const totalTransaksi = filteredTransactions.length;
+    if (fokusMode === 'KASIR_ONLY') {
+      const totalMasuk = filteredTransactions.reduce(
+        (s, tx) => s + (tx.nominalKasirMasuk ?? tx.nominalMasuk ?? 0),
+        0
+      );
+      const totalKeluar = filteredTransactions.reduce(
+        (s, tx) => s + (tx.nominalKasirKeluar ?? tx.nominalKeluar ?? 0),
+        0
+      );
+      const netCashflow = totalMasuk - totalKeluar;
+      const masukCount = filteredTransactions.filter(
+        (tx) =>
+          tx.arahKasir === 'MASUK' ||
+          tx.arahKasir === 'MUTASI_MASUK' ||
+          (tx.nominalKasirMasuk || 0) > 0
+      ).length;
+      const keluarCount = filteredTransactions.filter(
+        (tx) =>
+          tx.arahKasir === 'KELUAR' ||
+          tx.arahKasir === 'MUTASI_KELUAR' ||
+          (tx.nominalKasirKeluar || 0) > 0
+      ).length;
+      const mutasiCount = filteredTransactions.filter((tx) => tx.arusUang === 'MUTASI').length;
+      return {
+        totalTransaksi,
+        totalMasuk,
+        totalKeluar,
+        netCashflow,
+        totalNonTunai: 0,
+        masukCount,
+        keluarCount,
+        mutasiCount,
+        nonTunaiCount: 0,
+      };
+    }
+
     const totalMasuk = filteredTransactions.reduce((s, tx) => s + tx.nominalMasuk, 0);
     const totalKeluar = filteredTransactions.reduce((s, tx) => s + tx.nominalKeluar, 0);
     const netCashflow = totalMasuk - totalKeluar;
@@ -298,7 +350,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
       mutasiCount,
       nonTunaiCount,
     };
-  }, [filteredTransactions]);
+  }, [filteredTransactions, fokusMode]);
 
   // Print Action
   const handlePrint = () => {
@@ -419,16 +471,26 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               <Receipt className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-xl sm:text-2xl font-black text-zinc-900 tracking-tight">
-                  Rekapan Semua Transaksi Harian
+                  {fokusMode === 'KASIR_ONLY'
+                    ? 'Rekapan Arus Kas Kasir Harian (KAS01)'
+                    : 'Rekapan Semua Transaksi Harian'}
                 </h1>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-800 border border-cyan-300">
-                  JURNAL TERPADU
+                <span
+                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                    fokusMode === 'KASIR_ONLY'
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                      : 'bg-cyan-100 text-cyan-800 border-cyan-300'
+                  }`}
+                >
+                  {fokusMode === 'KASIR_ONLY' ? 'FOKUS LACI KASIR (KAS01)' : 'SEMUA REKENING & NON-TUNAI'}
                 </span>
               </div>
               <p className="text-xs text-zinc-500 mt-0.5">
-                Pusat rekapan lengkap seluruh transaksi kasir, pembelian kulakan supplier, pembelian hasil bumi, kasbon uang, bayar bon, upah &amp; beban operasional divisi
+                {fokusMode === 'KASIR_ONLY'
+                  ? 'Rekapan murni uang tunai fisik yang masuk & keluar dari Kasir (KAS01) — termasuk setor uang kasir ke Berangkas (BRK01) / Bank.'
+                  : 'Pusat rekapan lengkap seluruh transaksi kasir, transfer bank, kulakan supplier, hasil bumi, nota silang, kasbon & biaya divisi.'}
               </p>
             </div>
           </div>
@@ -493,21 +555,85 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* Mode Switcher: Fokus Arus Kas Kasir (KAS01) vs Semua Rekening */}
+      <div className="no-print bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+        <div className="text-xs text-emerald-950">
+          <div className="font-bold">
+            Mode Tampilan Rekapan:{' '}
+            {fokusMode === 'KASIR_ONLY'
+              ? 'Fokus Arus Kas Kasir (KAS01 — Uang Masuk & Keluar Kasir)'
+              : 'Seluruh Rekening (Kasir + Bank + Non-Tunai)'}
+          </div>
+          <div className="text-[11px] text-emerald-800/80">
+            {fokusMode === 'KASIR_ONLY'
+              ? 'Hanya menampilkan transaksi yang benar-benar menambah atau mengurangi uang tunai di laci Kasir (KAS01).'
+              : 'Menampilkan seluruh transaksi termasuk Transfer Bank, Kasbon/Piutang, Titipan Panen, dan Nota Silang.'}
+          </div>
+        </div>
+        <div className="inline-flex p-1 bg-white rounded-lg border border-emerald-200 shadow-2xs shrink-0 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => {
+              setFokusMode('KASIR_ONLY');
+              if (filterArusUang === 'NON_TUNAI') setFilterArusUang('ALL');
+            }}
+            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors cursor-pointer ${
+              fokusMode === 'KASIR_ONLY'
+                ? 'bg-emerald-700 text-white shadow-2xs'
+                : 'text-zinc-600 hover:text-zinc-900'
+            }`}
+          >
+            Fokus Arus Kas Kasir (KAS01)
+          </button>
+          <button
+            type="button"
+            onClick={() => setFokusMode('SEMUA_REKENING')}
+            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors cursor-pointer ${
+              fokusMode === 'SEMUA_REKENING'
+                ? 'bg-zinc-900 text-white shadow-2xs'
+                : 'text-zinc-600 hover:text-zinc-900'
+            }`}
+          >
+            Semua Rekening &amp; Non-Tunai
+          </button>
+        </div>
+      </div>
+
       {/* 2. Top Summary KPI Cards for Active Date */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {/* Card 1: Total Transaksi */}
+        {/* Card 1: Saldo Awal Kasir / Total Transaksi */}
         <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
           <div className="flex items-center justify-between gap-2 text-zinc-500 text-xs min-w-0">
-            <span className="font-semibold truncate">Total Transaksi</span>
+            <span className="font-semibold truncate">
+              {fokusMode === 'KASIR_ONLY' && activeTanggalParam !== 'ALL'
+                ? 'Saldo Awal Kasir (KAS01)'
+                : 'Total Transaksi'}
+            </span>
             <Receipt className="w-4 h-4 text-zinc-400 shrink-0" />
           </div>
           <div className="mt-2 min-w-0">
-            <div className="text-2xl font-black text-zinc-900 font-mono tabular-nums truncate whitespace-nowrap">
-              {computedSummary.totalTransaksi}
-            </div>
-            <div className="text-[11px] text-zinc-500 mt-0.5 truncate">
-              {activePeriodDisplay}
-            </div>
+            {fokusMode === 'KASIR_ONLY' && activeTanggalParam !== 'ALL' ? (
+              <>
+                <div
+                  className="text-lg sm:text-xl font-black text-zinc-900 font-mono tabular-nums truncate whitespace-nowrap"
+                  title={formatRupiah(rekapData?.kasirSummary?.saldoAwalKasir || 0)}
+                >
+                  {formatRupiahSingkat(rekapData?.kasirSummary?.saldoAwalKasir || 0)}
+                </div>
+                <div className="text-[11px] text-zinc-500 mt-0.5 truncate">
+                  {computedSummary.totalTransaksi} mutasi kasir · {activePeriodDisplay}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-black text-zinc-900 font-mono tabular-nums truncate whitespace-nowrap">
+                  {computedSummary.totalTransaksi}
+                </div>
+                <div className="text-[11px] text-zinc-500 mt-0.5 truncate">
+                  {activePeriodDisplay}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -516,7 +642,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-1.5 text-emerald-700 text-xs min-w-0">
             <span className="font-semibold flex items-center space-x-1 min-w-0 truncate">
               <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span className="truncate">Uang Masuk (Kas &amp; Bank)</span>
+              <span className="truncate">
+                {fokusMode === 'KASIR_ONLY' ? 'Uang Masuk Kasir (+)' : 'Uang Masuk (Kas & Bank)'}
+              </span>
             </span>
             <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded shrink-0">
               {computedSummary.masukCount} tx
@@ -530,7 +658,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               +{formatRupiahSingkat(computedSummary.totalMasuk)}
             </div>
             <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
-              Penjualan tunai, pelunasan bon
+              {fokusMode === 'KASIR_ONLY'
+                ? 'Tunai masuk laci kasir (KAS01)'
+                : 'Penjualan tunai, pelunasan bon'}
             </div>
           </div>
         </div>
@@ -540,7 +670,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-1.5 text-rose-700 text-xs min-w-0">
             <span className="font-semibold flex items-center space-x-1 min-w-0 truncate">
               <ArrowUpRight className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span className="truncate">Uang Keluar (Belanja &amp; Biaya)</span>
+              <span className="truncate">
+                {fokusMode === 'KASIR_ONLY' ? 'Uang Keluar Kasir (−)' : 'Uang Keluar (Belanja & Biaya)'}
+              </span>
             </span>
             <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.2 rounded shrink-0">
               {computedSummary.keluarCount} tx
@@ -554,7 +686,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               -{formatRupiahSingkat(Math.abs(computedSummary.totalKeluar))}
             </div>
             <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
-              Beli TBS, kulakan, bon, biaya divisi
+              {fokusMode === 'KASIR_ONLY'
+                ? 'Beli HB tunai, biaya, setor berangkas'
+                : 'Beli HB, kulakan, bon, biaya divisi'}
             </div>
           </div>
         </div>
@@ -574,7 +708,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               ) : (
                 <TrendingDown className="w-3.5 h-3.5 text-amber-600 shrink-0" />
               )}
-              <span className="truncate">Arus Kas Bersih (Net)</span>
+              <span className="truncate">
+                {fokusMode === 'KASIR_ONLY' ? 'Selisih Kasir Hari Ini' : 'Arus Kas Bersih (Net)'}
+              </span>
             </span>
             <span
               className={`text-[9px] font-bold px-1.5 py-0.2 rounded shrink-0 ${
@@ -597,34 +733,58 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               {formatRupiahSingkat(computedSummary.netCashflow)}
             </div>
             <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
-              Selisih masuk dikurangi keluar
+              {fokusMode === 'KASIR_ONLY' && (rekapData?.kasirSummary?.mutasiKeluarKasir || 0) > 0
+                ? `Mutasi/Setor Keluar Kasir: ${formatRupiahSingkat(rekapData?.kasirSummary?.mutasiKeluarKasir || 0)}`
+                : 'Selisih masuk dikurangi keluar'}
             </div>
           </div>
         </div>
 
-        {/* Card 5: Non-Tunai / Bon Piutang */}
-        <div className="col-span-2 lg:col-span-1 bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between gap-1.5 text-zinc-600 text-xs min-w-0">
-            <span className="font-semibold flex items-center space-x-1 min-w-0 truncate">
-              <HandCoins className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-              <span className="truncate">Piutang / Kasbon Baru</span>
-            </span>
-            <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.2 rounded shrink-0">
-              {computedSummary.nonTunaiCount} tx
-            </span>
-          </div>
-          <div className="mt-2 min-w-0">
-            <div
-              className="text-lg sm:text-xl font-black text-purple-700 font-mono tabular-nums truncate whitespace-nowrap"
-              title={formatRupiah(computedSummary.totalNonTunai)}
-            >
-              {formatRupiahSingkat(computedSummary.totalNonTunai)}
+        {/* Card 5: Saldo Akhir Kasir (when KASIR_ONLY) or Non-Tunai / Bon Piutang */}
+        {fokusMode === 'KASIR_ONLY' ? (
+          <div className="col-span-2 lg:col-span-1 bg-emerald-900 text-white p-4 rounded-xl border border-emerald-800 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
+            <div className="flex items-center justify-between gap-1.5 text-emerald-200 text-xs min-w-0">
+              <span className="font-bold truncate">Saldo Akhir Kasir (KAS01)</span>
+              <span className="text-[10px] bg-emerald-800 text-emerald-100 font-bold px-1.5 py-0.2 rounded shrink-0">
+                KAS01
+              </span>
             </div>
-            <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
-              Bon barang toko &amp; hutang tempo
+            <div className="mt-2 min-w-0">
+              <div
+                className="text-lg sm:text-xl font-black text-white font-mono tabular-nums truncate whitespace-nowrap"
+                title={formatRupiah(rekapData?.kasirSummary?.saldoAkhirKasir || 0)}
+              >
+                {formatRupiah(rekapData?.kasirSummary?.saldoAkhirKasir || 0)}
+              </div>
+              <div className="text-[10px] text-emerald-200/90 mt-0.5 truncate">
+                Uang fisik kasir siap setor ke Berangkas
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="col-span-2 lg:col-span-1 bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
+            <div className="flex items-center justify-between gap-1.5 text-zinc-600 text-xs min-w-0">
+              <span className="font-semibold flex items-center space-x-1 min-w-0 truncate">
+                <HandCoins className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                <span className="truncate">Piutang / Kasbon Baru</span>
+              </span>
+              <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.2 rounded shrink-0">
+                {computedSummary.nonTunaiCount} tx
+              </span>
+            </div>
+            <div className="mt-2 min-w-0">
+              <div
+                className="text-lg sm:text-xl font-black text-purple-700 font-mono tabular-nums truncate whitespace-nowrap"
+                title={formatRupiah(computedSummary.totalNonTunai)}
+              >
+                {formatRupiahSingkat(computedSummary.totalNonTunai)}
+              </div>
+              <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
+                Bon barang toko &amp; hutang tempo
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 3. MULTI-LEVEL FILTER CONTROLS (Hari, Arus Uang, Jenis Transaksi, Nama, Pencarian Transaksi) */}
@@ -1133,39 +1293,61 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
 
                       {/* Arus Uang */}
                       <td className="py-3 px-3.5 text-center whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center space-x-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
-                            tx.arusUang === 'MASUK'
-                              ? 'bg-emerald-600 text-white shadow-2xs'
-                              : tx.arusUang === 'KELUAR'
-                              ? 'bg-rose-600 text-white shadow-2xs'
-                              : tx.arusUang === 'MUTASI'
-                              ? 'bg-sky-600 text-white'
-                              : 'bg-purple-600 text-white'
-                          }`}
-                        >
-                          {tx.arusUang === 'MASUK' ? (
-                            <>
-                              <ArrowDownLeft className="w-3 h-3" />
-                              <span>MASUK (+)</span>
-                            </>
-                          ) : tx.arusUang === 'KELUAR' ? (
-                            <>
-                              <ArrowUpRight className="w-3 h-3" />
-                              <span>KELUAR (-)</span>
-                            </>
-                          ) : tx.arusUang === 'MUTASI' ? (
-                            <>
-                              <ArrowLeftRight className="w-3 h-3" />
-                              <span>MUTASI</span>
-                            </>
-                          ) : (
-                            <>
-                              <HandCoins className="w-3 h-3" />
-                              <span>BON / TITIP</span>
-                            </>
-                          )}
-                        </span>
+                        {fokusMode === 'KASIR_ONLY' && tx.arahKasir && tx.arahKasir !== 'NON_KASIR' ? (
+                          <span
+                            className={`inline-flex items-center space-x-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                              tx.arahKasir === 'MASUK' || tx.arahKasir === 'MUTASI_MASUK'
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'bg-rose-600 text-white shadow-2xs'
+                            }`}
+                          >
+                            {tx.arahKasir === 'MASUK' || tx.arahKasir === 'MUTASI_MASUK' ? (
+                              <>
+                                <ArrowDownLeft className="w-3 h-3" />
+                                <span>{tx.arahKasirLabel || 'MASUK KASIR (+)'}</span>
+                              </>
+                            ) : (
+                              <>
+                                <ArrowUpRight className="w-3 h-3" />
+                                <span>{tx.arahKasirLabel || 'KELUAR KASIR (-)'}</span>
+                              </>
+                            )}
+                          </span>
+                        ) : (
+                          <span
+                            className={`inline-flex items-center space-x-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                              tx.arusUang === 'MASUK'
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : tx.arusUang === 'KELUAR'
+                                ? 'bg-rose-600 text-white shadow-2xs'
+                                : tx.arusUang === 'MUTASI'
+                                ? 'bg-sky-600 text-white'
+                                : 'bg-purple-600 text-white'
+                            }`}
+                          >
+                            {tx.arusUang === 'MASUK' ? (
+                              <>
+                                <ArrowDownLeft className="w-3 h-3" />
+                                <span>MASUK (+)</span>
+                              </>
+                            ) : tx.arusUang === 'KELUAR' ? (
+                              <>
+                                <ArrowUpRight className="w-3 h-3" />
+                                <span>KELUAR (-)</span>
+                              </>
+                            ) : tx.arusUang === 'MUTASI' ? (
+                              <>
+                                <ArrowLeftRight className="w-3 h-3" />
+                                <span>MUTASI</span>
+                              </>
+                            ) : (
+                              <>
+                                <HandCoins className="w-3 h-3" />
+                                <span>BON / TITIP</span>
+                              </>
+                            )}
+                          </span>
+                        )}
                       </td>
 
                       {/* Rekening Terlibat */}
@@ -1175,18 +1357,35 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
 
                       {/* Nominal */}
                       <td className="py-3 px-3.5 text-right whitespace-nowrap">
-                        <div
-                          className={`font-mono font-bold text-xs ${
-                            tx.arusUang === 'MASUK'
-                              ? 'text-emerald-700'
-                              : tx.arusUang === 'KELUAR'
-                              ? 'text-rose-700'
-                              : 'text-zinc-900'
-                          }`}
-                        >
-                          {tx.arusUang === 'MASUK' ? '+' : tx.arusUang === 'KELUAR' ? '-' : ''}
-                          {formatRupiah(tx.nominal)}
-                        </div>
+                        {fokusMode === 'KASIR_ONLY' && tx.arahKasir && tx.arahKasir !== 'NON_KASIR' ? (
+                          <div
+                            className={`font-mono font-bold text-xs ${
+                              tx.arahKasir === 'MASUK' || tx.arahKasir === 'MUTASI_MASUK'
+                                ? 'text-emerald-700'
+                                : 'text-rose-700'
+                            }`}
+                          >
+                            {tx.arahKasir === 'MASUK' || tx.arahKasir === 'MUTASI_MASUK' ? '+' : '-'}
+                            {formatRupiah(
+                              tx.arahKasir === 'MASUK' || tx.arahKasir === 'MUTASI_MASUK'
+                                ? tx.nominalKasirMasuk || tx.nominal
+                                : tx.nominalKasirKeluar || tx.nominal
+                            )}
+                          </div>
+                        ) : (
+                          <div
+                            className={`font-mono font-bold text-xs ${
+                              tx.arusUang === 'MASUK'
+                                ? 'text-emerald-700'
+                                : tx.arusUang === 'KELUAR'
+                                ? 'text-rose-700'
+                                : 'text-zinc-900'
+                            }`}
+                          >
+                            {tx.arusUang === 'MASUK' ? '+' : tx.arusUang === 'KELUAR' ? '-' : ''}
+                            {formatRupiah(tx.nominal)}
+                          </div>
+                        )}
                       </td>
 
                       {/* Bukti Nota */}
