@@ -2373,9 +2373,13 @@ apiRouter.get('/karyawan', (req, res) => {
     const db = dbManager.get();
     const list = (db.karyawan || []).map((k) => {
       const mitraId = k.idMitraTerkait || `MTR-${k.id}`;
-      const outstandingBarang = (db.penjualan || [])
-        .filter((p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR')
-        .reduce((sum, p) => sum + (p.sisaPiutang || 0), 0);
+      const outstandingBarang =
+        (db.penjualan || [])
+          .filter((p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR')
+          .reduce((sum, p) => sum + (p.sisaPiutang || 0), 0) +
+        (db.penjualanHasilBumi || [])
+          .filter((j) => j.idMitra === mitraId && j.metodePembayaran === 'PIUTANG' && j.statusPembayaran === 'BELUM_BAYAR')
+          .reduce((sum, j) => sum + (j.sisaPiutang || 0), 0);
 
       const outstandingUang = (db.kasbonUang || [])
         .filter((ku) => ku.idMitra === mitraId && ku.status !== 'LUNAS')
@@ -3463,6 +3467,14 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
         outstandingBarangByMitra.set(
           p.idMitra,
           (outstandingBarangByMitra.get(p.idMitra) || 0) + (p.sisaPiutang || 0)
+        );
+      }
+    }
+    for (const j of db.penjualanHasilBumi || []) {
+      if (j.metodePembayaran === 'PIUTANG' && j.statusPembayaran === 'BELUM_BAYAR' && j.idMitra) {
+        outstandingBarangByMitra.set(
+          j.idMitra,
+          (outstandingBarangByMitra.get(j.idMitra) || 0) + (j.sisaPiutang || 0)
         );
       }
     }

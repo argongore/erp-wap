@@ -1305,6 +1305,7 @@ export const api = {
   recordKerjaHarian: async (payload: {
     idKaryawan: string;
     tanggalKerja?: string;
+    tanggalBayar?: string;
     hariTanggal?: string;
     divisi: NamaDivisi | string;
     divisiKode?: string;
@@ -1343,9 +1344,11 @@ export const api = {
     payload: {
       divisi?: NamaDivisi | string;
       tanggalKerja?: string;
+      tanggalBayar?: string;
       tipeGaji?: 'HARIAN' | 'BULANAN';
       periodeBulan?: string;
       upahHarianIds?: string[];
+      abaikanUpahHarian?: boolean;
       gajiPokokTambahan?: number;
       tunjangan?: number;
       bonus?: number;
@@ -1414,11 +1417,13 @@ export const api = {
     divisi?: NamaDivisi | string;
     tipeGaji?: 'HARIAN' | 'BULANAN';
     tanggalKerja?: string;
+    tanggalBayar?: string;
     periodeBulan?: string;
     gajiNominal?: number;
     tunjanganNominal?: number;
     bonus?: number;
     lunasiUpahHarianPending?: boolean;
+    abaikanUpahHarian?: boolean;
     upahHarianIds?: string[];
     persentasePotongKasbon: number;
     nominalPotongKustom?: number;

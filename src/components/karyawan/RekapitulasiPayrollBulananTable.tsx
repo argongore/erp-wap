@@ -55,7 +55,15 @@ import {
 interface RekapitulasiPayrollBulananTableProps {
   rekeningList: Rekening[];
   onOpenInputPayrollHarian: (idKaryawan?: string, divisiPreset?: NamaDivisi) => void;
-  onOpenBayarGaji?: (idKaryawan: string) => void;
+  onOpenBayarGaji?: (
+    idKaryawan?: string,
+    opts?: {
+      mode?: 'AKUMULASI_HARIAN' | 'BULAN_SEBELUMNYA_LANGSUNG';
+      bulan?: number;
+      tahun?: number;
+      tanggalBayarIso?: string;
+    }
+  ) => void;
   onOpenStatement?: (mitraId: string) => void;
   onOpenKasbonUang?: (karyawanMitraId: string) => void;
   onOpenDetailKaryawan?: (idKaryawan: string) => void;
@@ -79,7 +87,7 @@ const BULAN_LIST = [
   { value: 12, label: 'Desember' },
 ];
 
-const TAHUN_LIST = [2025, 2026, 2027];
+const TAHUN_LIST = [2024, 2025, 2026, 2027];
 
 const DIVISI_BADGES: Record<string, string> = {
   'Gudang Wijaya Agro': 'bg-amber-950/80 text-amber-300 border-amber-800',
@@ -120,6 +128,9 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
   // Settlement inline modal
   const [settleKaryawan, setSettleKaryawan] = useState<ItemRekapPayrollBulanan | null>(null);
   const [settleRekening, setSettleRekening] = useState<string>('KAS01');
+  const [settleTanggalBayar, setSettleTanggalBayar] = useState<string>(
+    () => new Date().toISOString().split('T')[0]
+  );
   const [settleModePotongBon, setSettleModePotongBon] = useState<'TIDAK_POTONG' | 'SEBAGIAN_PERSEN' | 'SEBAGIAN_NOMINAL' | 'LUNASI_PENUH'>('SEBAGIAN_PERSEN');
   const [settlePersenBon, setSettlePersenBon] = useState<number>(50);
   const [settleNominalKustom, setSettleNominalKustom] = useState<number>(0);
@@ -211,9 +222,22 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
         finalNominal = Math.max(0, Number(settleNominalKustom) || 0);
       }
 
+      const [sy, sm, sd] = (settleTanggalBayar || '').split('-');
+      const formattedTanggalBayar =
+        sy && sm && sd ? `${sd}/${sm}/${sy}` : settleTanggalBayar;
+
       await api.settleHakUpahKaryawan(settleKaryawan.idKaryawan, {
         divisi: settleKaryawan.divisiUtama,
+        tanggalBayar: formattedTanggalBayar,
+        tanggalKerja: formattedTanggalBayar,
+        periodeBulan: rekapData?.periodeBulan,
         rekeningSumber: settleRekening,
+        metodePembayaran:
+          settleRekening === 'SINKRON'
+            ? 'SINKRON'
+            : settleRekening === 'KAS01'
+            ? 'TUNAI'
+            : 'TRANSFER',
         persentasePotongKasbon: finalPersen,
         nominalPotongKustom: finalNominal,
       });
@@ -302,7 +326,15 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
   });
 
   const validRekeningList = rekeningList.filter(
-    (r) => !r.isVirtual && r.kode !== 'BON01' && r.kode !== 'TIT01' && r.status === 'AKTIF'
+    (r) =>
+      r.status === 'AKTIF' &&
+      !r.isVirtual &&
+      r.kategori !== 'VIRTUAL_SISTEM' &&
+      r.kategori !== 'OPERASIONAL_DIVISI' &&
+      r.kode !== 'BON01' &&
+      r.kode !== 'TIT01' &&
+      r.kode !== 'SINKRON' &&
+      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
   );
 
   return (
@@ -325,6 +357,20 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
 
           {/* Action CTAs */}
           <div className="flex flex-wrap items-center gap-2">
+            {onOpenBayarGaji && (
+              <button
+                type="button"
+                onClick={() =>
+                  onOpenBayarGaji(undefined, { mode: 'BULAN_SEBELUMNYA_LANGSUNG' })
+                }
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-lg text-xs font-extrabold shadow-xs transition-colors cursor-pointer"
+                title="Bayar gaji bulan sebelumnya (misal Oktober) yang uangnya dicairkan pada tanggal 1 November"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Bayar Gaji Bulan Lalu (Oktober)</span>
+              </button>
+            )}
+
             <button
               onClick={() => onOpenInputPayrollHarian()}
               className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
@@ -756,13 +802,23 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                             <button
                               onClick={() => {
                                 if (onOpenBayarGaji) {
-                                  onOpenBayarGaji(item.idKaryawan);
+                                  const isPrevMonthSelected =
+                                    selectedTahun < currentYear ||
+                                    (selectedTahun === currentYear && selectedBulan < currentMonth);
+                                  onOpenBayarGaji(item.idKaryawan, {
+                                    mode:
+                                      isPrevMonthSelected && item.totalHakUpahPending <= 0
+                                        ? 'BULAN_SEBELUMNYA_LANGSUNG'
+                                        : 'AKUMULASI_HARIAN',
+                                    bulan: selectedBulan,
+                                    tahun: selectedTahun,
+                                  });
                                 } else {
                                   setSettleKaryawan(item);
                                 }
                               }}
                               className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-bold transition-colors cursor-pointer shadow-xs whitespace-nowrap"
-                              title="Bayar gaji bulanan penuh / cairkan akumulasi upah kerja & potong kasbon"
+                              title="Bayar gaji bulanan penuh / bulan sebelumnya / cairkan akumulasi upah kerja & potong kasbon"
                             >
                               Bayar Gaji
                             </button>
@@ -1354,21 +1410,45 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
             )}
 
             <form onSubmit={handleProcessSettlement} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-zinc-300 font-semibold mb-1">
-                  Rekening Kas Sumber Pencairan:
-                </label>
-                <select
-                  value={settleRekening}
-                  onChange={(e) => setSettleRekening(e.target.value)}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-mono"
-                >
-                  {validRekeningList.map((r) => (
-                    <option key={r.kode} value={r.kode}>
-                      {r.nama} ({r.kode}) — Saldo: {formatRupiah(r.saldoSaatIni)}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-zinc-300 font-semibold mb-1">
+                    Rekening Kas / Bank Pencairan:
+                  </label>
+                  <select
+                    value={settleRekening}
+                    onChange={(e) => setSettleRekening(e.target.value)}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-mono"
+                  >
+                    {validRekeningList.map((r) => (
+                      <option key={r.kode} value={r.kode}>
+                        {r.nama} ({r.kode}) — {formatRupiah(r.saldoSaatIni)}
+                      </option>
+                    ))}
+                    <option value="SINKRON">SINKRON — Non-Kas (Rp 0 Uang Riil)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-zinc-300 font-semibold">
+                      Tanggal Pencairan (Arus Kas):
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setSettleTanggalBayar(`${currentYear}-11-01`)}
+                      className="text-[10px] text-emerald-400 hover:underline font-bold cursor-pointer"
+                    >
+                      Set 1 Nov
+                    </button>
+                  </div>
+                  <input
+                    type="date"
+                    value={settleTanggalBayar}
+                    onChange={(e) => setSettleTanggalBayar(e.target.value)}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-mono font-bold"
+                  />
+                </div>
               </div>
 
               <div>

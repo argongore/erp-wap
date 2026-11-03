@@ -137,10 +137,9 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
   // Mode payment: Catat Hak Upah Berjalan vs Langsung Cair Hari Ini
   const [modeBayar, setModeBayar] = useState<'CATAT_HAK_UPAH' | 'LANGSUNG_CAIR'>('CATAT_HAK_UPAH');
 
-  // Direct settlement settings
-  const chosenDivRek =
-    DAFTAR_DIVISI.find((d) => d.nama === divisi)?.kodeRekening || 'REK-GWA';
-  const [rekeningSumber, setRekeningSumber] = useState<string>(chosenDivRek);
+  // Direct settlement settings (selalu dari Kasir Utama / Bank PT riil, bukan Buku Operasional REK-*)
+  const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
+  const [tanggalBayar, setTanggalBayar] = useState<string>(todayStr);
   const [persentasePotongKasbon, setPersentasePotongKasbon] = useState<number>(0);
   const [nominalPotongKustom, setNominalPotongKustom] = useState<number>(0);
 
@@ -158,8 +157,6 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
       const kryDiv = (kry.divisi || kry.departemen) as NamaDivisi | undefined;
       if (kryDiv) {
         setDivisi(kryDiv);
-        const foundDiv = DAFTAR_DIVISI.find((d) => d.nama === kryDiv);
-        if (foundDiv) setRekeningSumber(foundDiv.kodeRekening);
       }
     }
   };
@@ -170,7 +167,15 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
   const totalBon = activeKry?.totalKasbonAktif || 0;
 
   const validRekeningList = rekeningList.filter(
-    (r) => !r.isVirtual && r.kode !== 'BON01' && r.kode !== 'TIT01' && r.status === 'AKTIF'
+    (r) =>
+      r.status === 'AKTIF' &&
+      !r.isVirtual &&
+      r.kategori !== 'VIRTUAL_SISTEM' &&
+      r.kategori !== 'OPERASIONAL_DIVISI' &&
+      r.kode !== 'BON01' &&
+      r.kode !== 'TIT01' &&
+      r.kode !== 'SINKRON' &&
+      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -207,11 +212,15 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
       ? divObj.kodeRekening.replace('REK-', '')
       : 'GWA';
 
+    const [byY, byM, byD] = (tanggalBayar || tanggalKerja).split('-');
+    const formattedTanggalBayar = byY && byM && byD ? `${byD}/${byM}/${byY}` : formattedTanggal;
+
     setSubmitting(true);
     try {
       const res = await api.recordKerjaHarian({
         idKaryawan: selectedKryId,
         tanggalKerja: formattedTanggal,
+        tanggalBayar: modeBayar === 'LANGSUNG_CAIR' ? formattedTanggalBayar : undefined,
         hariTanggal,
         divisi,
         divisiKode,
@@ -227,7 +236,13 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
         modeBayar,
         rekeningSumber: modeBayar === 'LANGSUNG_CAIR' ? rekeningSumber : undefined,
         metodePembayaran:
-          modeBayar === 'LANGSUNG_CAIR' && rekeningSumber === 'SINKRON' ? 'SINKRON' : undefined,
+          modeBayar === 'LANGSUNG_CAIR'
+            ? rekeningSumber === 'SINKRON'
+              ? 'SINKRON'
+              : rekeningSumber === 'KAS01'
+              ? 'TUNAI'
+              : 'TRANSFER'
+            : undefined,
         persentasePotongKasbon: modeBayar === 'LANGSUNG_CAIR' ? persentasePotongKasbon : 0,
         nominalPotongKustom: modeBayar === 'LANGSUNG_CAIR' && nominalPotongKustom > 0 ? nominalPotongKustom : undefined,
       });
@@ -385,7 +400,6 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                     type="button"
                     onClick={() => {
                       setDivisi(d.nama);
-                      if (rekeningSumber !== 'SINKRON') setRekeningSumber(d.kodeRekening);
                     }}
                     className={`p-2.5 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
                       isSelected
@@ -670,13 +684,13 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
           {modeBayar === 'LANGSUNG_CAIR' && (
             <div className="p-3.5 bg-amber-950/40 border border-amber-800/80 rounded-xl space-y-3">
               <span className="font-bold text-amber-300 text-xs block">
-                Pengaturan Pencairan Kas Divisi &amp; Pemotongan Bon:
+                Pengaturan Pencairan Kasir / Bank &amp; Pemotongan Bon:
               </span>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-zinc-300 mb-1">
-                    Rekening Pembayar Upah
+                    Rekening Kas / Bank Pembayar
                   </label>
                   <select
                     value={rekeningSumber}
@@ -685,18 +699,39 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                   >
                     {validRekeningList.map((r) => (
                       <option key={r.kode} value={r.kode}>
-                        {r.nama} ({r.kode}) - Saldo: {formatRupiah(r.saldoSaatIni)}
+                        {r.nama} ({r.kode}) - {formatRupiah(r.saldoSaatIni)}
                       </option>
                     ))}
                     <option value="SINKRON">
-                      Rekening SINKRON — Non-Kas (Rp 0 Uang Riil)
+                      SINKRON — Non-Kas (Rp 0 Uang Riil)
                     </option>
                   </select>
                 </div>
 
                 <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-zinc-300">
+                      Tanggal Pencairan Kas
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setTanggalBayar(`${new Date().getFullYear()}-11-01`)}
+                      className="text-[10px] text-amber-300 hover:underline font-bold cursor-pointer"
+                    >
+                      Set 1 Nov
+                    </button>
+                  </div>
+                  <input
+                    type="date"
+                    value={tanggalBayar}
+                    onChange={(e) => setTanggalBayar(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 text-xs font-mono font-bold"
+                  />
+                </div>
+
+                <div>
                   <label className="block text-[11px] font-semibold text-zinc-300 mb-1">
-                    Potong Bon Karyawan (Total Bon: {formatRupiah(totalBon)})
+                    Potong Bon ({formatRupiah(totalBon)})
                   </label>
                   <select
                     value={persentasePotongKasbon}

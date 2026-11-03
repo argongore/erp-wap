@@ -1703,6 +1703,29 @@ class DatabaseManager {
         isKaryawan: m.isKaryawan,
       });
     }
+
+    // Normalisasi format tanggal (DD/MM/YYYY) pada penggajian & upahHarian agar sinkron dengan Arus Kas Harian
+    const toDmyIfIso = (val?: string): string | undefined => {
+      if (!val) return val;
+      const clean = String(val).trim();
+      const isoMatch = clean.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (isoMatch) {
+        return `${isoMatch[3].padStart(2, '0')}/${isoMatch[2].padStart(2, '0')}/${isoMatch[1]}`;
+      }
+      const dmyMatch = clean.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (dmyMatch) {
+        return `${dmyMatch[1].padStart(2, '0')}/${dmyMatch[2].padStart(2, '0')}/${dmyMatch[3]}`;
+      }
+      return clean;
+    };
+
+    for (const g of this.db.penggajian || []) {
+      if (g.tanggal) g.tanggal = toDmyIfIso(g.tanggal) || g.tanggal;
+    }
+    for (const u of this.db.upahHarian || []) {
+      if (u.tanggalKerja) u.tanggalKerja = toDmyIfIso(u.tanggalKerja) || u.tanggalKerja;
+      if (u.tanggalDibayar) u.tanggalDibayar = toDmyIfIso(u.tanggalDibayar) || u.tanggalDibayar;
+    }
   }
 
   /**

@@ -89,30 +89,23 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
   const [nominalKustom, setNominalKustom] = useState<number>(0);
   const [metodePembayaran, setMetodePembayaran] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
 
-  // Map chosen division to dedicated rekening
-  const chosenDivRek = DIVISI_OPTIONS.find((d) => d.nama === divisi)?.kodeRekening || 'REK-GWA';
-  const [rekeningSumber, setRekeningSumber] = useState<string>(chosenDivRek);
+  const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
   const [keterangan, setKeterangan] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Whenever divisi changes, automatically suggest the division's dedicated rekening
-  useEffect(() => {
-    if (rekeningSumber === 'SINKRON' || metodePembayaran === 'SINKRON') return;
-    if (isTanpaDivisi(divisi)) {
-      setRekeningSumber('KAS01');
-      return;
-    }
-    const matched = DIVISI_OPTIONS.find((d) => d.nama === divisi);
-    if (matched) {
-      setRekeningSumber(matched.kodeRekening);
-    }
-  }, [divisi]);
-
   if (!activeKaryawan) return null;
 
   const validRekening = rekeningList.filter(
-    (r) => !r.isVirtual && r.kode !== 'BON01' && r.kode !== 'TIT01' && r.status === 'AKTIF'
+    (r) =>
+      r.status === 'AKTIF' &&
+      !r.isVirtual &&
+      r.kategori !== 'VIRTUAL_SISTEM' &&
+      r.kategori !== 'OPERASIONAL_DIVISI' &&
+      r.kode !== 'BON01' &&
+      r.kode !== 'TIT01' &&
+      r.kode !== 'SINKRON' &&
+      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
   );
 
   const totalBon = activeKaryawan.totalKasbonAktif || 0;
@@ -553,7 +546,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-[11px] font-medium text-zinc-300 mb-1">
-                Rekening Pembayar (Kas Divisi / Kas Pusat):
+                Rekening Kas / Bank Pembayar:
               </label>
               <select
                 value={rekeningSumber}
@@ -561,24 +554,12 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-zinc-100 text-xs focus:outline-hidden focus:border-emerald-500"
                 required
               >
-                {/* Division accounts first */}
-                <optgroup label="Rekening Khusus Divisi">
-                  {rekeningList
-                    .filter((r) => r.kode.startsWith('REK-'))
-                    .map((rek) => (
-                      <option key={rek.kode} value={rek.kode}>
-                        {rek.nama} ({rek.kode}) - Saldo: {formatRupiah(rek.saldoSaatIni)}
-                      </option>
-                    ))}
-                </optgroup>
-                <optgroup label="Kas Utama & Bank">
-                  {rekeningList
-                    .filter((r) => !r.isVirtual && !r.kode.startsWith('REK-'))
-                    .map((rek) => (
-                      <option key={rek.kode} value={rek.kode}>
-                        {rek.nama} ({rek.kode}) - Saldo: {formatRupiah(rek.saldoSaatIni)}
-                      </option>
-                    ))}
+                <optgroup label="Kas Utama & Bank Perusahaan">
+                  {validRekening.map((rek) => (
+                    <option key={rek.kode} value={rek.kode}>
+                      {rek.nama} ({rek.kode}) - Saldo: {formatRupiah(rek.saldoSaatIni)}
+                    </option>
+                  ))}
                 </optgroup>
                 <optgroup label="Metode Non-Kas (Sinkron)">
                   <option value="SINKRON">
@@ -598,7 +579,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                     }`}
                   >
                     Saldo kas: {formatRupiah(selectedRek.saldoSaatIni)}{' '}
-                    {saldoCukup ? '(Mencukupi)' : '(TIDAK MENCUKUPI - Dropping Kas Dulu)'}
+                    {saldoCukup ? '(Mencukupi)' : '(TIDAK MENCUKUPI)'}
                   </span>
                 )
               )}
@@ -613,7 +594,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                   type="button"
                   onClick={() => {
                     setMetodePembayaran('TUNAI');
-                    if (rekeningSumber === 'SINKRON') setRekeningSumber('KAS01');
+                    setRekeningSumber('KAS01');
                   }}
                   className={`py-2 rounded-md font-semibold text-xs border transition-colors ${
                     metodePembayaran === 'TUNAI' && !isSinkronMode
@@ -627,7 +608,8 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                   type="button"
                   onClick={() => {
                     setMetodePembayaran('TRANSFER');
-                    if (rekeningSumber === 'SINKRON') setRekeningSumber('KAS01');
+                    const firstBank = validRekening.find((r) => r.kode !== 'KAS01');
+                    setRekeningSumber(firstBank?.kode || 'KAS01');
                   }}
                   className={`py-2 rounded-md font-semibold text-xs border transition-colors ${
                     metodePembayaran === 'TRANSFER' && !isSinkronMode

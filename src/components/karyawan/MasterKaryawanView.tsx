@@ -206,7 +206,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [inputKet, setInputKet] = useState<'BON' | 'LUNAS'>('BON');
   const [inputCatatanKhusus, setInputCatatanKhusus] = useState<string>('');
   const [inputModeBayar, setInputModeBayar] = useState<'CATAT_HAK_UPAH' | 'LANGSUNG_CAIR'>('CATAT_HAK_UPAH');
-  const [inputRekeningSumber, setInputRekeningSumber] = useState<string>('REK-GWA');
+  const [inputRekeningSumber, setInputRekeningSumber] = useState<string>('KAS01');
+  const [inputTanggalBayar, setInputTanggalBayar] = useState<string>(todayStr);
   const [inputSubmitting, setInputSubmitting] = useState<boolean>(false);
   const [inputSuccessMsg, setInputSuccessMsg] = useState<string>('');
   const [inputErrorMsg, setInputErrorMsg] = useState<string>('');
@@ -219,6 +220,10 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [isProsesGajiModalOpen, setIsProsesGajiModalOpen] = useState(false);
   const [isBayarGajiModalOpen, setIsBayarGajiModalOpen] = useState(false);
   const [bayarGajiKaryawanId, setBayarGajiKaryawanId] = useState<string | undefined>(preselectedKaryawanId);
+  const [bayarGajiInitialMode, setBayarGajiInitialMode] = useState<'AKUMULASI_HARIAN' | 'BULAN_SEBELUMNYA_LANGSUNG'>('AKUMULASI_HARIAN');
+  const [bayarGajiInitialBulan, setBayarGajiInitialBulan] = useState<number | undefined>(undefined);
+  const [bayarGajiInitialTahun, setBayarGajiInitialTahun] = useState<number | undefined>(undefined);
+  const [bayarGajiInitialTanggalIso, setBayarGajiInitialTanggalIso] = useState<string | undefined>(undefined);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [activeSlip, setActiveSlip] = useState<TransaksiPenggajian | null>(null);
 
@@ -228,8 +233,30 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     }
   }, [preselectedKaryawanId]);
 
-  const handleOpenBayarGaji = (idKry?: string) => {
+  const handleOpenBayarGaji = (
+    idKry?: string,
+    opts?: {
+      mode?: 'AKUMULASI_HARIAN' | 'BULAN_SEBELUMNYA_LANGSUNG';
+      bulan?: number;
+      tahun?: number;
+      tanggalBayarIso?: string;
+    }
+  ) => {
+    const nowDt = new Date();
+    const curM = nowDt.getMonth() + 1;
+    const curY = nowDt.getFullYear();
+    const prevM = curM === 1 ? 12 : curM - 1;
+    const prevY = curM === 1 ? curY - 1 : curY;
+    const firstOfCurMonth = `${curY}-${String(curM).padStart(2, '0')}-01`;
+
+    const mode = opts?.mode || 'AKUMULASI_HARIAN';
     setBayarGajiKaryawanId(idKry);
+    setBayarGajiInitialMode(mode);
+    setBayarGajiInitialBulan(opts?.bulan ?? (mode === 'BULAN_SEBELUMNYA_LANGSUNG' ? prevM : undefined));
+    setBayarGajiInitialTahun(opts?.tahun ?? (mode === 'BULAN_SEBELUMNYA_LANGSUNG' ? prevY : undefined));
+    setBayarGajiInitialTanggalIso(
+      opts?.tanggalBayarIso ?? (mode === 'BULAN_SEBELUMNYA_LANGSUNG' ? firstOfCurMonth : undefined)
+    );
     setIsBayarGajiModalOpen(true);
   };
 
@@ -357,11 +384,15 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
     const divObj = DAFTAR_DIVISI.find((item) => item.nama === inputDivisi);
     const divisiKode = divObj ? divObj.kodeRekening.replace('REK-', '') : 'GWA';
 
+    const [byY, byM, byD] = (inputTanggalBayar || inputTanggal).split('-');
+    const formattedTanggalBayar = byY && byM && byD ? `${byD}/${byM}/${byY}` : formattedTanggal;
+
     setInputSubmitting(true);
     try {
       const res = await api.recordKerjaHarian({
         idKaryawan: inputKryId,
         tanggalKerja: formattedTanggal,
+        tanggalBayar: inputModeBayar === 'LANGSUNG_CAIR' ? formattedTanggalBayar : undefined,
         hariTanggal,
         divisi: inputDivisi,
         divisiKode,
@@ -376,10 +407,20 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         uangMakanLembur: inputUangMakan,
         modeBayar: inputModeBayar,
         rekeningSumber: inputModeBayar === 'LANGSUNG_CAIR' ? inputRekeningSumber : undefined,
+        metodePembayaran:
+          inputModeBayar === 'LANGSUNG_CAIR'
+            ? inputRekeningSumber === 'SINKRON'
+              ? 'SINKRON'
+              : inputRekeningSumber === 'KAS01'
+              ? 'TUNAI'
+              : 'TRANSFER'
+            : undefined,
       });
 
       setInputSuccessMsg(
-        `Berhasil mencatat upah harian ${kryObj.nama} (${inputItem}: ${formatRupiah(inputKuantiti * inputUpahHarian + inputUangMakan)}) untuk divisi ${inputDivisi}!`
+        inputModeBayar === 'LANGSUNG_CAIR'
+          ? `Berhasil mencatat & mencairkan upah ${kryObj.nama} (${formatRupiah(inputKuantiti * inputUpahHarian + inputUangMakan)}) pada Arus Kas Harian tanggal ${formattedTanggalBayar}!`
+          : `Berhasil mencatat upah harian ${kryObj.nama} (${inputItem}: ${formatRupiah(inputKuantiti * inputUpahHarian + inputUangMakan)}) untuk divisi ${inputDivisi}!`
       );
       setInputTugas('');
       setInputCatatanKhusus('');
@@ -633,7 +674,16 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           </button>
 
           <button
-            onClick={() => handleOpenBayarGaji()}
+            onClick={() => handleOpenBayarGaji(undefined, { mode: 'BULAN_SEBELUMNYA_LANGSUNG' })}
+            className="flex items-center space-x-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 rounded-lg text-xs font-extrabold shadow-xs transition-colors cursor-pointer"
+            title="Bayar gaji bulan sebelumnya (misal Oktober) yang dicairkan pada tanggal 1 November tanpa perlu input absensi harian"
+          >
+            <History className="w-4 h-4" />
+            <span>Bayar Gaji Bulan Lalu (Oktober)</span>
+          </button>
+
+          <button
+            onClick={() => handleOpenBayarGaji(undefined, { mode: 'AKUMULASI_HARIAN' })}
             className="flex items-center space-x-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-lg text-xs font-extrabold shadow-xs transition-colors cursor-pointer"
           >
             <HandCoins className="w-4 h-4" />
@@ -832,14 +882,24 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                 Pilih karyawan untuk mencairkan akumulasi upah kerja harian sekaligus potong kasbon secara fleksibel. Gaji dihitung murni per hari kerja yang di-input (hari tanpa input gaji karyawan otomatis dihitung <strong>Tidak Masuk</strong>). Setiap karyawan terhubung langsung ke satu <strong>Rekening Mitra</strong> yang sama.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => handleOpenBayarGaji()}
-              className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold rounded-xl text-xs flex items-center gap-2 shrink-0 cursor-pointer shadow-md"
-            >
-              <HandCoins className="w-4 h-4" />
-              <span>Buka Form Bayar Gaji</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleOpenBayarGaji(undefined, { mode: 'BULAN_SEBELUMNYA_LANGSUNG' })}
+                className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-extrabold rounded-xl text-xs flex items-center gap-2 cursor-pointer shadow-md"
+              >
+                <History className="w-4 h-4" />
+                <span>Bayar Gaji Bulan Lalu (Oktober)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenBayarGaji(undefined, { mode: 'AKUMULASI_HARIAN' })}
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold rounded-xl text-xs flex items-center gap-2 cursor-pointer shadow-md"
+              >
+                <HandCoins className="w-4 h-4" />
+                <span>Buka Form Bayar Gaji</span>
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -960,25 +1020,34 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                                 Rekening Mitra
                               </button>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => handleOpenBayarGaji(k.id)}
-                              className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-lg text-xs cursor-pointer flex items-center gap-1"
-                            >
-                              <HandCoins className="w-3.5 h-3.5" />
-                              <span>Bayar Gaji</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenBayarGaji(k.id, { mode: 'BULAN_SEBELUMNYA_LANGSUNG' })}
+                                className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-zinc-950 border border-amber-500/40 font-bold rounded-lg text-[11px] cursor-pointer flex items-center gap-1 transition-colors"
+                                title="Bayar gaji bulan sebelumnya (misal Oktober) dicairkan tgl 1 Nov"
+                              >
+                                <History className="w-3.5 h-3.5" />
+                                <span>Gaji Bln Lalu</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenBayarGaji(k.id, { mode: 'AKUMULASI_HARIAN' })}
+                                className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold rounded-lg text-xs cursor-pointer flex items-center gap-1"
+                              >
+                                <HandCoins className="w-3.5 h-3.5" />
+                                <span>Bayar Gaji</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* TAB 1: REKAPITULASI PAYROLL BULANAN */}
       {activeTab === 'rekap' && (
@@ -991,7 +1060,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
               setModalDivisi(div);
               setIsInputPayrollModalOpen(true);
             }}
-            onOpenBayarGaji={(idKry) => handleOpenBayarGaji(idKry)}
+            onOpenBayarGaji={(idKry, opts) => handleOpenBayarGaji(idKry, opts)}
             onOpenStatement={onOpenStatement}
             onOpenKasbonUang={onOpenKasbonUang}
             onOpenDetailKaryawan={(id) => setDetailKaryawanId(id)}
@@ -1149,7 +1218,6 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                         type="button"
                         onClick={() => {
                           setInputDivisi(div.nama);
-                          setInputRekeningSumber(div.kodeRekening);
                         }}
                         className={`p-2.5 rounded-lg border text-left transition-all ${
                           isSelected
@@ -1406,19 +1474,78 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setInputModeBayar('LANGSUNG_CAIR')}
+                    onClick={() => {
+                      setInputModeBayar('LANGSUNG_CAIR');
+                      if (!inputTanggalBayar) setInputTanggalBayar(inputTanggal);
+                    }}
                     className={`p-3 rounded-lg border text-left transition-all ${
                       inputModeBayar === 'LANGSUNG_CAIR'
                         ? 'bg-emerald-600/20 border-emerald-500 text-emerald-200'
                         : 'bg-zinc-800/80 border-zinc-700 text-zinc-400'
                     }`}
                   >
-                    <div className="font-bold text-xs text-zinc-100">2. Bayar Langsung Hari Ini</div>
+                    <div className="font-bold text-xs text-zinc-100">2. Bayar / Cairkan Langsung</div>
                     <div className="text-[10px] text-zinc-400 mt-1">
-                      Cairkan tunai hari ini dari kas operasional divisi terkait
+                      Potong Kasir Utama (KAS01) atau Bank &amp; masuk Uang Keluar Arus Kas Harian
                     </div>
                   </button>
                 </div>
+
+                {inputModeBayar === 'LANGSUNG_CAIR' && (
+                  <div className="p-3.5 bg-emerald-950/30 border border-emerald-800/70 rounded-xl grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-zinc-300 mb-1">
+                        Rekening Kas / Bank Pembayar
+                      </label>
+                      <select
+                        value={inputRekeningSumber}
+                        onChange={(e) => setInputRekeningSumber(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-semibold"
+                      >
+                        {rekeningList
+                          .filter(
+                            (r) =>
+                              r.status === 'AKTIF' &&
+                              !r.isVirtual &&
+                              r.kategori !== 'VIRTUAL_SISTEM' &&
+                              r.kategori !== 'OPERASIONAL_DIVISI' &&
+                              r.kode !== 'BON01' &&
+                              r.kode !== 'TIT01' &&
+                              r.kode !== 'SINKRON' &&
+                              (!r.kode.startsWith('REK-') ||
+                                Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
+                          )
+                          .map((r) => (
+                            <option key={r.kode} value={r.kode}>
+                              {r.nama} ({r.kode}) — {formatRupiah(r.saldoSaatIni)}
+                            </option>
+                          ))}
+                        <option value="SINKRON">SINKRON — Non-Kas (Rp 0 Uang Riil)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[11px] font-semibold text-zinc-300">
+                          Tanggal Uang Keluar Kas
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setInputTanggalBayar(`${new Date().getFullYear()}-11-01`)}
+                          className="text-[10px] text-emerald-400 hover:underline font-bold cursor-pointer"
+                        >
+                          Set 1 Nov
+                        </button>
+                      </div>
+                      <input
+                        type="date"
+                        value={inputTanggalBayar}
+                        onChange={(e) => setInputTanggalBayar(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-mono font-bold"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <button
@@ -2161,10 +2288,14 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         </div>
       )}
 
-      {/* Modal: Bayar Gaji Karyawan (1 Bulan Penuh / Akumulasi Upah) */}
+      {/* Modal: Bayar Gaji Karyawan (1 Bulan Penuh / Bulan Sebelumnya / Akumulasi Upah) */}
       {isBayarGajiModalOpen && (
         <BayarGajiKaryawanModal
           initialKaryawanId={bayarGajiKaryawanId}
+          initialMode={bayarGajiInitialMode}
+          initialBulan={bayarGajiInitialBulan}
+          initialTahun={bayarGajiInitialTahun}
+          initialTanggalBayarIso={bayarGajiInitialTanggalIso}
           allKaryawan={karyawanList}
           rekeningList={rekeningList}
           onClose={() => setIsBayarGajiModalOpen(false)}
@@ -2172,9 +2303,9 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           onSuccess={(slip) => {
             setIsBayarGajiModalOpen(false);
             setSuccessBanner(
-              `Pembayaran gaji ${slip.namaKaryawan} sebesar ${formatRupiah(slip.gajiBersihDibayar)} berhasil dicairkan & tercatat di Rekening Mitra.`
+              `Pembayaran gaji ${slip.namaKaryawan} (${slip.periodeBulan}) sebesar ${formatRupiah(slip.gajiBersihDibayar)} berhasil dicairkan pada tanggal ${slip.tanggal} & masuk ke Uang Keluar Arus Kas Harian.`
             );
-            setTimeout(() => setSuccessBanner(''), 7000);
+            setTimeout(() => setSuccessBanner(''), 8000);
             loadData();
             setRefreshTrigger((p) => p + 1);
             onRefreshAll?.();
@@ -2240,8 +2371,6 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             setProfilModalKaryawan(null);
             if (updated.id === inputKryId && updated.divisi) {
               setInputDivisi(updated.divisi as NamaDivisi);
-              const dObj = DAFTAR_DIVISI.find((d) => d.nama === updated.divisi);
-              if (dObj) setInputRekeningSumber(dObj.kodeRekening);
             }
             setSuccessBanner(
               `Profil & penempatan divisi "${updated.nama}" (${updated.divisi || updated.departemen}) berhasil diperbarui dan tersinkron di seluruh tampilan.`

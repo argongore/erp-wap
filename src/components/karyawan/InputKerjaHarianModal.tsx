@@ -87,10 +87,8 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
   // Mode payment: Catat Hak Upah Berjalan vs Langsung Cair Hari Ini
   const [modeBayar, setModeBayar] = useState<'CATAT_HAK_UPAH' | 'LANGSUNG_CAIR'>('CATAT_HAK_UPAH');
 
-  // Direct settlement settings
-  const chosenDivRek =
-    DAFTAR_DIVISI.find((d) => d.nama === divisi)?.kodeRekening || 'REK-GWA';
-  const [rekeningSumber, setRekeningSumber] = useState<string>(chosenDivRek);
+  // Direct settlement settings (Kasir Utama / Bank PT riil)
+  const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
   const [persentasePotongKasbon, setPersentasePotongKasbon] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
@@ -113,7 +111,15 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
   const totalBon = activeKry?.totalBonKaryawan || 0;
 
   const validRekeningList = rekeningList.filter(
-    (r) => !r.isVirtual && r.kode !== 'BON01' && r.kode !== 'TIT01' && r.status === 'AKTIF'
+    (r) =>
+      r.status === 'AKTIF' &&
+      !r.isVirtual &&
+      r.kategori !== 'VIRTUAL_SISTEM' &&
+      r.kategori !== 'OPERASIONAL_DIVISI' &&
+      r.kode !== 'BON01' &&
+      r.kode !== 'TIT01' &&
+      r.kode !== 'SINKRON' &&
+      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -274,7 +280,6 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
                     type="button"
                     onClick={() => {
                       setDivisi(d.nama);
-                      if (rekeningSumber !== 'SINKRON') setRekeningSumber(d.kodeRekening);
                     }}
                     className={`p-2.5 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
                       isSelected

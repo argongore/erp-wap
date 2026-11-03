@@ -60,6 +60,9 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
   const [showSettleModal, setShowSettleModal] = useState(false);
   const [settleDivisi, setSettleDivisi] = useState<NamaDivisi>('Gudang Wijaya Agro');
   const [settleRekening, setSettleRekening] = useState<string>('KAS01');
+  const [settleTanggalBayar, setSettleTanggalBayar] = useState<string>(
+    () => new Date().toISOString().split('T')[0]
+  );
   const [settlePersenBon, setSettlePersenBon] = useState<number>(100);
   const [settleSubmitting, setSettleSubmitting] = useState(false);
   const [settleError, setSettleError] = useState('');
@@ -90,9 +93,21 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
     setSettleError('');
     setSettleSubmitting(true);
     try {
+      const [sy, sm, sd] = (settleTanggalBayar || '').split('-');
+      const formattedTanggalBayar =
+        sy && sm && sd ? `${sd}/${sm}/${sy}` : settleTanggalBayar;
+
       await api.settleHakUpahKaryawan(idKaryawan, {
         divisi: settleDivisi,
+        tanggalBayar: formattedTanggalBayar,
+        tanggalKerja: formattedTanggalBayar,
         rekeningSumber: settleRekening,
+        metodePembayaran:
+          settleRekening === 'SINKRON'
+            ? 'SINKRON'
+            : settleRekening === 'KAS01'
+            ? 'TUNAI'
+            : 'TRANSFER',
         persentasePotongKasbon: settlePersenBon,
       });
       setShowSettleModal(false);
@@ -137,7 +152,15 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
   const pendingLogs = logHarian.filter((u) => u.status === 'TERCATAT');
 
   const validRekeningList = rekeningList.filter(
-    (r) => !r.isVirtual && r.kode !== 'BON01' && r.kode !== 'TIT01' && r.status === 'AKTIF'
+    (r) =>
+      r.status === 'AKTIF' &&
+      !r.isVirtual &&
+      r.kategori !== 'VIRTUAL_SISTEM' &&
+      r.kategori !== 'OPERASIONAL_DIVISI' &&
+      r.kode !== 'BON01' &&
+      r.kode !== 'TIT01' &&
+      r.kode !== 'SINKRON' &&
+      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
   );
 
   return (
@@ -688,7 +711,7 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
 
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Rekening Sumber Pencairan
+                  Rekening Kas / Bank Pencairan
                 </label>
                 <select
                   value={settleRekening}
@@ -700,7 +723,29 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                       {r.nama} ({r.kode}) - Saldo: {formatRupiah(r.saldoSaatIni)}
                     </option>
                   ))}
+                  <option value="SINKRON">SINKRON — Non-Kas (Rp 0 Uang Riil)</option>
                 </select>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-zinc-700">
+                    Tanggal Pencairan (Uang Keluar di Arus Kas Harian)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setSettleTanggalBayar(`${new Date().getFullYear()}-11-01`)}
+                    className="text-[11px] text-emerald-700 hover:underline font-bold cursor-pointer"
+                  >
+                    Set Tgl 1 Nov
+                  </button>
+                </div>
+                <input
+                  type="date"
+                  value={settleTanggalBayar}
+                  onChange={(e) => setSettleTanggalBayar(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono font-bold"
+                />
               </div>
 
               <div>
