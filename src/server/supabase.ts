@@ -97,6 +97,10 @@ class SupabaseSyncEngine {
   private serverlessInitialized = false;
   private lastCloudCheckAt = 0;
   private activeFreshCheckPromise: Promise<void> | null = null;
+  private hasUnsyncedLocalChanges = false;
+  private lastLocalMutationAt = 0;
+  private lastMirrorFingerprint = '';
+  private retryTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.loadConfig();
@@ -286,6 +290,112 @@ class SupabaseSyncEngine {
     }
   }
 
+  public markLocalMutation(data: DatabaseSchema) {
+    this.hasUnsyncedLocalChanges = true;
+    this.lastLocalMutationAt = Date.now();
+    this.queuedData = data;
+  }
+
+  public hasPendingLocalChanges(): boolean {
+    return (
+      this.hasUnsyncedLocalChanges ||
+      this.isSyncing ||
+      this.queuedData !== null ||
+      Date.now() - this.lastLocalMutationAt < 15000
+    );
+  }
+
+  public async ensureInitializedOnce(dbManager: any): Promise<void> {
+    await this.ensureHydrated();
+    if (!this.isConfigured() || !this.client) return;
+    if (!this.serverlessInitialized) {
+      await this.initOnServerStart(dbManager);
+    }
+  }
+
+  /**
+   * Compacts JSONB state before upserting to Supabase so wijaya_agro_erp_state never hits Postgres statement_timeout:
+   * 1. Caps auditLogs to latest 250 entries.
+   * 2. Deduplicates identical base64 strings between fotoNota and fotoNotaList.
+   * 3. Offloads heavy inline base64 images (>25KB) to Supabase Storage bucket ('erp-bukti-nota') incrementally.
+   */
+  private async prepareCompactCloudData(data: DatabaseSchema): Promise<void> {
+    if (Array.isArray(data.auditLogs) && data.auditLogs.length > 250) {
+      data.auditLogs = data.auditLogs.slice(0, 250);
+    }
+
+    let uploadsRemaining = 4;
+    const maybeOffloadField = async (obj: any, field: string, prefix: string) => {
+      if (!obj || uploadsRemaining <= 0) return;
+      const val = obj[field];
+      if (typeof val === 'string' && val.startsWith('data:image/') && val.length > 25000) {
+        uploadsRemaining--;
+        const uploadedUrl = await this.uploadBuktiImage(val, prefix);
+        if (uploadedUrl) {
+          obj[field] = uploadedUrl;
+        }
+      }
+    };
+
+    const collectionsWithPhotos: Array<{ list?: any[]; field: string; listField?: string; prefix: string }> = [
+      { list: data.pembelianHasilBumi, field: 'fotoNota', listField: 'fotoNotaList', prefix: 'phb' },
+      { list: data.kasbonUang, field: 'fotoNota', listField: 'fotoNotaList', prefix: 'ksb' },
+      { list: data.pembelianBarang, field: 'fotoNota', prefix: 'pbr' },
+      { list: data.penjualan, field: 'fotoNota', prefix: 'pnj' },
+      { list: data.bayarBon, field: 'fotoNota', prefix: 'byb' },
+      { list: data.bayarBon, field: 'fotoBukti', prefix: 'byb' },
+      { list: data.pengeluaran, field: 'fotoKuitansi', prefix: 'exp' },
+      { list: data.brilink, field: 'fotoBukti', prefix: 'bri' },
+      { list: data.uangMasuk, field: 'fotoBukti', prefix: 'ums' },
+      { list: data.inventaris, field: 'fotoItem', prefix: 'inv' },
+      { list: data.inventaris, field: 'fotoStnk', prefix: 'stnk' },
+    ];
+
+    for (const col of collectionsWithPhotos) {
+      if (!Array.isArray(col.list)) continue;
+      for (const item of col.list) {
+        if (!item) continue;
+        // Deduplicate identical inline base64 stored in both fotoNota and fotoNotaList[0]
+        if (
+          col.listField &&
+          Array.isArray(item[col.listField]) &&
+          item[col.listField].length === 1 &&
+          typeof item[col.field] === 'string' &&
+          item[col.listField][0] === item[col.field] &&
+          item[col.field].startsWith('data:image/')
+        ) {
+          await maybeOffloadField(item, col.field, col.prefix);
+          if (typeof item[col.field] === 'string' && !item[col.field].startsWith('data:image/')) {
+            item[col.listField] = [item[col.field]];
+          } else {
+            // Avoid storing two copies of a large base64 string in the same JSON object
+            delete item[col.listField];
+          }
+          continue;
+        }
+
+        if (uploadsRemaining > 0) {
+          await maybeOffloadField(item, col.field, col.prefix);
+        }
+        if (col.listField && Array.isArray(item[col.listField]) && uploadsRemaining > 0) {
+          for (let idx = 0; idx < item[col.listField].length; idx++) {
+            const v = item[col.listField][idx];
+            if (typeof v === 'string' && v.startsWith('data:image/') && v.length > 25000 && uploadsRemaining > 0) {
+              uploadsRemaining--;
+              const url = await this.uploadBuktiImage(v, `${col.prefix}_${idx}`);
+              if (url) {
+                item[col.listField][idx] = url;
+                if (idx === 0 && (!item[col.field] || item[col.field] === v)) {
+                  item[col.field] = url;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   /**
    * Test connection to Supabase
    */
@@ -380,6 +490,8 @@ class SupabaseSyncEngine {
         this.hasVerifiedCloudState = true;
       }
 
+      await this.prepareCompactCloudData(data);
+
       const payload = {
         id: 'MAIN_DATABASE',
         data,
@@ -390,12 +502,23 @@ class SupabaseSyncEngine {
         updated_by: 'KasirWap ERP',
       };
 
-      const { error: stateError } = await this.client
-        .from('wijaya_agro_erp_state')
-        .upsert(payload, { onConflict: 'id' });
+      let stateError: any = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const res = await this.client
+          .from('wijaya_agro_erp_state')
+          .upsert(payload, { onConflict: 'id' });
+        stateError = res.error;
+        if (!stateError) break;
+        if (stateError.code === '42P01' || String(stateError.message || '').includes('does not exist')) {
+          break;
+        }
+        if (attempt < 3) {
+          await new Promise((r) => setTimeout(r, attempt * 650));
+        }
+      }
 
       if (stateError) {
-        if (stateError.code === '42P01' || stateError.message.includes('does not exist')) {
+        if (stateError.code === '42P01' || String(stateError.message || '').includes('does not exist')) {
           throw new Error(
             'Tabel "wijaya_agro_erp_state" belum ada di Supabase. Silakan jalankan skrip SQL inisialisasi di Supabase SQL Editor.'
           );
@@ -404,68 +527,82 @@ class SupabaseSyncEngine {
       }
 
       this.hasVerifiedCloudState = true;
+      if (this.queuedData === null) {
+        this.hasUnsyncedLocalChanges = false;
+      }
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+      }
 
-      // Mirror into optional relational tables in parallel in background (or awaited on manual push)
-      const clientRef = this.client;
-      const runMirrors = async () => {
-        const mirrorTasks: Promise<any>[] = [];
+      // Mirror into optional relational tables ONLY when master counts/fingerprints change (prevents 6,800+ request storm)
+      const stokFingerprintSum = (data.stokBarang || []).reduce((acc, s) => acc + (Number(s.stok) || 0), 0);
+      const mirrorFp = `${produkCount}:${mitraCount}:${karyawanCount}:${stokFingerprintSum}:${data.produk?.[0]?.hargaBeli || 0}:${data.mitra?.[mitraCount - 1]?.id || ''}:${data.karyawan?.[karyawanCount - 1]?.id || ''}`;
+      const shouldMirror = Boolean(options?.awaitMirrors) || mirrorFp !== this.lastMirrorFingerprint;
 
-        if (data.karyawan && data.karyawan.length > 0) {
-          const kRows = data.karyawan.map((k) => ({
-            id: k.id,
-            nik: k.nik,
-            nama: k.nama,
-            jabatan: k.jabatan,
-            divisi: k.divisi || k.departemen || 'Gudang',
-            telepon: k.telepon,
-            status: k.status,
-            upah_harian_standar: (k as any).upahHarianStandar || k.gajiPokok || 0,
-            uang_makan_standar: (k as any).uangMakanStandar || k.tunjanganTetap || 0,
-            updated_at: now.iso,
-          }));
-          mirrorTasks.push(Promise.resolve(clientRef.from('karyawan').upsert(kRows, { onConflict: 'id' })));
+      if (shouldMirror) {
+        this.lastMirrorFingerprint = mirrorFp;
+        const clientRef = this.client;
+        const runMirrors = async () => {
+          const mirrorTasks: Promise<any>[] = [];
+
+          if (data.karyawan && data.karyawan.length > 0) {
+            const kRows = data.karyawan.map((k) => ({
+              id: k.id,
+              nik: k.nik,
+              nama: k.nama,
+              jabatan: k.jabatan,
+              divisi: k.divisi || k.departemen || 'Gudang',
+              telepon: k.telepon,
+              status: k.status,
+              upah_harian_standar: (k as any).upahHarianStandar || k.gajiPokok || 0,
+              uang_makan_standar: (k as any).uangMakanStandar || k.tunjanganTetap || 0,
+              updated_at: now.iso,
+            }));
+            mirrorTasks.push(Promise.resolve(clientRef.from('karyawan').upsert(kRows, { onConflict: 'id' })));
+          }
+
+          if (data.mitra && data.mitra.length > 0) {
+            const mRows = data.mitra.map((m) => ({
+              id: m.id,
+              kode: m.kode,
+              nama: m.nama,
+              role: m.role,
+              telepon: m.telepon,
+              alamat: m.alamat,
+              status: m.status,
+              updated_at: now.iso,
+            }));
+            mirrorTasks.push(Promise.resolve(clientRef.from('mitra').upsert(mRows, { onConflict: 'id' })));
+          }
+
+          if (data.produk && data.produk.length > 0) {
+            const stokMap = new Map((data.stokBarang || []).map((s) => [s.kode, s.stok]));
+            const pRows = data.produk.map((p) => ({
+              kode: p.kode,
+              nama: p.nama,
+              kategori: p.kategori,
+              satuan: p.satuan,
+              harga_beli: p.hargaBeli || 0,
+              harga_jual: p.hargaJual || 0,
+              harga_khusus_rekanan: p.hargaKhususRekanan || p.hargaJual || 0,
+              stok: stokMap.get(p.kode) ?? 0,
+              status: p.status || 'AKTIF',
+              updated_at: now.iso,
+            }));
+            mirrorTasks.push(Promise.resolve(clientRef.from('produk').upsert(pRows, { onConflict: 'kode' })));
+          }
+
+          if (mirrorTasks.length > 0) {
+            await Promise.allSettled(mirrorTasks);
+          }
+        };
+
+        if (options?.awaitMirrors) {
+          await runMirrors();
+        } else {
+          void runMirrors().catch(() => {});
         }
-
-        if (data.mitra && data.mitra.length > 0) {
-          const mRows = data.mitra.map((m) => ({
-            id: m.id,
-            kode: m.kode,
-            nama: m.nama,
-            role: m.role,
-            telepon: m.telepon,
-            alamat: m.alamat,
-            status: m.status,
-            updated_at: now.iso,
-          }));
-          mirrorTasks.push(Promise.resolve(clientRef.from('mitra').upsert(mRows, { onConflict: 'id' })));
-        }
-
-        if (data.produk && data.produk.length > 0) {
-          const stokMap = new Map((data.stokBarang || []).map((s) => [s.kode, s.stok]));
-          const pRows = data.produk.map((p) => ({
-            kode: p.kode,
-            nama: p.nama,
-            kategori: p.kategori,
-            satuan: p.satuan,
-            harga_beli: p.hargaBeli || 0,
-            harga_jual: p.hargaJual || 0,
-            harga_khusus_rekanan: p.hargaKhususRekanan || p.hargaJual || 0,
-            stok: stokMap.get(p.kode) ?? 0,
-            status: p.status || 'AKTIF',
-            updated_at: now.iso,
-          }));
-          mirrorTasks.push(Promise.resolve(clientRef.from('produk').upsert(pRows, { onConflict: 'kode' })));
-        }
-
-        if (mirrorTasks.length > 0) {
-          await Promise.allSettled(mirrorTasks);
-        }
-      };
-
-      if (options?.awaitMirrors) {
-        await runMirrors();
-      } else {
-        void runMirrors().catch(() => {});
       }
 
       this.config.lastSyncTime = now.iso;
@@ -478,6 +615,16 @@ class SupabaseSyncEngine {
         message: this.config.lastSyncMessage,
       };
     } catch (err: any) {
+      this.hasUnsyncedLocalChanges = true;
+      if (!this.queuedData) {
+        this.queuedData = data;
+      }
+      if (!this.retryTimer && !IS_SERVERLESS) {
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null;
+          void this.drainQueue();
+        }, 4000);
+      }
       this.config.lastSyncStatus = 'ERROR';
       this.config.lastSyncMessage = err.message || 'Gagal sinkron ke Supabase';
       this.saveConfig();
@@ -556,9 +703,9 @@ class SupabaseSyncEngine {
   /**
    * Immediate write-through flush to Supabase with bounded wait so mutations persist to Supabase right away
    */
-  public async flushSync(data: DatabaseSchema, maxWaitMs = 2500): Promise<void> {
+  public async flushSync(data: DatabaseSchema, maxWaitMs = 4500): Promise<void> {
     if (!this.config.autoSync || !this.client) return;
-    this.queuedData = data;
+    this.markLocalMutation(data);
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
       this.syncTimer = null;
@@ -576,7 +723,7 @@ class SupabaseSyncEngine {
    */
   public triggerAutoSync(data: DatabaseSchema) {
     if (!this.config.autoSync || !this.client) return;
-    this.queuedData = data;
+    this.markLocalMutation(data);
 
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
@@ -655,7 +802,15 @@ class SupabaseSyncEngine {
 
     this.pollTimer = setInterval(async () => {
       try {
-        if (!this.isConfigured() || !this.config.autoSync || !this.client || this.isSyncing || this.queuedData) {
+        if (!this.isConfigured() || !this.config.autoSync || !this.client) {
+          return;
+        }
+
+        // ANTI-ROLLBACK GUARD: Never pull stale cloud snapshot while local mutations are pending/unsynced
+        if (this.hasPendingLocalChanges()) {
+          if (this.hasUnsyncedLocalChanges && !this.isSyncing && this.queuedData) {
+            void this.drainQueue();
+          }
           return;
         }
 
@@ -674,13 +829,13 @@ class SupabaseSyncEngine {
           .eq('id', 'MAIN_DATABASE')
           .maybeSingle();
 
-        if (!error && data && data.updated_at) {
+        if (!error && data && data.updated_at && !this.hasPendingLocalChanges()) {
           const remoteTime = new Date(data.updated_at).getTime();
           const localSyncTime = this.config.lastSyncTime ? new Date(this.config.lastSyncTime).getTime() : 0;
-          if (remoteTime > localSyncTime + 2000) {
+          if (remoteTime > localSyncTime + 2500) {
             console.log('[SupabaseSyncEngine] Pembaruan terdeteksi di Cloud Supabase. Menyinkronkan...');
             const pull = await this.pullFromSupabase();
-            if (pull.success && pull.data) {
+            if (pull.success && pull.data && !this.hasPendingLocalChanges()) {
               await dbManager.hydrateFromSupabase(pull.data);
               console.log('[SupabaseSyncEngine] Database berhasil diperbarui dari Cloud Supabase.');
             }
@@ -689,16 +844,24 @@ class SupabaseSyncEngine {
       } catch {
         // Silent background check
       }
-    }, 12000);
+    }, 25000);
   }
 
   /**
    * Ensures cold starts hydrate from Cloud Supabase AND warm instances automatically
    * self-heal / pull fresh snapshots whenever Cloud Supabase changes.
    */
-  public async ensureFreshCloudState(dbManager: any, maxAgeMs = 3500): Promise<void> {
+  public async ensureFreshCloudState(dbManager: any, maxAgeMs = 30000): Promise<void> {
     await this.ensureHydrated();
     if (!this.isConfigured() || !this.client) {
+      return;
+    }
+
+    // ANTI-ROLLBACK GUARD: If local mutations exist or were just committed, push them out — NEVER overwrite local memory!
+    if (this.hasPendingLocalChanges()) {
+      if (this.hasUnsyncedLocalChanges && !this.isSyncing && this.queuedData) {
+        void this.drainQueue();
+      }
       return;
     }
 
@@ -722,6 +885,8 @@ class SupabaseSyncEngine {
 
         this.lastCloudCheckAt = Date.now();
 
+        if (this.hasPendingLocalChanges()) return;
+
         if (!this.hasVerifiedCloudState) {
           await this.syncSmartWithCloud(dbManager);
           return;
@@ -734,12 +899,12 @@ class SupabaseSyncEngine {
           .eq('id', 'MAIN_DATABASE')
           .maybeSingle();
 
-        if (!error && data && data.updated_at) {
+        if (!error && data && data.updated_at && !this.hasPendingLocalChanges()) {
           const remoteTime = new Date(data.updated_at).getTime();
           const localSyncTime = this.config.lastSyncTime ? new Date(this.config.lastSyncTime).getTime() : 0;
-          if (remoteTime > localSyncTime + 1000) {
+          if (remoteTime > localSyncTime + 2000) {
             const pull = await this.pullFromSupabase();
-            if (pull.success && pull.data) {
+            if (pull.success && pull.data && !this.hasPendingLocalChanges()) {
               await dbManager.hydrateFromSupabase(pull.data);
             }
           }

@@ -10,6 +10,7 @@ import {
   isKategoriAlatNonStok,
   isProdukTanpaStok,
   isExcludedFromDivisi,
+  isTanpaDivisi,
   normalizeRoleMitra,
   resolveKelompokItemPengeluaran,
 } from './types.ts';
@@ -72,6 +73,7 @@ export interface DatabaseSchema {
   inventaris?: ItemInventaris[];
   masterItemPengeluaran?: MasterItemPengeluaran[];
   deletedHasilBumiKodes?: string[];
+  deletedMasterPengeluaranNames?: string[];
 }
 
 const RUNTIME_CACHE_DIR = path.join(os.tmpdir(), 'wijaya_agro_erp_runtime');
@@ -600,6 +602,9 @@ class DatabaseManager {
           inventaris: Array.isArray(parsed.inventaris) ? parsed.inventaris : [],
           masterItemPengeluaran: Array.isArray(parsed.masterItemPengeluaran) ? parsed.masterItemPengeluaran : [],
           deletedHasilBumiKodes: Array.isArray(parsed.deletedHasilBumiKodes) ? parsed.deletedHasilBumiKodes : [],
+          deletedMasterPengeluaranNames: Array.isArray(parsed.deletedMasterPengeluaranNames)
+            ? parsed.deletedMasterPengeluaranNames
+            : [],
         };
 
         if (!Array.isArray(merged.karyawan)) {
@@ -827,6 +832,9 @@ class DatabaseManager {
     this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes)
       ? incoming.deletedHasilBumiKodes
       : (this.db.deletedHasilBumiKodes || []);
+    this.db.deletedMasterPengeluaranNames = Array.isArray(incoming.deletedMasterPengeluaranNames)
+      ? incoming.deletedMasterPengeluaranNames
+      : (this.db.deletedMasterPengeluaranNames || []);
   }
 
   /**
@@ -987,19 +995,33 @@ class DatabaseManager {
         .filter(Boolean)
     );
 
-    // Bersihkan item placeholder lama yang belum pernah dipakai transaksi agar daftar fokus pada 24 item baku
+    if (!Array.isArray(this.db.deletedMasterPengeluaranNames)) {
+      this.db.deletedMasterPengeluaranNames = [];
+    }
+    const deletedPengeluaranSet = new Set(
+      this.db.deletedMasterPengeluaranNames
+        .map((n) => String(n || '').replace(/\s+/g, '').toUpperCase())
+        .filter(Boolean)
+    );
+
+    // Bersihkan item placeholder lama yang belum pernah dipakai transaksi & item yang sengaja dihapus user
     this.db.masterItemPengeluaran = (this.db.masterItemPengeluaran || []).filter((m) => {
       const uName = String(m.nama || '').trim().toUpperCase();
+      const uCompact = uName.replace(/\s+/g, '');
       if (!uName) return false;
+      if (deletedPengeluaranSet.has(uCompact)) return false;
       if (legacyUnusedNames.has(uName) && !usedKategoriUpper.has(uName)) {
         return false;
       }
       return true;
     });
 
-    // Sinkronkan 24 item baku (No. 1 s/d 24)
+    // Sinkronkan 24 item baku (No. 1 s/d 24) kecuali yang telah dihapus user
     for (const def of DAFTAR_24_ITEM_PENGELUARAN) {
       const defCompact = def.nama.replace(/\s+/g, '').toUpperCase();
+      if (deletedPengeluaranSet.has(defCompact)) {
+        continue;
+      }
       const existing = this.db.masterItemPengeluaran.find(
         (m) =>
           m.nama.trim().toUpperCase() === def.nama.toUpperCase() ||
@@ -1036,7 +1058,7 @@ class DatabaseManager {
     for (const ex of this.db.pengeluaran) {
       const kName = String(ex.kategori || '').trim();
       const kCompact = kName.replace(/\s+/g, '').toUpperCase();
-      if (kName && !expItemNameSet.has(kCompact)) {
+      if (kName && !expItemNameSet.has(kCompact) && !deletedPengeluaranSet.has(kCompact)) {
         expItemNameSet.add(kCompact);
         const cleanSlug =
           kName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase() ||
@@ -1081,16 +1103,23 @@ class DatabaseManager {
       sinkronAcc.status = 'AKTIF';
     }
 
-    // Pastikan DP Parabot bukan Divisi dan tidak memiliki akun OPERASIONAL_DIVISI
+    // Pastikan DP Parabot maupun TANPA_DIVISI bukan Divisi dan tidak memiliki akun OPERASIONAL_DIVISI
     this.db.divisi = (this.db.divisi || []).filter(
-      (d) => !isExcludedFromDivisi(d.nama) && !isExcludedFromDivisi(d.id)
+      (d) =>
+        !isExcludedFromDivisi(d.nama) &&
+        !isExcludedFromDivisi(d.id) &&
+        !isTanpaDivisi(d.nama) &&
+        !isTanpaDivisi(d.id)
     );
     this.db.rekening = (this.db.rekening || []).filter(
       (r) =>
         !(
           r.kategori === 'OPERASIONAL_DIVISI' &&
           !r.isAnakPerusahaan &&
-          (isExcludedFromDivisi(r.nama) || isExcludedFromDivisi(r.kode))
+          (isExcludedFromDivisi(r.nama) ||
+            isExcludedFromDivisi(r.kode) ||
+            isTanpaDivisi(r.nama) ||
+            isTanpaDivisi(r.kode))
         )
     );
     const normalizeExcludedDivisi = <T extends { divisi?: string }>(list?: T[]) => {
@@ -1744,7 +1773,31 @@ class DatabaseManager {
         .reduce((sum, b) => sum + Math.max(0, b.nominalBayar || 0), 0) +
       (this.db.penjualan || [])
         .filter((p) => p.metode === 'SINKRON' || p.rekeningTujuan === 'SINKRON')
-        .reduce((sum, p) => sum + Math.max(0, p.totalNominal || 0), 0);
+        .reduce((sum, p) => sum + Math.max(0, p.totalNominal || 0), 0) +
+      (this.db.pembelianBarang || [])
+        .filter((pb) => pb.metodePembayaran === 'SINKRON' || pb.rekeningSumber === 'SINKRON')
+        .reduce((sum, pb) => sum + Math.max(0, pb.totalNominal || 0), 0) +
+      (this.db.pembelianHasilBumi || [])
+        .filter((phb) => phb.metodePembayaran === 'SINKRON' || phb.rekeningSumber === 'SINKRON')
+        .reduce((sum, phb) => sum + Math.max(0, phb.totalNominal || 0), 0) +
+      (this.db.penjualanHasilBumi || [])
+        .filter((jhb) => jhb.metodePembayaran === 'SINKRON' || jhb.rekeningTujuan === 'SINKRON')
+        .reduce((sum, jhb) => sum + Math.max(0, jhb.totalNominal || 0), 0) +
+      (this.db.kasbonUang || [])
+        .filter((k) => k.metode === 'SINKRON' || k.rekeningSumber === 'SINKRON')
+        .reduce((sum, k) => sum + Math.max(0, k.nominal || 0), 0) +
+      (this.db.pencairanTitipan || [])
+        .filter((pt) => pt.metodePembayaran === 'SINKRON' || pt.rekeningSumber === 'SINKRON')
+        .reduce((sum, pt) => sum + Math.max(0, pt.nominalPencairan || 0), 0) +
+      (this.db.pengeluaran || [])
+        .filter((ex) => ex.rekeningSumber === 'SINKRON')
+        .reduce((sum, ex) => sum + Math.abs(ex.nominal || 0), 0) +
+      (this.db.uangMasuk || [])
+        .filter((um) => um.metode === 'SINKRON' || um.rekeningTujuan === 'SINKRON')
+        .reduce((sum, um) => sum + Math.max(0, um.nominal || 0), 0) +
+      (this.db.penggajian || [])
+        .filter((gj) => gj.metodePembayaran === 'SINKRON' || gj.rekeningSumber === 'SINKRON')
+        .reduce((sum, gj) => sum + Math.max(0, gj.gajiBersihDibayar || 0), 0);
 
     const sinkronRek = this.db.rekening.find((r) => r.kode === 'SINKRON');
     if (sinkronRek) {
@@ -1760,7 +1813,7 @@ class DatabaseManager {
    */
   public ensureDivisiRegisteredInMemory(rawNama?: string): ItemDivisi | null {
     const trimmed = String(rawNama || '').trim();
-    if (!trimmed || isExcludedFromDivisi(trimmed)) return null;
+    if (!trimmed || isExcludedFromDivisi(trimmed) || isTanpaDivisi(trimmed)) return null;
 
     if (!Array.isArray(this.db.divisi)) this.db.divisi = [];
 
@@ -1841,12 +1894,24 @@ class DatabaseManager {
     const allDivisi = this.getDivisiList();
     const divisiByRekKode = new Map(allDivisi.map((d) => [d.kodeRekening.toUpperCase(), norm(d.nama)]));
 
-    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) =>
-      norm(divisi || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
-    const resolvePembelianBarangDivNorm = (divisi?: string) => norm(divisi || 'CV Wijaya Agro');
-    const resolveHasilBumiDivNorm = (divisi?: string) => norm(divisi || 'Gudang Wijaya Agro');
-    const resolveBrilinkDivNorm = (divisi?: string) => norm(divisi || 'BRILink');
+    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(divisi || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
+    };
+    const resolvePembelianBarangDivNorm = (divisi?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(divisi || 'CV Wijaya Agro');
+    };
+    const resolveHasilBumiDivNorm = (divisi?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(divisi || 'Gudang Wijaya Agro');
+    };
+    const resolveBrilinkDivNorm = (divisi?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(divisi || 'BRILink');
+    };
     const resolveBebanDivNorm = (divisi?: string, rekeningSumber?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
       if (divisi && String(divisi).trim()) return norm(divisi);
       if (rekeningSumber) {
         const mapped = divisiByRekKode.get(String(rekeningSumber).toUpperCase());
@@ -1964,6 +2029,7 @@ class DatabaseManager {
       const masukUangMasukDivisi = (this.db.uangMasuk || [])
         .filter(
           (um) =>
+            !isTanpaDivisi(um.divisi) &&
             norm(um.divisi || 'Gudang Wijaya Agro') === targetNorm &&
             (Number(um.nominal) || 0) > 0
         )
@@ -2225,7 +2291,11 @@ class DatabaseManager {
     });
 
     return Array.from(map.values()).filter(
-      (d) => !isExcludedFromDivisi(d.nama) && !isExcludedFromDivisi(d.id)
+      (d) =>
+        !isExcludedFromDivisi(d.nama) &&
+        !isExcludedFromDivisi(d.id) &&
+        !isTanpaDivisi(d.nama) &&
+        !isTanpaDivisi(d.id)
     );
   }
 
@@ -2405,7 +2475,8 @@ class DatabaseManager {
       this.reconcileRelationalIntegrity();
       this.synchronizeVirtualAccounts();
       this.saveDirect(this.db);
-      const syncWaitMs = process.env.VERCEL || process.env.NETLIFY ? 8000 : 1800;
+      supabaseSyncEngine.markLocalMutation(this.db);
+      const syncWaitMs = process.env.VERCEL || process.env.NETLIFY ? 8000 : 4500;
       await supabaseSyncEngine.flushSync(this.db, syncWaitMs);
       return result;
     } finally {

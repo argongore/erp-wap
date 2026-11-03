@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -11,12 +11,15 @@ import {
   UserPlus,
   CreditCard,
   Pencil,
+  Wallet,
+  Building2,
 } from 'lucide-react';
 import {
   JenisTransaksiBrilink,
   Mitra,
   Rekening,
   TransaksiBrilink,
+  isTanpaDivisi,
 } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
 import {
@@ -51,6 +54,9 @@ function getTodayIsoDate(): string {
 }
 
 const QUICK_ADMIN_AMOUNTS = [3000, 5000, 10000, 15000, 20000, 25000, 50000];
+const QUICK_POKOK_AMOUNTS = [100000, 200000, 500000, 1000000, 2000000, 5000000];
+
+type ModeInputBrilink = 'TARIK_TUNAI_PENUH' | 'ADM_MASUK_SAJA' | 'TUKAR_CASH';
 
 export const BrilinkView: React.FC<Props> = ({
   rekeningList,
@@ -64,11 +70,23 @@ export const BrilinkView: React.FC<Props> = ({
     () => rekeningList.filter(isRealTransferBankAccount),
     [rekeningList]
   );
+  const defaultBriAccount = useMemo(
+    () =>
+      bankAccounts.find((r) => r.kode.toUpperCase() === 'BRI01') ||
+      bankAccounts.find((r) => /bri/i.test(r.kode) || /bri/i.test(r.nama)) ||
+      bankAccounts[0],
+    [bankAccounts]
+  );
+  const kas01Acc = useMemo(
+    () => rekeningList.find((r) => r.kode === 'KAS01'),
+    [rekeningList]
+  );
   const activeMitra = useMemo(
     () => mitraList.filter((m) => m.status === 'AKTIF'),
     [mitraList]
   );
 
+  const [modeInput, setModeInput] = useState<ModeInputBrilink>('TARIK_TUNAI_PENUH');
   const [jenisBrilink, setJenisBrilink] = useState<JenisTransaksiBrilink>('TARIK_TUNAI');
   const [tanggal, setTanggal] = useState<string>(getTodayIsoDate());
 
@@ -83,14 +101,23 @@ export const BrilinkView: React.FC<Props> = ({
   const [nominalAdminDisplay, setNominalAdminDisplay] = useState<string>('');
   const [metodeAdmin, setMetodeAdmin] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
   const [rekeningAdminBank, setRekeningAdminBank] = useState<string>(
-    bankAccounts[0]?.kode || ''
+    defaultBriAccount?.kode || bankAccounts[0]?.kode || ''
   );
 
-  const [catatMutasiPokok, setCatatMutasiPokok] = useState<boolean>(false);
+  const [catatMutasiPokok, setCatatMutasiPokok] = useState<boolean>(true);
   const [nominalPokokDisplay, setNominalPokokDisplay] = useState<string>('');
   const [rekeningBankPokok, setRekeningBankPokok] = useState<string>(
-    bankAccounts[0]?.kode || ''
+    defaultBriAccount?.kode || bankAccounts[0]?.kode || ''
   );
+
+  useEffect(() => {
+    if (!rekeningBankPokok && defaultBriAccount?.kode) {
+      setRekeningBankPokok(defaultBriAccount.kode);
+    }
+    if (!rekeningAdminBank && defaultBriAccount?.kode) {
+      setRekeningAdminBank(defaultBriAccount.kode);
+    }
+  }, [defaultBriAccount, rekeningBankPokok, rekeningAdminBank]);
 
   const [divisi, setDivisi] = useState<string>('BRILink');
   const [keterangan, setKeterangan] = useState<string>('');
@@ -189,20 +216,31 @@ export const BrilinkView: React.FC<Props> = ({
 
   const validateForm = (): boolean => {
     setErrorMsg('');
-    if (nominalAdmin <= 0) {
+    if (modeInput === 'TARIK_TUNAI_PENUH') {
+      if (nominalPokok <= 0) {
+        setErrorMsg(
+          'Masukkan Nominal Uang Pokok Tarik Tunai yang keluar dari Kasir (KAS01) lebih dari Rp 0.'
+        );
+        return false;
+      }
+      if (!rekeningBankPokok) {
+        setErrorMsg('Pilih rekening BRI / Bank kantor penerima transfer pengganti tarik tunai.');
+        return false;
+      }
+    } else if (nominalAdmin <= 0 && (!catatMutasiPokok || nominalPokok <= 0)) {
       setErrorMsg(
         isTarikTunai
-          ? 'Masukkan nominal Uang Masuk Admin Tarik Tunai lebih dari Rp 0.'
+          ? 'Masukkan nominal Uang Masuk Admin BRILink lebih dari Rp 0.'
           : 'Masukkan nominal Uang Keluar Admin Tukar Cash Rupiah PT lebih dari Rp 0.'
       );
       return false;
     }
-    if (metodeAdmin === 'TRANSFER' && !rekeningAdminBank) {
+    if (nominalAdmin > 0 && metodeAdmin === 'TRANSFER' && !rekeningAdminBank) {
       setErrorMsg('Pilih rekening bank pencatatan admin.');
       return false;
     }
     if (catatMutasiPokok && nominalPokok > 0 && !rekeningBankPokok) {
-      setErrorMsg('Pilih rekening Bank EDC PT untuk mutasi pokok tarik tunai / tukar cash.');
+      setErrorMsg('Pilih rekening Bank BRI / PT untuk mutasi pokok tarik tunai / tukar cash.');
       return false;
     }
     return true;
@@ -218,51 +256,82 @@ export const BrilinkView: React.FC<Props> = ({
   const buildReceiptFromRecord = (rec: TransaksiBrilink): ReceiptData => {
     const isMasuk = rec.jenisBrilink === 'TARIK_TUNAI';
     const pokok = Number(rec.nominalPokok) || 0;
+    const divLabel = isTanpaDivisi(rec.divisi) ? 'Tanpa Arus Kas Divisi' : rec.divisi || 'BRILink';
     return {
-      title: isMasuk
-        ? 'STRUK AGEN BRILINK — ADM TARIK TUNAI (+)'
-        : 'BUKTI BRILINK — ADM TUKAR CASH PT (−)',
+      title:
+        isMasuk && pokok > 0
+          ? 'STRUK JASA TARIK TUNAI BRILINK (KAS01 → BRI)'
+          : isMasuk
+          ? 'STRUK AGEN BRILINK — ADM TARIK TUNAI (+)'
+          : 'BUKTI BRILINK — ADM TUKAR CASH PT (−)',
       subtitle: `${
-        isMasuk ? 'Uang Masuk Admin Tarik Tunai' : 'Uang Keluar Admin Tukar Cash Rupiah'
-      } | Divisi: ${rec.divisi || 'BRILink'}`,
+        isMasuk && pokok > 0
+          ? `Tarik Tunai ${formatRupiah(pokok)} + Adm ${formatRupiah(rec.nominalAdmin)}`
+          : isMasuk
+          ? 'Uang Masuk Admin Tarik Tunai'
+          : 'Uang Keluar Admin Tukar Cash Rupiah'
+      } | Divisi Admin: ${divLabel}`,
       nomorTransaksi: rec.idTransaksi,
       tanggal: rec.tanggal,
       jam: rec.jam,
       mitra: rec.namaPelanggan || 'Umum',
       rekening: rec.rekeningAdmin,
       kategori: 'BRILINK',
-      total: rec.nominalAdmin,
+      total: pokok > 0 && rec.nominalAdmin === 0 ? pokok : rec.nominalAdmin,
       items: [
-        {
-          nama: isMasuk
-            ? 'Pendapatan Admin Tarik Tunai BRILink'
-            : 'Biaya Admin Tukar Cash Rupiah PT',
-          qty: 1,
-          satuan: 'Transaksi',
-          harga: rec.nominalAdmin,
-          subtotal: rec.nominalAdmin,
-        },
+        ...(pokok > 0
+          ? [
+              {
+                nama: isMasuk
+                  ? `Uang Tunai Keluar Kasir (KAS01) → Masuk Rek ${rec.rekeningBank || 'BRI01'}`
+                  : `Tukar Cash Bank ${rec.rekeningBank || '-'} → Masuk Kasir (KAS01)`,
+                qty: 1,
+                satuan: 'Mutasi Pokok',
+                harga: pokok,
+                subtotal: pokok,
+              },
+            ]
+          : []),
+        ...(rec.nominalAdmin > 0
+          ? [
+              {
+                nama: isMasuk
+                  ? 'Pendapatan Biaya Admin Tarik Tunai BRILink'
+                  : 'Biaya Admin Tukar Cash Rupiah PT',
+                qty: 1,
+                satuan: 'Admin',
+                harga: rec.nominalAdmin,
+                subtotal: rec.nominalAdmin,
+              },
+            ]
+          : []),
       ],
       detailRows: [
-        { label: 'Divisi Terkait', value: rec.divisi || 'BRILink' },
-        {
-          label: 'Jenis Transaksi',
-          value: isMasuk ? 'Uang Masuk — Adm Tarik Tunai' : 'Uang Keluar — Adm Tukar Cash PT',
-          highlight: true,
-        },
-        { label: 'Rekening Admin', value: rec.rekeningAdmin },
         ...(pokok > 0
           ? [
               {
                 label: isMasuk
-                  ? 'Mutasi Pokok (+Bank / −KAS01)'
-                  : 'Mutasi Pokok (−Bank / +KAS01)',
-                value: `${formatRupiah(pokok)} (${rec.rekeningBank || '-'})`,
+                  ? 'Uang Tunai Keluar Kasir (KAS01)'
+                  : 'Uang Tunai Masuk Kasir (KAS01)',
+                value: `${isMasuk ? '−' : '+'}${formatRupiah(pokok)}`,
+                highlight: true,
+              },
+              {
+                label: isMasuk
+                  ? `Uang Pengganti Masuk (${rec.rekeningBank || 'BRI01'})`
+                  : `Saldo Bank Berkurang (${rec.rekeningBank || '-'})`,
+                value: `${isMasuk ? '+' : '−'}${formatRupiah(pokok)} (Non-Divisi)`,
+                highlight: true,
               },
             ]
           : []),
         {
-          label: isMasuk ? 'Total Uang Masuk Admin' : 'Total Uang Keluar Admin',
+          label: 'Divisi Biaya Admin',
+          value: rec.nominalAdmin > 0 ? divLabel : 'Tidak Ada Biaya Admin (Rp 0)',
+        },
+        { label: 'Rekening Biaya Admin', value: rec.rekeningAdmin },
+        {
+          label: isMasuk ? 'Pendapatan Biaya Admin BRILink' : 'Biaya Admin Tukar Cash',
           value: formatRupiah(rec.nominalAdmin),
           isTotal: true,
         },
@@ -305,9 +374,15 @@ export const BrilinkView: React.FC<Props> = ({
       setStepVerifikasi(false);
       setVerifiedDoubleCheck(false);
       setSuccessBanner(
-        `Transaksi BRILink ${record.idTransaksi} (${
-          isTarikTunai ? '+ Uang Masuk Adm Tarik Tunai' : '− Uang Keluar Adm Tukar Cash PT'
-        }: ${formatRupiah(record.nominalAdmin)}) berhasil disimpan.`
+        `Transaksi BRILink ${record.idTransaksi} berhasil disimpan ke Cloud Supabase! ${
+          (record.nominalPokok || 0) > 0
+            ? `Pokok ${formatRupiah(record.nominalPokok || 0)} (${
+                isTarikTunai
+                  ? `KAS01 keluar → ${record.rekeningBank || 'BRI01'} masuk`
+                  : `${record.rekeningBank || 'Bank'} keluar → KAS01 masuk`
+              }) · `
+            : ''
+        }Admin: ${formatRupiah(record.nominalAdmin)}.`
       );
       onRefresh();
       onSuccess(receipt);
@@ -437,61 +512,97 @@ export const BrilinkView: React.FC<Props> = ({
         onSubmit={handleOpenVerifikasi}
         className="bg-white rounded-2xl border border-zinc-200 p-5 sm:p-6 space-y-5 text-xs"
       >
-        {/* Step 1: Pilih Mode Uang Masuk (Adm Tarik Tunai) vs Uang Keluar (Adm Tukar Cash PT) */}
+        {/* Step 1: Pilih Mode BRILink (Jasa Tarik Tunai Penuh vs Input Admin Saja vs Tukar Cash PT) */}
         <div className="space-y-2">
           <label className="block text-[11px] font-bold text-zinc-800 uppercase tracking-wider">
-            1. Pilih Jenis Arus Kas Admin BRILink
+            1. Pilih Jenis Layanan / Transaksi BRILink
           </label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <button
               type="button"
               onClick={() => {
+                setModeInput('TARIK_TUNAI_PENUH');
                 setJenisBrilink('TARIK_TUNAI');
+                setCatatMutasiPokok(true);
+                if (defaultBriAccount?.kode) {
+                  setRekeningBankPokok(defaultBriAccount.kode);
+                }
                 setStepVerifikasi(false);
                 setVerifiedDoubleCheck(false);
               }}
               className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
-                isTarikTunai
-                  ? 'bg-emerald-50 border-emerald-600 ring-1 ring-emerald-600'
+                modeInput === 'TARIK_TUNAI_PENUH'
+                  ? 'bg-sky-50 border-sky-600 ring-2 ring-sky-600/30'
                   : 'bg-white border-zinc-200 hover:bg-zinc-50'
               }`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-bold text-zinc-900 text-sm">
-                  + Uang Masuk: Adm Tarik Tunai
+                  🏧 Jasa Tarik Tunai Pelanggan
                 </span>
-                <span className="font-mono text-[10px] font-extrabold text-emerald-800">
-                  KAS MASUK (+)
+                <span className="font-mono text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-sky-100 text-sky-900">
+                  KAS01 → BRI
                 </span>
               </div>
               <p className="text-[11px] text-zinc-600 mt-1 leading-relaxed">
-                Pelanggan melakukan tarik tunai di BRILink. <strong>Biaya Admin Tarik Tunai</strong> tercatat sebagai pendapatan / uang masuk ke Kas atau Bank PT.
+                <strong>Uang tunai keluar dari Kasir (KAS01)</strong>, uang penggantinya ditransfer pelanggan <strong>masuk ke Rekening BRI Kantor</strong> (tanpa masuk divisi), dan <strong>Biaya Admin</strong> masuk ke Divisi BRILink.
               </p>
             </button>
 
             <button
               type="button"
               onClick={() => {
-                setJenisBrilink('TUKAR_CASH');
+                setModeInput('ADM_MASUK_SAJA');
+                setJenisBrilink('TARIK_TUNAI');
+                setCatatMutasiPokok(false);
+                setNominalPokokDisplay('');
                 setStepVerifikasi(false);
                 setVerifiedDoubleCheck(false);
               }}
               className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
-                !isTarikTunai
-                  ? 'bg-rose-50 border-rose-600 ring-1 ring-rose-600'
+                modeInput === 'ADM_MASUK_SAJA'
+                  ? 'bg-emerald-50 border-emerald-600 ring-2 ring-emerald-600/30'
                   : 'bg-white border-zinc-200 hover:bg-zinc-50'
               }`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-bold text-zinc-900 text-sm">
-                  − Uang Keluar: Adm Tukar Cash Rupiah PT
+                  + Input Biaya Admin Saja
                 </span>
-                <span className="font-mono text-[10px] font-extrabold text-rose-800">
+                <span className="font-mono text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900">
+                  ADM MASUK (+)
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-600 mt-1 leading-relaxed">
+                Khusus mencatat <strong>Pendapatan Biaya Admin BRILink</strong> saja ke Kas/Bank &amp; Divisi BRILink tanpa mutasi pokok tarik tunai.
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setModeInput('TUKAR_CASH');
+                setJenisBrilink('TUKAR_CASH');
+                setCatatMutasiPokok(false);
+                setStepVerifikasi(false);
+                setVerifiedDoubleCheck(false);
+              }}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
+                modeInput === 'TUKAR_CASH'
+                  ? 'bg-rose-50 border-rose-600 ring-2 ring-rose-600/30'
+                  : 'bg-white border-zinc-200 hover:bg-zinc-50'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold text-zinc-900 text-sm">
+                  − Tukar Cash Rupiah PT
+                </span>
+                <span className="font-mono text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-rose-100 text-rose-900">
                   KAS KELUAR (−)
                 </span>
               </div>
               <p className="text-[11px] text-zinc-600 mt-1 leading-relaxed">
-                PT menukar saldo bank menjadi uang cash fisik rupiah. <strong>Biaya Admin Tukar Cash</strong> tercatat sebagai pengeluaran kas / bank PT.
+                PT menukar saldo bank menjadi uang cash fisik rupiah. <strong>Biaya Admin Tukar Cash</strong> tercatat sebagai pengeluaran kas/bank PT.
               </p>
             </button>
           </div>
@@ -603,7 +714,138 @@ export const BrilinkView: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Step 3: Input Nominal Admin (Fokus Utama) & Rekening Kas/Bank */}
+        {/* Step 3A: Blok Utama Jasa Tarik Tunai Pelanggan (Uang Keluar KAS01 -> Masuk Rek BRI) */}
+        {modeInput === 'TARIK_TUNAI_PENUH' && (
+          <div className="p-4 rounded-xl border-2 border-sky-300 bg-sky-50/50 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-200 pb-2.5">
+              <div>
+                <h3 className="text-xs font-bold text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <ArrowLeftRight className="w-4 h-4 text-sky-700" />
+                  <span>3A. Mutasi Pokok Tarik Tunai (Kasir KAS01 Keluar → Rekening BRI Masuk)</span>
+                </h3>
+                <p className="text-[11px] text-sky-800 mt-0.5">
+                  Otomatis mengurangi uang fisik di <strong>KAS01 (Kasir Utama)</strong> dan menambah saldo <strong>Rekening BRI Kantor</strong> tanpa mengotori Arus Kas Divisi.
+                </p>
+              </div>
+              <span className="text-[10px] font-mono font-bold px-2 py-1 rounded bg-sky-200/80 text-sky-950 self-start">
+                MUTASI ANTAR REKENING PT (NON-DIVISI)
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[11px] font-bold text-zinc-900 mb-1">
+                  Nominal Uang Tunai Diberikan dari Kasir / KAS01 (Rp) <span className="text-rose-600">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-zinc-400 font-mono font-bold">
+                    Rp
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="Contoh: 1.000.000"
+                    value={nominalPokokDisplay}
+                    onChange={(e) => {
+                      const num = parseRupiahInput(e.target.value);
+                      setNominalPokokDisplay(num > 0 ? num.toLocaleString('id-ID') : '');
+                      setStepVerifikasi(false);
+                    }}
+                    className="w-full pl-9 pr-3 py-2 rounded-lg border border-sky-400 bg-white font-mono tabular-nums text-base font-bold text-sky-950 focus:outline-none focus:border-sky-700"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {QUICK_POKOK_AMOUNTS.map((amt) => (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => {
+                        setNominalPokokDisplay(amt.toLocaleString('id-ID'));
+                        setStepVerifikasi(false);
+                      }}
+                      className="px-2 py-1 rounded border border-sky-300 bg-white hover:bg-sky-100 font-mono tabular-nums text-[10px] font-semibold text-sky-900 cursor-pointer"
+                    >
+                      {formatRupiahSingkat(amt)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-zinc-900 mb-1">
+                  Rekening Bank Penerima Transfer Pelanggan (Default BRI) <span className="text-rose-600">*</span>
+                </label>
+                <select
+                  value={rekeningBankPokok}
+                  onChange={(e) => {
+                    setRekeningBankPokok(e.target.value);
+                    setStepVerifikasi(false);
+                  }}
+                  className="w-full px-3 py-2.5 rounded-lg border border-sky-400 bg-white text-zinc-900 font-bold focus:outline-none focus:border-sky-700"
+                >
+                  {bankAccounts.map((rek) => (
+                    <option key={rek.kode} value={rek.kode}>
+                      {rek.kode} — {rek.nama} (Saldo: {formatRupiah(rek.saldoSaatIni)})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-sky-800 mt-1.5">
+                  Semua pelanggan tarik tunai diarahkan transfer ke rekening BRI kantor di atas sehingga uang kasir yang keluar otomatis tergantikan di saldo bank.
+                </p>
+              </div>
+            </div>
+
+            {/* Simulasi Real-Time 3 Kotak: KAS01 Keluar, BRI Masuk, Admin Masuk */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+              <div className="p-2.5 rounded-lg bg-white border border-rose-200 font-mono text-[11px]">
+                <div className="text-[10px] font-sans font-bold text-rose-800 flex items-center gap-1">
+                  <Wallet className="w-3 h-3" />
+                  <span>1. Uang Keluar Kasir (KAS01)</span>
+                </div>
+                <div className="text-sm font-extrabold text-rose-700 mt-0.5">
+                  −{formatRupiah(nominalPokok)}
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  Sisa KAS01:{' '}
+                  {formatRupiah(
+                    (kas01Acc?.saldoSaatIni || 0) -
+                      nominalPokok +
+                      (metodeAdmin === 'TUNAI' ? nominalAdmin : 0)
+                  )}
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white border border-sky-200 font-mono text-[11px]">
+                <div className="text-[10px] font-sans font-bold text-sky-800 flex items-center gap-1">
+                  <Building2 className="w-3 h-3" />
+                  <span>2. Masuk Rek {rekeningBankPokok || 'BRI01'}</span>
+                </div>
+                <div className="text-sm font-extrabold text-sky-700 mt-0.5">
+                  +{formatRupiah(nominalPokok)}
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  Otomatis Non-Divisi (Pengganti Kas)
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white border border-emerald-200 font-mono text-[11px]">
+                <div className="text-[10px] font-sans font-bold text-emerald-800 flex items-center gap-1">
+                  <CreditCard className="w-3 h-3" />
+                  <span>3. Untung Biaya Admin (+)</span>
+                </div>
+                <div className="text-sm font-extrabold text-emerald-700 mt-0.5">
+                  +{formatRupiah(nominalAdmin)}
+                </div>
+                <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
+                  Ke {metodeAdmin === 'TUNAI' ? 'KAS01' : rekeningAdminBank} ·{' '}
+                  {isTanpaDivisi(divisi) ? 'Non-Divisi' : divisi}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3B: Input Nominal Biaya Admin & Rekening Kas/Bank */}
         <div
           className={`p-4 rounded-xl border space-y-3.5 ${
             isTarikTunai
@@ -614,7 +856,9 @@ export const BrilinkView: React.FC<Props> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-bold text-zinc-900 mb-1">
-                {isTarikTunai
+                {modeInput === 'TARIK_TUNAI_PENUH'
+                  ? '3B. Biaya Admin Tarik Tunai untuk Divisi BRILink (Rp) — Isi Rp 0 jika diinput terpisah'
+                  : isTarikTunai
                   ? '3. Nominal Uang Masuk — Admin Tarik Tunai (Rp)'
                   : '3. Nominal Uang Keluar — Admin Tukar Cash PT (Rp)'}
               </label>
@@ -625,7 +869,7 @@ export const BrilinkView: React.FC<Props> = ({
                 <input
                   type="text"
                   inputMode="numeric"
-                  placeholder="Contoh: 10.000"
+                  placeholder={modeInput === 'TARIK_TUNAI_PENUH' ? 'Contoh: 10.000 (atau kosongkan = Rp 0)' : 'Contoh: 10.000'}
                   value={nominalAdminDisplay}
                   onChange={(e) => {
                     const num = parseRupiahInput(e.target.value);
@@ -642,6 +886,18 @@ export const BrilinkView: React.FC<Props> = ({
 
               {/* Tombol Cepat Nominal Admin */}
               <div className="flex flex-wrap gap-1.5 mt-2">
+                {modeInput === 'TARIK_TUNAI_PENUH' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNominalAdminDisplay('');
+                      setStepVerifikasi(false);
+                    }}
+                    className="px-2 py-1 rounded border border-zinc-300 bg-zinc-100 hover:bg-zinc-200 font-mono tabular-nums text-[10px] font-bold text-zinc-700 cursor-pointer"
+                  >
+                    Rp 0 (Tanpa Admin)
+                  </button>
+                )}
                 {QUICK_ADMIN_AMOUNTS.map((amt) => (
                   <button
                     key={amt}
@@ -660,7 +916,7 @@ export const BrilinkView: React.FC<Props> = ({
 
             <div className="space-y-2">
               <label className="block text-[11px] font-bold text-zinc-900">
-                Rekening {isTarikTunai ? 'Penerima Uang Admin (+)' : 'Sumber Bayar Admin (−)'}
+                Rekening {isTarikTunai ? 'Penerima Uang Biaya Admin (+)' : 'Sumber Bayar Biaya Admin (−)'}
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -675,7 +931,7 @@ export const BrilinkView: React.FC<Props> = ({
                       : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
                   }`}
                 >
-                  Kas Tunai (KAS01)
+                  Dibayar Tunai (KAS01)
                 </button>
                 <button
                   type="button"
@@ -689,7 +945,7 @@ export const BrilinkView: React.FC<Props> = ({
                       : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
                   }`}
                 >
-                  Rekening Bank PT
+                  Ikut Masuk Rek Bank
                 </button>
               </div>
 
@@ -712,67 +968,65 @@ export const BrilinkView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Opsional Mutasi Pokok Tarik Tunai / Tukar Cash */}
-          <div className="pt-2 border-t border-zinc-200/80 space-y-2.5">
-            <label className="inline-flex items-center space-x-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={catatMutasiPokok}
-                onChange={(e) => {
-                  setCatatMutasiPokok(e.target.checked);
-                  setStepVerifikasi(false);
-                }}
-                className="rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
-              />
-              <span className="text-xs font-semibold text-zinc-800 flex items-center gap-1.5">
-                <ArrowLeftRight className="w-3.5 h-3.5 text-sky-700" />
-                <span>
-                  Catat sekaligus mutasi uang pokok{' '}
-                  {isTarikTunai
-                    ? 'Tarik Tunai (+Bank EDC / −KAS01)'
-                    : 'Tukar Cash (−Bank PT / +KAS01)'}
-                  ? (Opsional)
+          {/* Opsional Mutasi Pokok untuk mode Tukar Cash PT */}
+          {modeInput === 'TUKAR_CASH' && (
+            <div className="pt-2 border-t border-zinc-200/80 space-y-2.5">
+              <label className="inline-flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={catatMutasiPokok}
+                  onChange={(e) => {
+                    setCatatMutasiPokok(e.target.checked);
+                    setStepVerifikasi(false);
+                  }}
+                  className="rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
+                />
+                <span className="text-xs font-semibold text-zinc-800 flex items-center gap-1.5">
+                  <ArrowLeftRight className="w-3.5 h-3.5 text-sky-700" />
+                  <span>
+                    Catat sekaligus mutasi uang pokok Tukar Cash (−Bank PT / +KAS01)? (Opsional)
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
 
-            {catatMutasiPokok && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-white border border-zinc-200">
-                <div>
-                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
-                    Nominal Pokok {isTarikTunai ? 'Tarik Tunai' : 'Tukar Cash'} (Rp)
-                  </label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="Contoh: 5.000.000"
-                    value={nominalPokokDisplay}
-                    onChange={(e) => {
-                      const num = parseRupiahInput(e.target.value);
-                      setNominalPokokDisplay(num > 0 ? num.toLocaleString('id-ID') : '');
-                    }}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 font-mono tabular-nums font-bold text-zinc-900 focus:outline-none focus:border-sky-600"
-                  />
+              {catatMutasiPokok && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-white border border-zinc-200">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                      Nominal Pokok Tukar Cash (Rp)
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Contoh: 5.000.000"
+                      value={nominalPokokDisplay}
+                      onChange={(e) => {
+                        const num = parseRupiahInput(e.target.value);
+                        setNominalPokokDisplay(num > 0 ? num.toLocaleString('id-ID') : '');
+                      }}
+                      className="w-full px-3 py-2 rounded-lg border border-zinc-300 font-mono tabular-nums font-bold text-zinc-900 focus:outline-none focus:border-sky-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                      Rekening Bank PT Sumber Tukar Cash
+                    </label>
+                    <select
+                      value={rekeningBankPokok}
+                      onChange={(e) => setRekeningBankPokok(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-zinc-300 bg-white text-zinc-900 font-semibold focus:outline-none focus:border-sky-600"
+                    >
+                      {bankAccounts.map((rek) => (
+                        <option key={rek.kode} value={rek.kode}>
+                          {rek.kode} — {rek.nama} ({formatRupiahSingkat(rek.saldoSaatIni)})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
-                    Rekening Bank EDC / Bank PT Terkait
-                  </label>
-                  <select
-                    value={rekeningBankPokok}
-                    onChange={(e) => setRekeningBankPokok(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-300 bg-white text-zinc-900 font-semibold focus:outline-none focus:border-sky-600"
-                  >
-                    {bankAccounts.map((rek) => (
-                      <option key={rek.kode} value={rek.kode}>
-                        {rek.kode} — {rek.nama} ({formatRupiahSingkat(rek.saldoSaatIni)})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Divisi & Catatan */}
@@ -861,6 +1115,8 @@ export const BrilinkView: React.FC<Props> = ({
                 <span>
                   {submitting
                     ? 'Menyimpan...'
+                    : modeInput === 'TARIK_TUNAI_PENUH'
+                    ? 'Ya, Simpan Jasa Tarik Tunai (KAS01 → BRI)'
                     : isTarikTunai
                     ? 'Ya, Simpan Uang Masuk Adm Tarik Tunai'
                     : 'Ya, Simpan Uang Keluar Adm Tukar Cash'}
@@ -870,9 +1126,14 @@ export const BrilinkView: React.FC<Props> = ({
           ) : (
             <button
               type="submit"
-              disabled={submitting || nominalAdmin <= 0}
+              disabled={
+                submitting ||
+                (modeInput === 'TARIK_TUNAI_PENUH' ? nominalPokok <= 0 : nominalAdmin <= 0)
+              }
               className={`px-5 py-2.5 rounded-lg disabled:bg-zinc-300 text-white font-semibold flex items-center space-x-2 cursor-pointer transition-colors ${
-                isTarikTunai
+                modeInput === 'TARIK_TUNAI_PENUH'
+                  ? 'bg-sky-700 hover:bg-sky-800'
+                  : isTarikTunai
                   ? 'bg-emerald-700 hover:bg-emerald-800'
                   : 'bg-rose-700 hover:bg-rose-800'
               }`}

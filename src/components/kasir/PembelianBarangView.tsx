@@ -23,8 +23,8 @@ import {
   Check,
   Pencil,
 } from 'lucide-react';
-import { Mitra, Produk, Rekening, StokBarang, TransaksiPembelianBarang } from '../../server/types.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { Mitra, Produk, Rekening, StokBarang, TransaksiPembelianBarang, isTanpaDivisi } from '../../server/types.ts';
+import { formatRupiah, dmyToIsoInput, normalizeDateToDmy } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
@@ -103,7 +103,8 @@ export const PembelianBarangView: React.FC<Props> = ({
     dismissedDistributorWarning.length > 0 &&
     dismissedDistributorWarning.toLowerCase() === manualDistributorNama.trim().toLowerCase();
   const [noFakturSupplier, setNoFakturSupplier] = useState<string>('');
-  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'HUTANG'>('TUNAI');
+  const [tanggalInput, setTanggalInput] = useState<string>(dmyToIsoInput());
+  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'HUTANG' | 'SINKRON'>('TUNAI');
   const [rekeningSumber, setRekeningSumber] = useState<string>(
     availableBanks[0]?.kode || 'BNI01'
   );
@@ -563,9 +564,15 @@ export const PembelianBarangView: React.FC<Props> = ({
         idMitra: distributorMode === 'TERDAFTAR' ? selectedSupplierId : undefined,
         namaDistributorManual: distributorMode === 'MANUAL' ? manualDistributorNama.trim() : undefined,
         noFakturSupplier,
+        tanggal: tanggalInput,
         divisi,
         metodePembayaran: metode,
-        rekeningSumber: metode === 'TRANSFER' ? validRekeningTransfer : undefined,
+        rekeningSumber:
+          metode === 'SINKRON'
+            ? 'SINKRON'
+            : metode === 'TRANSFER'
+            ? validRekeningTransfer
+            : undefined,
         fotoNota: fotoNota || undefined,
         isRekapanGlobal: isRekap,
         judulRekapan: isRekap ? (judulRekapan.trim() || `Rekapan Nota Pembelian Supplier (${supplierNameDisplay})`) : undefined,
@@ -586,11 +593,15 @@ export const PembelianBarangView: React.FC<Props> = ({
             : `Pembelian stok barang dari distributor ${supplierNameDisplay} (${itemsToSubmit.length} produk)`),
       });
 
+      const divisiDisplay = isTanpaDivisi(record?.divisi || divisi)
+        ? 'Tanpa Divisi'
+        : record?.divisi || divisi;
+
       const receipt: ReceiptData = {
         title: isRekap ? 'NOTA REKAPAN PEMBELIAN SUPPLIER' : 'NOTA PEMBELIAN DARI DISTRIBUTOR / PEMASOK',
-        subtitle: `Distributor: ${record?.namaMitra || supplierNameDisplay} | Divisi: ${record?.divisi || divisi}`,
+        subtitle: `Distributor: ${record?.namaMitra || supplierNameDisplay} | Divisi: ${divisiDisplay}`,
         nomorTransaksi: record?.noPembelian || `PB-${Date.now().toString().slice(-4)}`,
-        tanggal: record?.tanggal || new Date().toISOString().split('T')[0],
+        tanggal: record?.tanggal || normalizeDateToDmy(tanggalInput),
         jam: record?.jam || '00:00:00',
         mitra: record?.namaMitra || supplierNameDisplay,
         rekening: record?.rekeningSumber,
@@ -605,7 +616,7 @@ export const PembelianBarangView: React.FC<Props> = ({
         })),
         detailRows: [
           { label: 'Distributor / Pemasok', value: `${record?.namaMitra || supplierNameDisplay} ${distributorMode === 'MANUAL' ? '(Non-Tetap)' : '(Terdaftar)'}` },
-          { label: 'Divisi Terkait', value: record?.divisi || divisi },
+          { label: 'Divisi Terkait', value: divisiDisplay },
           { label: 'No Faktur / Surat Jalan', value: record?.noFakturSupplier || '-' },
           { label: 'Tipe Input', value: isRekap ? 'Rekapan Nota Global (Tanpa Stok)' : 'Rincian Produk Satuan (+Stok Gudang & HPP)' },
           { label: 'Lampiran Foto Fisik', value: (record?.fotoNota || fotoNota) ? 'Tersimpan di Sistem' : 'Tidak Ada' },
@@ -932,18 +943,31 @@ export const PembelianBarangView: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* No Faktur Supplier */}
-              <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                  No. Faktur / Surat Jalan / Nota Distributor
-                </label>
-                <input
-                  type="text"
-                  value={noFakturSupplier}
-                  onChange={(e) => setNoFakturSupplier(e.target.value)}
-                  placeholder="Contoh: INV-LPN-8910 / SJ-2026/10"
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:outline-hidden focus:border-amber-500 font-mono"
-                />
+              {/* No Faktur Supplier & Tanggal Pembelian */}
+              <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                    No. Faktur / Surat Jalan / Nota Distributor
+                  </label>
+                  <input
+                    type="text"
+                    value={noFakturSupplier}
+                    onChange={(e) => setNoFakturSupplier(e.target.value)}
+                    placeholder="Contoh: INV-LPN-8910 / SJ-2026/10"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:outline-hidden focus:border-amber-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                    Tanggal Pembelian / Faktur (Fleksibel)
+                  </label>
+                  <input
+                    type="date"
+                    value={tanggalInput}
+                    onChange={(e) => setTanggalInput(e.target.value)}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:outline-hidden focus:border-amber-500 font-mono"
+                  />
+                </div>
               </div>
 
               {/* Insert Image Nota / Faktur */}
@@ -962,7 +986,7 @@ export const PembelianBarangView: React.FC<Props> = ({
               <label className="block text-xs font-medium text-zinc-300 mb-2">
                 Metode Pembayaran Kulakan
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <button
                   type="button"
                   onClick={() => setMetode('TUNAI')}
@@ -1007,6 +1031,19 @@ export const PembelianBarangView: React.FC<Props> = ({
                 >
                   <div className="font-bold">Hutang Usaha</div>
                   <div className="text-[10px] text-zinc-400 mt-0.5">Tempo ke Supplier</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMetode('SINKRON')}
+                  className={`p-2.5 rounded-lg border text-center transition-all text-xs font-semibold cursor-pointer ${
+                    metode === 'SINKRON'
+                      ? 'bg-teal-600/20 border-teal-500 text-teal-300'
+                      : 'bg-zinc-800/80 border-zinc-700 text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  <div className="font-bold">Sinkron (Non-Kas)</div>
+                  <div className="text-[10px] text-zinc-400 mt-0.5">Stok + / Rp 0 Kas</div>
                 </button>
               </div>
 
@@ -1524,6 +1561,8 @@ export const PembelianBarangView: React.FC<Props> = ({
                     ? 'Kas Toko (KAS01)'
                     : metode === 'TRANSFER'
                     ? `Transfer Bank (${rekeningSumber})`
+                    : metode === 'SINKRON'
+                    ? 'Sinkron (Non-Kas / Rp 0 Uang Riil)'
                     : 'Hutang Usaha (TIT01)'}
                 </span>
               </div>
@@ -1578,6 +1617,10 @@ export const PembelianBarangView: React.FC<Props> = ({
                     ? `${manualDistributorNama.trim()} (Manual)`
                     : mitraList.find((m) => m.id === selectedSupplierId)?.nama || '-'}
                 </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Tanggal Pembelian:</span>
+                <span className="font-mono text-zinc-200">{normalizeDateToDmy(tanggalInput)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-400">No Faktur:</span>

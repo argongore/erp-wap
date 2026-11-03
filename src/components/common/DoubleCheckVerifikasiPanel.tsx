@@ -11,7 +11,7 @@ import {
   TrendingDown,
   Boxes,
 } from 'lucide-react';
-import { Rekening } from '../../server/types.ts';
+import { Rekening, TANPA_DIVISI_VALUE, isTanpaDivisi } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 
@@ -42,6 +42,13 @@ export function resolveDivisiAccount(
   divisiName: string,
   rekeningList: Rekening[]
 ): { kode: string; nama: string; saldoSaatIni: number } {
+  if (isTanpaDivisi(divisiName)) {
+    return {
+      kode: 'NON-DIVISI',
+      nama: 'Tanpa Arus Kas Divisi',
+      saldoSaatIni: 0,
+    };
+  }
   const cleanName = String(divisiName || '').trim();
   const norm = cleanName.toLowerCase();
   const mappedKode =
@@ -160,13 +167,16 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
   const [addingDivisi, setAddingDivisi] = useState(false);
   const [extraOptions, setExtraOptions] = useState<string[]>([]);
 
+  const tanpaDivisiActive = isTanpaDivisi(divisi);
+
   const allOptions = useMemo(() => {
     if (lockedDivisi && divisi) return [divisi];
     const set = new Set<string>(divisiOptions);
     for (const ex of extraOptions) {
-      if (ex) set.add(ex);
+      if (ex && !isTanpaDivisi(ex)) set.add(ex);
     }
-    if (divisi) set.add(divisi);
+    if (divisi && !isTanpaDivisi(divisi)) set.add(divisi);
+    set.delete(TANPA_DIVISI_VALUE);
     return Array.from(set);
   }, [divisiOptions, extraOptions, divisi, lockedDivisi]);
 
@@ -191,14 +201,15 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
 
   // Pembelian barang/komoditas untuk dijual kembali adalah MODAL DAGANG (uang berubah menjadi stok berjalan divisi),
   // sehingga tidak mengurangi Nilai Saldo Berjalan Divisi seperti beban pengeluaran murni.
-  const deltaDivisi = isNonTunai
-    ? 0
-    : direction === 'MASUK'
-    ? nominal
-    : isModalPembelian
-    ? 0
-    : -nominal;
-  const estimasiSaldoDivisi = activeDivisiAcc.saldoSaatIni + deltaDivisi;
+  const deltaDivisi =
+    tanpaDivisiActive || isNonTunai
+      ? 0
+      : direction === 'MASUK'
+      ? nominal
+      : isModalPembelian
+      ? 0
+      : -nominal;
+  const estimasiSaldoDivisi = tanpaDivisiActive ? 0 : activeDivisiAcc.saldoSaatIni + deltaDivisi;
 
   const handleCreateNewDivisi = async () => {
     const trimmed = newDivisiName.trim();
@@ -258,7 +269,17 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
         </div>
 
         <div className="flex items-center gap-1.5">
-          {isNonTunai ? (
+          {tanpaDivisiActive ? (
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                isDark
+                  ? 'bg-zinc-800 text-zinc-200 border-zinc-600'
+                  : 'bg-zinc-200 text-zinc-800 border-zinc-400'
+              }`}
+            >
+              Tanpa Arus Kas Divisi
+            </span>
+          ) : isNonTunai ? (
             <span
               className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
                 isDark
@@ -398,6 +419,40 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
             </button>
           );
         })}
+        {!lockedDivisi && (
+          <button
+            type="button"
+            onClick={() => onChangeDivisi(TANPA_DIVISI_VALUE)}
+            className={`text-left p-2 rounded-lg border transition-all cursor-pointer min-w-0 col-span-2 sm:col-span-3 ${
+              tanpaDivisiActive
+                ? isDark
+                  ? 'bg-zinc-800 border-amber-400 text-amber-200 shadow-xs'
+                  : 'bg-zinc-900 text-white border-zinc-900 shadow-xs'
+                : isDark
+                ? 'bg-zinc-950/70 border-dashed border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
+                : 'bg-zinc-50 border-dashed border-zinc-300 text-zinc-700 hover:border-zinc-500'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-bold text-[11px]">
+                ⊘ Tanpa Divisi (Tidak Masuk Arus Kas Divisi Mana Pun)
+              </span>
+              <span
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                  tanpaDivisiActive
+                    ? isDark
+                      ? 'bg-amber-500/20 text-amber-300 font-bold'
+                      : 'bg-white/20 text-amber-200 font-bold'
+                    : isDark
+                    ? 'bg-zinc-900 text-zinc-400'
+                    : 'bg-zinc-200 text-zinc-600'
+                }`}
+              >
+                OPSIONAL NON-DIVISI
+              </span>
+            </div>
+          </button>
+        )}
       </div>
 
       {/* Live Division Balance Mutation Preview */}
@@ -498,7 +553,11 @@ export const ArusKasDivisiSelectorCard: React.FC<ArusKasDivisiSelectorCardProps>
           isDark ? 'text-zinc-400' : 'text-zinc-600'
         }`}
       >
-        {isNonTunai ? (
+        {tanpaDivisiActive ? (
+          <>
+            Opsi <strong>Tanpa Arus Kas Divisi</strong> aktif: transaksi ini <strong>tidak dimasukkan ke buku arus kas maupun laba-rugi divisi mana pun</strong> (hanya mencatat mutasi Kas/Bank PT sesuai metode pembayaran).
+          </>
+        ) : isNonTunai ? (
           <>
             Karena metode <strong>{isBelumPutusHarga ? 'BELUM PUTUS HARGA' : metode}</strong> (non-tunai), nilai saldo divisi <strong>{divisi}</strong> dicatat non-tunai dan disesuaikan otomatis saat penyelesaian kas/transfer.
           </>
@@ -596,18 +655,23 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
   const estimasiSaldoAkhir =
     direction === 'MASUK' ? saldoSaatIni + nominal : saldoSaatIni - nominal;
 
+  const tanpaDivisiActive = isTanpaDivisi(divisi);
+
   const activeDivisiAcc = useMemo(
     () => resolveDivisiAccount(divisi, rekeningList),
     [divisi, rekeningList]
   );
-  const deltaDivisi = isNonTunai
+  const deltaDivisi =
+    tanpaDivisiActive || isNonTunai
+      ? 0
+      : direction === 'MASUK'
+      ? nominal
+      : isModalPembelian
+      ? 0
+      : -nominal;
+  const estimasiSaldoDivisiAkhir = tanpaDivisiActive
     ? 0
-    : direction === 'MASUK'
-    ? nominal
-    : isModalPembelian
-    ? 0
-    : -nominal;
-  const estimasiSaldoDivisiAkhir = activeDivisiAcc.saldoSaatIni + deltaDivisi;
+    : activeDivisiAcc.saldoSaatIni + deltaDivisi;
 
   const isAnakPerusahaan = Boolean(
     activeRealAccount?.isAnakPerusahaan ||
@@ -621,7 +685,7 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
   const nonTunaiLabel = useMemo(() => {
     if (isBelumPutusHarga) return 'TIT01 — Titip Timbang (Belum Putus Harga · Rp 0 Uang Keluar)';
     if (metode === 'SINKRON') {
-      return 'SINKRON — Terhitung LUNAS Tanpa Uang Fisik Masuk (Rp 0 Kas/Bank)';
+      return 'SINKRON — Terhitung SAH / LUNAS Tanpa Menggerakkan Uang Riil (Rp 0 Kas/Bank)';
     }
     if (metode === 'PEMAKAIAN_PENGELUARAN') {
       return 'PEMAKAIAN KE PENGELUARAN — Potong Stok & Otomatis Catat Pengeluaran (Rp 0 Kas)';
@@ -643,7 +707,7 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
 
   const ringkasanRekeningText = isNonTunai
     ? metode === 'SINKRON'
-      ? 'SINKRON (Lunas Rp 0 Kas)'
+      ? 'SINKRON (Sah/Lunas Rp 0 Uang Riil)'
       : metode === 'PEMAKAIAN_PENGELUARAN'
       ? 'STOK -> PENGELUARAN (Rp 0 Kas)'
       : 'Non-Tunai (Rp 0 Uang Riil)'
@@ -665,7 +729,8 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
 
   const mergedDivisiOptions = useMemo(() => {
     const s = new Set<string>(divisiOptions);
-    if (divisi) s.add(divisi);
+    if (divisi && !isTanpaDivisi(divisi)) s.add(divisi);
+    s.delete(TANPA_DIVISI_VALUE);
     return Array.from(s);
   }, [divisiOptions, divisi]);
 
@@ -902,7 +967,7 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
         </div>
 
         <select
-          value={divisi}
+          value={tanpaDivisiActive ? TANPA_DIVISI_VALUE : divisi}
           disabled={lockedDivisi}
           onChange={(e) => {
             if (lockedDivisi) return;
@@ -911,6 +976,11 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
           }}
           className={`${selectCls} ${lockedDivisi ? 'opacity-90 cursor-not-allowed' : ''}`}
         >
+          {!lockedDivisi && (
+            <option value={TANPA_DIVISI_VALUE}>
+              ⊘ Tanpa Divisi (Tidak Masuk Arus Kas Divisi Mana Pun)
+            </option>
+          )}
           {(lockedDivisi ? [divisi] : mergedDivisiOptions).map((d) => {
             const dAcc = resolveDivisiAccount(d, rekeningList);
             return (
@@ -932,12 +1002,12 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
               Saldo Divisi Saat Ini
             </div>
             <div className={`font-semibold ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
-              {formatRupiah(activeDivisiAcc.saldoSaatIni)}
+              {tanpaDivisiActive ? 'Rp 0 (Non-Divisi)' : formatRupiah(activeDivisiAcc.saldoSaatIni)}
             </div>
           </div>
           <div>
             <div className={`text-[10px] font-sans ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-              {isNonTunai
+              {tanpaDivisiActive || isNonTunai
                 ? 'Mutasi Arus Kas'
                 : direction === 'MASUK'
                 ? 'Arus Masuk Divisi (+)'
@@ -947,7 +1017,7 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
             </div>
             <div
               className={`font-bold ${
-                isNonTunai
+                tanpaDivisiActive || isNonTunai
                   ? isDark
                     ? 'text-amber-400'
                     : 'text-amber-700'
@@ -964,7 +1034,7 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
                   : 'text-rose-700'
               }`}
             >
-              {isNonTunai
+              {tanpaDivisiActive || isNonTunai
                 ? 'Rp 0'
                 : isModalPembelian
                 ? formatRupiah(nominal)
@@ -986,13 +1056,15 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
                   : 'text-emerald-800'
               }`}
             >
-              {formatRupiah(estimasiSaldoDivisiAkhir)}
+              {tanpaDivisiActive ? 'Rp 0 (Non-Divisi)' : formatRupiah(estimasiSaldoDivisiAkhir)}
             </div>
           </div>
         </div>
 
         <p className={`text-[10px] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-          {isNonTunai
+          {tanpaDivisiActive
+            ? 'Transaksi ini TIDAK dimasukkan ke buku arus kas maupun laba-rugi divisi mana pun.'
+            : isNonTunai
             ? `Dicatat pada Divisi ${divisi} (${activeDivisiAcc.kode}). Nilai saldo berjalan divisi menyesuaikan otomatis saat penyelesaian kas/transfer.`
             : direction === 'MASUK'
             ? `Otomatis menambah nilai saldo Divisi ${divisi} (${activeDivisiAcc.kode}) sebesar +${formatRupiah(nominal)}.`
@@ -1028,7 +1100,7 @@ export const DoubleCheckVerifikasiPanel: React.FC<DoubleCheckVerifikasiPanelProp
           </strong>{' '}
           &amp; Arus Kas Divisi{' '}
           <strong className={isDark ? 'text-sky-300' : 'text-sky-900'}>
-            {divisi} ({activeDivisiAcc.kode})
+            {tanpaDivisiActive ? 'Tanpa Divisi (Non-Divisi)' : `${divisi} (${activeDivisiAcc.kode})`}
           </strong>{' '}
           sudah sesuai.
         </span>

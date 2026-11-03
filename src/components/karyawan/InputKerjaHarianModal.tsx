@@ -18,7 +18,14 @@ import {
   Info,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
-import { DAFTAR_DIVISI, NamaDivisi, Rekening, RekapKaryawanItem } from '../../server/types.ts';
+import {
+  DAFTAR_DIVISI,
+  NamaDivisi,
+  Rekening,
+  RekapKaryawanItem,
+  TANPA_DIVISI_VALUE,
+  isTanpaDivisi,
+} from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 
 interface InputKerjaHarianModalProps {
@@ -61,7 +68,7 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
     initialSelected?.id || activeKaryawanList[0]?.id || ''
   );
   const [tanggalKerja, setTanggalKerja] = useState<string>(todayStr);
-  const [divisi, setDivisi] = useState<NamaDivisi>(
+  const [divisi, setDivisi] = useState<NamaDivisi | string>(
     initialSelected?.divisiTerakhir || 'Gudang Wijaya Agro'
   );
   const [tugasPekerjaan, setTugasPekerjaan] = useState<string>('');
@@ -143,6 +150,8 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
         uangMakanLembur,
         modeBayar,
         rekeningSumber: modeBayar === 'LANGSUNG_CAIR' ? rekeningSumber : undefined,
+        metodePembayaran:
+          modeBayar === 'LANGSUNG_CAIR' && rekeningSumber === 'SINKRON' ? 'SINKRON' : undefined,
         persentasePotongKasbon: modeBayar === 'LANGSUNG_CAIR' ? persentasePotongKasbon : 0,
       });
 
@@ -265,7 +274,7 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
                     type="button"
                     onClick={() => {
                       setDivisi(d.nama);
-                      setRekeningSumber(d.kodeRekening);
+                      if (rekeningSumber !== 'SINKRON') setRekeningSumber(d.kodeRekening);
                     }}
                     className={`p-2.5 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
                       isSelected
@@ -281,6 +290,24 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={() => {
+                  setDivisi(TANPA_DIVISI_VALUE);
+                  if (rekeningSumber !== 'SINKRON') setRekeningSumber('KAS01');
+                }}
+                className={`p-2.5 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
+                  isTanpaDivisi(divisi)
+                    ? 'bg-zinc-100 border-zinc-700 text-zinc-900 shadow-2xs font-bold'
+                    : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+                }`}
+              >
+                <Layers className={`w-4 h-4 shrink-0 mt-0.5 ${isTanpaDivisi(divisi) ? 'text-zinc-800' : 'text-zinc-500'}`} />
+                <div className="truncate">
+                  <div className="text-xs truncate">⊘ Tanpa Divisi</div>
+                  <div className="text-[9px] font-mono opacity-70">Non-Divisi</div>
+                </div>
+              </button>
             </div>
           </div>
 
@@ -439,6 +466,9 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
                         {r.nama} ({r.kode}) - Saldo: {formatRupiah(r.saldoSaatIni)}
                       </option>
                     ))}
+                    <option value="SINKRON">
+                      Rekening SINKRON — Non-Kas (Rp 0 Uang Riil)
+                    </option>
                   </select>
                 </div>
 

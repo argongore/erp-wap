@@ -18,7 +18,13 @@ import {
   Pencil,
 } from 'lucide-react';
 import { Mitra, Rekening, TransaksiKasbonUang } from '../../server/types.ts';
-import { formatRupiah, formatTanggalIndo, getWIBTodayString } from '../../utils/format.ts';
+import {
+  formatRupiah,
+  formatTanggalIndo,
+  getWIBTodayString,
+  dmyToIsoInput,
+  normalizeDateToDmy,
+} from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
@@ -56,9 +62,10 @@ export const KasbonUangView: React.FC<Props> = ({
   const [modalBersihkanNotaOpen, setModalBersihkanNotaOpen] = useState(false);
 
   // State: Kasbon Uang Baru
-  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
+  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
   const [rekeningSumber, setRekeningSumber] = useState<string>('BNI01');
   const [nominalInput, setNominalInput] = useState<string>('');
+  const [tanggalKasbon, setTanggalKasbon] = useState<string>(dmyToIsoInput());
   const [keterangan, setKeterangan] = useState<string>('');
   const [fotoKasbonBaru, setFotoKasbonBaru] = useState<string>('');
 
@@ -68,7 +75,7 @@ export const KasbonUangView: React.FC<Props> = ({
   );
   const [nominalNotaLaluInput, setNominalNotaLaluInput] = useState<string>('');
   const [noNotaLalu, setNoNotaLalu] = useState<string>('');
-  const [tanggalNotaLalu, setTanggalNotaLalu] = useState<string>(getWIBTodayString());
+  const [tanggalNotaLalu, setTanggalNotaLalu] = useState<string>(dmyToIsoInput());
   const [rincianBarangNotaLalu, setRincianBarangNotaLalu] = useState<string>('');
   const [keteranganNotaLalu, setKeteranganNotaLalu] = useState<string>('');
   const [fotoNotaLalu, setFotoNotaLalu] = useState<string>('');
@@ -102,18 +109,25 @@ export const KasbonUangView: React.FC<Props> = ({
 
   // Check live balance of chosen source account for Kasbon Baru
   const activeSourceAccount =
-    metode === 'TUNAI' ? kas01 : availableBanks.find((b) => b.kode === rekeningSumber);
+    metode === 'SINKRON'
+      ? undefined
+      : metode === 'TUNAI'
+      ? kas01
+      : availableBanks.find((b) => b.kode === rekeningSumber);
   const isSourceAnakPerusahaan = Boolean(
     activeSourceAccount &&
       (activeSourceAccount.isAnakPerusahaan ||
         activeSourceAccount.kategori === 'ANAK_PERUSAHAAN' ||
         activeSourceAccount.kode === 'REK-DPPARABO')
   );
-  const isBalanceSufficient = activeSourceAccount
-    ? isSourceAnakPerusahaan
+  const isBalanceSufficient =
+    metode === 'SINKRON'
       ? true
-      : activeSourceAccount.saldoSaatIni >= nominal
-    : false;
+      : activeSourceAccount
+      ? isSourceAnakPerusahaan
+        ? true
+        : activeSourceAccount.saldoSaatIni >= nominal
+      : false;
 
   // Process standard Kasbon Uang Baru
   const handleProcessSubmitKasbonBaru = async () => {
@@ -123,18 +137,20 @@ export const KasbonUangView: React.FC<Props> = ({
       return;
     }
 
-    if (!activeSourceAccount) {
-      setErrorMsg('Rekening sumber pengeluaran tidak valid');
-      return;
-    }
+    if (metode !== 'SINKRON') {
+      if (!activeSourceAccount) {
+        setErrorMsg('Rekening sumber pengeluaran tidak valid');
+        return;
+      }
 
-    if (!isSourceAnakPerusahaan && activeSourceAccount.saldoSaatIni < nominal) {
-      setErrorMsg(
-        `Saldo ${activeSourceAccount.nama} (${activeSourceAccount.kode}) tidak mencukupi! Saldo: ${formatRupiah(
-          activeSourceAccount.saldoSaatIni
-        )}, Nominal: ${formatRupiah(nominal)}`
-      );
-      return;
+      if (!isSourceAnakPerusahaan && activeSourceAccount.saldoSaatIni < nominal) {
+        setErrorMsg(
+          `Saldo ${activeSourceAccount.nama} (${activeSourceAccount.kode}) tidak mencukupi! Saldo: ${formatRupiah(
+            activeSourceAccount.saldoSaatIni
+          )}, Nominal: ${formatRupiah(nominal)}`
+        );
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -142,8 +158,14 @@ export const KasbonUangView: React.FC<Props> = ({
       const result: TransaksiKasbonUang = await api.processKasbonUang({
         idMitra: selectedMitraId,
         metode,
-        rekeningSumber: metode === 'TRANSFER' ? rekeningSumber : undefined,
+        rekeningSumber:
+          metode === 'SINKRON'
+            ? 'SINKRON'
+            : metode === 'TRANSFER'
+            ? rekeningSumber
+            : undefined,
         nominal,
+        tanggal: tanggalKasbon,
         keterangan,
         fotoNota: fotoKasbonBaru || undefined,
       });
@@ -155,17 +177,23 @@ export const KasbonUangView: React.FC<Props> = ({
         title: 'BUKTI PENGELUARAN KASBON UANG',
         subtitle: 'Pemberian Pinjaman Dana Tunai / Kasbon ke Mitra',
         nomorTransaksi: result?.idTransaksi || `KBU-${Date.now().toString().slice(-4)}`,
-        tanggal: result?.tanggal || getWIBTodayString(),
+        tanggal: result?.tanggal || normalizeDateToDmy(tanggalKasbon),
         jam: result?.jam || '00:00:00',
         mitra: result?.namaMitra || 'Mitra',
-        rekening: result?.rekeningSumber || rekeningSumber,
+        rekening: result?.rekeningSumber || (metode === 'SINKRON' ? 'SINKRON' : rekeningSumber),
         kategori: 'KASBON_UANG',
         fotoNota: result?.fotoNota || fotoKasbonBaru || undefined,
         detailRows: [
           { label: 'Penerima Kasbon', value: result?.namaMitra || 'Mitra' },
           { label: 'Jenis Transaksi', value: 'KASBON UANG' },
           { label: 'Metode Pengeluaran', value: result?.metode || metode },
-          { label: 'Rekening Sumber Dana', value: `${result?.rekeningSumber || rekeningSumber} (${activeSourceAccount?.nama || ''})` },
+          {
+            label: 'Rekening Sumber Dana',
+            value:
+              metode === 'SINKRON'
+                ? 'SINKRON (Non-Kas / Rp 0 Uang Keluar)'
+                : `${result?.rekeningSumber || rekeningSumber} (${activeSourceAccount?.nama || ''})`,
+          },
           { label: 'Status Pinjaman', value: result?.status || 'BELUM_LUNAS', highlight: true },
           { label: 'Lampiran Foto Nota', value: (result?.fotoNota || fotoKasbonBaru) ? '✅ Tersimpan' : 'Tidak Ada' },
           { label: 'Nominal Kasbon Uang', value: result?.nominal ?? nominal, isTotal: true },
@@ -211,11 +239,12 @@ export const KasbonUangView: React.FC<Props> = ({
           : `Nota Lalu (Titipan Uang / Hasil Panen): ${rincianBarangNotaLalu ? rincianBarangNotaLalu.trim() : 'Saldo Titip Panen Belum Diambil'}`;
 
       const isNgunciEffective = subTipeNotaLalu === 'PIUTANG_BARANG_NOTA_LALU' && isNotaNgunci;
+      const formattedTglNotaLalu = normalizeDateToDmy(tanggalNotaLalu);
       const res = await api.processInputNotaLalu({
         idMitra: selectedMitraId,
         tipe: subTipeNotaLalu,
         nominal: nominalNotaLalu,
-        tanggalNotaLalu: tanggalNotaLalu || getWIBTodayString(),
+        tanggalNotaLalu: formattedTglNotaLalu,
         noNotaLalu: cleanNoNota,
         rincianBarang: rincianBarangNotaLalu.trim() || undefined,
         fotoNota: fotoNotaLalu || undefined,
@@ -239,7 +268,7 @@ export const KasbonUangView: React.FC<Props> = ({
             : 'BUKTI PENCATATAN NOTA LALU (TITIP UANG / PANEN)',
         subtitle: 'Pencatatan Dokumen Fisik Manual Masa Lalu Sebagai Saldo Awal Sistem',
         nomorTransaksi: res?.record?.idTransaksi || res?.record?.noPembelian || cleanNoNota,
-        tanggal: res?.record?.tanggalNotaLalu || res?.record?.tanggal || getWIBTodayString(),
+        tanggal: res?.record?.tanggalNotaLalu || res?.record?.tanggal || formattedTglNotaLalu,
         jam: res?.record?.jam || '00:00:00',
         mitra: res?.mitraNama || 'Mitra',
         rekening: subTipeNotaLalu === 'PIUTANG_BARANG_NOTA_LALU' ? 'BON01 (Virtual Piutang)' : 'TIT01 (Virtual Titip)',
@@ -248,7 +277,7 @@ export const KasbonUangView: React.FC<Props> = ({
         detailRows: [
           { label: 'Pihak Mitra / Anak Buah', value: res?.mitraNama || 'Mitra' },
           { label: 'No. Dokumen / Nota Manual', value: cleanNoNota },
-          { label: 'Tanggal Nota Fisik', value: tanggalNotaLalu },
+          { label: 'Tanggal Nota Fisik', value: formattedTglNotaLalu },
           {
             label: 'Tipe Konversi',
             value:
@@ -480,22 +509,35 @@ export const KasbonUangView: React.FC<Props> = ({
                 </select>
               </div>
 
-              {/* Nominal */}
-              <div>
-                <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
-                  Nominal Uang Diberikan (Rp) <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  step="any"
-                  required
-                  placeholder="Masukkan nominal rupiah..."
-                  value={nominalInput}
-                  onChange={(e) => setNominalInput(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-zinc-300 rounded-lg text-sm font-mono font-bold focus:ring-1 focus:ring-rose-600"
-                />
-                <div className="text-xs font-semibold text-rose-700 mt-1">{formatRupiah(nominal)}</div>
+              {/* Nominal & Tanggal Kasbon */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                    Nominal Uang Diberikan (Rp) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    required
+                    placeholder="Masukkan nominal rupiah..."
+                    value={nominalInput}
+                    onChange={(e) => setNominalInput(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-zinc-300 rounded-lg text-sm font-mono font-bold focus:ring-1 focus:ring-rose-600"
+                  />
+                  <div className="text-xs font-semibold text-rose-700 mt-1">{formatRupiah(nominal)}</div>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                    Tanggal Kasbon (Fleksibel)
+                  </label>
+                  <input
+                    type="date"
+                    value={tanggalKasbon}
+                    onChange={(e) => setTanggalKasbon(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-zinc-300 rounded-lg text-xs font-mono font-semibold focus:ring-1 focus:ring-rose-600"
+                  />
+                </div>
               </div>
 
               {/* Metode */}
@@ -503,7 +545,7 @@ export const KasbonUangView: React.FC<Props> = ({
                 <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
                   Metode Penyerahan Uang <span className="text-rose-500">*</span>
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setMetode('TUNAI')}
@@ -513,7 +555,7 @@ export const KasbonUangView: React.FC<Props> = ({
                         : 'bg-zinc-50 text-zinc-700 border-zinc-300 hover:bg-zinc-100'
                     }`}
                   >
-                    Tunai (Auto KAS01)
+                    Tunai (KAS01)
                   </button>
                   <button
                     type="button"
@@ -524,13 +566,34 @@ export const KasbonUangView: React.FC<Props> = ({
                         : 'bg-zinc-50 text-zinc-700 border-zinc-300 hover:bg-zinc-100'
                     }`}
                   >
-                    Transfer Bank Perusahaan
+                    Transfer Bank
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMetode('SINKRON')}
+                    className={`py-2 px-3 text-center rounded-lg font-semibold text-xs border transition-all cursor-pointer ${
+                      metode === 'SINKRON'
+                        ? 'bg-cyan-700 text-white border-cyan-700 shadow-xs'
+                        : 'bg-cyan-50 text-cyan-900 border-cyan-300 hover:bg-cyan-100'
+                    }`}
+                  >
+                    Sinkron (Non-Kas)
                   </button>
                 </div>
               </div>
 
               {/* Account Details based on Method */}
-              {metode === 'TUNAI' ? (
+              {metode === 'SINKRON' ? (
+                <div className="p-3 bg-cyan-50/80 rounded-lg border border-cyan-200 text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-cyan-900">Rekening Kliring Sistem:</span>
+                    <span className="font-mono font-bold text-cyan-950">SINKRON (Non-Kas)</span>
+                  </div>
+                  <div className="text-[11px] text-cyan-800">
+                    Kasbon dicatat sebagai piutang aktif (BON01) tanpa mengurangi saldo kas/bank fisik perusahaan.
+                  </div>
+                </div>
+              ) : metode === 'TUNAI' ? (
                 <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 text-xs space-y-1.5">
                   <div className="flex justify-between">
                     <span className="text-zinc-600">Rekening Sumber Otomatis:</span>
@@ -720,11 +783,10 @@ export const KasbonUangView: React.FC<Props> = ({
 
                 <div>
                   <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
-                    Tanggal Nota (Bisa Mundur)
+                    Tanggal Nota (Fleksibel / Bisa Mundur)
                   </label>
                   <input
-                    type="text"
-                    placeholder="DD/MM/YYYY misal 10/05/2023"
+                    type="date"
                     value={tanggalNotaLalu}
                     onChange={(e) => setTanggalNotaLalu(e.target.value)}
                     className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-mono focus:ring-1 focus:ring-amber-600"
@@ -1077,31 +1139,43 @@ export const KasbonUangView: React.FC<Props> = ({
             <div className="p-5 space-y-3.5 text-xs text-zinc-700">
               <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1.5">
                 <div className="flex justify-between">
+                  <span className="text-zinc-500">Tanggal Kasbon:</span>
+                  <span className="font-mono font-bold text-zinc-900">
+                    {normalizeDateToDmy(tanggalKasbon)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
                   <span className="text-zinc-500">Mitra Penerima:</span>
                   <span className="font-bold text-zinc-900">{selectedMitra?.nama}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Rekening Sumber Kas:</span>
                   <span className="font-mono font-bold text-zinc-900">
-                    {activeSourceAccount?.nama} ({activeSourceAccount?.kode})
+                    {metode === 'SINKRON'
+                      ? 'SINKRON (Non-Kas / Rp 0 Uang Keluar)'
+                      : `${activeSourceAccount?.nama} (${activeSourceAccount?.kode})`}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Saldo Sumber Saat Ini:</span>
-                  <span className="font-semibold text-zinc-700">
-                    {formatRupiah(activeSourceAccount?.saldoSaatIni || 0)}
-                  </span>
-                </div>
+                {metode !== 'SINKRON' && (
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Saldo Sumber Saat Ini:</span>
+                    <span className="font-semibold text-zinc-700">
+                      {formatRupiah(activeSourceAccount?.saldoSaatIni || 0)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between pt-1 border-t border-zinc-200">
                   <span className="text-zinc-500 font-bold">Nominal Kasbon:</span>
                   <span className="font-bold text-sm text-rose-700">{formatRupiah(nominal)}</span>
                 </div>
-                <div className="flex justify-between text-[11px] text-zinc-500">
-                  <span>Estimasi Saldo Sumber Setelahnya:</span>
-                  <span className="font-mono font-semibold">
-                    {formatRupiah((activeSourceAccount?.saldoSaatIni || 0) - nominal)}
-                  </span>
-                </div>
+                {metode !== 'SINKRON' && (
+                  <div className="flex justify-between text-[11px] text-zinc-500">
+                    <span>Estimasi Saldo Sumber Setelahnya:</span>
+                    <span className="font-mono font-semibold">
+                      {formatRupiah((activeSourceAccount?.saldoSaatIni || 0) - nominal)}
+                    </span>
+                  </div>
+                )}
                 {fotoKasbonBaru && (
                   <div className="text-[11px] text-emerald-700 font-semibold pt-1 border-t border-zinc-200">
                     ✅ Lampiran foto fisik kuitansi kasbon siap disimpan

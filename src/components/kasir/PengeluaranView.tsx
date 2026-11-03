@@ -30,8 +30,15 @@ import {
   KelompokItemPengeluaran,
   resolveKelompokItemPengeluaran,
   getNomorUrutItemPengeluaran,
+  TANPA_DIVISI_VALUE,
+  isTanpaDivisi,
 } from '../../server/types.ts';
-import { formatRupiah, formatRupiahSingkat, getWIBTodayString } from '../../utils/format.ts';
+import {
+  dmyToIsoInput,
+  formatRupiah,
+  formatRupiahSingkat,
+  getWIBTodayString,
+} from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { FotoNotaPreviewModal } from '../common/FotoNotaPreviewModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
@@ -69,6 +76,19 @@ interface RecapRowItem {
   satuanDefault?: string;
   netNominal: number;
   count: number;
+  linkedInventarisId?: string;
+  linkedMasterId?: string;
+  nomorPlat?: string;
+  divisiUnit?: string;
+}
+
+function getInventarisDisplayLabel(unit: ItemInventaris): string {
+  const rawNama = String(unit.namaItem || '').trim().toUpperCase();
+  const rawPlat = String(unit.nomorPlat || '').trim().toUpperCase();
+  if (rawPlat && rawPlat !== '-' && !rawNama.includes(rawPlat)) {
+    return `${rawNama} (${rawPlat})`;
+  }
+  return rawNama || rawPlat || unit.kode;
 }
 
 function normalizeCompact(str: string): string {
@@ -112,15 +132,19 @@ export const PengeluaranView: React.FC<Props> = ({
 
   const allDivisiList = useMemo(() => {
     const set = new Set<string>(DEFAULT_DIVISI);
-    customDivisi.forEach((d) => set.add(d));
-    list.forEach((item) => {
-      if (item.divisi) set.add(item.divisi);
+    customDivisi.forEach((d) => {
+      if (d && !isTanpaDivisi(d)) set.add(d);
     });
+    list.forEach((item) => {
+      if (item.divisi && !isTanpaDivisi(item.divisi)) set.add(item.divisi);
+    });
+    set.delete(TANPA_DIVISI_VALUE);
     return Array.from(set);
   }, [customDivisi, list]);
 
-  // Master 24 Item Pengeluaran (+ item tambahan jika ada)
+  // Master Item Pengeluaran (tersinkronisasi dengan Cloud Supabase)
   const [masterItems, setMasterItems] = useState<MasterItemPengeluaran[]>([]);
+  const [hasLoadedMaster, setHasLoadedMaster] = useState<boolean>(false);
   const [showAddMasterItemModal, setShowAddMasterItemModal] = useState<boolean>(false);
   const [newMasterItemName, setNewMasterItemName] = useState<string>('');
   const [newMasterItemKelompok, setNewMasterItemKelompok] =
@@ -129,6 +153,15 @@ export const PengeluaranView: React.FC<Props> = ({
   const [newMasterItemKet, setNewMasterItemKet] = useState<string>('');
   const [savingMasterItem, setSavingMasterItem] = useState<boolean>(false);
 
+  // Inline konfirmasi hapus item pengeluaran (Hijau / Oranye) tanpa window.confirm
+  const [confirmDeleteItem, setConfirmDeleteItem] = useState<{
+    kelompok: KelompokItemPengeluaran;
+    nama: string;
+    linkedInventarisId?: string;
+    linkedMasterId?: string;
+  } | null>(null);
+  const [deletingMasterItem, setDeletingMasterItem] = useState<boolean>(false);
+
   // Filter states
   const [filterKategoriItem, setFilterKategoriItem] = useState<string>('ALL');
   const [filterKelompok, setFilterKelompok] = useState<'ALL' | KelompokItemPengeluaran>('ALL');
@@ -136,9 +169,9 @@ export const PengeluaranView: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // ============================================================================
-  // FORM 1 (WARNA HIJAU): PENGELUARAN UNTUK INVENTARIS (ITEM 1 - 16)
+  // FORM 1 (WARNA HIJAU): PENGELUARAN UNTUK INVENTARIS (DARI DATA INVENTARIS)
   // ============================================================================
-  const [invKategori, setInvKategori] = useState<string>('L300');
+  const [invKategori, setInvKategori] = useState<string>('');
   const [invDivisi, setInvDivisi] = useState<string>('Wijaya Transport');
   const [invArahMutasi, setInvArahMutasi] = useState<'TAMBAH' | 'KURANG'>('TAMBAH');
   const [invQty, setInvQty] = useState<string>('');
@@ -149,11 +182,11 @@ export const PengeluaranView: React.FC<Props> = ({
   const [invRekeningSumber, setInvRekeningSumber] = useState<string>('KAS01');
   const [invSelectedUnitId, setInvSelectedUnitId] = useState<string>('');
   const [invPenerimaManual, setInvPenerimaManual] = useState<string>('');
-  const [invTanggal, setInvTanggal] = useState<string>(getWIBTodayString());
+  const [invTanggal, setInvTanggal] = useState<string>(() => dmyToIsoInput(getWIBTodayString()));
   const [invFotoKuitansi, setInvFotoKuitansi] = useState<string>('');
 
   // ============================================================================
-  // FORM 2 (WARNA ORANYE): PENGELUARAN BIASA / HARIAN (ITEM 17 - 24)
+  // FORM 2 (WARNA ORANYE): PENGELUARAN BIASA / HARIAN
   // ============================================================================
   const [biasaKategori, setBiasaKategori] = useState<string>('SOLAR');
   const [biasaDivisi, setBiasaDivisi] = useState<string>('Gudang Wijaya Agro');
@@ -165,7 +198,7 @@ export const PengeluaranView: React.FC<Props> = ({
   const [biasaKeterangan, setBiasaKeterangan] = useState<string>('');
   const [biasaRekeningSumber, setBiasaRekeningSumber] = useState<string>('KAS01');
   const [biasaPenerima, setBiasaPenerima] = useState<string>('');
-  const [biasaTanggal, setBiasaTanggal] = useState<string>(getWIBTodayString());
+  const [biasaTanggal, setBiasaTanggal] = useState<string>(() => dmyToIsoInput(getWIBTodayString()));
   const [biasaFotoKuitansi, setBiasaFotoKuitansi] = useState<string>('');
 
   // Quick Add Inventaris Modal inside Pengeluaran
@@ -229,22 +262,8 @@ export const PengeluaranView: React.FC<Props> = ({
       const target = mergedInventarisList.find((i) => i.id === preselectedInventarisId);
       if (target) {
         setInvSelectedUnitId(target.id);
+        setInvKategori(getInventarisDisplayLabel(target));
         if (target.divisi) setInvDivisi(target.divisi);
-        // Match canonical 1-16 item if possible
-        const platNorm = normalizeCompact(target.nomorPlat || '');
-        const namaNorm = normalizeCompact(target.namaItem || '');
-        const matchedDef = DAFTAR_24_ITEM_PENGELUARAN.filter(
-          (d) => d.kelompok === 'INVENTARIS'
-        ).find((d) => {
-          const dn = normalizeCompact(d.nama);
-          return (
-            (platNorm && (dn === platNorm || platNorm.includes(dn))) ||
-            (namaNorm && (dn === namaNorm || namaNorm.includes(dn)))
-          );
-        });
-        if (matchedDef) {
-          setInvKategori(matchedDef.nama);
-        }
         onClearPreselectedInventaris?.();
       }
     }
@@ -253,17 +272,24 @@ export const PengeluaranView: React.FC<Props> = ({
   const loadData = async (silent = false) => {
     if (!silent && list.length === 0) setLoading(true);
     try {
-      const [data, divList, masterList] = await Promise.all([
+      const [data, divList, masterList, freshInv] = await Promise.all([
         api.getPengeluaran(),
         api.getDivisi().catch(() => []),
-        api.getMasterItemPengeluaran().catch(() => []),
+        api.getMasterItemPengeluaran().catch(() => null),
+        api.getInventaris().catch(() => null),
       ]);
       setList(data || []);
       if (Array.isArray(masterList)) {
         setMasterItems(masterList);
+        setHasLoadedMaster(true);
+      }
+      if (Array.isArray(freshInv)) {
+        setLocalInventaris(freshInv);
       }
       if (Array.isArray(divList) && divList.length > 0) {
-        const customNames = divList.filter((d: any) => d.isCustom).map((d: any) => d.nama);
+        const customNames = divList
+          .filter((d: any) => d.isCustom && !isTanpaDivisi(d.nama))
+          .map((d: any) => d.nama);
         if (customNames.length > 0) {
           setCustomDivisi((prev) => Array.from(new Set([...prev, ...customNames])));
         }
@@ -282,65 +308,127 @@ export const PengeluaranView: React.FC<Props> = ({
     return () => window.removeEventListener('erp:data-updated', onErpUpdated);
   }, []);
 
-  // Build ordered 24 Canonical Items + any custom MasterItems / Historical Categories
+  // Build Daftar Item Pengeluaran:
+  // - HIJAU (INVENTARIS): Diambil langsung dari Sub-Menu Data Inventaris (mergedInventarisList) + item tambahan INVENTARIS yang dibuat user
+  // - ORANYE (BIASA): Diambil dari Master Item Pengeluaran aktif (bisa ditambah & dihapus/dikurangi)
   const recapRows = useMemo<RecapRowItem[]>(() => {
-    const mapByUpper = new Map<string, RecapRowItem>();
+    const rows: RecapRowItem[] = [];
+    let runningNo = 1;
 
-    // 1. Seed exact 24 canonical items first (No 1..16 HIJAU INVENTARIS, No 17..24 ORANYE BIASA)
-    for (const def of DAFTAR_24_ITEM_PENGELUARAN) {
-      mapByUpper.set(def.nama.toUpperCase(), {
-        nomorUrut: def.nomorUrut,
-        nama: def.nama,
-        kelompok: def.kelompok,
-        satuanDefault: def.satuanDefault,
+    // 1. HIJAU: Semua unit aktif dari Sub-Menu Data Inventaris
+    const usedInventarisCompact = new Set<string>();
+    for (const unit of mergedInventarisList) {
+      const label = getInventarisDisplayLabel(unit);
+      const compactLabel = normalizeCompact(label);
+      if (compactLabel) usedInventarisCompact.add(compactLabel);
+      if (unit.namaItem) usedInventarisCompact.add(normalizeCompact(unit.namaItem));
+      if (unit.nomorPlat && unit.nomorPlat !== '-') {
+        usedInventarisCompact.add(normalizeCompact(unit.nomorPlat));
+      }
+      rows.push({
+        nomorUrut: runningNo++,
+        nama: label,
+        kelompok: 'INVENTARIS',
+        satuanDefault: 'PCS',
         netNominal: 0,
         count: 0,
+        linkedInventarisId: unit.id,
+        nomorPlat: unit.nomorPlat,
+        divisiUnit: unit.divisi,
       });
     }
 
-    // 2. Merge custom MasterItemPengeluaran if any beyond the 24
-    let extraOrder = 25;
-    for (const m of masterItems) {
-      const key = (m.nama || '').trim().toUpperCase();
-      if (!key) continue;
-      if (!mapByUpper.has(key)) {
-        mapByUpper.set(key, {
-          nomorUrut: m.nomorUrut || extraOrder++,
-          nama: m.nama.trim().toUpperCase(),
-          kelompok: m.kelompok || resolveKelompokItemPengeluaran(m.nama),
-          satuanDefault: m.satuanDefault,
-          netNominal: 0,
-          count: 0,
-        });
-      }
+    // Tambahan item custom INVENTARIS dari masterItems (apabila user menambah item Hijau non-kendaraan)
+    const customGreenMasters = masterItems.filter((m) => {
+      const kel = m.kelompok || resolveKelompokItemPengeluaran(m.nama);
+      if (kel !== 'INVENTARIS') return false;
+      // Hanya masukkan jika bukan duplikat unit Data Inventaris (atau jika Data Inventaris masih kosong)
+      if (mergedInventarisList.length > 0 && m.isSystemDefault) return false;
+      const c = normalizeCompact(m.nama);
+      return c.length > 0 && !usedInventarisCompact.has(c);
+    });
+
+    for (const m of customGreenMasters) {
+      const c = normalizeCompact(m.nama);
+      usedInventarisCompact.add(c);
+      rows.push({
+        nomorUrut: runningNo++,
+        nama: m.nama.trim().toUpperCase(),
+        kelompok: 'INVENTARIS',
+        satuanDefault: m.satuanDefault || 'PCS',
+        netNominal: 0,
+        count: 0,
+        linkedMasterId: m.id,
+      });
     }
 
-    // 3. Accumulate transaction totals (respecting filterDivisi if active so Bos can inspect per-divisi or all)
+    // 2. ORANYE: Item Pengeluaran Biasa dari masterItems aktif (yang sudah dihapus tidak akan muncul lagi)
+    const activeOrangeMasters = hasLoadedMaster
+      ? masterItems.filter(
+          (m) => (m.kelompok || resolveKelompokItemPengeluaran(m.nama)) === 'BIASA'
+        )
+      : DAFTAR_24_ITEM_PENGELUARAN.filter((d) => d.kelompok === 'BIASA').map((d) => ({
+          id: d.nama,
+          kode: d.nama,
+          nama: d.nama,
+          kelompok: 'BIASA' as KelompokItemPengeluaran,
+          satuanDefault: d.satuanDefault,
+        }));
+
+    const seenOrange = new Set<string>();
+    for (const m of activeOrangeMasters) {
+      const c = normalizeCompact(m.nama);
+      if (!c || seenOrange.has(c)) continue;
+      seenOrange.add(c);
+      rows.push({
+        nomorUrut: runningNo++,
+        nama: m.nama.trim().toUpperCase(),
+        kelompok: 'BIASA',
+        satuanDefault: m.satuanDefault || 'PCS',
+        netNominal: 0,
+        count: 0,
+        linkedMasterId: m.id,
+      });
+    }
+
+    // 3. Akumulasi transaksi ke baris yang sesuai
     const relevantTx =
       filterDivisi === 'ALL' ? list : list.filter((t) => t.divisi === filterDivisi);
 
     for (const tx of relevantTx) {
-      const rawKat = (tx.kategori || '').trim();
-      if (!rawKat) continue;
-      const key = rawKat.toUpperCase();
-      const existing = mapByUpper.get(key);
-      if (existing) {
-        existing.netNominal += Number(tx.nominal) || 0;
-        existing.count += 1;
-      } else {
-        const kel = tx.kelompokPengeluaran || resolveKelompokItemPengeluaran(rawKat);
-        mapByUpper.set(key, {
-          nomorUrut: getNomorUrutItemPengeluaran(rawKat) ?? extraOrder++,
-          nama: rawKat,
-          kelompok: kel,
-          netNominal: Number(tx.nominal) || 0,
-          count: 1,
+      const nom = Number(tx.nominal) || 0;
+      const rawKat = String(tx.kategori || '').trim();
+      const katCompact = normalizeCompact(rawKat);
+
+      // Cari kecocokan dengan ID Inventaris lebih dulu
+      let matchedRow = tx.idInventaris
+        ? rows.find((r) => r.linkedInventarisId && r.linkedInventarisId === tx.idInventaris)
+        : undefined;
+
+      // Jika belum ketemu via idInventaris, cocokkan nama / plat unit inventaris atau nama item
+      if (!matchedRow && katCompact) {
+        matchedRow = rows.find((r) => {
+          if (normalizeCompact(r.nama) === katCompact) return true;
+          if (r.linkedInventarisId) {
+            const unit = mergedInventarisList.find((u) => u.id === r.linkedInventarisId);
+            if (unit) {
+              const p = normalizeCompact(unit.nomorPlat || '');
+              const n = normalizeCompact(unit.namaItem || '');
+              if ((p && p === katCompact) || (n && n === katCompact)) return true;
+            }
+          }
+          return false;
         });
+      }
+
+      if (matchedRow) {
+        matchedRow.netNominal += nom;
+        matchedRow.count += 1;
       }
     }
 
-    return Array.from(mapByUpper.values()).sort((a, b) => a.nomorUrut - b.nomorUrut);
-  }, [masterItems, list, filterDivisi]);
+    return rows;
+  }, [mergedInventarisList, masterItems, hasLoadedMaster, list, filterDivisi]);
 
   const inventarisItems = useMemo(
     () => recapRows.filter((r) => r.kelompok === 'INVENTARIS'),
@@ -351,6 +439,38 @@ export const PengeluaranView: React.FC<Props> = ({
     () => recapRows.filter((r) => r.kelompok === 'BIASA'),
     [recapRows]
   );
+
+  // Sinkronkan pilihan default Form Hijau & Form Oranye jika item berganti / dihapus
+  useEffect(() => {
+    if (inventarisItems.length > 0) {
+      const exists = inventarisItems.some(
+        (it) => it.nama.toUpperCase() === invKategori.toUpperCase()
+      );
+      if (!invKategori || !exists) {
+        const first = inventarisItems[0];
+        setInvKategori(first.nama);
+        if (first.linkedInventarisId) {
+          setInvSelectedUnitId(first.linkedInventarisId);
+        }
+        if (first.divisiUnit && !isTanpaDivisi(invDivisi)) {
+          setInvDivisi(first.divisiUnit);
+        }
+      }
+    }
+  }, [inventarisItems, invKategori]);
+
+  useEffect(() => {
+    if (biasaItems.length > 0) {
+      const exists = biasaItems.some(
+        (it) => it.nama.toUpperCase() === biasaKategori.toUpperCase()
+      );
+      if (!biasaKategori || !exists) {
+        const first = biasaItems[0];
+        setBiasaKategori(first.nama);
+        if (first.satuanDefault) setBiasaSatuan(first.satuanDefault);
+      }
+    }
+  }, [biasaItems, biasaKategori]);
 
   const totalInventarisHijau = useMemo(
     () => inventarisItems.reduce((s, r) => s + r.netNominal, 0),
@@ -377,22 +497,71 @@ export const PengeluaranView: React.FC<Props> = ({
 
   const handleSelectInvKategori = (katName: string) => {
     setInvKategori(katName);
+    setConfirmDeleteItem(null);
     const foundDef = inventarisItems.find((i) => i.nama.toUpperCase() === katName.toUpperCase());
     if (foundDef?.satuanDefault) {
       setInvSatuan(foundDef.satuanDefault);
     }
+    if (foundDef?.linkedInventarisId) {
+      setInvSelectedUnitId(foundDef.linkedInventarisId);
+      if (foundDef.divisiUnit && !isTanpaDivisi(invDivisi)) {
+        setInvDivisi(foundDef.divisiUnit);
+      }
+      return;
+    }
     const matchedUnit = findMatchingInventarisUnit(katName);
     if (matchedUnit) {
       setInvSelectedUnitId(matchedUnit.id);
-      if (matchedUnit.divisi) setInvDivisi(matchedUnit.divisi);
+      if (matchedUnit.divisi && !isTanpaDivisi(invDivisi)) setInvDivisi(matchedUnit.divisi);
+    } else {
+      setInvSelectedUnitId('');
     }
   };
 
   const handleSelectBiasaKategori = (katName: string) => {
     setBiasaKategori(katName);
+    setConfirmDeleteItem(null);
     const foundDef = biasaItems.find((i) => i.nama.toUpperCase() === katName.toUpperCase());
     if (foundDef?.satuanDefault) {
       setBiasaSatuan(foundDef.satuanDefault);
+    }
+  };
+
+  const handleConfirmRemoveItemPengeluaran = async () => {
+    if (!confirmDeleteItem) return;
+    setDeletingMasterItem(true);
+    setErrorMsg('');
+    try {
+      if (confirmDeleteItem.linkedInventarisId) {
+        await api.deleteInventaris(confirmDeleteItem.linkedInventarisId);
+        setLocalInventaris((prev) =>
+          prev.filter((u) => u.id !== confirmDeleteItem.linkedInventarisId)
+        );
+        setSuccessMsg(
+          `Unit "${confirmDeleteItem.nama}" berhasil dihapus dari Data Inventaris & daftar Pengeluaran Hijau.`
+        );
+      } else {
+        await api.deleteMasterItemPengeluaran(
+          confirmDeleteItem.linkedMasterId || confirmDeleteItem.nama
+        );
+        setMasterItems((prev) =>
+          prev.filter(
+            (m) =>
+              m.id !== confirmDeleteItem.linkedMasterId &&
+              normalizeCompact(m.nama) !== normalizeCompact(confirmDeleteItem.nama)
+          )
+        );
+        setSuccessMsg(
+          `Item Pengeluaran "${confirmDeleteItem.nama}" berhasil dikurangi / dihapus dari daftar pilihan!`
+        );
+      }
+      setConfirmDeleteItem(null);
+      await loadData(true);
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal menghapus item pengeluaran.');
+    } finally {
+      setDeletingMasterItem(false);
     }
   };
 
@@ -487,19 +656,19 @@ export const PengeluaranView: React.FC<Props> = ({
         fotoKuitansi: invFotoKuitansi || undefined,
       });
 
-      setSuccessMsg(
-        invArahMutasi === 'KURANG'
-          ? `Koreksi Pengeluaran Inventaris (Hijau) "${invKategori}" sebesar −${formatRupiah(nominal)} berhasil disimpan.`
-          : `Pengeluaran Inventaris (Hijau) "${invKategori}" sebesar +${formatRupiah(nominal)} berhasil dicatat!`
-      );
       setInvQty('');
       setInvHargaSatuan('');
       setInvNominal('');
       setInvKeterangan('');
       setInvPenerimaManual('');
       setInvFotoKuitansi('');
-      loadData();
+      await loadData(true);
       onRefresh();
+      setSuccessMsg(
+        invArahMutasi === 'KURANG'
+          ? `Koreksi Pengeluaran Inventaris (Hijau) "${invKategori}" sebesar −${formatRupiah(nominal)} berhasil tersimpan ke Cloud Supabase!`
+          : `Pengeluaran Inventaris (Hijau) "${invKategori}" sebesar +${formatRupiah(nominal)} berhasil tersimpan ke Cloud Supabase!`
+      );
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal menyimpan pengeluaran inventaris');
     } finally {
@@ -569,19 +738,19 @@ export const PengeluaranView: React.FC<Props> = ({
         fotoKuitansi: biasaFotoKuitansi || undefined,
       });
 
-      setSuccessMsg(
-        biasaArahMutasi === 'KURANG'
-          ? `Koreksi Pengeluaran Biasa (Oranye) "${biasaKategori}" sebesar −${formatRupiah(nominal)} berhasil disimpan.`
-          : `Pengeluaran Biasa (Oranye) "${biasaKategori}" sebesar +${formatRupiah(nominal)} berhasil dicatat!`
-      );
       setBiasaQty('');
       setBiasaHargaSatuan('');
       setBiasaNominal('');
       setBiasaKeterangan('');
       setBiasaPenerima('');
       setBiasaFotoKuitansi('');
-      loadData();
+      await loadData(true);
       onRefresh();
+      setSuccessMsg(
+        biasaArahMutasi === 'KURANG'
+          ? `Koreksi Pengeluaran Biasa (Oranye) "${biasaKategori}" sebesar −${formatRupiah(nominal)} berhasil tersimpan ke Cloud Supabase!`
+          : `Pengeluaran Biasa (Oranye) "${biasaKategori}" sebesar +${formatRupiah(nominal)} berhasil tersimpan ke Cloud Supabase!`
+      );
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal menyimpan pengeluaran biasa');
     } finally {
@@ -651,6 +820,7 @@ export const PengeluaranView: React.FC<Props> = ({
       });
       setLocalInventaris((prev) => [created, ...prev]);
       setInvSelectedUnitId(created.id);
+      setInvKategori(getInventarisDisplayLabel(created));
       setShowQuickAddInventaris(false);
       setQuickInvNama('');
       setQuickInvPlat('');
@@ -829,10 +999,10 @@ export const PengeluaranView: React.FC<Props> = ({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-zinc-900 tracking-tight">
-            Rekapan 24 Item Pengeluaran &amp; Dual Form Input (Hijau Inventaris · Oranye Biasa)
+            Rekapan Pengeluaran &amp; Dual Form Input (Hijau Data Inventaris · Oranye Biasa)
           </h1>
           <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">
-            Item pengeluaran dibagi tegas menjadi <strong>16 Item Hijau (Pengeluaran Untuk Inventaris / Armada)</strong> dan <strong>8 Item Oranye (Pengeluaran Biasa Harian)</strong> sesuai buku rekapan PT. Klik baris pada tabel rekapan untuk memilih item dan memfilter histori.
+            <strong>Form Hijau (Pengeluaran Inventaris)</strong> mengambil data langsung dari <strong>Sub-Menu Data Inventaris</strong>, dan <strong>Form Oranye (Pengeluaran Biasa)</strong> mencatat pengeluaran operasional harian. Keduanya mendukung <strong>+ Tambah / − Kurangi Nominal</strong> serta <strong>Tambah / Hapus Item Pengeluaran</strong>.
           </p>
         </div>
 
@@ -915,7 +1085,7 @@ export const PengeluaranView: React.FC<Props> = ({
                 Tabel Rekapan {recapRows.length} Item Pengeluaran
               </h2>
               <p className="text-[11px] text-zinc-300">
-                1–16 Hijau (Inventaris) · 17–24 Oranye (Biasa)
+                Hijau = Dari Data Inventaris ({inventarisItems.length}) · Oranye = Biasa ({biasaItems.length})
               </p>
             </div>
             {(filterKategoriItem !== 'ALL' || filterKelompok !== 'ALL') && (
@@ -1002,7 +1172,7 @@ export const PengeluaranView: React.FC<Props> = ({
                 {/* Subtotal Ringkas Hijau & Oranye */}
                 <tr className="bg-emerald-50 text-emerald-950 border-b border-zinc-300 text-[11px]">
                   <td colSpan={2} className="py-1.5 px-3 font-bold border-r border-zinc-300">
-                    SUBTOTAL HIJAU (INVENTARIS 1–16)
+                    SUBTOTAL HIJAU (DATA INVENTARIS · {inventarisItems.length} ITEM)
                   </td>
                   <td className="py-1.5 px-3 text-right font-mono tabular-nums font-bold">
                     {formatAngkaTabel(totalInventarisHijau)}
@@ -1010,7 +1180,7 @@ export const PengeluaranView: React.FC<Props> = ({
                 </tr>
                 <tr className="bg-orange-50 text-orange-950 border-b border-zinc-700 text-[11px]">
                   <td colSpan={2} className="py-1.5 px-3 font-bold border-r border-zinc-300">
-                    SUBTOTAL ORANYE (BIASA 17–24)
+                    SUBTOTAL ORANYE (PENGELUARAN BIASA · {biasaItems.length} ITEM)
                   </td>
                   <td className="py-1.5 px-3 text-right font-mono tabular-nums font-bold">
                     {formatAngkaTabel(totalBiasaOranye)}
@@ -1044,116 +1214,167 @@ export const PengeluaranView: React.FC<Props> = ({
                     Form Hijau: Pengeluaran Inventaris
                   </h2>
                   <p className="text-[11px] text-emerald-100 truncate">
-                    Khusus Item No. 1–16 (L300, Traga, Dump, Exca, Plat Mobil &amp; Motor)
+                    Data otomatis dari Sub-Menu Data Inventaris ({inventarisItems.length} Unit/Item)
                   </p>
                 </div>
               </div>
+              {onOpenInventarisMenu && (
+                <button
+                  type="button"
+                  onClick={onOpenInventarisMenu}
+                  className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-[11px] font-bold text-white shrink-0 cursor-pointer"
+                >
+                  Buka Data Inventaris
+                </button>
+              )}
             </div>
 
             <form
               onSubmit={handleSubmitFormInventaris}
               className="p-4 space-y-3.5 text-xs bg-emerald-50/25"
             >
-              {/* Pilih Item Inventaris (Hijau 1-16) */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
+              {/* Pilih Item Inventaris langsung dari Sub-Menu Data Inventaris */}
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
                   <label className="font-bold text-emerald-950">
-                    Pilih Item Inventaris (No. 1–16) <span className="text-rose-500">*</span>
+                    Pilih Unit / Item dari Data Inventaris <span className="text-rose-500">*</span>
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewMasterItemKelompok('INVENTARIS');
-                      setShowAddMasterItemModal(true);
-                    }}
-                    className="text-[11px] font-bold text-emerald-800 hover:underline cursor-pointer"
-                  >
-                    + Item Hijau Baru
-                  </button>
-                </div>
-                <select
-                  required
-                  value={invKategori}
-                  onChange={(e) => handleSelectInvKategori(e.target.value)}
-                  className="w-full px-3 py-2 border-2 border-emerald-400 bg-emerald-100/60 rounded-lg font-bold text-zinc-950 focus:outline-none focus:border-emerald-700"
-                >
-                  {inventarisItems.map((it) => (
-                    <option key={it.nama} value={it.nama}>
-                      {it.nomorUrut}. {it.nama}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Unit Kendaraan PT & Divisi */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="font-semibold text-zinc-700">
-                      Divisi Beban <span className="text-rose-500">*</span>
-                    </label>
-                  </div>
-                  <select
-                    required
-                    value={invDivisi}
-                    onChange={(e) => {
-                      if (e.target.value === '__ADD_DIVISI__') {
-                        setShowAddDivisiModal(true);
-                      } else {
-                        setInvDivisi(e.target.value);
-                      }
-                    }}
-                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-semibold text-zinc-900"
-                  >
-                    {allDivisiList.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                    <option value="__ADD_DIVISI__">+ Tambah Divisi Baru...</option>
-                  </select>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="font-semibold text-zinc-700">Link Aset / Unit PT</label>
-                    <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickInvError('');
+                        setQuickInvNama('');
+                        setShowQuickAddInventaris(true);
+                      }}
+                      className="text-[11px] font-bold text-emerald-800 hover:underline cursor-pointer"
+                    >
+                      + Tambah Data Inventaris
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewMasterItemKelompok('INVENTARIS');
+                        setShowAddMasterItemModal(true);
+                      }}
+                      className="text-[11px] font-semibold text-teal-800 hover:underline cursor-pointer"
+                    >
+                      + Item Lain
+                    </button>
+                    {invKategori && (
                       <button
                         type="button"
                         onClick={() => {
-                          setQuickInvError('');
-                          setQuickInvNama(invKategori);
-                          setShowQuickAddInventaris(true);
+                          const cur = inventarisItems.find(
+                            (i) => i.nama.toUpperCase() === invKategori.toUpperCase()
+                          );
+                          setConfirmDeleteItem({
+                            kelompok: 'INVENTARIS',
+                            nama: invKategori,
+                            linkedInventarisId: cur?.linkedInventarisId,
+                            linkedMasterId: cur?.linkedMasterId,
+                          });
                         }}
-                        className="text-[10px] font-bold text-emerald-800 hover:underline cursor-pointer"
+                        className="inline-flex items-center gap-0.5 text-[11px] font-bold text-rose-700 hover:text-rose-900 cursor-pointer"
+                        title="Kurangi / Hapus item ini dari daftar"
                       >
-                        + Unit Baru
+                        <Trash2 className="w-3 h-3" />
+                        <span>Hapus Item</span>
                       </button>
-                      {onOpenInventarisMenu && (
-                        <button
-                          type="button"
-                          onClick={onOpenInventarisMenu}
-                          className="text-[10px] text-zinc-500 hover:text-zinc-900 underline cursor-pointer"
-                        >
-                          Master
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
+                </div>
+
+                {inventarisItems.length === 0 ? (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 flex items-center justify-between gap-2">
+                    <span>Belum ada unit di Sub-Menu Data Inventaris.</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowQuickAddInventaris(true)}
+                      className="px-2.5 py-1 rounded bg-emerald-700 text-white font-bold cursor-pointer shrink-0"
+                    >
+                      + Tambah Unit Sekarang
+                    </button>
+                  </div>
+                ) : (
                   <select
-                    value={invSelectedUnitId}
-                    onChange={(e) => setInvSelectedUnitId(e.target.value)}
-                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg text-zinc-800"
+                    required
+                    value={invKategori}
+                    onChange={(e) => handleSelectInvKategori(e.target.value)}
+                    className="w-full px-3 py-2 border-2 border-emerald-400 bg-emerald-100/60 rounded-lg font-bold text-zinc-950 focus:outline-none focus:border-emerald-700"
                   >
-                    <option value="">-- Otomatis Sesuai Nama Item ({invKategori}) --</option>
-                    {mergedInventarisList.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.nomorPlat && u.nomorPlat !== '-' ? `${u.nomorPlat} — ` : ''}
-                        {u.namaItem}
+                    {inventarisItems.map((it) => (
+                      <option key={`${it.nomorUrut}-${it.nama}`} value={it.nama}>
+                        {it.nomorUrut}. {it.nama}
+                        {it.linkedInventarisId ? ' [Data Inventaris]' : ''}
                       </option>
                     ))}
                   </select>
+                )}
+
+                {confirmDeleteItem?.kelompok === 'INVENTARIS' && (
+                  <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-300 text-rose-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="text-[11px]">
+                      Hapus item <strong>"{confirmDeleteItem.nama}"</strong> dari daftar Pengeluaran Inventaris?
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        disabled={deletingMasterItem}
+                        onClick={handleConfirmRemoveItemPengeluaran}
+                        className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold cursor-pointer"
+                      >
+                        {deletingMasterItem ? 'Menghapus...' : 'Ya, Hapus'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deletingMasterItem}
+                        onClick={() => setConfirmDeleteItem(null)}
+                        className="px-2.5 py-1 rounded bg-white border border-zinc-300 text-zinc-700 text-[11px] font-semibold cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Divisi Beban (termasuk Opsi Tanpa Divisi) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-zinc-700">
+                    Divisi Beban (Opsional Bisa Tanpa Divisi) <span className="text-rose-500">*</span>
+                  </label>
+                  <span className="text-[10px] font-mono text-zinc-500">
+                    {isTanpaDivisi(invDivisi)
+                      ? 'Non-Divisi (Rp 0 Divisi)'
+                      : `Saldo ${resolveDivisiAccount(invDivisi, rekeningList).kode}: ${formatRupiahSingkat(
+                          resolveDivisiAccount(invDivisi, rekeningList).saldoSaatIni
+                        )}`}
+                  </span>
                 </div>
+                <select
+                  required
+                  value={isTanpaDivisi(invDivisi) ? TANPA_DIVISI_VALUE : invDivisi}
+                  onChange={(e) => {
+                    if (e.target.value === '__ADD_DIVISI__') {
+                      setShowAddDivisiModal(true);
+                    } else {
+                      setInvDivisi(e.target.value);
+                    }
+                  }}
+                  className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-semibold text-zinc-900"
+                >
+                  <option value={TANPA_DIVISI_VALUE}>
+                    ⊘ Tanpa Divisi (Tidak Masuk Arus Kas Divisi)
+                  </option>
+                  {allDivisiList.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                  <option value="__ADD_DIVISI__">+ Tambah Divisi Baru...</option>
+                </select>
               </div>
 
               {selectedInvUnitObj && (
@@ -1294,13 +1515,14 @@ export const PengeluaranView: React.FC<Props> = ({
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-zinc-700 mb-1">Tanggal</label>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Tanggal Fleksibel
+                  </label>
                   <input
-                    type="text"
+                    type="date"
                     value={invTanggal}
                     onChange={(e) => setInvTanggal(e.target.value)}
-                    placeholder="DD/MM/YYYY"
-                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-800"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums font-semibold text-zinc-800"
                   />
                 </div>
               </div>
@@ -1352,7 +1574,7 @@ export const PengeluaranView: React.FC<Props> = ({
                     Form Oranye: Pengeluaran Biasa
                   </h2>
                   <p className="text-[11px] text-orange-100 truncate">
-                    Khusus Item No. 17–24 (Rumah, Solar, Rokok, Akua, Nasi, Token, Sedekah, Gorengan)
+                    Bisa Tambah/Kurangi Nominal &amp; Tambah/Hapus Item Pengeluaran ({biasaItems.length} Item)
                   </p>
                 </div>
               </div>
@@ -1362,45 +1584,116 @@ export const PengeluaranView: React.FC<Props> = ({
               onSubmit={handleSubmitFormBiasa}
               className="p-4 space-y-3.5 text-xs bg-orange-50/25"
             >
-              {/* Pilih Item Biasa (Oranye 17-24) */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
+              {/* Pilih Item Biasa (Oranye) + Tombol Tambah Item & Hapus Item */}
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
                   <label className="font-bold text-orange-950">
-                    Pilih Item Pengeluaran Biasa (No. 17–24){' '}
-                    <span className="text-rose-500">*</span>
+                    Pilih Item Pengeluaran Biasa <span className="text-rose-500">*</span>
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewMasterItemKelompok('BIASA');
-                      setShowAddMasterItemModal(true);
-                    }}
-                    className="text-[11px] font-bold text-orange-800 hover:underline cursor-pointer"
-                  >
-                    + Item Oranye Baru
-                  </button>
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewMasterItemKelompok('BIASA');
+                        setShowAddMasterItemModal(true);
+                      }}
+                      className="text-[11px] font-bold text-orange-800 hover:underline cursor-pointer"
+                    >
+                      + Tambah Item Oranye
+                    </button>
+                    {biasaKategori && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = biasaItems.find(
+                            (i) => i.nama.toUpperCase() === biasaKategori.toUpperCase()
+                          );
+                          setConfirmDeleteItem({
+                            kelompok: 'BIASA',
+                            nama: biasaKategori,
+                            linkedMasterId: cur?.linkedMasterId,
+                          });
+                        }}
+                        className="inline-flex items-center gap-0.5 text-[11px] font-bold text-rose-700 hover:text-rose-900 cursor-pointer"
+                        title="Kurangi / Hapus item yang tidak diperlukan dari daftar pilihan"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Hapus Item</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <select
-                  required
-                  value={biasaKategori}
-                  onChange={(e) => handleSelectBiasaKategori(e.target.value)}
-                  className="w-full px-3 py-2 border-2 border-orange-400 bg-amber-100/70 rounded-lg font-bold text-zinc-950 focus:outline-none focus:border-orange-700"
-                >
-                  {biasaItems.map((it) => (
-                    <option key={it.nama} value={it.nama}>
-                      {it.nomorUrut}. {it.nama}
-                    </option>
-                  ))}
-                </select>
+
+                {biasaItems.length === 0 ? (
+                  <div className="p-3 rounded-lg bg-orange-50 border border-orange-300 text-orange-950 flex items-center justify-between gap-2">
+                    <span>Daftar item pengeluaran biasa kosong.</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewMasterItemKelompok('BIASA');
+                        setShowAddMasterItemModal(true);
+                      }}
+                      className="px-2.5 py-1 rounded bg-orange-600 text-white font-bold cursor-pointer shrink-0"
+                    >
+                      + Tambah Item Baru
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    required
+                    value={biasaKategori}
+                    onChange={(e) => handleSelectBiasaKategori(e.target.value)}
+                    className="w-full px-3 py-2 border-2 border-orange-400 bg-amber-100/70 rounded-lg font-bold text-zinc-950 focus:outline-none focus:border-orange-700"
+                  >
+                    {biasaItems.map((it) => (
+                      <option key={`${it.nomorUrut}-${it.nama}`} value={it.nama}>
+                        {it.nomorUrut}. {it.nama}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {confirmDeleteItem?.kelompok === 'BIASA' && (
+                  <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-300 text-rose-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="text-[11px]">
+                      Hapus item <strong>"{confirmDeleteItem.nama}"</strong> dari daftar pilihan Pengeluaran Oranye?
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        disabled={deletingMasterItem}
+                        onClick={handleConfirmRemoveItemPengeluaran}
+                        className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold cursor-pointer"
+                      >
+                        {deletingMasterItem ? 'Menghapus...' : 'Ya, Hapus'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deletingMasterItem}
+                        onClick={() => setConfirmDeleteItem(null)}
+                        className="px-2.5 py-1 rounded bg-white border border-zinc-300 text-zinc-700 text-[11px] font-semibold cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Divisi Beban */}
+              {/* Divisi Beban (termasuk Opsi Tanpa Divisi) */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="font-semibold text-zinc-700">
-                    Unit / Divisi Beban <span className="text-rose-500">*</span>
+                    Unit / Divisi Beban (Opsional Bisa Tanpa Divisi) <span className="text-rose-500">*</span>
                   </label>
                   {(() => {
+                    if (isTanpaDivisi(biasaDivisi)) {
+                      return (
+                        <span className="text-[10px] font-mono text-zinc-500">
+                          Non-Divisi (Rp 0 Divisi)
+                        </span>
+                      );
+                    }
                     const divAcc = resolveDivisiAccount(biasaDivisi, rekeningList);
                     return (
                       <span className="text-[10px] font-mono text-zinc-500">
@@ -1411,7 +1704,7 @@ export const PengeluaranView: React.FC<Props> = ({
                 </div>
                 <select
                   required
-                  value={biasaDivisi}
+                  value={isTanpaDivisi(biasaDivisi) ? TANPA_DIVISI_VALUE : biasaDivisi}
                   onChange={(e) => {
                     if (e.target.value === '__ADD_DIVISI__') {
                       setShowAddDivisiModal(true);
@@ -1421,6 +1714,9 @@ export const PengeluaranView: React.FC<Props> = ({
                   }}
                   className="w-full px-3 py-2 border border-zinc-300 bg-white rounded-lg font-semibold text-zinc-900"
                 >
+                  <option value={TANPA_DIVISI_VALUE}>
+                    ⊘ Tanpa Divisi (Tidak Masuk Arus Kas Divisi)
+                  </option>
                   {allDivisiList.map((d) => (
                     <option key={d} value={d}>
                       {d}
@@ -1557,13 +1853,14 @@ export const PengeluaranView: React.FC<Props> = ({
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-zinc-700 mb-1">Tanggal</label>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Tanggal Fleksibel
+                  </label>
                   <input
-                    type="text"
+                    type="date"
                     value={biasaTanggal}
                     onChange={(e) => setBiasaTanggal(e.target.value)}
-                    placeholder="DD/MM/YYYY"
-                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums text-zinc-800"
+                    className="w-full px-2.5 py-2 border border-zinc-300 bg-white rounded-lg font-mono tabular-nums font-semibold text-zinc-800"
                   />
                 </div>
               </div>
@@ -1797,7 +2094,7 @@ export const PengeluaranView: React.FC<Props> = ({
                         </div>
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap font-medium text-zinc-800">
-                        {item.divisi}
+                        {isTanpaDivisi(item.divisi) ? 'Tanpa Divisi' : item.divisi}
                       </td>
                       <td className="py-2.5 px-3">
                         <div className="font-semibold text-zinc-900">{item.keterangan}</div>

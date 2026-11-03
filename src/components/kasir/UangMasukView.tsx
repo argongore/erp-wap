@@ -120,7 +120,7 @@ export const UangMasukView: React.FC<Props> = ({
 
   const [tanggal, setTanggal] = useState<string>(getTodayIsoDate());
   const [nominalDisplay, setNominalDisplay] = useState<string>('');
-  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER'>(
+  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>(
     bankAccounts.length > 0 ? 'TRANSFER' : 'TUNAI'
   );
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(bankAccounts[0]?.kode || '');
@@ -383,7 +383,12 @@ export const UangMasukView: React.FC<Props> = ({
           jenisSumber === 'PENJUALAN_HASIL_BUMI' ? tandaiLunasHb : undefined,
         nominal,
         metode,
-        rekeningTujuan: metode === 'TRANSFER' ? rekeningTujuan : 'KAS01',
+        rekeningTujuan:
+          metode === 'SINKRON'
+            ? 'SINKRON'
+            : metode === 'TRANSFER'
+            ? rekeningTujuan
+            : 'KAS01',
         divisi,
         keterangan: keterangan.trim() || undefined,
         fotoBukti: fotoBukti || undefined,
@@ -833,7 +838,7 @@ export const UangMasukView: React.FC<Props> = ({
             <label className="block text-[11px] font-bold text-zinc-800 mb-1">
               Metode Uang Masuk
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -861,6 +866,20 @@ export const UangMasukView: React.FC<Props> = ({
                 }`}
               >
                 Transfer Bank
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMetode('SINKRON');
+                  setStepVerifikasi(false);
+                }}
+                className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                  metode === 'SINKRON'
+                    ? 'bg-cyan-700 text-white border-cyan-700'
+                    : 'bg-cyan-50 text-cyan-900 border-cyan-300 hover:bg-cyan-100'
+                }`}
+              >
+                Sinkron (Non-Kas)
               </button>
             </div>
           </div>

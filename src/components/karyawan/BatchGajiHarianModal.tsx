@@ -13,11 +13,18 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
-import { DAFTAR_DIVISI, NamaDivisi, Rekening, TransaksiPenggajian } from '../../server/types.ts';
+import {
+  DAFTAR_DIVISI,
+  NamaDivisi,
+  Rekening,
+  TransaksiPenggajian,
+  TANPA_DIVISI_VALUE,
+  isTanpaDivisi,
+} from '../../server/types.ts';
 
 interface BatchRowItem {
   idKaryawan: string;
-  divisi: NamaDivisi;
+  divisi: NamaDivisi | string;
   gajiNominal: number;
   bonus: number;
   persentasePotongKasbon: number;
@@ -41,6 +48,7 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
   const todayStr = new Date().toISOString().split('T')[0];
 
   const [tanggalKerja, setTanggalKerja] = useState<string>(todayStr);
+  const [metodeBatch, setMetodeBatch] = useState<'KAS_RIIL' | 'SINKRON'>('KAS_RIIL');
 
   // Initialize rows with active employees
   const [rows, setRows] = useState<BatchRowItem[]>(() => {
@@ -144,13 +152,17 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
     setSubmitting(true);
     try {
       const payloadItems = rows.map((r) => {
+        const divLabel = isTanpaDivisi(r.divisi) ? 'Tanpa Divisi' : r.divisi;
         return {
           idKaryawan: r.idKaryawan,
           divisi: r.divisi,
           gajiNominal: Number(r.gajiNominal) || 0,
           bonus: Number(r.bonus) || 0,
           persentasePotongKasbon: Number(r.persentasePotongKasbon) || 0,
-          keterangan: r.keterangan || `Upah Harian [${r.divisi}] (${formattedTanggal})`,
+          ...(metodeBatch === 'SINKRON'
+            ? { metodePembayaran: 'SINKRON' as const, rekeningSumber: 'SINKRON' }
+            : {}),
+          keterangan: r.keterangan || `Upah Harian [${divLabel}] (${formattedTanggal})`,
         };
       });
 
@@ -219,8 +231,33 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
               />
             </div>
 
-            <div className="flex items-center space-x-2">
-              <span className="text-[11px] text-zinc-400">Set Cepat Upah Rata-rata:</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-900 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setMetodeBatch('KAS_RIIL')}
+                  className={`px-2.5 py-1 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                    metodeBatch === 'KAS_RIIL'
+                      ? 'bg-emerald-700 text-white'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Kas Divisi / Kasir Riil
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMetodeBatch('SINKRON')}
+                  className={`px-2.5 py-1 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                    metodeBatch === 'SINKRON'
+                      ? 'bg-cyan-700 text-white'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  SINKRON (Non-Kas / Rp 0)
+                </button>
+              </div>
+
+              <span className="text-[11px] text-zinc-400">Set Cepat:</span>
               {[120000, 135000, 150000, 175000].map((rate) => (
                 <button
                   key={rate}
@@ -291,7 +328,7 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
                         <select
                           value={row.divisi}
                           onChange={(e) =>
-                            handleUpdateRow(idx, { divisi: e.target.value as NamaDivisi })
+                            handleUpdateRow(idx, { divisi: e.target.value })
                           }
                           className="w-full bg-zinc-800 border border-amber-700/60 rounded px-2 py-1.5 text-amber-300 font-bold focus:outline-hidden focus:border-amber-400 text-xs"
                         >
@@ -300,6 +337,9 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
                               {d.nama}
                             </option>
                           ))}
+                          <option value={TANPA_DIVISI_VALUE}>
+                            ⊘ Tanpa Divisi (Non-Divisi)
+                          </option>
                         </select>
                       </td>
 

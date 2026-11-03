@@ -15,6 +15,7 @@ import {
   StokHasilBumi,
   TransaksiPembelianHasilBumi,
   TransaksiPenjualanHasilBumi,
+  isTanpaDivisi,
 } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
 import { formatRupiah, formatRupiahSingkat, parseRupiahInput } from '../../utils/format.ts';
@@ -99,7 +100,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const [idMitra, setIdMitra] = useState<string>('');
   const [namaPembeliManual, setNamaPembeliManual] = useState<string>('');
   const [metodePembayaran, setMetodePembayaran] = useState<
-    'BELUM_PUTUS_HARGA' | 'TUNAI' | 'TRANSFER' | 'PIUTANG'
+    'BELUM_PUTUS_HARGA' | 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'SINKRON'
   >('BELUM_PUTUS_HARGA');
   const [allowOverStockPutus, setAllowOverStockPutus] = useState<boolean>(false);
   const [isHabisMuatSusut, setIsHabisMuatSusut] = useState<boolean>(false);
@@ -338,8 +339,8 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
           ? 'NOTA MUAT / JUAL HASIL BUMI (BELUM PUTUS HARGA)'
           : 'NOTA PENJUALAN HASIL BUMI',
         subtitle: isRecordBelumPutus
-          ? `Muat Keluar Gudang · Menunggu Uang Masuk | Divisi: ${record.divisi || divisi}`
-          : `Pengiriman Stok Keluar Gudang | Divisi: ${record.divisi || divisi}`,
+          ? `Muat Keluar Gudang · Menunggu Uang Masuk | Divisi: ${isTanpaDivisi(record.divisi || divisi) ? 'Tanpa Divisi' : record.divisi || divisi}`
+          : `Pengiriman Stok Keluar Gudang | Divisi: ${isTanpaDivisi(record.divisi || divisi) ? 'Tanpa Divisi' : record.divisi || divisi}`,
         nomorTransaksi: record.noPenjualan,
         tanggal: record.tanggal,
         jam: record.jam,
@@ -524,7 +525,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                     2. Sudah Putus Harga (Langsung Deal)
                   </span>
                   <span className="font-mono text-[10px] font-bold text-emerald-800">
-                    TUNAI / BANK / BON
+                    TUNAI / BANK / BON / SINKRON
                   </span>
                 </div>
                 <p className="text-[11px] text-zinc-600 mt-1 leading-snug">
@@ -948,18 +949,21 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                 <label className="block text-[11px] font-semibold text-zinc-700">
                   Metode Penerimaan Pembayaran (Putus Harga)
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['TUNAI', 'TRANSFER', 'PIUTANG'] as const).map((mtd) => (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {(['TUNAI', 'TRANSFER', 'PIUTANG', 'SINKRON'] as const).map((mtd) => (
                     <button
                       key={mtd}
                       type="button"
                       onClick={() => {
                         setMetodePembayaran(mtd);
+                        setVerifiedDoubleCheck(false);
                         if (mtd === 'PIUTANG') setModePembeli('MITRA');
                       }}
                       className={`py-2 px-2.5 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
                         metodePembayaran === mtd
-                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          ? mtd === 'SINKRON'
+                            ? 'bg-indigo-700 text-white border-indigo-700'
+                            : 'bg-emerald-700 text-white border-emerald-700'
                           : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
                       }`}
                     >
@@ -967,7 +971,9 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                         ? 'Tunai (KAS01)'
                         : mtd === 'TRANSFER'
                         ? 'Transfer Bank'
-                        : 'Piutang Mitra'}
+                        : mtd === 'PIUTANG'
+                        ? 'Piutang Mitra'
+                        : '🔄 Sinkron (Non-Riil)'}
                     </button>
                   ))}
                 </div>
@@ -1102,7 +1108,9 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                   </div>
                   <div>
                     <span className="text-zinc-500 block">Divisi Pencatat:</span>
-                    <span className="font-bold text-zinc-900">{divisi}</span>
+                    <span className="font-bold text-zinc-900">
+                      {isTanpaDivisi(divisi) ? 'Tanpa Divisi (Non-Divisi)' : divisi}
+                    </span>
                   </div>
                   <div>
                     <span className="text-zinc-500 block">Tonase Pengurang Stok:</span>

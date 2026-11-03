@@ -19,7 +19,14 @@ import {
   Store,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
-import { DAFTAR_DIVISI, NamaDivisi, Rekening, TransaksiPenggajian } from '../../server/types.ts';
+import {
+  DAFTAR_DIVISI,
+  NamaDivisi,
+  Rekening,
+  TransaksiPenggajian,
+  TANPA_DIVISI_VALUE,
+  isTanpaDivisi,
+} from '../../server/types.ts';
 
 interface ProsesGajiModalProps {
   karyawan: KaryawanWithBon | null;
@@ -65,7 +72,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
   const todayStr = new Date().toISOString().split('T')[0];
   const [tanggalKerja, setTanggalKerja] = useState<string>(todayStr);
   const tipeGaji = 'HARIAN' as const;
-  const [divisi, setDivisi] = useState<NamaDivisi>(initialDivisi || 'Gudang Wijaya Agro');
+  const [divisi, setDivisi] = useState<NamaDivisi | string>(initialDivisi || 'Gudang Wijaya Agro');
 
   // Nominal gaji harian manual
   const [gajiNominal, setGajiNominal] = useState<number>(120000);
@@ -80,7 +87,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
   const [periodeBulan, setPeriodeBulan] = useState(currentMonthYear);
   const [persentasePilihan, setPersentasePilihan] = useState<number>(0); // Default 0 for daily, or user can choose to deduct
   const [nominalKustom, setNominalKustom] = useState<number>(0);
-  const [metodePembayaran, setMetodePembayaran] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
+  const [metodePembayaran, setMetodePembayaran] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
 
   // Map chosen division to dedicated rekening
   const chosenDivRek = DIVISI_OPTIONS.find((d) => d.nama === divisi)?.kodeRekening || 'REK-GWA';
@@ -91,6 +98,11 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
 
   // Whenever divisi changes, automatically suggest the division's dedicated rekening
   useEffect(() => {
+    if (rekeningSumber === 'SINKRON' || metodePembayaran === 'SINKRON') return;
+    if (isTanpaDivisi(divisi)) {
+      setRekeningSumber('KAS01');
+      return;
+    }
     const matched = DIVISI_OPTIONS.find((d) => d.nama === divisi);
     if (matched) {
       setRekeningSumber(matched.kodeRekening);
@@ -123,8 +135,15 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
   const sisaKasbonAkhir = Math.max(0, totalBon - potonganKasbon);
   const gajiBersih = Math.max(0, gajiKotor - potonganKasbon);
 
-  const selectedRek = rekeningList.find((r) => r.kode === rekeningSumber);
-  const saldoCukup = selectedRek ? selectedRek.saldoSaatIni >= gajiBersih : false;
+  const isSinkronMode = metodePembayaran === 'SINKRON' || rekeningSumber === 'SINKRON';
+  const selectedRek = isSinkronMode
+    ? undefined
+    : rekeningList.find((r) => r.kode === rekeningSumber);
+  const saldoCukup = isSinkronMode
+    ? true
+    : selectedRek
+    ? selectedRek.saldoSaatIni >= gajiBersih
+    : false;
 
   const formatRupiah = (val: number) => {
     return 'Rp ' + Number(val || 0).toLocaleString('id-ID');
@@ -152,28 +171,31 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
       return;
     }
 
-    if (!rekeningSumber) {
-      setErrorMsg('Pilih rekening sumber pembayaran upah.');
-      return;
-    }
+    if (!isSinkronMode) {
+      if (!rekeningSumber) {
+        setErrorMsg('Pilih rekening sumber pembayaran upah.');
+        return;
+      }
 
-    if (!selectedRek) {
-      setErrorMsg('Rekening pembayaran tidak valid.');
-      return;
-    }
+      if (!selectedRek) {
+        setErrorMsg('Rekening pembayaran tidak valid.');
+        return;
+      }
 
-    if (!saldoCukup) {
-      setErrorMsg(
-        `Saldo ${selectedRek.nama} (${formatRupiah(
-          selectedRek.saldoSaatIni
-        )}) tidak mencukupi untuk membayar gaji bersih ${formatRupiah(gajiBersih)}.`
-      );
-      return;
+      if (!saldoCukup) {
+        setErrorMsg(
+          `Saldo ${selectedRek.nama} (${formatRupiah(
+            selectedRek.saldoSaatIni
+          )}) tidak mencukupi untuk membayar gaji bersih ${formatRupiah(gajiBersih)}.`
+        );
+        return;
+      }
     }
 
     // Convert YYYY-MM-DD to DD/MM/YYYY
     const [y, m, d] = tanggalKerja.split('-');
     const formattedTanggalKerja = `${d}/${m}/${y}`;
+    const divLabel = isTanpaDivisi(divisi) ? 'Tanpa Divisi' : divisi;
 
     setSubmitting(true);
     try {
@@ -193,11 +215,11 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
             ? Math.round((potonganKasbon / (totalBon || 1)) * 100)
             : persentasePilihan,
         nominalPotongKustom: persentasePilihan === -1 ? nominalKustom : undefined,
-        metodePembayaran,
-        rekeningSumber,
+        metodePembayaran: isSinkronMode ? 'SINKRON' : metodePembayaran,
+        rekeningSumber: isSinkronMode ? 'SINKRON' : rekeningSumber,
         keterangan:
           keterangan ||
-          `Upah ${tipeGaji === 'HARIAN' ? 'Harian' : 'Bulanan'} [${divisi}] ${activeKaryawan.nama} (${formattedTanggalKerja})`,
+          `Upah ${tipeGaji === 'HARIAN' ? 'Harian' : 'Bulanan'} [${divLabel}] ${activeKaryawan.nama} (${formattedTanggalKerja})`,
       });
 
       onSuccess(res);
@@ -288,7 +310,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
               </label>
               <select
                 value={divisi}
-                onChange={(e) => setDivisi(e.target.value as NamaDivisi)}
+                onChange={(e) => setDivisi(e.target.value)}
                 className="w-full bg-zinc-800 border border-amber-600/70 rounded-lg px-3 py-2 text-amber-200 font-bold focus:outline-hidden focus:border-amber-400"
               >
                 {DIVISI_OPTIONS.map((d) => (
@@ -296,9 +318,14 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                     {d.nama} ({d.kodeRekening})
                   </option>
                 ))}
+                <option value={TANPA_DIVISI_VALUE}>
+                  ⊘ Tanpa Divisi (Tidak Masuk Arus Kas Divisi)
+                </option>
               </select>
               <span className="block text-[10px] text-zinc-400 mt-1">
-                {DIVISI_OPTIONS.find((d) => d.nama === divisi)?.deskripsi}
+                {isTanpaDivisi(divisi)
+                  ? 'Tidak masuk arus kas divisi mana pun'
+                  : DIVISI_OPTIONS.find((d) => d.nama === divisi)?.deskripsi}
               </span>
             </div>
 
@@ -553,16 +580,27 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                       </option>
                     ))}
                 </optgroup>
+                <optgroup label="Metode Non-Kas (Sinkron)">
+                  <option value="SINKRON">
+                    SINKRON — Non-Kas (Rp 0 Uang Riil Keluar)
+                  </option>
+                </optgroup>
               </select>
-              {selectedRek && (
-                <span
-                  className={`block text-[10px] mt-1 font-mono ${
-                    saldoCukup ? 'text-emerald-400' : 'text-rose-400 font-bold'
-                  }`}
-                >
-                  Saldo kas: {formatRupiah(selectedRek.saldoSaatIni)}{' '}
-                  {saldoCukup ? '(Mencukupi)' : '(TIDAK MENCUKUPI - Dropping Kas Dulu)'}
+              {isSinkronMode ? (
+                <span className="block text-[10px] mt-1 font-mono text-cyan-400 font-semibold">
+                  Metode SINKRON: Rp 0 uang kas keluar (tidak menggerakkan uang riil)
                 </span>
+              ) : (
+                selectedRek && (
+                  <span
+                    className={`block text-[10px] mt-1 font-mono ${
+                      saldoCukup ? 'text-emerald-400' : 'text-rose-400 font-bold'
+                    }`}
+                  >
+                    Saldo kas: {formatRupiah(selectedRek.saldoSaatIni)}{' '}
+                    {saldoCukup ? '(Mencukupi)' : '(TIDAK MENCUKUPI - Dropping Kas Dulu)'}
+                  </span>
+                )
               )}
             </div>
 
@@ -570,28 +608,48 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
               <label className="block text-[11px] font-medium text-zinc-300 mb-1">
                 Metode Pembayaran:
               </label>
-              <div className="flex space-x-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
-                  onClick={() => setMetodePembayaran('TUNAI')}
-                  className={`flex-1 py-2 rounded-md font-semibold text-xs border transition-colors ${
-                    metodePembayaran === 'TUNAI'
+                  onClick={() => {
+                    setMetodePembayaran('TUNAI');
+                    if (rekeningSumber === 'SINKRON') setRekeningSumber('KAS01');
+                  }}
+                  className={`py-2 rounded-md font-semibold text-xs border transition-colors ${
+                    metodePembayaran === 'TUNAI' && !isSinkronMode
                       ? 'bg-emerald-800 text-white border-emerald-500'
                       : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
                   }`}
                 >
-                  Tunai (Kas Lapangan)
+                  Tunai
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMetodePembayaran('TRANSFER')}
-                  className={`flex-1 py-2 rounded-md font-semibold text-xs border transition-colors ${
-                    metodePembayaran === 'TRANSFER'
+                  onClick={() => {
+                    setMetodePembayaran('TRANSFER');
+                    if (rekeningSumber === 'SINKRON') setRekeningSumber('KAS01');
+                  }}
+                  className={`py-2 rounded-md font-semibold text-xs border transition-colors ${
+                    metodePembayaran === 'TRANSFER' && !isSinkronMode
                       ? 'bg-emerald-800 text-white border-emerald-500'
                       : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
                   }`}
                 >
-                  Transfer Rekening
+                  Transfer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMetodePembayaran('SINKRON');
+                    setRekeningSumber('SINKRON');
+                  }}
+                  className={`py-2 rounded-md font-semibold text-xs border transition-colors ${
+                    isSinkronMode
+                      ? 'bg-cyan-800 text-white border-cyan-500'
+                      : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
+                  }`}
+                >
+                  Sinkron (Non-Kas)
                 </button>
               </div>
             </div>
@@ -606,7 +664,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
               type="text"
               value={keterangan}
               onChange={(e) => setKeterangan(e.target.value)}
-              placeholder={`Contoh: Bongkar muat 2 truk jagung di ${divisi}`}
+              placeholder={`Contoh: Bongkar muat 2 truk jagung di ${isTanpaDivisi(divisi) ? 'Gudang' : divisi}`}
               className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-zinc-100 text-xs focus:outline-hidden focus:border-emerald-500"
             />
           </div>
@@ -627,7 +685,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                 {formatRupiah(gajiBersih)}
               </span>
               <span className="text-[10px] text-emerald-400 font-semibold">
-                Divisi: {divisi}
+                Divisi: {isTanpaDivisi(divisi) ? 'Tanpa Divisi' : divisi}
               </span>
             </div>
           </div>

@@ -21,7 +21,15 @@ import {
   UserCog,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
-import { DAFTAR_DIVISI, Karyawan, NamaDivisi, Rekening, TransaksiPenggajian } from '../../server/types.ts';
+import {
+  DAFTAR_DIVISI,
+  Karyawan,
+  NamaDivisi,
+  Rekening,
+  TransaksiPenggajian,
+  TANPA_DIVISI_VALUE,
+  isTanpaDivisi,
+} from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 import {
   KaryawanAvatar,
@@ -99,7 +107,7 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
     initialKaryawanId || activeKaryawanList[0]?.id || ''
   );
   const [tanggalKerja, setTanggalKerja] = useState<string>(todayStr);
-  const [divisi, setDivisi] = useState<NamaDivisi>(initialDivisi);
+  const [divisi, setDivisi] = useState<NamaDivisi | string>(initialDivisi);
   const [tugasPekerjaan, setTugasPekerjaan] = useState<string>('');
 
   // Spreadsheet specific fields matching user format
@@ -193,7 +201,11 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
     const hariTanggal = `${namaHari} ${d} ${namaBulanSingkat}`;
 
     const divObj = DAFTAR_DIVISI.find((item) => item.nama === divisi);
-    const divisiKode = divObj ? divObj.kodeRekening.replace('REK-', '') : 'GWA';
+    const divisiKode = isTanpaDivisi(divisi)
+      ? 'NON-DIV'
+      : divObj
+      ? divObj.kodeRekening.replace('REK-', '')
+      : 'GWA';
 
     setSubmitting(true);
     try {
@@ -214,6 +226,8 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
         uangMakanLembur,
         modeBayar,
         rekeningSumber: modeBayar === 'LANGSUNG_CAIR' ? rekeningSumber : undefined,
+        metodePembayaran:
+          modeBayar === 'LANGSUNG_CAIR' && rekeningSumber === 'SINKRON' ? 'SINKRON' : undefined,
         persentasePotongKasbon: modeBayar === 'LANGSUNG_CAIR' ? persentasePotongKasbon : 0,
         nominalPotongKustom: modeBayar === 'LANGSUNG_CAIR' && nominalPotongKustom > 0 ? nominalPotongKustom : undefined,
       });
@@ -243,7 +257,7 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
               <h2 className="font-bold text-sm text-zinc-100 flex items-center space-x-2">
                 <span>Input Payroll &amp; Upah Harian Divisi</span>
                 <span className="text-[10px] bg-amber-950 text-amber-300 font-semibold px-2 py-0.5 rounded border border-amber-700">
-                  {divisi}
+                  {isTanpaDivisi(divisi) ? 'Tanpa Divisi' : divisi}
                 </span>
               </h2>
               <p className="text-[11px] text-zinc-400">
@@ -371,7 +385,7 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                     type="button"
                     onClick={() => {
                       setDivisi(d.nama);
-                      setRekeningSumber(d.kodeRekening);
+                      if (rekeningSumber !== 'SINKRON') setRekeningSumber(d.kodeRekening);
                     }}
                     className={`p-2.5 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
                       isSelected
@@ -387,6 +401,24 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={() => {
+                  setDivisi(TANPA_DIVISI_VALUE);
+                  if (rekeningSumber !== 'SINKRON') setRekeningSumber('KAS01');
+                }}
+                className={`p-2.5 rounded-xl border text-left flex items-start space-x-2 transition-all cursor-pointer ${
+                  isTanpaDivisi(divisi)
+                    ? 'bg-zinc-700 border-zinc-400 text-white shadow-md font-bold'
+                    : 'bg-zinc-800/80 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                }`}
+              >
+                <Layers className={`w-4 h-4 shrink-0 mt-0.5 ${isTanpaDivisi(divisi) ? 'text-zinc-200' : 'text-zinc-500'}`} />
+                <div className="truncate">
+                  <div className="text-xs truncate">⊘ Tanpa Divisi</div>
+                  <div className="text-[9px] font-mono opacity-70">Non-Divisi</div>
+                </div>
+              </button>
             </div>
           </div>
 
@@ -656,6 +688,9 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                         {r.nama} ({r.kode}) - Saldo: {formatRupiah(r.saldoSaatIni)}
                       </option>
                     ))}
+                    <option value="SINKRON">
+                      Rekening SINKRON — Non-Kas (Rp 0 Uang Riil)
+                    </option>
                   </select>
                 </div>
 

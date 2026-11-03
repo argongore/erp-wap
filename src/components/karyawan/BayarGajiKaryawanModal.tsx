@@ -19,7 +19,9 @@ import {
   NamaDivisi,
   Rekening,
   TransaksiPenggajian,
+  TANPA_DIVISI_VALUE,
 } from '../../server/types.ts';
+import { dmyToIsoInput } from '../../utils/format.ts';
 
 interface BayarGajiKaryawanModalProps {
   initialKaryawanId?: string;
@@ -104,9 +106,10 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
   const [persentasePotong, setPersentasePotong] = useState<number>(0);
   const [nominalPotongKustom, setNominalPotongKustom] = useState<number>(0);
 
-  const [divisi, setDivisi] = useState<NamaDivisi>('Gudang Wijaya Agro');
-  const [metodePembayaran, setMetodePembayaran] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
+  const [divisi, setDivisi] = useState<NamaDivisi | string>('Gudang Wijaya Agro');
+  const [metodePembayaran, setMetodePembayaran] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
   const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
+  const [tanggalBayar, setTanggalBayar] = useState<string>(dmyToIsoInput());
   const [keterangan, setKeterangan] = useState<string>('');
 
   const [submitting, setSubmitting] = useState(false);
@@ -222,9 +225,14 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
   const gajiBersihDiterima = Math.max(0, totalGajiKotor - nominalPotonganKasbon);
   const sisaKasbonSetelahGaji = Math.max(0, totalKasbonAktif - nominalPotonganKasbon);
 
-  const selectedRekObj = realRekenings.find((r) => r.kode === rekeningSumber);
+  const isSinkronMode = metodePembayaran === 'SINKRON' || rekeningSumber === 'SINKRON';
+  const selectedRekObj = isSinkronMode
+    ? undefined
+    : realRekenings.find((r) => r.kode === rekeningSumber);
   const saldoTidakCukup =
-    gajiBersihDiterima > 0 && selectedRekObj ? selectedRekObj.saldoSaatIni < gajiBersihDiterima : false;
+    !isSinkronMode && gajiBersihDiterima > 0 && selectedRekObj
+      ? selectedRekObj.saldoSaatIni < gajiBersihDiterima
+      : false;
 
   const periodeLabel = `${NAMA_BULAN[bulan - 1]} ${tahun}`;
 
@@ -261,14 +269,15 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
       }
       const slip: TransaksiPenggajian = await api.settleHakUpahKaryawan(selectedKaryawanId, {
         divisi,
+        tanggalKerja: tanggalBayar,
         tipeGaji: 'HARIAN',
         periodeBulan: filterScope === 'BULAN_INI' ? periodeLabel : `Akumulasi s/d ${periodeLabel}`,
         upahHarianIds: selectedUpahIds,
         gajiPokokTambahan: 0,
         tunjangan: 0,
         bonus: bonusInput > 0 ? bonusInput : 0,
-        rekeningSumber,
-        metodePembayaran,
+        rekeningSumber: isSinkronMode ? 'SINKRON' : rekeningSumber,
+        metodePembayaran: isSinkronMode ? 'SINKRON' : metodePembayaran,
         persentasePotongKasbon: persentasePotong === -1 ? 0 : persentasePotong,
         nominalPotongKustom: persentasePotong === -1 ? nominalPotongKustom : undefined,
         keterangan:
@@ -624,7 +633,7 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
               </label>
               <select
                 value={divisi}
-                onChange={(e) => setDivisi(e.target.value as NamaDivisi)}
+                onChange={(e) => setDivisi(e.target.value)}
                 className="w-full px-3 py-2.5 text-sm font-semibold border border-slate-300 rounded-xl bg-white"
               >
                 {Object.keys(DIVISI_REKENING_MAP).map((d) => (
@@ -632,6 +641,9 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                     {d}
                   </option>
                 ))}
+                <option value={TANPA_DIVISI_VALUE}>
+                  ⊘ Tanpa Divisi (Tidak Masuk Arus Kas Divisi)
+                </option>
               </select>
             </div>
 
@@ -639,15 +651,24 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 Metode Bayar
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                {(['TUNAI', 'TRANSFER'] as const).map((m) => (
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['TUNAI', 'TRANSFER', 'SINKRON'] as const).map((m) => (
                   <button
                     key={m}
                     type="button"
-                    onClick={() => setMetodePembayaran(m)}
-                    className={`py-2.5 rounded-xl text-xs font-bold border transition-colors ${
+                    onClick={() => {
+                      setMetodePembayaran(m);
+                      if (m === 'SINKRON') {
+                        setRekeningSumber('SINKRON');
+                      } else if (rekeningSumber === 'SINKRON') {
+                        setRekeningSumber(realRekenings[0]?.kode || 'KAS01');
+                      }
+                    }}
+                    className={`py-2.5 rounded-xl text-[11px] font-bold border transition-colors cursor-pointer ${
                       metodePembayaran === m
-                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        ? m === 'SINKRON'
+                          ? 'bg-cyan-700 text-white border-cyan-700'
+                          : 'bg-emerald-600 text-white border-emerald-600'
                         : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                     }`}
                   >
@@ -661,31 +682,50 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 Rekening Kas / Bank Keluar
               </label>
-              <select
-                value={rekeningSumber}
-                onChange={(e) => setRekeningSumber(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm font-semibold border border-slate-300 rounded-xl bg-white"
-              >
-                {realRekenings.map((r) => (
-                  <option key={r.kode} value={r.kode}>
-                    {r.nama} ({formatRp(r.saldoSaatIni)})
-                  </option>
-                ))}
-              </select>
+              {isSinkronMode ? (
+                <div className="w-full px-3 py-2.5 text-xs font-mono font-bold border border-cyan-300 rounded-xl bg-cyan-50 text-cyan-900">
+                  SINKRON — Non-Kas (Rp 0 Uang Riil)
+                </div>
+              ) : (
+                <select
+                  value={rekeningSumber}
+                  onChange={(e) => setRekeningSumber(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm font-semibold border border-slate-300 rounded-xl bg-white"
+                >
+                  {realRekenings.map((r) => (
+                    <option key={r.kode} value={r.kode}>
+                      {r.nama} ({formatRp(r.saldoSaatIni)})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Catatan Slip Gaji (Opsional)
-            </label>
-            <input
-              type="text"
-              value={keterangan}
-              onChange={(e) => setKeterangan(e.target.value)}
-              placeholder={`Contoh: Gaji Bulanan Penuh ${periodeLabel}`}
-              className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl bg-white"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-slate-500" /> Tanggal Pembayaran (Fleksibel)
+              </label>
+              <input
+                type="date"
+                value={tanggalBayar}
+                onChange={(e) => setTanggalBayar(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm font-mono border border-slate-300 rounded-xl bg-white"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Catatan Slip Gaji (Opsional)
+              </label>
+              <input
+                type="text"
+                value={keterangan}
+                onChange={(e) => setKeterangan(e.target.value)}
+                placeholder={`Contoh: Gaji Bulanan Penuh ${periodeLabel}`}
+                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl bg-white"
+              />
+            </div>
           </div>
 
           {/* Ringkasan Final */}

@@ -29,8 +29,9 @@ import {
   RoleMitra,
   StokHasilBumi,
   TransaksiPembelianHasilBumi,
+  isTanpaDivisi,
 } from '../../server/types.ts';
-import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
+import { dmyToIsoInput, formatRupiah, getWIBTodayString } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
@@ -92,9 +93,10 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   // Belum Putus Harga state (Auto-active for HB-08 KOPI TITIP)
   const [isBelumPutusHarga, setIsBelumPutusHarga] = useState<boolean>(false);
 
-  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'TITIP'>('TUNAI');
+  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON'>('TUNAI');
   const [rekeningSumber, setRekeningSumber] = useState<string>(availableBanks[0]?.kode || 'BNI01');
   const [divisi, setDivisi] = useState<string>('Gudang Wijaya Agro');
+  const [tanggalInput, setTanggalInput] = useState<string>(() => dmyToIsoInput(getWIBTodayString()));
   const [keterangan, setKeterangan] = useState<string>('');
   const [fotoNota, setFotoNota] = useState<string>('');
   const [isNotaLalu, setIsNotaLalu] = useState<boolean>(false);
@@ -132,15 +134,17 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
     open: boolean;
     tx?: TransaksiPembelianHasilBumi;
     hargaDeal: string;
-    metode: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    metode: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
     rekening: string;
     divisi: string;
+    tanggalPutus: string;
   }>({
     open: false,
     hargaDeal: '',
     metode: 'TUNAI',
     rekening: availableBanks[0]?.kode || 'BNI01',
     divisi: 'Gudang Wijaya Agro',
+    tanggalPutus: dmyToIsoInput(getWIBTodayString()),
   });
   const [verifiedPutusHarga, setVerifiedPutusHarga] = useState<boolean>(false);
   const [isSavingPutusHarga, setIsSavingPutusHarga] = useState<boolean>(false);
@@ -361,6 +365,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       await api.putusHargaHasilBumi({
         noPembelian: putusHargaModal.tx.noPembelian,
         hargaDealPerKg: dealPrice,
+        tanggal: putusHargaModal.tanggalPutus || undefined,
         divisi: putusHargaModal.divisi,
         metodePembayaran: putusHargaModal.metode,
         rekeningSumber: putusHargaModal.metode === 'TRANSFER' ? putusHargaModal.rekening : undefined,
@@ -372,6 +377,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         metode: 'TUNAI',
         rekening: availableBanks[0]?.kode || 'BNI01',
         divisi: 'Gudang Wijaya Agro',
+        tanggalPutus: dmyToIsoInput(getWIBTodayString()),
       });
       onRefresh();
       loadTransactions();
@@ -416,8 +422,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           ? namaPetaniManual.trim() || 'Petani Umum'
           : selectedMitra?.nama || 'Petani';
 
+      const divisiLabel = isTanpaDivisi(divisi) ? 'Tanpa Arus Kas Divisi' : divisi;
+
       if (isUsingCart) {
         const batchRes = await api.processBatchPembelianHasilBumi({
+          tanggal: tanggalInput || undefined,
           idMitra: tipePetani === 'UMUM' ? 'UMUM' : selectedMitraId,
           namaPetaniManual: tipePetani === 'UMUM' ? farmerDisplayName : undefined,
           teleponPetaniManual: tipePetani === 'UMUM' ? teleponPetaniManual.trim() || undefined : undefined,
@@ -426,6 +435,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           isNotaLalu,
           noNotaLalu: isNotaLalu ? noNotaLalu.trim() || undefined : undefined,
           tanggalNotaLalu: isNotaLalu ? tanggalNotaLalu.trim() || undefined : undefined,
+          divisi,
           metodePembayaran: isEffectiveBelumPutus ? 'TITIP' : metode,
           rekeningSumber: metode === 'TRANSFER' ? rekeningSumber : undefined,
           keterangan: keterangan.trim() || undefined,
@@ -439,7 +449,13 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           })),
         });
 
-        const firstRec = batchRes.records[0];
+        const recordsSafe = Array.isArray(batchRes?.records) ? batchRes.records : [];
+        const firstRec = recordsSafe[0];
+        const totalNettoSafe =
+          Number(batchRes?.totalNettoBatch ?? batchRes?.totalBeratBersih ?? totalNettoKeranjang) || 0;
+        const totalBayarSafe =
+          Number(batchRes?.totalBayarBatch ?? batchRes?.totalNominal ?? totalTagihan) || 0;
+
         setShowConfirmModal(false);
         setVerifiedDoubleCheck(false);
         setCartHb([]);
@@ -457,15 +473,15 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
 
         const receipt: ReceiptData = {
           title: 'SLIP PEMBELIAN HASIL BUMI (GABUNGAN KERANJANG)',
-          subtitle: `${batchRes.records.length} Komoditas | Metode: ${isEffectiveBelumPutus ? 'TITIP' : metode} | Divisi: Gudang Wijaya Agro`,
-          nomorTransaksi: batchRes.batchId,
+          subtitle: `${recordsSafe.length} Komoditas | Metode: ${isEffectiveBelumPutus ? 'TITIP' : metode} | Divisi: ${divisiLabel}`,
+          nomorTransaksi: batchRes?.batchId || firstRec?.noPembelian || `BATCH-${Date.now().toString().slice(-5)}`,
           tanggal: firstRec?.tanggal || getWIBTodayString(),
           jam: firstRec?.jam || '00:00:00',
           mitra: firstRec?.namaMitra || farmerDisplayName,
           rekening: firstRec?.rekeningSumber,
           kategori: 'PEMBELIAN_HASIL_BUMI',
           fotoNota: firstRec?.fotoNota || fotoNota || undefined,
-          items: batchRes.records.map((r) => ({
+          items: recordsSafe.map((r) => ({
             nama: `${r.komoditasNama}${r.potonganRafaksi > 0 ? ` (Bruto ${r.beratKotor} Kg, Raf ${r.potonganRafaksi}%)` : ''}`,
             qty: r.beratBersih,
             satuan: 'Kg',
@@ -473,11 +489,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             subtotal: r.totalNominal,
           })),
           detailRows: [
-            { label: 'Divisi Terkait', value: 'Gudang Wijaya Agro' },
-            { label: 'Jumlah Komoditas', value: `${batchRes.records.length} Komoditas` },
+            { label: 'Divisi Terkait', value: divisiLabel },
+            { label: 'Jumlah Komoditas', value: `${recordsSafe.length} Komoditas` },
             {
               label: 'Total Berat Bersih',
-              value: `${batchRes.totalNettoBatch.toLocaleString('id-ID')} Kg`,
+              value: `${totalNettoSafe.toLocaleString('id-ID')} Kg`,
               highlight: true,
             },
             { label: 'Metode Pembayaran', value: isEffectiveBelumPutus ? 'TITIP' : metode },
@@ -487,11 +503,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             },
             {
               label: 'Total Pembayaran Keranjang',
-              value: batchRes.totalBayarBatch,
+              value: totalBayarSafe,
               isTotal: true,
             },
           ],
-          catatan: keterangan || `Pembelian gabungan ${batchRes.records.length} komoditas`,
+          catatan: keterangan || `Pembelian gabungan ${recordsSafe.length} komoditas`,
           kasir: 'Kasir Wijaya Agro',
         };
         try {
@@ -511,6 +527,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           : undefined);
 
       const result: TransaksiPembelianHasilBumi = await api.processPembelianHasilBumi({
+        tanggal: tanggalInput || undefined,
         idMitra: tipePetani === 'UMUM' ? 'UMUM' : selectedMitraId,
         namaPetaniManual: tipePetani === 'UMUM' ? farmerDisplayName : undefined,
         teleponPetaniManual: tipePetani === 'UMUM' ? teleponPetaniManual.trim() || undefined : undefined,
@@ -524,7 +541,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         isNotaLalu,
         noNotaLalu: isNotaLalu ? noNotaLalu.trim() || undefined : undefined,
         tanggalNotaLalu: isNotaLalu ? tanggalNotaLalu.trim() || undefined : undefined,
-        divisi: 'Gudang Wijaya Agro',
+        divisi,
         metodePembayaran: isBelumPutusHarga ? 'TITIP' : metode,
         rekeningSumber: metode === 'TRANSFER' ? rekeningSumber : undefined,
         keterangan: finalKet,
@@ -548,17 +565,17 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           ? 'SLIP TITIP TIMBANG HASIL BUMI (BELUM PUTUS HARGA)'
           : 'SLIP PEMBELIAN HASIL BUMI',
         subtitle: isBelumPutusHarga
-          ? `STATUS: TITIP TIMBANG | Divisi: Gudang Wijaya Agro`
-          : `Metode: ${result?.metodePembayaran || metode} | Divisi: Gudang Wijaya Agro`,
+          ? `STATUS: TITIP TIMBANG | Divisi: ${divisiLabel}`
+          : `Metode: ${result?.metodePembayaran || metode} | Divisi: ${divisiLabel}`,
         nomorTransaksi: result?.noPembelian || `PHB-${Date.now().toString().slice(-4)}`,
-        tanggal: result?.tanggal || new Date().toISOString().split('T')[0],
+        tanggal: result?.tanggal || getWIBTodayString(),
         jam: result?.jam || '00:00:00',
         mitra: result?.namaMitra || farmerDisplayName,
         rekening: result?.rekeningSumber,
         kategori: 'PEMBELIAN_HASIL_BUMI',
         fotoNota: result?.fotoNota || fotoNota || undefined,
         detailRows: [
-          { label: 'Divisi Terkait', value: 'Gudang Wijaya Agro' },
+          { label: 'Divisi Terkait', value: divisiLabel },
           { label: 'Komoditas', value: result?.komoditasNama || selectedKomoditas?.nama || 'Hasil Bumi' },
           { label: 'Berat Timbangan Kotor', value: `${(result?.beratKotor ?? beratKotor ?? 0).toLocaleString('id-ID')} Kg` },
           { label: 'Potongan Rafaksi / Kadar Air', value: `${result?.potonganRafaksi ?? rafaksi ?? 0}%` },
@@ -649,6 +666,24 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         <div className="lg:col-span-7 space-y-4">
           {/* Mitra / Supplier Selector with Umum vs Terdaftar Options */}
           <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs space-y-3">
+            {/* Tanggal Transaksi Fleksibel */}
+            <div className="p-2.5 bg-amber-50/70 rounded-lg border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <label className="block text-[11px] font-bold text-amber-950">
+                  Tanggal Transaksi Pembelian HB (Fleksibel)
+                </label>
+                <span className="text-[10px] text-amber-800">
+                  Bisa disesuaikan bebas (misal 1 Nov atau tanggal mundur/maju sesuai pembukuan)
+                </span>
+              </div>
+              <input
+                type="date"
+                value={tanggalInput}
+                onChange={(e) => setTanggalInput(e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-mono font-bold text-zinc-900 focus:outline-none focus:border-amber-600"
+              />
+            </div>
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <label className="block text-xs font-bold text-zinc-700 uppercase tracking-wider">
                 1. Identitas Petani / Penjual Hasil Bumi <span className="text-rose-500">*</span>
@@ -1113,11 +1148,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               3. Metode Pembayaran Hasil Panen
             </label>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <button
                 type="button"
                 onClick={() => setMetode('TUNAI')}
-                className={`py-2 px-2 text-center rounded-lg font-semibold text-xs border transition-all ${
+                className={`py-2 px-2 text-center rounded-lg font-semibold text-xs border transition-all cursor-pointer ${
                   metode === 'TUNAI'
                     ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
                     : 'bg-zinc-50 text-zinc-700 border-zinc-300 hover:bg-zinc-100'
@@ -1129,7 +1164,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setMetode('TRANSFER')}
-                className={`py-2 px-2 text-center rounded-lg font-semibold text-xs border transition-all ${
+                className={`py-2 px-2 text-center rounded-lg font-semibold text-xs border transition-all cursor-pointer ${
                   metode === 'TRANSFER'
                     ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
                     : 'bg-zinc-50 text-zinc-700 border-zinc-300 hover:bg-zinc-100'
@@ -1141,7 +1176,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setMetode('TITIP')}
-                className={`py-2 px-2 text-center rounded-lg font-semibold text-xs border transition-all ${
+                className={`py-2 px-2 text-center rounded-lg font-semibold text-xs border transition-all cursor-pointer ${
                   metode === 'TITIP'
                     ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
                     : 'bg-zinc-50 text-zinc-700 border-zinc-300 hover:bg-zinc-100'
@@ -1149,7 +1184,31 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               >
                 Titip / Hutang
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBelumPutusHarga(false);
+                  setMetode('SINKRON');
+                }}
+                className={`py-2 px-2 text-center rounded-lg font-semibold text-xs border transition-all cursor-pointer ${
+                  metode === 'SINKRON'
+                    ? 'bg-teal-700 text-white border-teal-700 shadow-xs'
+                    : 'bg-teal-50 text-teal-900 border-teal-300 hover:bg-teal-100'
+                }`}
+              >
+                Sinkron (Rp 0 Riil)
+              </button>
             </div>
+
+            {metode === 'SINKRON' && (
+              <div className="p-3 bg-teal-50 rounded-lg border border-teal-200 text-xs text-teal-950 space-y-1">
+                <div className="font-bold">Metode SINKRON — Tanpa Menggerakkan Uang Riil</div>
+                <p className="text-[11px] text-teal-900">
+                  Stok hasil bumi bertambah di gudang dan nota terhitung <strong>SAH / LUNAS</strong>, tanpa mengurangi saldo uang fisik Kasir (KAS01) maupun Bank PT.
+                </p>
+              </div>
+            )}
 
             {metode === 'TUNAI' && (
               <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 text-xs space-y-1">
@@ -1251,20 +1310,23 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Arus Kas Divisi Terkait (Dikunci Otomatis ke Gudang Wijaya Agro) */}
+            {/* Arus Kas Divisi Terkait (Bisa Gudang Wijaya Agro, Divisi Lain, atau Tanpa Divisi) */}
             <div className="pt-2 border-t border-zinc-200">
               <ArusKasDivisiSelectorCard
                 direction="KELUAR"
                 transactionKind="MODAL_PEMBELIAN"
                 metode={metode}
                 nominal={totalTagihan}
-                divisi="Gudang Wijaya Agro"
+                divisi={divisi}
                 divisiOptions={divisiOptions}
-                onChangeDivisi={() => setDivisi('Gudang Wijaya Agro')}
+                onChangeDivisi={(d) => {
+                  setVerifiedDoubleCheck(false);
+                  setDivisi(d);
+                }}
                 rekeningList={rekeningList}
                 theme="light"
                 isBelumPutusHarga={isEffectiveBelumPutus}
-                lockedDivisi={true}
+                lockedDivisi={false}
                 onDivisiCreated={onRefresh}
               />
             </div>
@@ -1282,8 +1344,10 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             {/* Total Recap Card */}
             <div className="p-4 bg-zinc-50 rounded-xl border border-zinc-200 space-y-2 text-xs">
               <div className="flex justify-between">
-                <span className="text-zinc-500">Divisi Tujuan Otomatis:</span>
-                <span className="font-bold text-emerald-800">Gudang Wijaya Agro</span>
+                <span className="text-zinc-500">Divisi Terkait:</span>
+                <span className="font-bold text-emerald-800">
+                  {isTanpaDivisi(divisi) ? 'Tanpa Arus Kas Divisi' : divisi}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-500">Komoditas:</span>
@@ -1410,6 +1474,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                               metode: 'TUNAI',
                               rekening: availableBanks[0]?.kode || 'BNI01',
                               divisi: tx.divisi || 'Gudang Wijaya Agro',
+                              tanggalPutus: dmyToIsoInput(tx.tanggal || getWIBTodayString()),
                             });
                           }}
                           className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs shadow-2xs transition-colors flex items-center space-x-1 cursor-pointer"
@@ -1596,7 +1661,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait (Dikunci ke Gudang Wijaya Agro) */}
+              {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
               <DoubleCheckVerifikasiPanel
                 direction="KELUAR"
                 transactionKind="MODAL_PEMBELIAN"
@@ -1605,14 +1670,14 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 rekeningList={rekeningList}
                 selectedTransferKode={rekeningSumber}
                 onChangeTransferKode={setRekeningSumber}
-                divisi="Gudang Wijaya Agro"
+                divisi={divisi}
                 divisiOptions={divisiOptions}
-                onChangeDivisi={() => setDivisi('Gudang Wijaya Agro')}
+                onChangeDivisi={setDivisi}
                 verified={verifiedDoubleCheck}
                 onToggleVerified={setVerifiedDoubleCheck}
                 theme="light"
                 isBelumPutusHarga={isEffectiveBelumPutus}
-                lockedDivisi={true}
+                lockedDivisi={false}
               />
 
               <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-200">
@@ -1818,8 +1883,20 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               </div>
 
               <div>
+                <label className="block font-bold text-zinc-700 mb-1">Tanggal Putus Harga (Fleksibel)</label>
+                <input
+                  type="date"
+                  value={putusHargaModal.tanggalPutus}
+                  onChange={(e) =>
+                    setPutusHargaModal({ ...putusHargaModal, tanggalPutus: e.target.value })
+                  }
+                  className="w-full px-3 py-1.5 border border-zinc-300 rounded-lg text-xs font-mono font-semibold"
+                />
+              </div>
+
+              <div>
                 <label className="block font-bold text-zinc-700 mb-1">Metode Pembayaran Putus Harga</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <button
                     type="button"
                     onClick={() => {
@@ -1861,6 +1938,20 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                     }`}
                   >
                     Titip Saldo TIT01
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVerifiedPutusHarga(false);
+                      setPutusHargaModal({ ...putusHargaModal, metode: 'SINKRON' });
+                    }}
+                    className={`py-1.5 px-2 text-center rounded-lg font-semibold text-xs border cursor-pointer ${
+                      putusHargaModal.metode === 'SINKRON'
+                        ? 'bg-teal-700 text-white border-teal-700'
+                        : 'bg-teal-50 text-teal-900 border-teal-300'
+                    }`}
+                  >
+                    Sinkron (Rp 0)
                   </button>
                 </div>
               </div>

@@ -13,6 +13,7 @@ import {
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
 import { generateFullBackupXlsxBuffer } from '../utils/fullBackupSpreadsheet.ts';
+import { normalizeDateToDmy } from '../utils/format.ts';
 
 export const apiRouter = Router();
 
@@ -1460,7 +1461,7 @@ apiRouter.put('/stok-hasil-bumi/:kode/harga', async (req, res) => {
 // Penyesuaian Saldo Awal & Rekap Manual Pembelian Lalu untuk Hasil Bumi
 apiRouter.post('/stok-hasil-bumi/saldo-awal', async (req, res) => {
   try {
-    const { kode, stokAwal, rataRataModalAwal, modalAwalTotal, keterangan, items } = req.body;
+    const { kode, stokAwal, rataRataModalAwal, modalAwalTotal, keterangan, tanggalStokAwal, items } = req.body;
     const { iso, tanggal, jam } = getWIBDateTime();
 
     const result = await dbManager.executeTransaction((db) => {
@@ -1470,9 +1471,10 @@ apiRouter.post('/stok-hasil-bumi/saldo-awal', async (req, res) => {
         rataRataModalAwal: number;
         modalAwalTotal?: number;
         keterangan?: string;
+        tanggalStokAwal?: string;
       }> = Array.isArray(items)
         ? items
-        : [{ kode, stokAwal, rataRataModalAwal, modalAwalTotal, keterangan }];
+        : [{ kode, stokAwal, rataRataModalAwal, modalAwalTotal, keterangan, tanggalStokAwal }];
 
       const updatedResults: any[] = [];
 
@@ -1500,11 +1502,16 @@ apiRouter.post('/stok-hasil-bumi/saldo-awal', async (req, res) => {
           .reduce((sum, j) => sum + (j.beratBersih || 0), 0);
 
         // Update saldo awal dan akumulasi modal lama
+        const rawTglStokAwal = item.tanggalStokAwal || tanggalStokAwal;
+        const resolvedTglStokAwal = rawTglStokAwal
+          ? normalizeDateToDmy(String(rawTglStokAwal), tanggal)
+          : `${tanggal} ${jam}`;
+
         hb.stokAwal = validStokAwal;
         hb.rataRataModalAwal = validRataRata;
         hb.modalAwalTotal = validModalTotal;
         hb.keteranganStokAwal = item.keterangan?.trim() || 'Rekap stok manual lama sebelum aplikasi';
-        hb.tanggalInputStokAwal = `${tanggal} ${jam}`;
+        hb.tanggalInputStokAwal = resolvedTglStokAwal;
 
         // Stok fisik Ready Gudang = Stok Awal Lama + Pembelian Baru - Penjualan Keluar
         hb.stok = Math.max(0, Math.round((validStokAwal + pembelianBerjalanKg - penjualanBerjalanKg) * 100) / 100);
@@ -1953,6 +1960,16 @@ apiRouter.post('/master-item-pengeluaran', async (req, res) => {
   try {
     const item = await TransactionService.createMasterItemPengeluaran(req.body);
     res.json({ success: true, data: item });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/master-item-pengeluaran/delete', async (req, res) => {
+  try {
+    const idOrNama = req.body?.idOrNama || req.body?.id || req.body?.nama;
+    const result = await TransactionService.deleteMasterItemPengeluaran(String(idOrNama || ''));
+    res.json(result);
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
   }

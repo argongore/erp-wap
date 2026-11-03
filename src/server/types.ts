@@ -93,7 +93,7 @@ export interface RiwayatDivisiKaryawan {
   catatan?: string;
 }
 
-export type MetodePembayaran = 'TUNAI' | 'TRANSFER' | 'KASBON' | 'TITIP';
+export type MetodePembayaran = 'TUNAI' | 'TRANSFER' | 'KASBON' | 'TITIP' | 'SINKRON';
 
 export type KategoriRekening = 'PERUSAHAAN' | 'ANAK_PERUSAHAAN' | 'OPERASIONAL_DIVISI' | 'VIRTUAL_SISTEM';
 
@@ -464,6 +464,31 @@ export function isProdukTanpaStok(
   return isKategoriAlatNonStok(item.kategori);
 }
 
+export const TANPA_DIVISI_VALUE = 'TANPA_DIVISI';
+
+export function isTanpaDivisi(rawNama?: string | null): boolean {
+  const norm = String(rawNama || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  if (!norm) return false;
+  const compact = norm.replace(/[^a-z0-9]/g, '');
+  return (
+    norm === '-' ||
+    norm === 'tanpa_divisi' ||
+    norm === 'tanpa divisi' ||
+    norm === 'non_divisi' ||
+    norm === 'non divisi' ||
+    norm === 'tidak masuk divisi' ||
+    norm === 'tidak masuk arus kas divisi' ||
+    compact === 'tanpadivisi' ||
+    compact === 'nondivisi' ||
+    compact === 'tidakmasukdivisi' ||
+    compact === 'rektanpadiv' ||
+    compact === 'divtanpadiv'
+  );
+}
+
 export function isExcludedFromDivisi(rawNama?: string | null): boolean {
   const norm = String(rawNama || '')
     .trim()
@@ -590,8 +615,8 @@ export interface TransaksiPembelianBarang {
   noFakturSupplier?: string;
   fotoNota?: string;     // Base64 data URL / image link of invoice or physical receipt
   divisi?: string;       // Divisi usaha terkait saat kulakan
-  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG';
-  rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for HUTANG
+  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG' | 'SINKRON';
+  rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for HUTANG, SINKRON for non-cash sync
   items: ItemPembelianBarang[];
   totalNominal: number;
   status: 'LUNAS' | 'HUTANG_BELUM_LUNAS';
@@ -721,8 +746,8 @@ export interface TransaksiPembelianHasilBumi {
   hargaPerKg: number;
   totalNominal: number;
   divisi?: string;       // Divisi usaha terkait saat pembelian hasil bumi (otomatis Gudang Wijaya Agro)
-  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
-  rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for TITIP
+  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
+  rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for TITIP, SINKRON for non-cash sync
   status: 'LUNAS' | 'BELUM_DIAMBIL' | 'TITIP' | 'BELUM_PUTUS_HARGA';
   isBelumPutusHarga?: boolean;
   statusHarga?: 'HARGA_PUTUS' | 'BELUM_PUTUS_HARGA';
@@ -793,8 +818,8 @@ export interface TransaksiPenjualanHasilBumi {
   totalNominal: number;  // Omzet penjualan langsung (0 jika BELUM_PUTUS_HARGA karena uang masuk dicatat lewat menu Uang Masuk)
   labaKotor: number;     // Realisasi selisih terhadap modal HPP
   divisi?: string;       // Divisi usaha terkait saat penjualan hasil bumi
-  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA';
-  rekeningTujuan: string; // KAS01, bank, BON01, atau MENUNGGU_UANG_MASUK
+  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA' | 'SINKRON';
+  rekeningTujuan: string; // KAS01, bank, BON01, SINKRON, atau MENUNGGU_UANG_MASUK
   statusPembayaran: 'LUNAS' | 'BELUM_BAYAR' | 'MENUNGGU_UANG_MASUK';
   sisaPiutang: number;
   isBelumPutusHargaJual?: boolean;
@@ -892,8 +917,8 @@ export interface TransaksiKasbonUang {
   idMitra: string;
   namaMitra: string;
   jenisTransaksi: 'KASBON UANG';
-  metode: 'TUNAI' | 'TRANSFER';
-  rekeningSumber: string; // KAS01 or chosen bank (BNI01, BCA01, etc.)
+  metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
+  rekeningSumber: string; // KAS01, chosen bank, or SINKRON
   nominal: number;
   sisaKasbon: number;
   keterangan: string;
@@ -1116,7 +1141,7 @@ export interface TransaksiPenggajian {
   namaKaryawan: string;
   jabatan: string;
   departemen: string;
-  divisi: NamaDivisi;      // Divisi utama / penugasan
+  divisi: string;          // Divisi utama / penugasan (atau TANPA_DIVISI)
   tipeGaji: 'HARIAN' | 'BULANAN';
   periodeBulan: string;    // e.g. "Harian - 24/09/2026" atau "September 2026"
   gajiPokok: number;       // Nominal upah harian / akumulasi pokok
@@ -1128,7 +1153,7 @@ export interface TransaksiPenggajian {
   potonganKasbon: number;
   sisaKasbonAkhir: number;
   gajiBersihDibayar: number; // totalGajiKotor - potonganKasbon
-  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'SPLIT';
+  metodePembayaran: 'TUNAI' | 'TRANSFER' | 'SPLIT' | 'SINKRON';
   rekeningSumber: string;  // Rekening kas/bank utama pembayaran (KAS01, REK-GWA, etc.)
   // Split payment fields (jika sebagian cash dan sebagian transfer)
   nominalTunai?: number;
@@ -1606,8 +1631,8 @@ export interface TransaksiUangMasuk {
   namaPengirim: string;          // Nama pembeli / pabrik / bandar / penyetor
   pengirim?: string;             // Alias kompatibel
   idMitra?: string;              // 'UMUM' atau ID Mitra terdaftar
-  metode: 'TUNAI' | 'TRANSFER';
-  rekeningTujuan: string;        // KAS01 atau Rekening Bank PT
+  metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
+  rekeningTujuan: string;        // KAS01, Rekening Bank PT, atau SINKRON
   nominal: number;               // Nominal uang riil masuk (+)
   noPenjualanHasilBumi?: string; // Opsional link ke nota muat/jual hasil bumi (JHB-...)
   komoditasNama?: string;

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowLeftRight, CheckCircle2, AlertCircle, Info, Landmark, History, AlertTriangle, Pencil } from 'lucide-react';
 import { Rekening, TransaksiTransferRekening } from '../../server/types.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, dmyToIsoInput, normalizeDateToDmy } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
@@ -25,6 +25,7 @@ export const TransferRekeningView: React.FC<Props> = ({
   const [rekeningSumber, setRekeningSumber] = useState<string>(validAccounts[0]?.kode || 'KAS01');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(validAccounts[1]?.kode || 'BNI01');
   const [nominalInput, setNominalInput] = useState<string>('');
+  const [tanggalTransfer, setTanggalTransfer] = useState<string>(dmyToIsoInput());
   const [keterangan, setKeterangan] = useState<string>('');
 
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -80,6 +81,7 @@ export const TransferRekeningView: React.FC<Props> = ({
         rekeningSumber,
         rekeningTujuan,
         nominal,
+        tanggal: tanggalTransfer,
         keterangan,
       });
 
@@ -279,17 +281,30 @@ export const TransferRekeningView: React.FC<Props> = ({
               </div>
             )}
 
-            <div>
-              <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
-                Keterangan / Alasan Mutasi
-              </label>
-              <input
-                type="text"
-                placeholder="Misal: Penarikan tunai dari bank / Setoran harian"
-                value={keterangan}
-                onChange={(e) => setKeterangan(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                  Tanggal Transfer (Fleksibel)
+                </label>
+                <input
+                  type="date"
+                  value={tanggalTransfer}
+                  onChange={(e) => setTanggalTransfer(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-mono"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                  Keterangan / Alasan Mutasi
+                </label>
+                <input
+                  type="text"
+                  placeholder="Misal: Penarikan tunai dari bank / Setoran harian"
+                  value={keterangan}
+                  onChange={(e) => setKeterangan(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs"
+                />
+              </div>
             </div>
 
             <button
@@ -382,6 +397,12 @@ export const TransferRekeningView: React.FC<Props> = ({
 
             <div className="p-5 space-y-3.5 text-xs text-zinc-700">
               <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Tanggal Transfer:</span>
+                  <span className="font-mono font-bold text-zinc-900">
+                    {normalizeDateToDmy(tanggalTransfer)}
+                  </span>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Dari Rekening:</span>
                   <span className="font-mono font-bold text-rose-700">

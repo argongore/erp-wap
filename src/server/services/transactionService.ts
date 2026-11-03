@@ -2,13 +2,16 @@ import { dbManager, getWIBDateTime } from '../db.ts';
 import {
   DAFTAR_DIVISI,
   DAFTAR_24_ITEM_PENGELUARAN,
+  TANPA_DIVISI_VALUE,
   getNomorUrutItemPengeluaran,
   isKategoriAlatNonStok,
   isProdukTanpaStok,
   isExcludedFromDivisi,
+  isTanpaDivisi,
   normalizeRoleMitra,
   resolveKelompokItemPengeluaran,
 } from '../types.ts';
+import { normalizeDateToDmy } from '../../utils/format.ts';
 import type {
   AlokasiPembayaranBon,
   AuditLog,
@@ -140,6 +143,7 @@ export class TransactionService {
     idMitra?: string;
     namaPembeliManual?: string;
     tipePembeli?: 'UMUM' | 'REKANAN';
+    tanggal?: string;
     metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'SINKRON' | 'INTERNAL_PT' | 'PEMAKAIAN_PENGELUARAN';
     rekeningTujuan?: string;
     divisi?: string;
@@ -151,6 +155,7 @@ export class TransactionService {
   }): Promise<TransaksiPenjualan> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal, tanggal);
 
       const isInternalSale = params.metode === 'INTERNAL_PT' || (params.metode as string) === 'INTERNAL';
       const isPemakaianPengeluaran = params.metode === 'PEMAKAIAN_PENGELUARAN';
@@ -332,9 +337,10 @@ export class TransactionService {
         sisaPiutang = totalNominal;
       }
 
-      const finalDivisi =
-        params.divisi?.trim() ||
-        (isInternalSale || isPemakaianPengeluaran ? 'Gudang Wijaya Agro' : 'CV Wijaya Agro');
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : params.divisi?.trim() ||
+          (isInternalSale || isPemakaianPengeluaran ? 'Gudang Wijaya Agro' : 'CV Wijaya Agro');
       const totalLabaKotor = totalNominal - totalModalHpp;
       const noPenjualan = generateId('PJ');
 
@@ -348,6 +354,13 @@ export class TransactionService {
           params.kategoriPengeluaran?.trim() ||
           processedItems[0]?.namaProduk?.trim() ||
           'SOLAR';
+
+        if (Array.isArray(db.deletedMasterPengeluaranNames) && db.deletedMasterPengeluaranNames.length > 0) {
+          const katKey = resolvedKategoriPengeluaran.replace(/\s+/g, '').toUpperCase();
+          db.deletedMasterPengeluaranNames = db.deletedMasterPengeluaranNames.filter(
+            (n) => String(n || '').replace(/\s+/g, '').toUpperCase() !== katKey
+          );
+        }
 
         if (!Array.isArray(db.masterItemPengeluaran)) db.masterItemPengeluaran = [];
         if (
@@ -384,7 +397,7 @@ export class TransactionService {
         idPengeluaranTerkait = generateId('EXP');
         const expRecord: TransaksiPengeluaran = {
           idTransaksi: idPengeluaranTerkait,
-          tanggal,
+          tanggal: finalTanggal,
           jam,
           divisi: finalDivisi,
           kategori: resolvedKategoriPengeluaran,
@@ -406,7 +419,7 @@ export class TransactionService {
 
       const penjualanRecord: TransaksiPenjualan = {
         noPenjualan,
-        tanggal,
+        tanggal: finalTanggal,
         jam,
         idMitra: finalMitraId,
         namaMitra: finalMitraNama,
@@ -473,7 +486,8 @@ export class TransactionService {
     judulRekapan?: string;
     totalNominalRekapan?: number;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG';
+    tanggal?: string;
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG' | 'SINKRON';
     rekeningSumber?: string;
     items?: Array<{
       kodeProduk: string;
@@ -486,6 +500,7 @@ export class TransactionService {
   }): Promise<TransaksiPembelianBarang> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal, tanggal);
 
       // Resolve Supplier (Registered or Dynamic/Manual)
       let supplier = params.idMitra ? db.mitra.find((m) => m.id === params.idMitra) : undefined;
@@ -701,13 +716,18 @@ export class TransactionService {
       } else if (params.metodePembayaran === 'HUTANG') {
         finalRekeningSumber = 'TIT01';
         statusPembayaran = 'HUTANG_BELUM_LUNAS';
+      } else if (params.metodePembayaran === 'SINKRON') {
+        finalRekeningSumber = 'SINKRON';
+        statusPembayaran = 'LUNAS';
       }
 
-      const finalDivisi = params.divisi?.trim() || 'CV Wijaya Agro';
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : params.divisi?.trim() || 'CV Wijaya Agro';
       const noPembelian = generateId('PB');
       const record: TransaksiPembelianBarang = {
         noPembelian,
-        tanggal,
+        tanggal: finalTanggal,
         jam,
         idMitra: supplier.id,
         namaMitra: supplier.nama,
@@ -847,11 +867,20 @@ export class TransactionService {
     const divisiByRekKode = new Map(allDivisi.map((d) => [d.kodeRekening.toUpperCase(), norm(d.nama)]));
 
     const cleanDiv = (d?: string) => (d && !isExcludedFromDivisi(d) ? d : undefined);
-    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) =>
-      norm(cleanDiv(divisi) || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
-    const resolvePembelianBarangDivNorm = (divisi?: string) => norm(cleanDiv(divisi) || 'CV Wijaya Agro');
-    const resolveHasilBumiDivNorm = (divisi?: string) => norm(cleanDiv(divisi) || 'Gudang Wijaya Agro');
+    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(cleanDiv(divisi) || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
+    };
+    const resolvePembelianBarangDivNorm = (divisi?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(cleanDiv(divisi) || 'CV Wijaya Agro');
+    };
+    const resolveHasilBumiDivNorm = (divisi?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(cleanDiv(divisi) || 'Gudang Wijaya Agro');
+    };
     const resolveBebanDivNorm = (divisi?: string, rekeningSumber?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
       const validDiv = cleanDiv(divisi);
       if (validDiv && String(validDiv).trim()) return norm(validDiv);
       if (rekeningSumber) {
@@ -975,6 +1004,7 @@ export class TransactionService {
 
       const brilinkMasukDiv = (db.brilink || []).filter(
         (br) =>
+          !isTanpaDivisi(br.divisi) &&
           norm(cleanDiv(br.divisi) || 'BRILink') === targetNorm &&
           br.jenisBrilink === 'TARIK_TUNAI' &&
           (Number(br.nominalAdmin) || 0) > 0
@@ -982,6 +1012,7 @@ export class TransactionService {
       const brilinkKeluarDiv = (db.brilink || [])
         .filter(
           (br) =>
+            !isTanpaDivisi(br.divisi) &&
             norm(cleanDiv(br.divisi) || 'BRILink') === targetNorm &&
             br.jenisBrilink === 'TUKAR_CASH' &&
             (Number(br.nominalAdmin) || 0) > 0
@@ -997,6 +1028,7 @@ export class TransactionService {
 
       const uangMasukDiv = (db.uangMasuk || []).filter(
         (um) =>
+          !isTanpaDivisi(um.divisi) &&
           norm(cleanDiv(um.divisi) || 'PT Wijaya Agro Perkasa') === targetNorm &&
           (Number(um.nominal) || 0) > 0
       );
@@ -1529,13 +1561,15 @@ export class TransactionService {
     isNotaLalu?: boolean;
     noNotaLalu?: string;
     tanggalNotaLalu?: string;
+    tanggal?: string;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPembelianHasilBumi> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal || params.tanggalNotaLalu, tanggal);
 
       if (!Array.isArray(db.stokHasilBumi)) db.stokHasilBumi = [];
       if (!Array.isArray(db.mitra)) db.mitra = [];
@@ -1664,18 +1698,22 @@ export class TransactionService {
       } else if (params.metodePembayaran === 'TITIP') {
         finalRekeningSumber = 'TIT01';
         status = 'TITIP';
+      } else if (params.metodePembayaran === 'SINKRON') {
+        finalRekeningSumber = 'SINKRON';
+        status = 'LUNAS';
       }
 
       // Add to Hasil Bumi Stock (stock enters warehouse immediately)
       komoditas.stok += beratBersih;
       komoditas.updateTerakhir = iso;
 
-      // Arus divisi pembelian hasil bumi selalu diarahkan ke Gudang Wijaya Agro
-      const finalDivisi = 'Gudang Wijaya Agro';
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : params.divisi?.trim() || 'Gudang Wijaya Agro';
       const noPembelian = generateId('PHB');
       const pembelianRecord: TransaksiPembelianHasilBumi = {
         noPembelian,
-        tanggal,
+        tanggal: finalTanggal,
         jam,
         idMitra: finalMitraId,
         namaMitra: finalMitraNama,
@@ -1726,7 +1764,14 @@ export class TransactionService {
   public static async processBatchPembelianHasilBumi(params: {
     idMitra?: string;
     namaPetaniManual?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    teleponPetaniManual?: string;
+    alamatPetaniManual?: string;
+    isNotaLalu?: boolean;
+    noNotaLalu?: string;
+    tanggalNotaLalu?: string;
+    tanggal?: string;
+    divisi?: string;
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
     rekeningSumber?: string;
     fotoNota?: string;
     keterangan?: string;
@@ -1745,10 +1790,13 @@ export class TransactionService {
     totalNominal: number;
     totalNominalDibayarSekarang: number;
     totalBeratBersih: number;
+    totalBayarBatch: number;
+    totalNettoBatch: number;
     divisi: string;
   }> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal || params.tanggalNotaLalu, tanggal);
 
       if (!Array.isArray(db.stokHasilBumi)) db.stokHasilBumi = [];
       if (!Array.isArray(db.mitra)) db.mitra = [];
@@ -1777,7 +1825,9 @@ export class TransactionService {
         throw new Error('Pilih petani terdaftar atau ketik nama petani umum');
       }
 
-      const finalDivisi = 'Gudang Wijaya Agro';
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : params.divisi?.trim() || 'Gudang Wijaya Agro';
       const batchId = generateId('BHB');
 
       type PreparedCartRow = {
@@ -1854,7 +1904,7 @@ export class TransactionService {
         const totalNominal = isBelumPutus ? 0 : Math.round(beratBersih * (it.hargaPerKg || 0));
 
         totalNominalAll += totalNominal;
-        if (!isBelumPutus && params.metodePembayaran !== 'TITIP') {
+        if (!isBelumPutus && params.metodePembayaran !== 'TITIP' && params.metodePembayaran !== 'SINKRON') {
           totalNominalDibayarSekarang += totalNominal;
         }
         totalBeratBersih = Math.round((totalBeratBersih + beratBersih) * 100) / 100;
@@ -1922,20 +1972,27 @@ export class TransactionService {
           bankAcc.saldoSaatIni -= totalNominalDibayarSekarang;
         }
         paidRekeningKode = bankAcc.kode;
+      } else if (params.metodePembayaran === 'SINKRON') {
+        paidRekeningKode = 'SINKRON';
       }
 
       const createdRecords: TransaksiPembelianHasilBumi[] = [];
 
-      // Simpan setiap komoditas keranjang dengan nomor timbangan berurutan & divisi Gudang Wijaya Agro
+      // Simpan setiap komoditas keranjang dengan nomor timbangan berurutan
       for (let idx = 0; idx < preparedRows.length; idx++) {
         const row = preparedRows[idx];
         row.komoditas.stok += row.beratBersih;
         row.komoditas.updateTerakhir = iso;
 
-        const rowMetode: 'TUNAI' | 'TRANSFER' | 'TITIP' = row.isBelumPutus
+        const rowMetode: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON' = row.isBelumPutus
           ? 'TITIP'
           : params.metodePembayaran;
-        const rowRekening = row.isBelumPutus || params.metodePembayaran === 'TITIP' ? 'TIT01' : paidRekeningKode;
+        const rowRekening =
+          row.isBelumPutus || params.metodePembayaran === 'TITIP'
+            ? 'TIT01'
+            : params.metodePembayaran === 'SINKRON'
+            ? 'SINKRON'
+            : paidRekeningKode;
         const rowStatus: TransaksiPembelianHasilBumi['status'] = row.isBelumPutus
           ? 'BELUM_PUTUS_HARGA'
           : params.metodePembayaran === 'TITIP'
@@ -1948,7 +2005,7 @@ export class TransactionService {
         const rec: TransaksiPembelianHasilBumi = {
           noPembelian,
           batchId,
-          tanggal,
+          tanggal: finalTanggal,
           jam,
           idMitra: finalMitraId,
           namaMitra: finalMitraNama,
@@ -2001,6 +2058,8 @@ export class TransactionService {
         totalNominal: totalNominalAll,
         totalNominalDibayarSekarang,
         totalBeratBersih,
+        totalBayarBatch: totalNominalAll,
+        totalNettoBatch: totalBeratBersih,
         divisi: finalDivisi,
       };
     });
@@ -2348,13 +2407,15 @@ export class TransactionService {
   public static async putusHargaHasilBumi(params: {
     noPembelian: string;
     hargaDealPerKg: number;
+    tanggal?: string;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPembelianHasilBumi> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal, tanggal);
       const record = db.pembelianHasilBumi.find((p) => p.noPembelian === params.noPembelian);
       if (!record) throw new Error(`Transaksi pembelian ${params.noPembelian} tidak ditemukan`);
       if (params.hargaDealPerKg <= 0) throw new Error('Harga deal per kg harus lebih dari Rp 0');
@@ -2364,11 +2425,17 @@ export class TransactionService {
       record.totalNominal = totalNominalBaru;
       record.statusHarga = 'HARGA_PUTUS';
       record.isBelumPutusHarga = false;
-      record.tanggalPutusHarga = `${tanggal} ${jam}`;
-      record.divisi = 'Gudang Wijaya Agro';
+      record.tanggalPutusHarga = `${finalTanggal} ${jam}`;
+      if (params.divisi !== undefined) {
+        record.divisi = isTanpaDivisi(params.divisi)
+          ? TANPA_DIVISI_VALUE
+          : params.divisi.trim() || 'Gudang Wijaya Agro';
+      } else if (!record.divisi) {
+        record.divisi = 'Gudang Wijaya Agro';
+      }
       record.keterangan = params.keterangan
         ? params.keterangan
-        : `${record.keterangan} - (Harga diputus pada ${tanggal} @ Rp ${params.hargaDealPerKg.toLocaleString('id-ID')}/Kg)`;
+        : `${record.keterangan} - (Harga diputus pada ${finalTanggal} @ Rp ${params.hargaDealPerKg.toLocaleString('id-ID')}/Kg)`;
 
       if (params.metodePembayaran === 'TUNAI') {
         const kasAcc = db.rekening.find((r) => r.kode === 'KAS01');
@@ -2395,6 +2462,10 @@ export class TransactionService {
         bankAcc.saldoSaatIni -= totalNominalBaru;
         record.metodePembayaran = 'TRANSFER';
         record.rekeningSumber = bankAcc.kode;
+        record.status = 'LUNAS';
+      } else if (params.metodePembayaran === 'SINKRON') {
+        record.metodePembayaran = 'SINKRON';
+        record.rekeningSumber = 'SINKRON';
         record.status = 'LUNAS';
       } else {
         record.metodePembayaran = 'TITIP';
@@ -2469,7 +2540,7 @@ export class TransactionService {
     potonganRafaksi?: number;
     hargaJualPerKg?: number;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA';
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA' | 'SINKRON';
     rekeningTujuan?: string;
     noSuratJalan?: string;
     tanggal?: string;
@@ -2614,6 +2685,10 @@ export class TransactionService {
         finalRekeningTujuan = 'BON01';
         statusPembayaran = 'BELUM_BAYAR';
         sisaPiutang = totalNominal;
+      } else if (params.metodePembayaran === 'SINKRON') {
+        finalRekeningTujuan = 'SINKRON';
+        statusPembayaran = 'LUNAS';
+        sisaPiutang = 0;
       }
 
       // Kurangi Stok Fisik Ready Gudang (+ opsi Habis Muat / Susut)
@@ -2633,20 +2708,10 @@ export class TransactionService {
       komoditas.stok = stokGudangSetelah;
       komoditas.updateTerakhir = iso;
 
-      // Normalisasi tanggal jika diberikan (YYYY-MM-DD -> DD/MM/YYYY)
-      let finalTanggal = todayWib;
-      if (params.tanggal && params.tanggal.trim()) {
-        const rawTgl = params.tanggal.trim();
-        const parts = rawTgl.split(/[-/]/);
-        if (parts.length === 3) {
-          finalTanggal =
-            parts[0].length === 4
-              ? `${parts[2].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[0]}`
-              : `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
-        }
-      }
-
-      const finalDivisi = params.divisi?.trim() || 'PT Wijaya Agro Perkasa';
+      const finalTanggal = normalizeDateToDmy(params.tanggal, todayWib);
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : params.divisi?.trim() || 'PT Wijaya Agro Perkasa';
       const noPenjualan = generateId('JHB');
       const defaultKet = isBelumPutusHarga
         ? `Muat / Jual ${komoditas.nama} (${beratBersih.toLocaleString('id-ID')} Kg @ Rata-Rata Beli Rp ${modalRataRataPerKg.toLocaleString('id-ID')}/Kg) kepada ${finalMitraNama} — Uang Hasil Penjualan Lewat Uang Masuk`
@@ -3107,14 +3172,16 @@ export class TransactionService {
   // ==========================================
   public static async processKasbonUang(params: {
     idMitra: string;
-    metode: 'TUNAI' | 'TRANSFER';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningSumber?: string;
     nominal: number;
+    tanggal?: string;
     keterangan?: string;
     fotoNota?: string;
   }): Promise<TransaksiKasbonUang> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal, tanggal);
 
       // Validasi nominal
       if (!params.nominal || params.nominal <= 0) {
@@ -3130,53 +3197,66 @@ export class TransactionService {
         throw new Error(`Mitra ${mitra.nama} berstatus NONAKTIF`);
       }
 
+      const isSinkron = params.metode === 'SINKRON' || params.rekeningSumber === 'SINKRON';
       let rekeningSumberKode = '';
-      if (params.metode === 'TUNAI') {
-        rekeningSumberKode = 'KAS01';
-      } else if (params.metode === 'TRANSFER') {
-        if (!params.rekeningSumber) {
-          throw new Error('User wajib memilih rekening bank perusahaan untuk transfer kasbon uang');
+      let rekeningSumberNama = 'Rekening SINKRON (Non-Kas)';
+
+      if (isSinkron) {
+        rekeningSumberKode = 'SINKRON';
+      } else {
+        if (params.metode === 'TUNAI') {
+          rekeningSumberKode = 'KAS01';
+        } else if (params.metode === 'TRANSFER') {
+          if (!params.rekeningSumber) {
+            throw new Error('User wajib memilih rekening bank perusahaan untuk transfer kasbon uang');
+          }
+          rekeningSumberKode = params.rekeningSumber;
         }
-        rekeningSumberKode = params.rekeningSumber;
-      }
 
-      // Dilarang keras menggunakan BON01 atau TIT01
-      if (rekeningSumberKode === 'BON01' || rekeningSumberKode === 'TIT01') {
-        throw new Error('Rekening virtual BON01 / TIT01 DILARANG digunakan sebagai sumber kasbon uang!');
-      }
+        // Dilarang keras menggunakan BON01 atau TIT01
+        if (rekeningSumberKode === 'BON01' || rekeningSumberKode === 'TIT01') {
+          throw new Error('Rekening virtual BON01 / TIT01 DILARANG digunakan sebagai sumber kasbon uang!');
+        }
 
-      // Validasi rekening sumber dan saldo aktual di database
-      const rekeningSumber = db.rekening.find((r) => r.kode === rekeningSumberKode);
-      if (!rekeningSumber) {
-        throw new Error(`Rekening sumber dengan kode ${rekeningSumberKode} tidak ditemukan`);
-      }
-      if (rekeningSumber.status !== 'AKTIF') {
-        throw new Error(`Rekening sumber ${rekeningSumber.nama} tidak aktif`);
-      }
-      if (!this.isAnakPerusahaanRekening(rekeningSumber) && rekeningSumber.saldoSaatIni < params.nominal) {
-        throw new Error(
-          `Saldo rekening ${rekeningSumber.nama} (${rekeningSumber.kode}) tidak mencukupi! Saldo saat ini: Rp ${rekeningSumber.saldoSaatIni.toLocaleString(
-            'id-ID'
-          )}, kasbon yang diajukan: Rp ${params.nominal.toLocaleString('id-ID')}`
-        );
-      }
+        // Validasi rekening sumber dan saldo aktual di database
+        const rekeningSumber = db.rekening.find((r) => r.kode === rekeningSumberKode);
+        if (!rekeningSumber) {
+          throw new Error(`Rekening sumber dengan kode ${rekeningSumberKode} tidak ditemukan`);
+        }
+        if (rekeningSumber.status !== 'AKTIF') {
+          throw new Error(`Rekening sumber ${rekeningSumber.nama} tidak aktif`);
+        }
+        if (!this.isAnakPerusahaanRekening(rekeningSumber) && rekeningSumber.saldoSaatIni < params.nominal) {
+          throw new Error(
+            `Saldo rekening ${rekeningSumber.nama} (${rekeningSumber.kode}) tidak mencukupi! Saldo saat ini: Rp ${rekeningSumber.saldoSaatIni.toLocaleString(
+              'id-ID'
+            )}, kasbon yang diajukan: Rp ${params.nominal.toLocaleString('id-ID')}`
+          );
+        }
 
-      // Potong saldo rekening sumber aktual
-      rekeningSumber.saldoSaatIni -= params.nominal;
+        // Potong saldo rekening sumber aktual
+        rekeningSumber.saldoSaatIni -= params.nominal;
+        rekeningSumberKode = rekeningSumber.kode;
+        rekeningSumberNama = rekeningSumber.nama;
+      }
 
       const idTransaksi = generateId('KBU');
       const kasbonUangRecord: TransaksiKasbonUang = {
         idTransaksi,
-        tanggal,
+        tanggal: finalTanggal,
         jam,
         idMitra: mitra.id,
         namaMitra: mitra.nama,
         jenisTransaksi: 'KASBON UANG',
-        metode: params.metode,
-        rekeningSumber: rekeningSumber.kode,
+        metode: isSinkron ? 'SINKRON' : params.metode,
+        rekeningSumber: rekeningSumberKode,
         nominal: params.nominal,
         sisaKasbon: params.nominal,
-        keterangan: params.keterangan || `Pemberian Kasbon Uang Operasional Tani kepada ${mitra.nama}`,
+        keterangan:
+          params.keterangan ||
+          (isSinkron
+            ? `Pencatatan Kasbon Uang SINKRON (Tanpa Uang Riil Keluar) kepada ${mitra.nama}`
+            : `Pemberian Kasbon Uang Operasional Tani kepada ${mitra.nama}`),
         status: 'BELUM LUNAS',
         isNotaNgunci: false,
         fotoNota: params.fotoNota || '',
@@ -3184,6 +3264,7 @@ export class TransactionService {
       };
 
       db.kasbonUang.unshift(kasbonUangRecord);
+      dbManager.synchronizeVirtualAccounts();
 
       this.addAuditLog(
         db,
@@ -3191,9 +3272,9 @@ export class TransactionService {
         idTransaksi,
         `Kasbon Uang diberikan kepada ${mitra.nama} sebesar Rp ${params.nominal.toLocaleString(
           'id-ID'
-        )} dari ${rekeningSumber.nama} (${rekeningSumber.kode}) via ${params.metode}`,
+        )} dari ${rekeningSumberNama} (${rekeningSumberKode}) via ${kasbonUangRecord.metode}`,
         params.nominal,
-        rekeningSumber.kode
+        rekeningSumberKode
       );
 
       return kasbonUangRecord;
@@ -3387,15 +3468,25 @@ export class TransactionService {
       if (!mitra) throw new Error('Mitra tidak ditemukan');
       if (mitra.status !== 'AKTIF') throw new Error(`Mitra ${mitra.nama} berstatus NONAKTIF`);
 
-      const rekening = db.rekening.find((r) => r.kode === params.rekeningTujuan);
-      if (!rekening) throw new Error(`Rekening kasir/bank PT "${params.rekeningTujuan}" tidak ditemukan`);
+      const isSinkronPinjaman = params.rekeningTujuan === 'SINKRON';
+      const rekening = !isSinkronPinjaman
+        ? db.rekening.find((r) => r.kode === params.rekeningTujuan)
+        : undefined;
+      if (!isSinkronPinjaman && !rekening) {
+        throw new Error(`Rekening kasir/bank PT "${params.rekeningTujuan}" tidak ditemukan`);
+      }
 
-      const cleanTgl = params.tanggal ? params.tanggal.trim() : tanggal;
+      const cleanTgl = normalizeDateToDmy(params.tanggal, tanggal);
       const noPembelian = generateId('PJM');
       const cleanRef = params.noReferensi ? params.noReferensi.trim() : `PJM-${Date.now().toString().slice(-4)}`;
 
-      // 1. Tambah Saldo Kas / Bank PT karena uang pinjaman masuk ke kas PT
-      rekening.saldoSaatIni += params.nominal;
+      // 1. Tambah Saldo Kas / Bank PT hanya jika bukan metode SINKRON
+      if (!isSinkronPinjaman && rekening && !rekening.isVirtual) {
+        rekening.saldoSaatIni += params.nominal;
+      }
+
+      const rekKodeFinal = isSinkronPinjaman ? 'SINKRON' : rekening!.kode;
+      const rekNamaFinal = isSinkronPinjaman ? 'Rekening SINKRON (Non-Kas)' : rekening!.nama;
 
       const allFotos = params.fotoNotaList && params.fotoNotaList.length > 0 
         ? params.fotoNotaList 
@@ -3416,7 +3507,7 @@ export class TransactionService {
         hargaPerKg: 0,
         totalNominal: params.nominal,
         metodePembayaran: 'TITIP',
-        rekeningSumber: rekening.kode,
+        rekeningSumber: rekKodeFinal,
         status: 'TITIP',
         fotoNota: allFotos.join('|||'),
         fotoNotaList: allFotos,
@@ -3425,7 +3516,7 @@ export class TransactionService {
         tanggalNotaLalu: cleanTgl,
         keterangan: params.keterangan 
           ? params.keterangan.trim() 
-          : `Pinjaman uang dari PT ke Mitra ${mitra.nama} (Diterima di ${rekening.nama}, Masuk Saldo Titip Mitra)`,
+          : `Pinjaman uang dari PT ke Mitra ${mitra.nama} (${isSinkronPinjaman ? 'Metode SINKRON Non-Kas' : `Diterima di ${rekNamaFinal}`}, Masuk Saldo Titip Mitra)`,
         createdAt: iso,
       };
 
@@ -3436,9 +3527,9 @@ export class TransactionService {
         db,
         'CREATE',
         noPembelian,
-        `Pinjam uang PT ke Mitra "${mitra.nama}" sebesar Rp ${params.nominal.toLocaleString('id-ID')} masuk ke ${rekening.nama} (Tercatat di Saldo Titip Mitra - Ref: ${cleanRef})`,
+        `Pinjam uang PT ke Mitra "${mitra.nama}" sebesar Rp ${params.nominal.toLocaleString('id-ID')} via ${rekNamaFinal} (Tercatat di Saldo Titip Mitra - Ref: ${cleanRef})`,
         params.nominal,
-        rekening.kode
+        rekKodeFinal
       );
 
       dbManager.synchronizeVirtualAccounts();
@@ -3447,7 +3538,7 @@ export class TransactionService {
         record: pinjamanRecord,
         mitraNama: mitra.nama,
         nominal: params.nominal,
-        rekeningNama: rekening.nama,
+        rekeningNama: rekNamaFinal,
       };
     });
   }
@@ -3754,11 +3845,13 @@ export class TransactionService {
     nominalBayar: number;
     metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningTujuan?: string;
+    tanggal?: string;
     keterangan?: string;
     idNotaTarget?: string;
   }): Promise<TransaksiBayarBon> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal, tanggal);
 
       if (!params.nominalBayar || params.nominalBayar <= 0) {
         throw new Error('Nominal pembayaran bon harus lebih dari Rp 0');
@@ -3781,28 +3874,25 @@ export class TransactionService {
         params.metode === 'SINKRON' || params.rekeningTujuan === 'SINKRON';
 
       // =========================================================
-      // JALUR 1: METODE SINKRON (POTONG LANGSUNG DARI TITIPAN / UANG HASIL BUMI TANPA UANG KELUAR/MASUK)
+      // JALUR 1: METODE SINKRON (PELUNASAN BON TANPA MENGGERAKKAN UANG RIIL KAS/BANK)
+      // Jika mitra memiliki Saldo Titipan Hasil Bumi, otomatis memotong saldo titipan tersebut;
+      // jika tidak ada titipan, tetap melunasi bon secara SINKRON (Non-Kas).
       // =========================================================
       if (isSinkronMode) {
         if (totalBonKotor <= 0) {
           throw new Error(`Mitra ${mitra.nama} tidak memiliki kewajiban bon aktif yang perlu disinkronkan (Rp 0).`);
         }
-        if (saldoTitipanAktif <= 0) {
-          throw new Error(
-            `Mitra ${mitra.nama} tidak memiliki Saldo Titipan Hasil Bumi / Uang Kopi (Rp 0) untuk dipotong via Rekening SINKRON. Silakan gunakan metode Tunai atau Transfer.`
-          );
-        }
 
-        const maksPotongSinkron = Math.min(totalBonKotor, saldoTitipanAktif);
-        if (params.nominalBayar > maksPotongSinkron) {
+        if (params.nominalBayar > totalBonKotor) {
           throw new Error(
             `Nominal SINKRON (Rp ${params.nominalBayar.toLocaleString(
               'id-ID'
-            )}) melebihi batas maksimal potong silang antara Bon (Rp ${totalBonKotor.toLocaleString(
-              'id-ID'
-            )}) dan Saldo Titipan Hasil Bumi (Rp ${saldoTitipanAktif.toLocaleString('id-ID')}), yaitu maksimal Rp ${maksPotongSinkron.toLocaleString('id-ID')}.`
+            )}) melebihi total kewajiban Bon aktif mitra (Rp ${totalBonKotor.toLocaleString('id-ID')}).`
           );
         }
+
+        const nominalPotongDariTitipan =
+          saldoTitipanAktif > 0 ? Math.min(params.nominalBayar, saldoTitipanAktif) : 0;
 
         const idTransaksi = generateId('BYB');
 
@@ -3811,24 +3901,28 @@ export class TransactionService {
           idNotaTarget: cleanIdNotaTarget,
         });
         const sisaBonSetelah = Math.max(0, totalBonKotor - params.nominalBayar);
-        const sisaTitipanSetelah = Math.max(0, saldoTitipanAktif - params.nominalBayar);
+        const sisaTitipanSetelah = Math.max(0, saldoTitipanAktif - nominalPotongDariTitipan);
         const sisaNotaNgunciSetelah = this.getMitraNominalNotaNgunci(db, mitra.id);
         const nominalPengurangNotaNgunci = Math.max(0, sisaNotaNgunciSebelum - sisaNotaNgunciSetelah);
 
         const ketSinkron =
           params.keterangan && params.keterangan.trim()
             ? params.keterangan.trim()
-            : `Pelunasan Bon via SINKRON — Potong langsung dari Saldo Titipan / Uang Hasil Bumi (Sisa Titipan: Rp ${sisaTitipanSetelah.toLocaleString('id-ID')})`;
+            : nominalPotongDariTitipan > 0
+            ? `Pelunasan Bon via SINKRON — Potong langsung dari Saldo Titipan / Uang Hasil Bumi Rp ${nominalPotongDariTitipan.toLocaleString('id-ID')} (Sisa Titipan: Rp ${sisaTitipanSetelah.toLocaleString('id-ID')})`
+            : `Pelunasan Bon via SINKRON (Tanpa Pergerakan Uang Riil Kas/Bank)`;
 
         const bayarBonSinkronRecord: TransaksiBayarBon = {
           idTransaksi,
-          tanggal,
+          tanggal: finalTanggal,
           jam,
           idMitra: mitra.id,
           namaMitra: mitra.nama,
           totalBonSebelum: totalBonKotor,
           totalBonAwalKotor: totalBonKotor,
-          nominalPotongTitipanOtomatis: params.nominalBayar,
+          ...(nominalPotongDariTitipan > 0
+            ? { nominalPotongTitipanOtomatis: nominalPotongDariTitipan }
+            : {}),
           nominalBayar: params.nominalBayar,
           sisaBonSetelah,
           ...(cleanIdNotaTarget ? { idNotaTarget: cleanIdNotaTarget } : {}),
@@ -3841,7 +3935,7 @@ export class TransactionService {
             : {}),
           metode: 'SINKRON',
           rekeningTujuan: 'SINKRON',
-          isKompensasiTitipan: true,
+          isKompensasiTitipan: nominalPotongDariTitipan > 0,
           alokasi: alokasiSinkron,
           keterangan: ketSinkron,
           createdAt: iso,
@@ -3850,25 +3944,27 @@ export class TransactionService {
         if (!db.bayarBon) db.bayarBon = [];
         db.bayarBon.unshift(bayarBonSinkronRecord);
 
-        // 2. Catat pemotongan pasangan pada Saldo Titipan Hasil Bumi mitra agar saldo uang kopinya berkurang presisi
-        if (!db.pencairanTitipan) db.pencairanTitipan = [];
-        db.pencairanTitipan.unshift({
-          idPencairan: `${idTransaksi}-SINKRON`,
-          tanggal,
-          jam,
-          idMitra: mitra.id,
-          namaMitra: mitra.nama,
-          nominalPencairan: params.nominalBayar,
-          rekeningSumber: 'SINKRON',
-          saldoTitipanSebelum: saldoTitipanAktif,
-          totalTitipanAwalKotor: saldoTitipanAktif,
-          nominalPotongBonOtomatis: params.nominalBayar,
-          saldoTitipanSisa: sisaTitipanSetelah,
-          metodePembayaran: 'SINKRON',
-          isKompensasiBon: true,
-          keterangan: `Potong Saldo Titipan / Uang Hasil Bumi via Rekening SINKRON untuk Pelunasan Bon (${idTransaksi})`,
-          createdAt: iso,
-        });
+        // 2. Jika mitra memiliki Saldo Titipan Hasil Bumi, catat pemotongan pasangan agar saldo titipan berkurang presisi
+        if (nominalPotongDariTitipan > 0) {
+          if (!db.pencairanTitipan) db.pencairanTitipan = [];
+          db.pencairanTitipan.unshift({
+            idPencairan: `${idTransaksi}-SINKRON`,
+            tanggal: finalTanggal,
+            jam,
+            idMitra: mitra.id,
+            namaMitra: mitra.nama,
+            nominalPencairan: nominalPotongDariTitipan,
+            rekeningSumber: 'SINKRON',
+            saldoTitipanSebelum: saldoTitipanAktif,
+            totalTitipanAwalKotor: saldoTitipanAktif,
+            nominalPotongBonOtomatis: nominalPotongDariTitipan,
+            saldoTitipanSisa: sisaTitipanSetelah,
+            metodePembayaran: 'SINKRON',
+            isKompensasiBon: true,
+            keterangan: `Potong Saldo Titipan / Uang Hasil Bumi via Rekening SINKRON untuk Pelunasan Bon (${idTransaksi})`,
+            createdAt: iso,
+          });
+        }
 
         dbManager.synchronizeVirtualAccounts();
 
@@ -3878,15 +3974,15 @@ export class TransactionService {
           idTransaksi,
           `Pelunasan Bon via SINKRON (${mitra.nama}): Bon Rp ${params.nominalBayar.toLocaleString(
             'id-ID'
-          )} dipotong langsung dari Saldo Titipan / Uang Hasil Bumi Rp ${saldoTitipanAktif.toLocaleString(
-            'id-ID'
-          )} tanpa uang keluar/masuk.${
+          )} diselesaikan tanpa uang keluar/masuk.${
+            nominalPotongDariTitipan > 0
+              ? ` Dipotong dari Saldo Titipan Rp ${nominalPotongDariTitipan.toLocaleString('id-ID')}.`
+              : ''
+          }${
             nominalPengurangNotaNgunci > 0
               ? ` [Mengurangi Nominal Nota Kunci Rp ${nominalPengurangNotaNgunci.toLocaleString('id-ID')} -> Sisa Nota Kunci Rp ${sisaNotaNgunciSetelah.toLocaleString('id-ID')}]`
               : ''
-          } Sisa Bon: Rp ${sisaBonSetelah.toLocaleString(
-            'id-ID'
-          )}, Sisa Titipan Mitra: Rp ${sisaTitipanSetelah.toLocaleString('id-ID')}.`,
+          } Sisa Bon: Rp ${sisaBonSetelah.toLocaleString('id-ID')}.`,
           params.nominalBayar,
           'SINKRON'
         );
@@ -3957,7 +4053,7 @@ export class TransactionService {
           nominalPotong: potonganOtomatis,
           totalBonSebelum: totalBonKotor,
           saldoTitipanSebelum: saldoTitipanAktif,
-          tanggal,
+          tanggal: finalTanggal,
           jam,
           iso,
           refId: idTransaksi,
@@ -3977,7 +4073,7 @@ export class TransactionService {
 
       const bayarBonRecord: TransaksiBayarBon = {
         idTransaksi,
-        tanggal,
+        tanggal: finalTanggal,
         jam,
         idMitra: mitra.id,
         namaMitra: mitra.nama,
@@ -4052,10 +4148,12 @@ export class TransactionService {
     rekeningSumber: string;
     rekeningTujuan: string;
     nominal: number;
+    tanggal?: string;
     keterangan: string;
   }): Promise<TransaksiTransferRekening> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const finalTanggal = normalizeDateToDmy(params.tanggal, tanggal);
 
       // Validasi rekening sumber & tujuan
       if (!params.rekeningSumber || !params.rekeningTujuan) {
@@ -4140,7 +4238,7 @@ export class TransactionService {
       const noTransfer = generateId('TRF');
       const transferRecord: TransaksiTransferRekening = {
         noTransfer,
-        tanggal,
+        tanggal: finalTanggal,
         jam,
         rekeningSumber: sumberAcc.kode,
         rekeningTujuan: tujuanAcc.kode,
@@ -4188,19 +4286,19 @@ export class TransactionService {
 
   public static async processPenggajian(params: {
     idKaryawan: string;
-    divisi?: NamaDivisi;
+    divisi?: NamaDivisi | string;
     tipeGaji?: 'HARIAN' | 'BULANAN';
     tanggalKerja?: string;
     periodeBulan?: string;
-    gajiNominal?: number; // Manual input nominal upah harian / gaji pokok
-    tunjanganNominal?: number; // Tunjangan opsional (override tunjanganTetap jika diisi)
-    bonus?: number;       // Lembur, insentif, uang makan
-    lunasiUpahHarianPending?: boolean; // Jika true, tandai catatan upah harian TERCATAT jadi SUDAH_DIBAYAR
-    upahHarianIds?: string[]; // Daftar ID upah harian spesifik yang ikut dilunasi
-    persentasePotongKasbon?: number; // e.g. 100, 50, 25, 0 atau custom
+    gajiNominal?: number;
+    tunjanganNominal?: number;
+    bonus?: number;
+    lunasiUpahHarianPending?: boolean;
+    upahHarianIds?: string[];
+    persentasePotongKasbon?: number;
     nominalPotongKustom?: number;
-    metodePembayaran?: 'TUNAI' | 'TRANSFER';
-    rekeningSumber?: string; // e.g. Rekening Divisi atau Kas Utama
+    metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
+    rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPenggajian> {
     return await dbManager.executeTransaction((db) => {
@@ -4214,15 +4312,19 @@ export class TransactionService {
         throw new Error(`Karyawan ${kry.nama} berstatus nonaktif`);
       }
 
-      // Validasi Divisi yang ditugaskan hari ini
-      const divisi: NamaDivisi =
-        params.divisi ||
-        ((kry.divisi || kry.departemen || 'Gudang Wijaya Agro') as NamaDivisi);
+      const divisi: string = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : (params.divisi && String(params.divisi).trim()) ||
+          kry.divisi ||
+          kry.departemen ||
+          'Gudang Wijaya Agro';
       const tipeGaji: 'HARIAN' | 'BULANAN' = params.tipeGaji || 'HARIAN';
-      const targetTanggal = params.tanggalKerja || tanggal;
+      const targetTanggal = normalizeDateToDmy(params.tanggalKerja, tanggal);
 
-      // Tentukan rekening sumber default (utamakan rekening khusus divisi jika tidak dipilih)
-      let rekKode = params.rekeningSumber;
+      const isSinkronGaji =
+        params.metodePembayaran === 'SINKRON' || params.rekeningSumber === 'SINKRON';
+
+      let rekKode = isSinkronGaji ? 'SINKRON' : params.rekeningSumber;
       if (!rekKode) {
         rekKode = TransactionService.DIVISI_REKENING_MAP[divisi] || 'KAS01';
       }
@@ -4231,16 +4333,16 @@ export class TransactionService {
         throw new Error('Rekening virtual BON01 / TIT01 DILARANG digunakan untuk pembayaran gaji!');
       }
 
-      let rekSumber = db.rekening.find((r) => r.kode === rekKode);
-      if (!rekSumber) {
-        // Fallback to KAS01 jika rekening divisi belum ada
-        rekSumber = db.rekening.find((r) => r.kode === 'KAS01') || db.rekening[0];
-      }
-      if (rekSumber.status !== 'AKTIF') {
-        throw new Error(`Rekening ${rekSumber.nama} tidak aktif`);
+      let rekSumber = !isSinkronGaji ? db.rekening.find((r) => r.kode === rekKode) : undefined;
+      if (!isSinkronGaji) {
+        if (!rekSumber) {
+          rekSumber = db.rekening.find((r) => r.kode === 'KAS01') || db.rekening[0];
+        }
+        if (rekSumber.status !== 'AKTIF') {
+          throw new Error(`Rekening ${rekSumber.nama} tidak aktif`);
+        }
       }
 
-      // Upah dihitung murni berdasarkan input per hari kerja (tanpa standar gaji bulanan tetap)
       const upahManual =
         params.gajiNominal !== undefined && params.gajiNominal !== null
           ? Math.max(0, Number(params.gajiNominal))
@@ -4257,7 +4359,6 @@ export class TransactionService {
         throw new Error('Total gaji/upah harus lebih dari Rp 0');
       }
 
-      // Find linked mitra to calculate current total outstanding bon
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
       const outstandingKasbonBarang = db.penjualan
         .filter((p) => p.idMitra === mitraId && p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR')
@@ -4269,7 +4370,6 @@ export class TransactionService {
 
       const totalKasbonAwal = outstandingKasbonBarang + outstandingKasbonUang;
 
-      // Calculate potongan kasbon
       let potonganKasbon = 0;
       const persentase = Number(params.persentasePotongKasbon) || 0;
       if (params.nominalPotongKustom !== undefined && params.nominalPotongKustom > 0) {
@@ -4282,6 +4382,8 @@ export class TransactionService {
       const gajiBersihDibayar = totalGajiKotor - potonganKasbon;
 
       if (
+        !isSinkronGaji &&
+        rekSumber &&
         !this.isAnakPerusahaanRekening(rekSumber) &&
         rekSumber.kategori !== 'OPERASIONAL_DIVISI' &&
         rekSumber.saldoSaatIni < gajiBersihDibayar
@@ -4295,7 +4397,6 @@ export class TransactionService {
 
       let idBayarBonTerkait: string | undefined;
 
-      // Settle kasbon if deduction > 0 (Prioritas Nota Kunci dulu lalu FIFO)
       if (potonganKasbon > 0) {
         const ngunciBefore = this.getMitraNominalNotaNgunci(db, mitraId);
         const alokasiList = this.allocateMitraBonFifo(db, mitraId, potonganKasbon);
@@ -4329,8 +4430,15 @@ export class TransactionService {
         });
       }
 
-      // Potong saldo rekening sumber
-      rekSumber.saldoSaatIni -= gajiBersihDibayar;
+      if (!isSinkronGaji && rekSumber) {
+        rekSumber.saldoSaatIni -= gajiBersihDibayar;
+      }
+
+      const finalRekKode = isSinkronGaji ? 'SINKRON' : rekSumber!.kode;
+      const finalRekNama = isSinkronGaji ? 'Rekening SINKRON (Non-Kas)' : rekSumber!.nama;
+      const finalMetode: 'TUNAI' | 'TRANSFER' | 'SINKRON' = isSinkronGaji
+        ? 'SINKRON'
+        : params.metodePembayaran || (finalRekKode === 'KAS01' ? 'TUNAI' : 'TRANSFER');
 
       const sisaKasbonAkhir = totalKasbonAwal - potonganKasbon;
       const idPayroll = generateId('GAJI');
@@ -4340,7 +4448,6 @@ export class TransactionService {
         params.periodeBulan ||
         (tipeGaji === 'HARIAN' ? `Harian - ${targetTanggal}` : `Bulanan - ${targetTanggal.slice(3)}`);
 
-      // Jika diminta melunasi catatan upah harian yang masih TERCATAT (misal saat gajian 1 bulan penuh)
       let settledDailyLogs: CatatanUpahHarian[] = [];
       if (params.lunasiUpahHarianPending || (params.upahHarianIds && params.upahHarianIds.length > 0)) {
         const idFilter =
@@ -4383,8 +4490,8 @@ export class TransactionService {
         potonganKasbon,
         sisaKasbonAkhir,
         gajiBersihDibayar,
-        metodePembayaran: params.metodePembayaran || 'TUNAI',
-        rekeningSumber: rekSumber.kode,
+        metodePembayaran: finalMetode,
+        rekeningSumber: finalRekKode,
         ...(settledDailyLogs.length > 0
           ? {
               jumlahHariKerja: settledDailyLogs.length,
@@ -4396,14 +4503,15 @@ export class TransactionService {
       };
 
       db.penggajian.unshift(payrollRecord);
+      dbManager.synchronizeVirtualAccounts();
 
       this.addAuditLog(
         db,
         'PAYROLL',
         idPayroll,
-        `Penggajian ${tipeGaji} [Divisi: ${divisi}] Karyawan ${kry.nama} (${kry.nik}): Upah Kotor Rp ${totalGajiKotor.toLocaleString('id-ID')}, Potong Bon Rp ${potonganKasbon.toLocaleString('id-ID')} (Sisa Bon Rp ${sisaKasbonAkhir.toLocaleString('id-ID')}), Gaji Bersih Rp ${gajiBersihDibayar.toLocaleString('id-ID')} via ${rekSumber.nama} (${rekSumber.kode})`,
+        `Penggajian ${tipeGaji} [Divisi: ${divisi}] Karyawan ${kry.nama} (${kry.nik}): Upah Kotor Rp ${totalGajiKotor.toLocaleString('id-ID')}, Potong Bon Rp ${potonganKasbon.toLocaleString('id-ID')} (Sisa Bon Rp ${sisaKasbonAkhir.toLocaleString('id-ID')}), Gaji Bersih Rp ${gajiBersihDibayar.toLocaleString('id-ID')} via ${finalRekNama} (${finalRekKode})`,
         gajiBersihDibayar,
-        rekSumber.kode
+        finalRekKode
       );
 
       return payrollRecord;
@@ -4417,11 +4525,12 @@ export class TransactionService {
     tanggalKerja: string;
     items: Array<{
       idKaryawan: string;
-      divisi: NamaDivisi;
+      divisi: NamaDivisi | string;
       gajiNominal: number;
       bonus?: number;
       persentasePotongKasbon?: number;
       nominalPotongKustom?: number;
+      metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
       rekeningSumber?: string;
       keterangan?: string;
     }>;
@@ -4437,6 +4546,7 @@ export class TransactionService {
         bonus: item.bonus,
         persentasePotongKasbon: item.persentasePotongKasbon || 0,
         nominalPotongKustom: item.nominalPotongKustom,
+        metodePembayaran: item.metodePembayaran,
         rekeningSumber: item.rekeningSumber,
         keterangan: item.keterangan,
       });
@@ -4453,7 +4563,7 @@ export class TransactionService {
     idKaryawan: string;
     tanggalKerja?: string;
     hariTanggal?: string;
-    divisi: NamaDivisi;
+    divisi: NamaDivisi | string;
     divisiKode?: string;
     kategori?: string;
     rekening?: string;
@@ -4465,14 +4575,14 @@ export class TransactionService {
     ket?: 'BON' | 'LUNAS';
     catatan?: string;
     noInv?: string;
-    tugasPekerjaan?: string; // "hari ini kerja untuk apa"
-    upahHarian?: number;     // manual / dinamis tidak baku
+    tugasPekerjaan?: string;
+    upahHarian?: number;
     uangMakanLembur?: number;
     modeBayar: 'CATAT_HAK_UPAH' | 'LANGSUNG_CAIR';
     rekeningSumber?: string;
     persentasePotongKasbon?: number;
     nominalPotongKustom?: number;
-    metodePembayaran?: 'TUNAI' | 'TRANSFER';
+    metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
   }): Promise<{ catatan: CatatanUpahHarian; slipGaji?: TransaksiPenggajian }> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
@@ -4480,7 +4590,10 @@ export class TransactionService {
       if (!kry) throw new Error(`Karyawan dengan ID ${params.idKaryawan} tidak ditemukan`);
       if (kry.status !== 'AKTIF') throw new Error(`Karyawan ${kry.nama} berstatus nonaktif`);
 
-      const tglKerja = params.tanggalKerja || tanggal;
+      const tglKerja = normalizeDateToDmy(params.tanggalKerja, tanggal);
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : String(params.divisi || kry.divisi || 'Gudang Wijaya Agro').trim();
       const kuantiti = params.kuantiti !== undefined ? Number(params.kuantiti) : 1;
       const harga = params.harga !== undefined ? Number(params.harga) : (Number(params.upahHarian) || 0);
       const uangMakan = Math.max(0, Number(params.uangMakanLembur) || 0);
@@ -4516,10 +4629,18 @@ export class TransactionService {
         }
 
         const gajiBersihDibayar = totalUpah - potonganKasbon;
-        const rekKode = params.rekeningSumber || TransactionService.DIVISI_REKENING_MAP[params.divisi] || 'KAS01';
-        let rekSumber = db.rekening.find((r) => r.kode === rekKode) || db.rekening.find((r) => r.kode === 'KAS01') || db.rekening[0];
+        const isSinkronUpah =
+          params.metodePembayaran === 'SINKRON' || params.rekeningSumber === 'SINKRON';
+        const rekKode = isSinkronUpah
+          ? 'SINKRON'
+          : params.rekeningSumber || TransactionService.DIVISI_REKENING_MAP[finalDivisi] || 'KAS01';
+        let rekSumber = !isSinkronUpah
+          ? db.rekening.find((r) => r.kode === rekKode) || db.rekening.find((r) => r.kode === 'KAS01') || db.rekening[0]
+          : undefined;
 
         if (
+          !isSinkronUpah &&
+          rekSumber &&
           !this.isAnakPerusahaanRekening(rekSumber) &&
           rekSumber.kategori !== 'OPERASIONAL_DIVISI' &&
           rekSumber.saldoSaatIni < gajiBersihDibayar
@@ -4547,12 +4668,15 @@ export class TransactionService {
             rekeningTujuan: 'POTONG_GAJI',
             isPotongGaji: true,
             alokasi: alokasiList,
-            keterangan: `Potong Upah Harian [${params.divisi}] Karyawan ${kry.nama}`,
+            keterangan: `Potong Upah Harian [${finalDivisi}] Karyawan ${kry.nama}`,
             createdAt: iso,
           });
         }
 
-        rekSumber.saldoSaatIni -= gajiBersihDibayar;
+        if (!isSinkronUpah && rekSumber) {
+          rekSumber.saldoSaatIni -= gajiBersihDibayar;
+        }
+        const finalRekKode = isSinkronUpah ? 'SINKRON' : rekSumber!.kode;
         const idPayroll = generateId('GAJI');
         const slipNomor = `SLIP/WA/${tglKerja.replace(/\//g, '')}/${idPayroll.slice(-4)}`;
 
@@ -4566,7 +4690,7 @@ export class TransactionService {
           namaKaryawan: kry.nama,
           jabatan: kry.jabatan,
           departemen: kry.departemen,
-          divisi: params.divisi,
+          divisi: finalDivisi,
           tipeGaji: 'HARIAN',
           periodeBulan: `Harian - ${tglKerja}`,
           gajiPokok: hitungJumlah,
@@ -4578,23 +4702,24 @@ export class TransactionService {
           potonganKasbon,
           sisaKasbonAkhir: totalKasbonAwal - potonganKasbon,
           gajiBersihDibayar,
-          metodePembayaran: params.metodePembayaran || 'TUNAI',
-          rekeningSumber: rekSumber.kode,
-          keterangan: `Upah Harian [${params.divisi}]: ${params.tugasPekerjaan}`,
+          metodePembayaran: isSinkronUpah ? 'SINKRON' : params.metodePembayaran || 'TUNAI',
+          rekeningSumber: finalRekKode,
+          keterangan: `Upah Harian [${finalDivisi}]: ${params.tugasPekerjaan || itemNama}`,
           idBayarBonTerkait,
         };
 
         db.penggajian.unshift(slipGaji);
+        dbManager.synchronizeVirtualAccounts();
 
         this.addAuditLog(
           db,
           'PAYROLL',
           idPayroll,
-          `Pencairan Upah Harian [${params.divisi}] ${kry.nama} (${kry.nik}) Tugas: "${params.tugasPekerjaan}". Total Rp ${totalUpah.toLocaleString(
+          `Pencairan Upah Harian [${finalDivisi}] ${kry.nama} (${kry.nik}) Tugas: "${params.tugasPekerjaan || itemNama}". Total Rp ${totalUpah.toLocaleString(
             'id-ID'
           )}, Potong Bon Rp ${potonganKasbon.toLocaleString('id-ID')}, Bersih Rp ${gajiBersihDibayar.toLocaleString('id-ID')}`,
           gajiBersihDibayar,
-          rekSumber.kode
+          finalRekKode
         );
       }
 
@@ -4606,7 +4731,7 @@ export class TransactionService {
         nikKaryawan: kry.nik,
         namaKaryawan: kry.nama,
         jabatan: kry.jabatan,
-        divisi: params.divisi,
+        divisi: finalDivisi as NamaDivisi,
         divisiKode: params.divisiKode,
         kategori: params.kategori || 'KELUAR',
         rekening: params.rekening || 'HUTANG',
@@ -4857,7 +4982,8 @@ export class TransactionService {
    */
   public static async settleHakUpahKaryawan(params: {
     idKaryawan: string;
-    divisi?: NamaDivisi;
+    divisi?: NamaDivisi | string;
+    tanggalKerja?: string;
     upahHarianIds?: string[];
     tipeGaji?: 'HARIAN' | 'BULANAN';
     periodeBulan?: string;
@@ -4867,11 +4993,12 @@ export class TransactionService {
     rekeningSumber?: string;
     persentasePotongKasbon?: number;
     nominalPotongKustom?: number;
-    metodePembayaran?: 'TUNAI' | 'TRANSFER';
+    metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     keterangan?: string;
   }): Promise<TransaksiPenggajian> {
     return await dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
+      const targetTanggal = normalizeDateToDmy(params.tanggalKerja, tanggal);
       const kry = db.karyawan.find((k) => k.id === params.idKaryawan);
       if (!kry) throw new Error('Karyawan tidak ditemukan');
 
@@ -4893,10 +5020,13 @@ export class TransactionService {
         throw new Error('Tidak ada hak upah atau nominal gaji yang akan dibayarkan');
       }
 
-      const divisi: NamaDivisi =
-        params.divisi ||
-        pendingList[0]?.divisi ||
-        ((kry.divisi || kry.departemen || 'Gudang Wijaya Agro') as NamaDivisi);
+      const divisi: string = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : (params.divisi && String(params.divisi).trim()) ||
+          pendingList[0]?.divisi ||
+          kry.divisi ||
+          kry.departemen ||
+          'Gudang Wijaya Agro';
 
       const mitraId = kry.idMitraTerkait || `MTR-${kry.id}`;
       const outstandingKasbonBarang = (db.penjualan || [])
@@ -4916,16 +5046,25 @@ export class TransactionService {
       }
 
       const gajiBersihDibayar = totalUpahKotor - potonganKasbon;
-      const rekKode = params.rekeningSumber || TransactionService.DIVISI_REKENING_MAP[divisi] || 'KAS01';
+      const isSinkronGaji =
+        params.metodePembayaran === 'SINKRON' || params.rekeningSumber === 'SINKRON';
+
+      const rekKode = isSinkronGaji
+        ? 'SINKRON'
+        : params.rekeningSumber || TransactionService.DIVISI_REKENING_MAP[divisi] || 'KAS01';
       if (rekKode === 'BON01' || rekKode === 'TIT01') {
         throw new Error('Rekening virtual BON01 / TIT01 tidak dapat digunakan untuk pembayaran gaji');
       }
-      const rekSumber =
-        db.rekening.find((r) => r.kode === rekKode) ||
-        db.rekening.find((r) => r.kode === 'KAS01') ||
-        db.rekening[0];
+
+      const rekSumber = !isSinkronGaji
+        ? db.rekening.find((r) => r.kode === rekKode) ||
+          db.rekening.find((r) => r.kode === 'KAS01') ||
+          db.rekening[0]
+        : undefined;
 
       if (
+        !isSinkronGaji &&
+        rekSumber &&
         !this.isAnakPerusahaanRekening(rekSumber) &&
         rekSumber.kategori !== 'OPERASIONAL_DIVISI' &&
         rekSumber.saldoSaatIni < gajiBersihDibayar
@@ -4954,7 +5093,7 @@ export class TransactionService {
                 sisaNotaNgunciSetelah: ngunciAfter,
               }
             : {}),
-          tanggal,
+          tanggal: targetTanggal,
           jam,
           idMitra: mitraId,
           namaMitra: kry.nama,
@@ -4970,22 +5109,29 @@ export class TransactionService {
         });
       }
 
-      rekSumber.saldoSaatIni -= gajiBersihDibayar;
+      if (!isSinkronGaji && rekSumber) {
+        rekSumber.saldoSaatIni -= gajiBersihDibayar;
+      }
+      const finalRekKode = isSinkronGaji ? 'SINKRON' : rekSumber!.kode;
+      const finalMetode: 'TUNAI' | 'TRANSFER' | 'SINKRON' = isSinkronGaji
+        ? 'SINKRON'
+        : params.metodePembayaran || 'TUNAI';
+
       const idPayroll = generateId('GAJI');
-      const slipNomor = `SLIP/WA/${tanggal.replace(/\//g, '')}/${idPayroll.slice(-4)}`;
+      const slipNomor = `SLIP/WA/${targetTanggal.replace(/\//g, '')}/${idPayroll.slice(-4)}`;
 
       const resolvedTipeGaji: 'HARIAN' | 'BULANAN' =
         params.tipeGaji || (params.periodeBulan ? 'BULANAN' : 'HARIAN');
       const resolvedPeriode =
         params.periodeBulan ||
         (pendingList.length > 0
-          ? `Settlement ${pendingList.length} Hari Kerja - ${tanggal}`
-          : `Penggajian Bulanan - ${tanggal}`);
+          ? `Settlement ${pendingList.length} Hari Kerja - ${targetTanggal}`
+          : `Penggajian Bulanan - ${targetTanggal}`);
 
       const payrollRecord: TransaksiPenggajian = {
         id: idPayroll,
         slipNomor,
-        tanggal,
+        tanggal: targetTanggal,
         jam,
         idKaryawan: kry.id,
         nikKaryawan: kry.nik,
@@ -5004,8 +5150,8 @@ export class TransactionService {
         potonganKasbon,
         sisaKasbonAkhir: totalKasbonAwal - potonganKasbon,
         gajiBersihDibayar,
-        metodePembayaran: params.metodePembayaran || 'TUNAI',
-        rekeningSumber: rekSumber.kode,
+        metodePembayaran: finalMetode,
+        rekeningSumber: finalRekKode,
         ...(pendingList.length > 0
           ? {
               jumlahHariKerja: pendingList.length,
@@ -5026,7 +5172,11 @@ export class TransactionService {
         u.status = 'SUDAH_DIBAYAR';
         u.ket = 'LUNAS';
         u.idPayrollSettlement = idPayroll;
-        u.tanggalDibayar = tanggal;
+        u.tanggalDibayar = targetTanggal;
+      }
+
+      if (isSinkronGaji || potonganKasbon > 0) {
+        dbManager.synchronizeVirtualAccounts();
       }
 
       this.addAuditLog(
@@ -5035,9 +5185,9 @@ export class TransactionService {
         idPayroll,
         `Pembayaran Gaji Karyawan ${kry.nama} (${kry.nik}) [${resolvedPeriode}]. Total Gaji Kotor: Rp ${totalUpahKotor.toLocaleString(
           'id-ID'
-        )}, Potong Bon: Rp ${potonganKasbon.toLocaleString('id-ID')}, Bersih Dibayar: Rp ${gajiBersihDibayar.toLocaleString('id-ID')}`,
+        )}, Potong Bon: Rp ${potonganKasbon.toLocaleString('id-ID')}, Bersih Dibayar: Rp ${gajiBersihDibayar.toLocaleString('id-ID')} via ${finalRekKode}`,
         gajiBersihDibayar,
-        rekSumber.kode
+        finalRekKode
       );
 
       return payrollRecord;
@@ -5375,11 +5525,20 @@ export class TransactionService {
     const divisiByRekKode = new Map(allDivisi.map((d) => [d.kodeRekening.toUpperCase(), norm(d.nama)]));
 
     const cleanDiv = (d?: string) => (d && !isExcludedFromDivisi(d) ? d : undefined);
-    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) =>
-      norm(cleanDiv(divisi) || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
-    const resolvePembelianBarangDivNorm = (divisi?: string) => norm(cleanDiv(divisi) || 'CV Wijaya Agro');
-    const resolveHasilBumiDivNorm = (divisi?: string) => norm(cleanDiv(divisi) || 'Gudang Wijaya Agro');
+    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(cleanDiv(divisi) || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
+    };
+    const resolvePembelianBarangDivNorm = (divisi?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(cleanDiv(divisi) || 'CV Wijaya Agro');
+    };
+    const resolveHasilBumiDivNorm = (divisi?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
+      return norm(cleanDiv(divisi) || 'Gudang Wijaya Agro');
+    };
     const resolveBebanDivNorm = (divisi?: string, rekeningSumber?: string) => {
+      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
       const validDiv = cleanDiv(divisi);
       if (validDiv && String(validDiv).trim()) return norm(validDiv);
       if (rekeningSumber) {
@@ -5479,12 +5638,14 @@ export class TransactionService {
 
       const uangMasukDivList = (db.uangMasuk || []).filter(
         (um) =>
+          !isTanpaDivisi(um.divisi) &&
           norm(cleanDiv(um.divisi) || 'PT Wijaya Agro Perkasa') === targetNorm &&
           (Number(um.nominal) || 0) > 0
       );
 
       const brilinkMasukDivList = (db.brilink || []).filter(
         (br) =>
+          !isTanpaDivisi(br.divisi) &&
           norm(cleanDiv(br.divisi) || 'BRILink') === targetNorm &&
           br.jenisBrilink === 'TARIK_TUNAI' &&
           (Number(br.nominalAdmin) || 0) > 0
@@ -5492,6 +5653,7 @@ export class TransactionService {
 
       const brilinkKeluarDivList = (db.brilink || []).filter(
         (br) =>
+          !isTanpaDivisi(br.divisi) &&
           norm(cleanDiv(br.divisi) || 'BRILink') === targetNorm &&
           br.jenisBrilink === 'TUKAR_CASH' &&
           (Number(br.nominalAdmin) || 0) > 0
@@ -7617,10 +7779,16 @@ export class TransactionService {
       (j) =>
         isSameDate(j.tanggal) &&
         j.metodePembayaran !== 'PIUTANG' &&
-        j.metodePembayaran !== 'BELUM_PUTUS_HARGA'
+        j.metodePembayaran !== 'BELUM_PUTUS_HARGA' &&
+        j.metodePembayaran !== 'SINKRON' &&
+        j.rekeningTujuan !== 'SINKRON'
     );
     const uangMasukHariIni = (db.uangMasuk || []).filter(
-      (um) => isSameDate(um.tanggal) && (um.nominal || 0) > 0
+      (um) =>
+        isSameDate(um.tanggal) &&
+        (um.nominal || 0) > 0 &&
+        um.metode !== 'SINKRON' &&
+        um.rekeningTujuan !== 'SINKRON'
     );
     const totalUangMasukMenu = uangMasukHariIni.reduce((s, um) => s + (um.nominal || 0), 0);
     const brilinkMasukHariIni = (db.brilink || []).filter(
@@ -7688,6 +7856,8 @@ export class TransactionService {
       (b) =>
         isSameDate(b.tanggal) &&
         b.metodePembayaran !== 'TITIP' &&
+        b.metodePembayaran !== 'SINKRON' &&
+        b.rekeningSumber !== 'SINKRON' &&
         b.komoditasKode !== 'PINJAMAN_DANA' &&
         b.komoditasKode !== 'NOTA_SILANG' &&
         !b.isNotaSilang &&
@@ -7696,12 +7866,21 @@ export class TransactionService {
     const totalBeliHasilBumi = beliHasilBumiHariIni.reduce((s, b) => s + (b.totalNominal || 0), 0);
 
     const kasbonUangHariIni = (db.kasbonUang || []).filter(
-      (k) => isSameDate(k.tanggal) && !k.isNotaLalu && k.rekeningSumber !== 'BON01'
+      (k) =>
+        isSameDate(k.tanggal) &&
+        !k.isNotaLalu &&
+        k.rekeningSumber !== 'BON01' &&
+        k.rekeningSumber !== 'SINKRON' &&
+        k.metode !== 'SINKRON'
     );
     const totalKasbonUang = kasbonUangHariIni.reduce((s, k) => s + (k.nominal || 0), 0);
 
     const beliBarangHariIni = (db.pembelianBarang || []).filter(
-      (b) => isSameDate(b.tanggal) && b.metodePembayaran !== 'HUTANG'
+      (b) =>
+        isSameDate(b.tanggal) &&
+        b.metodePembayaran !== 'HUTANG' &&
+        b.metodePembayaran !== 'SINKRON' &&
+        b.rekeningSumber !== 'SINKRON'
     );
     const totalBeliBarang = beliBarangHariIni.reduce((s, b) => s + (b.totalNominal || 0), 0);
 
@@ -7715,7 +7894,9 @@ export class TransactionService {
     );
     const totalPencairanTitipan = pencairanTitipanHariIni.reduce((s, pt) => s + (pt.nominalPencairan || 0), 0);
 
-    const gajiHariIni = (db.penggajian || []).filter((g) => isSameDate(g.tanggal));
+    const gajiHariIni = (db.penggajian || []).filter(
+      (g) => isSameDate(g.tanggal) && g.metodePembayaran !== 'SINKRON' && g.rekeningSumber !== 'SINKRON'
+    );
     const totalGaji = gajiHariIni.reduce((s, g) => s + (g.gajiBersihDibayar || 0), 0);
 
     const totalUangKeluar =
@@ -7820,17 +8001,7 @@ export class TransactionService {
     return dbManager.executeTransaction((db) => {
       const { tanggal: todayWib, jam, iso } = getWIBDateTime();
 
-      let finalTanggal = todayWib;
-      if (params.tanggal && params.tanggal.trim()) {
-        const rawTgl = params.tanggal.trim();
-        const parts = rawTgl.split(/[-/]/);
-        if (parts.length === 3) {
-          finalTanggal =
-            parts[0].length === 4
-              ? `${parts[2].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[0]}`
-              : `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
-        }
-      }
+      const finalTanggal = normalizeDateToDmy(params.tanggal, todayWib);
 
       const rawJenis = params.jenisBrilink || params.jenisTransaksi;
       const jenisBrilink: JenisTransaksiBrilink =
@@ -7840,11 +8011,11 @@ export class TransactionService {
       const nominalAdmin = Math.round(Number(params.nominalAdmin) || 0);
       const nominalPokok = Math.max(0, Math.round(Number(params.nominalPokok) || 0));
 
-      if (nominalAdmin <= 0) {
+      if (nominalAdmin < 0 || (nominalAdmin === 0 && nominalPokok <= 0)) {
         throw new Error(
           jenisBrilink === 'TARIK_TUNAI'
-            ? 'Nominal Admin Tarik Tunai (Uang Masuk) wajib lebih dari Rp 0'
-            : 'Nominal Admin Tukar Cash Rupiah (Uang Keluar) wajib lebih dari Rp 0'
+            ? 'Masukkan Nominal Pokok Tarik Tunai atau Nominal Biaya Admin (> Rp 0)'
+            : 'Masukkan Nominal Pokok Tukar Cash atau Nominal Biaya Admin (> Rp 0)'
         );
       }
 
@@ -7889,7 +8060,28 @@ export class TransactionService {
       let finalRekeningKasTunai: string | undefined = undefined;
 
       if (nominalPokok > 0) {
-        const bankKode = (params.rekeningBank || params.rekeningPokokBank || '').trim();
+        let bankKode = (params.rekeningBank || params.rekeningPokokBank || '').trim();
+        if (!bankKode || bankKode === 'KAS01') {
+          const defaultBri =
+            db.rekening.find((r) => r.kode === 'BRI01' && r.status === 'AKTIF') ||
+            db.rekening.find(
+              (r) =>
+                !r.isVirtual &&
+                r.kategori !== 'OPERASIONAL_DIVISI' &&
+                r.kode !== 'KAS01' &&
+                r.status === 'AKTIF' &&
+                /\bbri\b/i.test(`${r.kode} ${r.nama}`)
+            ) ||
+            db.rekening.find(
+              (r) =>
+                !r.isVirtual &&
+                r.kategori !== 'OPERASIONAL_DIVISI' &&
+                r.kode !== 'KAS01' &&
+                r.kode !== 'BRK01' &&
+                r.status === 'AKTIF'
+            );
+          bankKode = defaultBri?.kode || '';
+        }
         if (!bankKode || bankKode === 'KAS01') {
           throw new Error(
             'Untuk transaksi dengan Nominal Pokok > Rp 0, pilih Rekening Bank PT operasional (misal BRI, BNI, BCA, Mandiri)'
@@ -7951,15 +8143,19 @@ export class TransactionService {
         }
       }
 
-      const finalDivisi = (params.divisi || '').trim() || 'BRILink';
-      dbManager.ensureDivisiRegisteredInMemory(finalDivisi);
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : (params.divisi || '').trim() || 'BRILink';
+      if (!isTanpaDivisi(finalDivisi)) {
+        dbManager.ensureDivisiRegisteredInMemory(finalDivisi);
+      }
 
       const idTransaksi = generateId('BRI');
       const defaultKet =
         jenisBrilink === 'TARIK_TUNAI'
-          ? `Adm Tarik Tunai BRILink (${finalNamaPelanggan})${
-              nominalPokok > 0 ? ` · Pokok Rp ${nominalPokok.toLocaleString('id-ID')}` : ''
-            }`
+          ? nominalPokok > 0
+            ? `Jasa Tarik Tunai BRILink (${finalNamaPelanggan}) · Pokok Rp ${nominalPokok.toLocaleString('id-ID')} (-KAS01 → +${finalRekeningBank})${nominalAdmin > 0 ? ` · Adm Rp ${nominalAdmin.toLocaleString('id-ID')}` : ''}`
+            : `Adm Tarik Tunai BRILink (${finalNamaPelanggan})`
           : `Adm Tukar Cash Rupiah PT (${finalNamaPelanggan})${
               nominalPokok > 0 ? ` · Pokok Rp ${nominalPokok.toLocaleString('id-ID')}` : ''
             }`;
@@ -8104,7 +8300,7 @@ export class TransactionService {
     kategori?: string;
     keterangan?: string;
     nominal: number;
-    metode: 'TUNAI' | 'TRANSFER';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningTujuan?: string;
     idMitra?: string;
     namaPengirimManual?: string;
@@ -8123,21 +8319,14 @@ export class TransactionService {
         throw new Error('Nominal Uang Masuk wajib lebih dari Rp 0');
       }
 
-      let finalTanggal = todayWib;
-      if (params.tanggal && params.tanggal.trim()) {
-        const rawTgl = params.tanggal.trim();
-        const parts = rawTgl.split(/[-/]/);
-        if (parts.length === 3) {
-          finalTanggal =
-            parts[0].length === 4
-              ? `${parts[2].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[0]}`
-              : `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
-        }
-      }
+      const finalTanggal = normalizeDateToDmy(params.tanggal, todayWib);
+      const isSinkronMasuk = params.metode === 'SINKRON' || params.rekeningTujuan === 'SINKRON';
 
       // Validasi rekening penerima
       let finalRekeningTujuan = 'KAS01';
-      if (params.metode === 'TUNAI') {
+      if (isSinkronMasuk) {
+        finalRekeningTujuan = 'SINKRON';
+      } else if (params.metode === 'TUNAI') {
         const kasAcc = db.rekening.find((r) => r.kode === 'KAS01');
         if (!kasAcc) throw new Error('Rekening Kas Tunai (KAS01) tidak ditemukan');
         finalRekeningTujuan = 'KAS01';
@@ -8193,9 +8382,12 @@ export class TransactionService {
         }
       }
 
-      const finalDivisi =
-        (params.divisi || '').trim() || linkedJhb?.divisi || 'PT Wijaya Agro Perkasa';
-      dbManager.ensureDivisiRegisteredInMemory(finalDivisi);
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : (params.divisi || '').trim() || linkedJhb?.divisi || 'PT Wijaya Agro Perkasa';
+      if (!isTanpaDivisi(finalDivisi)) {
+        dbManager.ensureDivisiRegisteredInMemory(finalDivisi);
+      }
 
       const finalKategori =
         (params.kategori || '').trim() ||
@@ -8241,7 +8433,7 @@ export class TransactionService {
         kategori: finalKategori,
         keterangan: (params.keterangan || '').trim() || defaultKet,
         nominal,
-        metode: params.metode,
+        metode: isSinkronMasuk ? 'SINKRON' : params.metode,
         rekeningTujuan: finalRekeningTujuan,
         idMitra: finalMitraId,
         namaPengirim: finalNamaPengirim,
@@ -8287,16 +8479,18 @@ export class TransactionService {
       }
 
       const target = db.uangMasuk[idx];
-      const acc = db.rekening.find((r) => r.kode === target.rekeningTujuan);
-      if (acc) {
-        if (!this.isAnakPerusahaanRekening(acc) && acc.saldoSaatIni < target.nominal) {
-          throw new Error(
-            `Tidak dapat membatalkan ${idTransaksi}: Saldo ${acc.nama} (${acc.kode}) tersisa Rp ${acc.saldoSaatIni.toLocaleString(
-              'id-ID'
-            )}, lebih kecil dari nominal Uang Masuk Rp ${target.nominal.toLocaleString('id-ID')}`
-          );
+      if (target.metode !== 'SINKRON' && target.rekeningTujuan !== 'SINKRON') {
+        const acc = db.rekening.find((r) => r.kode === target.rekeningTujuan);
+        if (acc) {
+          if (!this.isAnakPerusahaanRekening(acc) && acc.saldoSaatIni < target.nominal) {
+            throw new Error(
+              `Tidak dapat membatalkan ${idTransaksi}: Saldo ${acc.nama} (${acc.kode}) tersisa Rp ${acc.saldoSaatIni.toLocaleString(
+                'id-ID'
+              )}, lebih kecil dari nominal Uang Masuk Rp ${target.nominal.toLocaleString('id-ID')}`
+            );
+          }
+          acc.saldoSaatIni -= target.nominal;
         }
-        acc.saldoSaatIni -= target.nominal;
       }
 
       if (target.noPenjualanHasilBumi && Array.isArray(db.penjualanHasilBumi)) {
@@ -8423,8 +8617,14 @@ export class TransactionService {
         throw new Error('Nama item pengeluaran baru wajib diisi');
       }
       if (!Array.isArray(db.masterItemPengeluaran)) db.masterItemPengeluaran = [];
+      const compactKey = cleanNama.replace(/\s+/g, '').toUpperCase();
+      if (Array.isArray(db.deletedMasterPengeluaranNames) && db.deletedMasterPengeluaranNames.length > 0) {
+        db.deletedMasterPengeluaranNames = db.deletedMasterPengeluaranNames.filter(
+          (n) => String(n || '').replace(/\s+/g, '').toUpperCase() !== compactKey
+        );
+      }
       const exists = db.masterItemPengeluaran.find(
-        (m) => m.nama.replace(/\s+/g, '').toUpperCase() === cleanNama.replace(/\s+/g, '').toUpperCase()
+        (m) => m.nama.replace(/\s+/g, '').toUpperCase() === compactKey
       );
       if (exists) {
         throw new Error(`Item pengeluaran "${exists.nama}" sudah terdaftar`);
@@ -8470,25 +8670,45 @@ export class TransactionService {
 
   public static async deleteMasterItemPengeluaran(idOrNama: string): Promise<{ success: boolean; message: string }> {
     return await dbManager.executeTransaction((db) => {
+      const { tanggal, jam, iso } = getWIBDateTime();
       if (!Array.isArray(db.masterItemPengeluaran)) db.masterItemPengeluaran = [];
+      const cleanQuery = String(idOrNama || '').trim();
+      if (!cleanQuery) {
+        throw new Error('Pilih item pengeluaran yang akan dihapus');
+      }
+      const queryCompact = cleanQuery.replace(/\s+/g, '').toUpperCase();
       const idx = db.masterItemPengeluaran.findIndex(
-        (m) => m.id === idOrNama || m.kode === idOrNama || m.nama.trim().toUpperCase() === idOrNama.trim().toUpperCase()
+        (m) =>
+          m.id === cleanQuery ||
+          m.kode === cleanQuery ||
+          m.nama.replace(/\s+/g, '').toUpperCase() === queryCompact
       );
       if (idx === -1) throw new Error('Item pengeluaran tidak ditemukan');
       const target = db.masterItemPengeluaran[idx];
-      if (target.nomorUrut && target.nomorUrut >= 1 && target.nomorUrut <= 24) {
-        throw new Error(`Item "${target.nama}" adalah bagian dari 24 Item Baku Pengeluaran sehingga tidak perlu dihapus.`);
+      const targetCompact = target.nama.replace(/\s+/g, '').toUpperCase();
+
+      if (!Array.isArray(db.deletedMasterPengeluaranNames)) {
+        db.deletedMasterPengeluaranNames = [];
       }
-      const usedCount = (db.pengeluaran || []).filter(
-        (p) => String(p.kategori || '').trim().toUpperCase() === target.nama.trim().toUpperCase()
-      ).length;
-      if (usedCount > 0) {
-        throw new Error(
-          `Item "${target.nama}" sudah memiliki ${usedCount} riwayat pencatatan sehingga tetap dipertahankan untuk keutuhan pembukuan.`
-        );
+      if (!db.deletedMasterPengeluaranNames.some((n) => String(n || '').replace(/\s+/g, '').toUpperCase() === targetCompact)) {
+        db.deletedMasterPengeluaranNames.push(targetCompact);
       }
+
       db.masterItemPengeluaran.splice(idx, 1);
-      return { success: true, message: `Item pengeluaran "${target.nama}" berhasil dihapus` };
+
+      db.auditLogs.unshift({
+        id: `LOG-EXPITMDEL-${Date.now()}`,
+        timestamp: iso,
+        tanggal,
+        jam,
+        user: 'Admin Pengeluaran',
+        jenisTransaksi: 'VOID',
+        idTransaksi: target.kode || target.id,
+        detail: `Hapus Item Master Pengeluaran: "${target.nama}" (riwayat transaksi lama tetap aman di pembukuan)`,
+        nominal: 0,
+      });
+
+      return { success: true, message: `Item pengeluaran "${target.nama}" berhasil dihapus dari daftar pilihan` };
     });
   }
 
@@ -8554,11 +8774,17 @@ export class TransactionService {
       }
 
       const cleanKategori = String(params.kategori || 'SOLAR').trim() || 'SOLAR';
+      const cleanKatCompact = cleanKategori.replace(/\s+/g, '').toUpperCase();
+      if (Array.isArray(db.deletedMasterPengeluaranNames) && db.deletedMasterPengeluaranNames.length > 0) {
+        db.deletedMasterPengeluaranNames = db.deletedMasterPengeluaranNames.filter(
+          (n) => String(n || '').replace(/\s+/g, '').toUpperCase() !== cleanKatCompact
+        );
+      }
       const kelompokPengeluaran = resolveKelompokItemPengeluaran(cleanKategori, params.kelompokPengeluaran);
       if (!Array.isArray(db.masterItemPengeluaran)) db.masterItemPengeluaran = [];
       if (
         !db.masterItemPengeluaran.some(
-          (m) => m.nama.replace(/\s+/g, '').toUpperCase() === cleanKategori.replace(/\s+/g, '').toUpperCase()
+          (m) => m.nama.replace(/\s+/g, '').toUpperCase() === cleanKatCompact
         )
       ) {
         const cleanSlug =
@@ -8578,26 +8804,17 @@ export class TransactionService {
         });
       }
 
-      // Normalisasi tanggal jika dikirim dalam YYYY-MM-DD
-      let finalTanggal = tanggal;
-      if (params.tanggal && params.tanggal.trim()) {
-        const parts = params.tanggal.trim().split(/[-/]/);
-        if (parts.length === 3) {
-          finalTanggal =
-            parts[0].length === 4
-              ? `${parts[2].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[0]}`
-              : `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
-        } else {
-          finalTanggal = params.tanggal.trim();
-        }
-      }
+      const finalTanggal = normalizeDateToDmy(params.tanggal, tanggal);
+      const finalDivisi = isTanpaDivisi(params.divisi)
+        ? TANPA_DIVISI_VALUE
+        : params.divisi?.trim() || 'Gudang Wijaya Agro';
 
       const idTransaksi = generateId('EXP');
       const record: TransaksiPengeluaran = {
         idTransaksi,
         tanggal: finalTanggal,
         jam,
-        divisi: params.divisi || 'Gudang Wijaya Agro',
+        divisi: finalDivisi,
         kategori: cleanKategori,
         kelompokPengeluaran,
         qty: parsedQty,
@@ -8682,13 +8899,13 @@ export class TransactionService {
     idMitra: string;
     nominal: number;
     rekeningSumber: string;
-    metode: 'TUNAI' | 'TRANSFER';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     keterangan?: string;
     tanggal?: string;
   }): Promise<TransaksiPencairanTitipan> {
     return dbManager.executeTransaction((db) => {
       const { tanggal, jam, iso } = getWIBDateTime();
-      const targetTanggal = params.tanggal || tanggal;
+      const targetTanggal = normalizeDateToDmy(params.tanggal, tanggal);
       const nominalFisik = Math.round(Number(params.nominal) || 0);
 
       const mitra = db.mitra.find((m) => m.id === params.idMitra);
@@ -8734,8 +8951,12 @@ export class TransactionService {
         );
       }
 
-      let rekening = db.rekening.find((r) => r.kode === params.rekeningSumber);
-      if (nominalFisik > 0) {
+      const isSinkronCair =
+        params.metode === 'SINKRON' || params.rekeningSumber === 'SINKRON';
+      let rekening = !isSinkronCair
+        ? db.rekening.find((r) => r.kode === params.rekeningSumber)
+        : undefined;
+      if (nominalFisik > 0 && !isSinkronCair) {
         if (!rekening) throw new Error('Rekening pembayaran kas/bank tidak ditemukan');
         if (!this.isAnakPerusahaanRekening(rekening) && rekening.saldoSaatIni < nominalFisik) {
           throw new Error(
@@ -8803,6 +9024,8 @@ export class TransactionService {
       // 2. Bayarkan sisa bersih dari Kas / Bank PT ke Mitra
       const saldoTitipanSisa = Math.max(0, sisaTitipanBersih - nominalFisik);
 
+      const finalRekKode = isSinkronCair ? 'SINKRON' : params.rekeningSumber;
+      const finalMetode: 'TUNAI' | 'TRANSFER' | 'SINKRON' = isSinkronCair ? 'SINKRON' : params.metode;
       const record: TransaksiPencairanTitipan = {
         idPencairan,
         tanggal: targetTanggal,
@@ -8810,7 +9033,7 @@ export class TransactionService {
         idMitra: mitra.id,
         namaMitra: mitra.nama,
         nominalPencairan: nominalFisik,
-        rekeningSumber: params.rekeningSumber,
+        rekeningSumber: finalRekKode,
         saldoTitipanSebelum: sisaTitipanBersih,
         ...(potonganOtomatis > 0
           ? {
@@ -8819,10 +9042,12 @@ export class TransactionService {
             }
           : {}),
         saldoTitipanSisa,
-        metodePembayaran: params.metode,
+        metodePembayaran: finalMetode,
         keterangan:
           params.keterangan ||
-          (potonganOtomatis > 0
+          (isSinkronCair
+            ? `Pencairan / Penyelesaian Titipan Hasil Bumi SINKRON (Tanpa Uang Riil Keluar) untuk ${mitra.nama}`
+            : potonganOtomatis > 0
             ? `Pembayaran PT ke Mitra ${mitra.nama} (Titipan Rp ${saldoTitipanAktif.toLocaleString(
                 'id-ID'
               )} - Potong Bon Otomatis Rp ${potonganOtomatis.toLocaleString('id-ID')})`
@@ -8834,7 +9059,7 @@ export class TransactionService {
       db.pencairanTitipan.unshift(record);
 
       // Potong saldo rekening kas/bank perusahaan hanya sebesar pembayaran bersih fisik
-      if (rekening) {
+      if (!isSinkronCair && rekening) {
         rekening.saldoSaatIni -= nominalFisik;
       }
 
@@ -8847,12 +9072,12 @@ export class TransactionService {
               'id-ID'
             )} dipotong otomatis Bon Mitra Rp ${potonganOtomatis.toLocaleString(
               'id-ID'
-            )} (Bon Lunas), dibayar bersih Rp ${nominalFisik.toLocaleString('id-ID')} via ${rekening?.nama || params.rekeningSumber}`
+            )} (Bon Lunas), dibayar bersih Rp ${nominalFisik.toLocaleString('id-ID')} via ${rekening?.nama || finalRekKode}`
           : `Pembayaran Titipan Hasil Bumi dari PT ke Mitra ${mitra.nama} sebesar Rp ${nominalFisik.toLocaleString(
               'id-ID'
-            )} via ${rekening?.nama || params.rekeningSumber}`,
+            )} via ${rekening?.nama || finalRekKode}`,
         nominalFisik,
-        params.rekeningSumber
+        finalRekKode
       );
 
       dbManager.synchronizeVirtualAccounts();
@@ -8888,7 +9113,7 @@ export class TransactionService {
         }
         if (keteranganBaru) pb.keterangan = keteranganBaru;
         if (tanggalBaru) pb.tanggal = tanggalBaru;
-        if (pb.metodePembayaran !== 'TITIP') {
+        if (pb.metodePembayaran !== 'TITIP' && pb.metodePembayaran !== 'SINKRON' && pb.rekeningSumber !== 'SINKRON') {
           const rek = db.rekening.find((r) => r.kode === pb.rekeningSumber);
           if (rek) rek.saldoSaatIni -= diff;
         }
@@ -8944,7 +9169,7 @@ export class TransactionService {
         ku.sisaKasbon = Math.max(0, ku.sisaKasbon + diff);
         if (keteranganBaru) ku.keterangan = keteranganBaru;
         if (tanggalBaru) ku.tanggal = tanggalBaru;
-        if (ku.rekeningSumber !== 'BON01') {
+        if (ku.rekeningSumber !== 'BON01' && ku.rekeningSumber !== 'SINKRON' && ku.metode !== 'SINKRON') {
           const rek = db.rekening.find((r) => r.kode === ku.rekeningSumber);
           if (rek) rek.saldoSaatIni -= diff;
         }
@@ -8998,7 +9223,7 @@ export class TransactionService {
         kpb.totalNominal = nominalBaru;
         if (keteranganBaru) kpb.keterangan = keteranganBaru;
         if (tanggalBaru) kpb.tanggal = tanggalBaru;
-        if (kpb.metodePembayaran !== 'HUTANG') {
+        if (kpb.metodePembayaran !== 'HUTANG' && kpb.metodePembayaran !== 'SINKRON' && kpb.rekeningSumber !== 'SINKRON') {
           const rek = db.rekening.find((r) => r.kode === kpb.rekeningSumber);
           if (rek) rek.saldoSaatIni -= diff;
         }
@@ -9026,8 +9251,10 @@ export class TransactionService {
         exp.nominal = nominalBaru;
         if (keteranganBaru) exp.keterangan = keteranganBaru;
         if (tanggalBaru) exp.tanggal = tanggalBaru;
-        const rek = db.rekening.find((r) => r.kode === exp.rekeningSumber);
-        if (rek) rek.saldoSaatIni -= diff;
+        if (!exp.isNonKas && exp.rekeningSumber !== 'SINKRON' && exp.rekeningSumber !== 'STOK_INTERNAL') {
+          const rek = db.rekening.find((r) => r.kode === exp.rekeningSumber);
+          if (rek) rek.saldoSaatIni -= diff;
+        }
         updatedRecord = exp;
       }
 
@@ -9189,7 +9416,8 @@ export class TransactionService {
     for (const jhb of db.penjualanHasilBumi || []) {
       const isPiutang = jhb.metodePembayaran === 'PIUTANG';
       const isBelumPutus = jhb.metodePembayaran === 'BELUM_PUTUS_HARGA';
-      const isNonTunai = isPiutang || isBelumPutus;
+      const isSinkronJhb = jhb.metodePembayaran === 'SINKRON' || jhb.rekeningTujuan === 'SINKRON';
+      const isNonTunai = isPiutang || isBelumPutus || isSinkronJhb;
       const rekKode = jhb.rekeningTujuan || (jhb.metodePembayaran === 'TUNAI' ? kodeKasir : '');
       const isKasir = !isNonTunai && (rekKode === kodeKasir || jhb.metodePembayaran === 'TUNAI');
       const nilaiPengurangStok =
@@ -9202,12 +9430,16 @@ export class TransactionService {
         jenis: 'PENJUALAN_HASIL_BUMI',
         jenisLabel: isBelumPutus
           ? 'Muat / Jual Hasil Bumi (Uang via Uang Masuk)'
+          : isSinkronJhb
+          ? 'Penjualan Hasil Bumi SINKRON'
           : 'Penjualan Hasil Bumi',
         arusUang: isNonTunai ? 'NON_TUNAI' : 'MASUK',
         arusUangLabel: isBelumPutus
           ? 'Keluar Stok Gudang (Uang via Uang Masuk)'
           : isPiutang
           ? 'Piutang Pabrik/Mitra (Non-Tunai)'
+          : isSinkronJhb
+          ? 'Lunas Sinkron (Tanpa Uang Masuk)'
           : 'Uang Masuk (+)',
         deskripsi: isBelumPutus
           ? `Muat ${jhb.komoditasNama} (${jhb.beratBersih.toLocaleString('id-ID')} kg @ Rata-Rata Beli Rp ${jhb.modalRataRataPerKg.toLocaleString('id-ID')}/kg = Pengurang Stok Rp ${nilaiPengurangStok.toLocaleString('id-ID')})${
@@ -9215,7 +9447,7 @@ export class TransactionService {
                 ? ` · Realisasi Uang Masuk: Rp ${(jhb.nominalUangMasukTerkumpul || 0).toLocaleString('id-ID')}`
                 : ' · Menunggu Uang Masuk'
             }`
-          : `Jual ${jhb.komoditasNama} (${jhb.beratBersih.toLocaleString('id-ID')} kg @ Rp ${jhb.hargaJualPerKg.toLocaleString('id-ID')}) [${jhb.metodePembayaran}]${jhb.divisi ? ` · ${jhb.divisi}` : ''}`,
+          : `Jual ${jhb.komoditasNama} (${jhb.beratBersih.toLocaleString('id-ID')} kg @ Rp ${jhb.hargaJualPerKg.toLocaleString('id-ID')}) [${jhb.metodePembayaran}]${jhb.divisi && !isTanpaDivisi(jhb.divisi) ? ` · ${jhb.divisi}` : ''}`,
         pihakTerkait: jhb.namaMitra || 'Pembeli Umum',
         kategoriPihak: 'MITRA',
         rekening: rekKode || kodeKasir,
@@ -9240,9 +9472,11 @@ export class TransactionService {
       const isPinjamanDana =
         b.komoditasKode === 'PINJAMAN_DANA' || Boolean(b.komoditasNama?.includes('Pinjaman Uang'));
       const isTitip = b.metodePembayaran === 'TITIP' && !isPinjamanDana;
+      const isSinkronPhb = (b.metodePembayaran === 'SINKRON' || b.rekeningSumber === 'SINKRON') && !isPinjamanDana;
+      const isNonTunaiPhb = isTitip || isSinkronPhb;
 
       if (isPinjamanDana) {
-        const hasRealCashIn = Boolean(b.rekeningSumber && b.rekeningSumber !== 'TIT01');
+        const hasRealCashIn = Boolean(b.rekeningSumber && b.rekeningSumber !== 'TIT01' && b.rekeningSumber !== 'SINKRON');
         const isKasir = hasRealCashIn && b.rekeningSumber === kodeKasir;
         list.push({
           id: b.noPembelian,
@@ -9272,23 +9506,27 @@ export class TransactionService {
         });
       } else {
         const rekKode = b.rekeningSumber || (b.metodePembayaran === 'TUNAI' ? kodeKasir : '');
-        const isKasir = !isTitip && (rekKode === kodeKasir || b.metodePembayaran === 'TUNAI');
+        const isKasir = !isNonTunaiPhb && (rekKode === kodeKasir || b.metodePembayaran === 'TUNAI');
         list.push({
           id: b.noPembelian,
           tanggal: normalizeDateStr(b.tanggal),
           jam: b.jam || '09:00',
           timestamp: b.createdAt || b.tanggal,
           jenis: 'PEMBELIAN_HASIL_BUMI',
-          jenisLabel: 'Pembelian Hasil Bumi',
-          arusUang: isTitip ? 'NON_TUNAI' : 'KELUAR',
-          arusUangLabel: isTitip ? 'Titip Timbang (Hutang)' : 'Uang Keluar (-)',
-          deskripsi: `Beli ${b.komoditasNama} (${b.beratBersih} kg @ Rp ${(b.hargaPerKg || 0).toLocaleString('id-ID')})${b.divisi ? ` · ${b.divisi}` : ''}`,
+          jenisLabel: isSinkronPhb ? 'Pembelian Hasil Bumi SINKRON' : 'Pembelian Hasil Bumi',
+          arusUang: isNonTunaiPhb ? 'NON_TUNAI' : 'KELUAR',
+          arusUangLabel: isTitip
+            ? 'Titip Timbang (Hutang)'
+            : isSinkronPhb
+            ? 'Lunas Sinkron (Non-Kas)'
+            : 'Uang Keluar (-)',
+          deskripsi: `Beli ${b.komoditasNama} (${b.beratBersih} kg @ Rp ${(b.hargaPerKg || 0).toLocaleString('id-ID')})${b.divisi && !isTanpaDivisi(b.divisi) ? ` · ${b.divisi}` : ''}`,
           pihakTerkait: b.namaMitra,
           kategoriPihak: 'MITRA',
           rekening: rekKode || kodeKasir,
           nominal: b.totalNominal,
           nominalMasuk: 0,
-          nominalKeluar: isTitip ? 0 : b.totalNominal,
+          nominalKeluar: isNonTunaiPhb ? 0 : b.totalNominal,
           isArusKasKasir: isKasir && b.totalNominal > 0,
           arahKasir: isKasir && b.totalNominal > 0 ? 'KELUAR' : 'NON_KASIR',
           arahKasirLabel: isKasir && b.totalNominal > 0 ? 'Keluar Kasir (−)' : 'Bukan Kasir',
@@ -9305,8 +9543,10 @@ export class TransactionService {
     // 3. Pembelian Barang Dagang (Supplier / Distributor)
     for (const pb of db.pembelianBarang || []) {
       const isHutang = pb.metodePembayaran === 'HUTANG';
+      const isSinkronPb = pb.metodePembayaran === 'SINKRON' || pb.rekeningSumber === 'SINKRON';
+      const isNonTunaiPb = isHutang || isSinkronPb;
       const rekKode = pb.rekeningSumber || (pb.metodePembayaran === 'TUNAI' ? kodeKasir : '');
-      const isKasir = !isHutang && (rekKode === kodeKasir || pb.metodePembayaran === 'TUNAI');
+      const isKasir = !isNonTunaiPb && (rekKode === kodeKasir || pb.metodePembayaran === 'TUNAI');
       const itemsDesc =
         pb.items?.map((i) => `${i.namaProduk} (${i.qty} ${i.satuan})`).join(', ') || 'Barang Dagangan';
       const supplierName = pb.namaMitra || pb.namaDistributorManual || 'Pemasok / Distributor';
@@ -9316,16 +9556,20 @@ export class TransactionService {
         jam: pb.jam || '10:00',
         timestamp: pb.createdAt || pb.tanggal,
         jenis: 'PEMBELIAN_BARANG',
-        jenisLabel: 'Kulakan Supplier',
-        arusUang: isHutang ? 'NON_TUNAI' : 'KELUAR',
-        arusUangLabel: isHutang ? 'Hutang Dagang (Tempo)' : 'Uang Keluar (-)',
-        deskripsi: `Kulakan: ${itemsDesc}${pb.divisi ? ` · ${pb.divisi}` : ''}`,
+        jenisLabel: isSinkronPb ? 'Kulakan Supplier SINKRON' : 'Kulakan Supplier',
+        arusUang: isNonTunaiPb ? 'NON_TUNAI' : 'KELUAR',
+        arusUangLabel: isHutang
+          ? 'Hutang Dagang (Tempo)'
+          : isSinkronPb
+          ? 'Lunas Sinkron (Non-Kas)'
+          : 'Uang Keluar (-)',
+        deskripsi: `Kulakan: ${itemsDesc}${pb.divisi && !isTanpaDivisi(pb.divisi) ? ` · ${pb.divisi}` : ''}`,
         pihakTerkait: supplierName,
         kategoriPihak: 'VENDOR',
         rekening: rekKode || kodeKasir,
         nominal: pb.totalNominal,
         nominalMasuk: 0,
-        nominalKeluar: isHutang ? 0 : pb.totalNominal,
+        nominalKeluar: isNonTunaiPb ? 0 : pb.totalNominal,
         isArusKasKasir: isKasir && pb.totalNominal > 0,
         arahKasir: isKasir && pb.totalNominal > 0 ? 'KELUAR' : 'NON_KASIR',
         arahKasirLabel: isKasir && pb.totalNominal > 0 ? 'Keluar Kasir (−)' : 'Bukan Kasir',
@@ -9341,26 +9585,36 @@ export class TransactionService {
     // 4. Kasbon Uang & Nota Lalu
     for (const k of db.kasbonUang || []) {
       const isNotaLalu = Boolean(k.isNotaLalu || k.rekeningSumber === 'BON01');
+      const isSinkronKb = k.metode === 'SINKRON' || k.rekeningSumber === 'SINKRON';
+      const isNonTunaiKb = isNotaLalu || isSinkronKb;
       const rekKode = k.rekeningSumber || (k.metode === 'TUNAI' ? kodeKasir : '');
-      const isKasir = !isNotaLalu && (rekKode === kodeKasir || k.metode === 'TUNAI');
+      const isKasir = !isNonTunaiKb && (rekKode === kodeKasir || k.metode === 'TUNAI');
       list.push({
         id: k.idTransaksi,
         tanggal: normalizeDateStr(k.tanggal),
         jam: k.jam || '11:00',
         timestamp: k.createdAt || k.tanggal,
         jenis: 'KASBON_UANG',
-        jenisLabel: isNotaLalu ? 'Piutang Nota Lalu' : 'Kasbon Uang & Pinjaman',
-        arusUang: isNotaLalu ? 'NON_TUNAI' : 'KELUAR',
-        arusUangLabel: isNotaLalu ? 'Piutang Nota Lalu (Non-Tunai)' : 'Uang Keluar (-)',
+        jenisLabel: isNotaLalu
+          ? 'Piutang Nota Lalu'
+          : isSinkronKb
+          ? 'Kasbon Uang SINKRON'
+          : 'Kasbon Uang & Pinjaman',
+        arusUang: isNonTunaiKb ? 'NON_TUNAI' : 'KELUAR',
+        arusUangLabel: isNotaLalu
+          ? 'Piutang Nota Lalu (Non-Tunai)'
+          : isSinkronKb
+          ? 'Sinkron (Non-Kas)'
+          : 'Uang Keluar (-)',
         deskripsi: isNotaLalu
           ? `Piutang Nota Lalu: ${k.keterangan || k.noNotaLalu || 'Nota Barang Lama'}`
-          : `Kasbon Tunai (${k.keterangan || 'Pinjaman Uang'}) [${k.metode}]`,
+          : `Kasbon (${k.keterangan || 'Pinjaman Uang'}) [${k.metode}]`,
         pihakTerkait: k.namaMitra,
         kategoriPihak: 'MITRA',
         rekening: rekKode || kodeKasir,
         nominal: k.nominal,
         nominalMasuk: 0,
-        nominalKeluar: isNotaLalu ? 0 : k.nominal,
+        nominalKeluar: isNonTunaiKb ? 0 : k.nominal,
         isArusKasKasir: isKasir && k.nominal > 0,
         arahKasir: isKasir && k.nominal > 0 ? 'KELUAR' : 'NON_KASIR',
         arahKasirLabel: isKasir && k.nominal > 0 ? 'Keluar Kasir (−)' : 'Bukan Kasir',
@@ -9542,24 +9796,25 @@ export class TransactionService {
 
     // 9. Penggajian Bulanan / Harian Cair
     for (const g of db.penggajian || []) {
+      const isSinkronGj = g.metodePembayaran === 'SINKRON' || g.rekeningSumber === 'SINKRON';
       const rekKode = g.rekeningSumber || (g.metodePembayaran === 'TUNAI' ? kodeKasir : '');
-      const isKasir = rekKode === kodeKasir || g.metodePembayaran === 'TUNAI';
+      const isKasir = !isSinkronGj && (rekKode === kodeKasir || g.metodePembayaran === 'TUNAI');
       list.push({
         id: g.id,
         tanggal: normalizeDateStr(g.tanggal),
         jam: g.jam || '10:00',
         timestamp: `${g.tanggal} ${g.jam || '10:00'}`,
         jenis: 'PENGGAJIAN',
-        jenisLabel: 'Pembayaran Gaji / Upah',
-        arusUang: 'KELUAR',
-        arusUangLabel: 'Uang Keluar (-)',
-        deskripsi: `Gaji Karyawan Periode ${g.periodeBulan} [${g.divisi}]`,
+        jenisLabel: isSinkronGj ? 'Pembayaran Gaji / Upah SINKRON' : 'Pembayaran Gaji / Upah',
+        arusUang: isSinkronGj ? 'NON_TUNAI' : 'KELUAR',
+        arusUangLabel: isSinkronGj ? 'Sinkron (Non-Kas)' : 'Uang Keluar (-)',
+        deskripsi: `Gaji Karyawan Periode ${g.periodeBulan} [${isTanpaDivisi(g.divisi) ? 'Tanpa Divisi' : g.divisi}]`,
         pihakTerkait: g.namaKaryawan,
         kategoriPihak: 'KARYAWAN',
         rekening: rekKode || kodeKasir,
         nominal: g.gajiBersihDibayar,
         nominalMasuk: 0,
-        nominalKeluar: g.gajiBersihDibayar,
+        nominalKeluar: isSinkronGj ? 0 : g.gajiBersihDibayar,
         isArusKasKasir: isKasir && g.gajiBersihDibayar > 0,
         arahKasir: isKasir && g.gajiBersihDibayar > 0 ? 'KELUAR' : 'NON_KASIR',
         arahKasirLabel: isKasir && g.gajiBersihDibayar > 0 ? 'Keluar Kasir (−)' : 'Bukan Kasir',
@@ -9699,8 +9954,9 @@ export class TransactionService {
 
     // 12. Transaksi Uang Masuk (+) & Realisasi Penjualan Hasil Bumi
     for (const um of db.uangMasuk || []) {
+      const isSinkronUm = um.metode === 'SINKRON' || um.rekeningTujuan === 'SINKRON';
       const rekKode = um.rekeningTujuan || (um.metode === 'TUNAI' ? kodeKasir : '');
-      const isKasir = rekKode === kodeKasir || um.metode === 'TUNAI';
+      const isKasir = !isSinkronUm && (rekKode === kodeKasir || um.metode === 'TUNAI');
       list.push({
         id: um.idTransaksi,
         tanggal: normalizeDateStr(um.tanggal),
@@ -9709,15 +9965,17 @@ export class TransactionService {
         jenis: 'UANG_MASUK',
         jenisLabel: um.noPenjualanHasilBumi
           ? `Uang Masuk Hasil Bumi (${um.noPenjualanHasilBumi})`
+          : isSinkronUm
+          ? `Uang Masuk SINKRON: ${um.kategori}`
           : `Uang Masuk: ${um.kategori}`,
-        arusUang: 'MASUK',
-        arusUangLabel: 'Uang Masuk (+)',
-        deskripsi: `${um.keterangan}${um.divisi ? ` · ${um.divisi}` : ''}`,
+        arusUang: isSinkronUm ? 'NON_TUNAI' : 'MASUK',
+        arusUangLabel: isSinkronUm ? 'Sinkron (Non-Kas)' : 'Uang Masuk (+)',
+        deskripsi: `${um.keterangan}${um.divisi && !isTanpaDivisi(um.divisi) ? ` · ${um.divisi}` : ''}`,
         pihakTerkait: um.namaPengirim || 'Pembeli / Pengirim Umum',
         kategoriPihak: um.idMitra && um.idMitra !== 'UMUM' ? 'MITRA' : 'INTERNAL',
         rekening: rekKode || kodeKasir,
         nominal: um.nominal,
-        nominalMasuk: um.nominal,
+        nominalMasuk: isSinkronUm ? 0 : um.nominal,
         nominalKeluar: 0,
         isArusKasKasir: isKasir && um.nominal > 0,
         arahKasir: isKasir && um.nominal > 0 ? 'MASUK' : 'NON_KASIR',
@@ -14023,9 +14281,14 @@ export class TransactionService {
       }
     }
 
-    // 2. PENJUALAN HASIL BUMI LANGSUNG LUNAS (TUNAI / TRANSFER)
+    // 2. PENJUALAN HASIL BUMI LANGSUNG LUNAS (TUNAI / TRANSFER — EXCLUDE SINKRON)
     for (const j of db.penjualanHasilBumi || []) {
-      if (j.metodePembayaran === 'PIUTANG' || j.metodePembayaran === 'BELUM_PUTUS_HARGA') {
+      if (
+        j.metodePembayaran === 'PIUTANG' ||
+        j.metodePembayaran === 'BELUM_PUTUS_HARGA' ||
+        j.metodePembayaran === 'SINKRON' ||
+        j.rekeningTujuan === 'SINKRON'
+      ) {
         continue;
       }
       const nom = Math.round(Number(j.totalNominal) || 0);
@@ -14057,6 +14320,7 @@ export class TransactionService {
 
     // 3. MENU UANG MASUK (REALISASI MUAT HASIL BUMI / PENERIMAAN OPERASIONAL)
     for (const um of db.uangMasuk || []) {
+      if (um.metode === 'SINKRON' || um.rekeningTujuan === 'SINKRON') continue;
       const nom = Math.round(Number(um.nominal) || 0);
       if (nom <= 0) continue;
       const rekKode = um.rekeningTujuan || (um.metode === 'TUNAI' ? kodeKasir : '');
@@ -14276,6 +14540,8 @@ export class TransactionService {
     for (const b of db.pembelianHasilBumi || []) {
       if (
         b.metodePembayaran === 'TITIP' ||
+        b.metodePembayaran === 'SINKRON' ||
+        b.rekeningSumber === 'SINKRON' ||
         b.komoditasKode === 'PINJAMAN_DANA' ||
         b.komoditasKode === 'TITIP_DANA' ||
         b.komoditasKode === 'NOTA_SILANG' ||
@@ -14369,7 +14635,9 @@ export class TransactionService {
 
     // 9. KASBON UANG (PENCAIRAN PINJAMAN TUNAI / TRANSFER KE MITRA)
     for (const k of db.kasbonUang || []) {
-      if (k.isNotaLalu || k.rekeningSumber === 'BON01') continue;
+      if (k.isNotaLalu || k.rekeningSumber === 'BON01' || k.rekeningSumber === 'SINKRON' || k.metode === 'SINKRON') {
+        continue;
+      }
       const nom = Math.round(Number(k.nominal) || 0);
       if (nom <= 0) continue;
       const rekKode = k.rekeningSumber || (k.metode === 'TUNAI' ? kodeKasir : '');
@@ -14399,7 +14667,9 @@ export class TransactionService {
 
     // 10. KULAKAN / PEMBELIAN BARANG TOKO LUNAS
     for (const b of db.pembelianBarang || []) {
-      if (b.metodePembayaran === 'HUTANG') continue;
+      if (b.metodePembayaran === 'HUTANG' || b.metodePembayaran === 'SINKRON' || b.rekeningSumber === 'SINKRON') {
+        continue;
+      }
       const nom = Math.round(Number(b.totalNominal) || 0);
       if (nom <= 0) continue;
       const rekKode = b.rekeningSumber || (b.metodePembayaran === 'TUNAI' ? kodeKasir : '');
@@ -14469,6 +14739,7 @@ export class TransactionService {
 
     // 12. PEMBAYARAN GAJI & UPAH KARYAWAN
     for (const g of db.penggajian || []) {
+      if (g.metodePembayaran === 'SINKRON' || g.rekeningSumber === 'SINKRON') continue;
       const nom = Math.round(Number(g.gajiBersihDibayar) || 0);
       if (nom <= 0) continue;
       const rekKode = g.rekeningSumber || (g.metodePembayaran === 'TUNAI' ? kodeKasir : '');

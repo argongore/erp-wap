@@ -14,7 +14,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { Mitra, Rekening } from '../../server/types.ts';
-import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
+import { formatRupiah, dmyToIsoInput, normalizeDateToDmy } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ImageUploadZone } from './ImageUploadZone.tsx';
 
@@ -42,7 +42,7 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
   );
   const [selectedRekeningKode, setSelectedRekeningKode] = useState<string>('KAS01');
   const [nominalInput, setNominalInput] = useState<string>('5000000');
-  const [tanggal, setTanggal] = useState<string>(getWIBTodayString());
+  const [tanggal, setTanggal] = useState<string>(dmyToIsoInput());
   const [noReferensi, setNoReferensi] = useState<string>('');
   const [keterangan, setKeterangan] = useState<string>('');
   const [fotoNota, setFotoNota] = useState<string>('');
@@ -112,7 +112,7 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
         idMitra: selectedMitraId,
         nominal,
         rekeningTujuan: selectedRekeningKode,
-        tanggal: tanggal || getWIBTodayString(),
+        tanggal: normalizeDateToDmy(tanggal),
         noReferensi: noReferensi.trim() || undefined,
         keterangan: keterangan.trim() || `Pinjaman uang dari PT ke Mitra ${selectedMitra?.nama || ''} (Masuk Saldo Titip Mitra)`,
         fotoNota: fotos[0] || undefined,
@@ -217,16 +217,27 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
                 onChange={(e) => setSelectedRekeningKode(e.target.value)}
                 className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-zinc-900 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               >
-                {internalRekening.map((r) => (
-                  <option key={r.kode} value={r.kode}>
-                    {r.nama} ({r.kode}) · Saldo Saat Ini: {formatRupiah(r.saldoSaatIni)}
-                  </option>
-                ))}
+                {internalRekening
+                  .filter((r) => !r.isVirtual && r.kode !== 'BON01' && r.kode !== 'TIT01')
+                  .map((r) => (
+                    <option key={r.kode} value={r.kode}>
+                      {r.nama} ({r.kode}) · Saldo Saat Ini: {formatRupiah(r.saldoSaatIni)}
+                    </option>
+                  ))}
+                <option value="SINKRON">
+                  Rekening SINKRON — Non-Kas (Rp 0 Uang Masuk Riil)
+                </option>
               </select>
-              {selectedRekening && (
-                <div className="mt-1 text-[11px] text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 font-medium">
-                  Dana tunai/transfer akan masuk ke <strong>{selectedRekening.nama}</strong>
+              {selectedRekeningKode === 'SINKRON' ? (
+                <div className="mt-1 text-[11px] text-cyan-800 bg-cyan-50 px-2.5 py-1 rounded-lg border border-cyan-200 font-medium">
+                  Dicatat ke Saldo Titip Mitra secara <strong>SINKRON (Rp 0 Uang Riil)</strong>
                 </div>
+              ) : (
+                selectedRekening && (
+                  <div className="mt-1 text-[11px] text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 font-medium">
+                    Dana tunai/transfer akan masuk ke <strong>{selectedRekening.nama}</strong>
+                  </div>
+                )
               )}
             </div>
           </div>
@@ -278,10 +289,9 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
                   <span>Tanggal Pinjaman:</span>
                 </label>
                 <input
-                  type="text"
+                  type="date"
                   value={tanggal}
                   onChange={(e) => setTanggal(e.target.value)}
-                  placeholder="DD/MM/YYYY"
                   className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-1.5 text-xs font-mono font-semibold text-zinc-900"
                   required
                 />

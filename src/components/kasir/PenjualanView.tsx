@@ -35,8 +35,9 @@ import {
   ItemInventaris,
   MasterItemPengeluaran,
   isProdukTanpaStok,
+  isTanpaDivisi,
 } from '../../server/types.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, dmyToIsoInput, normalizeDateToDmy } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
@@ -277,6 +278,7 @@ export const PenjualanView: React.FC<Props> = ({
   >('TUNAI');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(availableBanks[0]?.kode || 'BNI01');
   const [divisi, setDivisi] = useState<string>('CV Wijaya Agro');
+  const [tanggalInput, setTanggalInput] = useState<string>(dmyToIsoInput());
   const [keterangan, setKeterangan] = useState<string>('');
 
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -721,6 +723,7 @@ export const PenjualanView: React.FC<Props> = ({
             ? finalBuyerName
             : undefined,
         tipePembeli,
+        tanggal: tanggalInput,
         divisi,
         metode: effectiveMetode,
         rekeningTujuan: effectiveMetode === 'TRANSFER' ? rekeningTujuan : undefined,
@@ -772,14 +775,14 @@ export const PenjualanView: React.FC<Props> = ({
           ? 'BUKTI PENGELUARAN BARANG (KEBUTUHAN INTERNAL PT)'
           : 'NOTA PENJUALAN KASIR',
         subtitle: isPemakaianPengeluaran
-          ? `Otomatis Potong Stok & Catat Pengeluaran ${kategoriPengeluaran} | Divisi: ${result?.divisi || divisi}`
+          ? `Otomatis Potong Stok & Catat Pengeluaran ${kategoriPengeluaran} | Divisi: ${isTanpaDivisi(result?.divisi || divisi) ? 'Tanpa Divisi' : result?.divisi || divisi}`
           : isSinkron
-          ? `Metode SINKRON (Lunas Rp 0 Uang Masuk) | Divisi: ${result?.divisi || divisi}`
+          ? `Metode SINKRON (Lunas Rp 0 Uang Masuk) | Divisi: ${isTanpaDivisi(result?.divisi || divisi) ? 'Tanpa Divisi' : result?.divisi || divisi}`
           : isInternalPT
           ? 'Pemakaian Sendiri / Operasional PT Wijaya Agro (Harga Rp 0)'
-          : `Tipe: ${result?.tipePembeli || tipePembeli} | Divisi: ${result?.divisi || divisi}`,
+          : `Tipe: ${result?.tipePembeli || tipePembeli} | Divisi: ${isTanpaDivisi(result?.divisi || divisi) ? 'Tanpa Divisi' : result?.divisi || divisi}`,
         nomorTransaksi: result?.noPenjualan || `PJ-${Date.now().toString().slice(-4)}`,
-        tanggal: result?.tanggal || new Date().toISOString().split('T')[0],
+        tanggal: result?.tanggal || normalizeDateToDmy(tanggalInput),
         jam: result?.jam || '00:00:00',
         mitra: result?.namaMitra || buyerForExpense,
         rekening: result?.rekeningTujuan || (isInternalPT ? 'INTERNAL_PT' : '-'),
@@ -793,7 +796,12 @@ export const PenjualanView: React.FC<Props> = ({
         })),
         detailRows: [
           { label: 'Penerima / Pihak', value: result?.namaMitra || buyerForExpense },
-          { label: 'Divisi Terkait', value: result?.divisi || divisi },
+          {
+            label: 'Divisi Terkait',
+            value: isTanpaDivisi(result?.divisi || divisi)
+              ? 'Tanpa Divisi (Non-Divisi)'
+              : result?.divisi || divisi,
+          },
           {
             label: 'Jenis Transaksi',
             value: isPemakaianPengeluaran
@@ -2046,15 +2054,28 @@ export const PenjualanView: React.FC<Props> = ({
                 onDivisiCreated={onRefresh}
               />
 
-              <div>
-                <label className="block text-[11px] text-zinc-400 mb-1">Catatan Nota / Transaksi</label>
-                <input
-                  type="text"
-                  placeholder="Keterangan keperluan barang, lokasi kebun, atau kesepakatan nego..."
-                  value={keterangan}
-                  onChange={(e) => setKeterangan(e.target.value)}
-                  className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-xs text-zinc-200 focus:outline-hidden focus:border-emerald-500"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    Tanggal Transaksi (Fleksibel)
+                  </label>
+                  <input
+                    type="date"
+                    value={tanggalInput}
+                    onChange={(e) => setTanggalInput(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-xs font-mono text-zinc-200 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-zinc-400 mb-1">Catatan Nota / Transaksi</label>
+                  <input
+                    type="text"
+                    placeholder="Keterangan keperluan barang, lokasi kebun, atau kesepakatan nego..."
+                    value={keterangan}
+                    onChange={(e) => setKeterangan(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg text-xs text-zinc-200 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
               </div>
 
               <button
@@ -2154,7 +2175,9 @@ export const PenjualanView: React.FC<Props> = ({
                             : `${pj.metode} (${pj.rekeningTujuan})`}
                         </div>
                         {pj.divisi && (
-                          <div className="text-[10px] text-sky-400 font-medium mt-0.5">{pj.divisi}</div>
+                          <div className="text-[10px] text-sky-400 font-medium mt-0.5">
+                            {isTanpaDivisi(pj.divisi) ? 'Tanpa Divisi' : pj.divisi}
+                          </div>
                         )}
                       </td>
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
@@ -2210,6 +2233,12 @@ export const PenjualanView: React.FC<Props> = ({
 
             <div className="p-5 space-y-3.5 text-xs text-zinc-300 overflow-y-auto">
               <div className="p-3 bg-zinc-800/80 rounded-lg border border-zinc-700 space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Tanggal Transaksi:</span>
+                  <span className="font-mono font-bold text-zinc-100">
+                    {normalizeDateToDmy(tanggalInput)}
+                  </span>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-400">Tipe Pembeli:</span>
                   <span className="font-bold text-amber-400">{tipePembeli}</span>

@@ -70,7 +70,12 @@ async function startServer() {
   app.use('/api', async (req, res, next) => {
     try {
       const { dbManager, supabaseSyncEngine } = await backendReadyPromise;
-      await supabaseSyncEngine.ensureFreshCloudState(dbManager, 4000);
+      const method = String(req.method || 'GET').toUpperCase();
+      if (method === 'GET' || method === 'HEAD') {
+        await supabaseSyncEngine.ensureFreshCloudState(dbManager, 30000);
+      } else {
+        await supabaseSyncEngine.ensureInitializedOnce(dbManager);
+      }
       if (apiRouterInstance) {
         return apiRouterInstance(req, res, next);
       }

@@ -18,7 +18,7 @@ import {
   RekeningKoranMitraSummary,
   TransaksiBayarBon,
 } from '../../server/types.ts';
-import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
+import { formatRupiah, formatRupiahSingkat, dmyToIsoInput, normalizeDateToDmy } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
@@ -66,6 +66,7 @@ export const BayarBonView: React.FC<Props> = ({
   const [metode, setMetode] = useState<'SINKRON' | 'TUNAI' | 'TRANSFER'>('TUNAI');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(availableBanks[0]?.kode || 'BNI01');
   const [nominalBayarInput, setNominalBayarInput] = useState<string>('');
+  const [tanggalBayar, setTanggalBayar] = useState<string>(dmyToIsoInput());
   const [keterangan, setKeterangan] = useState<string>('Pembayaran pelunasan bon mitra');
 
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -196,7 +197,7 @@ export const BayarBonView: React.FC<Props> = ({
   const bonKotorAwal = statementData?.totalBonKeseluruhan || 0;
   const saldoTitipHasilBumi = statementData?.totalTitip || 0;
   const maksPotongSinkron = Math.min(bonKotorAwal, saldoTitipHasilBumi);
-  const canUseSinkron = bonKotorAwal > 0 && saldoTitipHasilBumi > 0 && maksPotongSinkron > 0;
+  const canUseSinkron = bonKotorAwal > 0;
 
   // Sisa bon bersih apabila dibayar fisik (Tunai / Transfer)
   const sisaBonFisik =
@@ -205,7 +206,7 @@ export const BayarBonView: React.FC<Props> = ({
     statementData?.sisaTitipanBersih ?? Math.max(0, saldoTitipHasilBumi - bonKotorAwal);
 
   // Target batas maksimal sesuai metode yang dipilih
-  const targetMaksBayar = metode === 'SINKRON' ? maksPotongSinkron : sisaBonFisik;
+  const targetMaksBayar = metode === 'SINKRON' ? bonKotorAwal : sisaBonFisik;
 
   const nominalBayar = Number(nominalBayarInput) || 0;
   const isPartial = nominalBayar > 0 && nominalBayar < targetMaksBayar;
@@ -234,9 +235,13 @@ export const BayarBonView: React.FC<Props> = ({
     setErrorMsg('');
     setMetode(nextMetode);
     if (nextMetode === 'SINKRON') {
-      setNominalBayarInput(maksPotongSinkron > 0 ? String(maksPotongSinkron) : '0');
+      setNominalBayarInput(
+        maksPotongSinkron > 0 ? String(maksPotongSinkron) : String(bonKotorAwal || 0)
+      );
       setKeterangan(
-        'Pelunasan bon via SINKRON (potong langsung dari titipan / uang hasil bumi mitra)'
+        maksPotongSinkron > 0
+          ? 'Pelunasan bon via SINKRON (potong langsung dari titipan / uang hasil bumi mitra)'
+          : 'Pelunasan bon via SINKRON (tanpa menggerakkan uang riil kas/bank)'
       );
     } else {
       setNominalBayarInput(sisaBonFisik > 0 ? String(sisaBonFisik) : '0');
@@ -251,9 +256,7 @@ export const BayarBonView: React.FC<Props> = ({
       return;
     }
     if (metode === 'SINKRON' && !canUseSinkron) {
-      setErrorMsg(
-        'Mitra ini tidak memiliki Saldo Titipan / Uang Hasil Bumi untuk dipotong via SINKRON.'
-      );
+      setErrorMsg('Mitra ini tidak memiliki sisa bon aktif untuk disinkronkan.');
       return;
     }
     if (metode !== 'SINKRON' && sisaBonFisik <= 0) {
@@ -287,6 +290,7 @@ export const BayarBonView: React.FC<Props> = ({
             : metode === 'TRANSFER'
             ? rekeningTujuan
             : 'KAS01',
+        tanggal: tanggalBayar,
         keterangan,
       });
 
@@ -679,7 +683,7 @@ export const BayarBonView: React.FC<Props> = ({
                     } disabled:opacity-45`}
                   >
                     <RefreshCw className="w-3.5 h-3.5 shrink-0" />
-                    <span>Sinkron (Potong Titipan)</span>
+                    <span>Sinkron (Non-Kas / Titipan)</span>
                   </button>
 
                   <button
@@ -834,16 +838,29 @@ export const BayarBonView: React.FC<Props> = ({
                 </div>
               )}
 
-              <div>
-                <label className="block text-[11px] font-semibold text-zinc-700 mb-1">Keterangan / Catatan</label>
-                <input
-                  type="text"
-                  disabled={targetMaksBayar <= 0}
-                  placeholder="Misal: Sinkron potong bon dari uang kopi mitra"
-                  value={keterangan}
-                  onChange={(e) => setKeterangan(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs disabled:bg-zinc-100"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                    Tanggal Pelunasan (Fleksibel)
+                  </label>
+                  <input
+                    type="date"
+                    value={tanggalBayar}
+                    onChange={(e) => setTanggalBayar(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-mono"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">Keterangan / Catatan</label>
+                  <input
+                    type="text"
+                    disabled={targetMaksBayar <= 0}
+                    placeholder="Misal: Sinkron potong bon dari uang kopi mitra"
+                    value={keterangan}
+                    onChange={(e) => setKeterangan(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs disabled:bg-zinc-100"
+                  />
+                </div>
               </div>
 
               <button
@@ -980,6 +997,12 @@ export const BayarBonView: React.FC<Props> = ({
 
             <div className="p-5 space-y-3.5 text-xs text-zinc-700">
               <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Tanggal Pelunasan:</span>
+                  <span className="font-mono font-bold text-zinc-900">
+                    {normalizeDateToDmy(tanggalBayar)}
+                  </span>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Nama Mitra:</span>
                   <span className="font-bold text-zinc-900">{statementData?.namaMitra}</span>

@@ -23,7 +23,7 @@ import {
   TransaksiPenjualan,
   TransaksiPenjualanHasilBumi,
 } from '../../server/types.ts';
-import { formatRupiah, formatRupiahSingkat, getWIBTodayString } from '../../utils/format.ts';
+import { formatRupiah, formatRupiahSingkat, dmyToIsoInput } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalPinjamUangMitra } from '../common/ModalPinjamUangMitra.tsx';
@@ -60,9 +60,9 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
   const [selectedMitraId, setSelectedMitraId] = useState<string>(initialSelectedMitraId || '');
   const [nominalInput, setNominalInput] = useState<string>('');
   const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
-  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
+  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
   const [keterangan, setKeterangan] = useState<string>('');
-  const [tanggalInput, setTanggalInput] = useState<string>(getWIBTodayString());
+  const [tanggalInput, setTanggalInput] = useState<string>(dmyToIsoInput());
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
@@ -336,6 +336,7 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
     );
 
     if (
+      metode !== 'SINKRON' &&
       nominalToPay > 0 &&
       selectedRekening &&
       !isRekAnakPerusahaan &&
@@ -354,7 +355,7 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       const record = await api.cairkanTitipan({
         idMitra: selectedMitraId,
         nominal: nominalToPay,
-        rekeningSumber,
+        rekeningSumber: metode === 'SINKRON' ? 'SINKRON' : rekeningSumber,
         metode,
         keterangan: keterangan.trim() || undefined,
         tanggal: tanggalInput,
@@ -777,7 +778,9 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
               </div>
               {Number(nominalInput) > 0 && (
                 <div className="text-[11px] text-emerald-700 font-semibold mt-1">
-                  Dibayarkan bersih dari kas/bank PT: {formatRupiah(Number(nominalInput))}
+                  {metode === 'SINKRON'
+                    ? `Diselesaikan via SINKRON (Rp 0 Uang Kas Keluar): ${formatRupiah(Number(nominalInput))}`
+                    : `Dibayarkan bersih dari kas/bank PT: ${formatRupiah(Number(nominalInput))}`}
                 </div>
               )}
             </div>
@@ -786,32 +789,39 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">Sumber Kas / Bank PT</label>
-                <select
-                  value={rekeningSumber}
-                  onChange={(e) => setRekeningSumber(e.target.value)}
-                  disabled={selectedMitraSiapBayarBersih <= 0}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 disabled:bg-zinc-100"
-                >
-                  {rekeningList
-                    .filter((r) => !r.isVirtual && r.status === 'AKTIF')
-                    .map((r) => (
-                      <option key={r.kode} value={r.kode}>
-                        {r.nama} ({formatRupiah(r.saldoSaatIni)})
-                      </option>
-                    ))}
-                </select>
+                {metode === 'SINKRON' ? (
+                  <div className="w-full px-3 py-2 border border-cyan-300 bg-cyan-50 text-cyan-900 rounded-lg font-mono font-bold text-xs">
+                    SINKRON — Non-Kas (Rp 0 Uang Riil)
+                  </div>
+                ) : (
+                  <select
+                    value={rekeningSumber}
+                    onChange={(e) => setRekeningSumber(e.target.value)}
+                    disabled={selectedMitraSiapBayarBersih <= 0}
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 disabled:bg-zinc-100"
+                  >
+                    {rekeningList
+                      .filter((r) => !r.isVirtual && r.status === 'AKTIF')
+                      .map((r) => (
+                        <option key={r.kode} value={r.kode}>
+                          {r.nama} ({formatRupiah(r.saldoSaatIni)})
+                        </option>
+                      ))}
+                  </select>
+                )}
               </div>
 
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">Metode Bayar</label>
                 <select
                   value={metode}
-                  onChange={(e) => setMetode(e.target.value as 'TUNAI' | 'TRANSFER')}
+                  onChange={(e) => setMetode(e.target.value as 'TUNAI' | 'TRANSFER' | 'SINKRON')}
                   disabled={selectedMitraSiapBayarBersih <= 0}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 disabled:bg-zinc-100"
                 >
                   <option value="TUNAI">TUNAI (Kas Kasir)</option>
                   <option value="TRANSFER">TRANSFER BANK</option>
+                  <option value="SINKRON">SINKRON (Non-Kas / Rp 0 Uang Riil)</option>
                 </select>
               </div>
             </div>
@@ -819,13 +829,14 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
             {/* Tanggal & Keterangan */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block font-semibold text-zinc-700 mb-1">Tanggal Bayar</label>
+                <label className="block font-semibold text-zinc-700 mb-1">
+                  Tanggal Bayar (Fleksibel)
+                </label>
                 <input
-                  type="text"
+                  type="date"
                   value={tanggalInput}
                   onChange={(e) => setTanggalInput(e.target.value)}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 font-mono"
-                  placeholder="DD/MM/YYYY"
                 />
               </div>
 

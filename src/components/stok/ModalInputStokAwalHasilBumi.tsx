@@ -11,9 +11,10 @@ import {
   Layers,
   Coffee,
   Check,
+  Calendar,
 } from 'lucide-react';
 import { StokHasilBumi, TransaksiPembelianHasilBumi } from '../../server/types.ts';
-import { formatRupiah } from '../../utils/format.ts';
+import { formatRupiah, dmyToIsoInput } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 
 interface Props {
@@ -52,45 +53,86 @@ export const ModalInputStokAwalHasilBumi: React.FC<Props> = ({
   );
 
   // Form states per commodity
-  const [formData, setFormData] = useState<Record<string, { stokAwal: string; rataRataModalAwal: string; keterangan: string }>>({});
+  const [formData, setFormData] = useState<
+    Record<
+      string,
+      {
+        stokAwal: string;
+        rataRataModalAwal: string;
+        keterangan: string;
+        tanggalStokAwal: string;
+      }
+    >
+  >({});
   const [submitting, setSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [viewMode, setViewMode] = useState<'SINGLE' | 'TABLE'>('SINGLE');
 
-  // Initialize form data from current stokList
+  // Initialize form data cleanly whenever modal opens
   useEffect(() => {
+    if (!isOpen) return;
     if (activeStokList.length > 0) {
-      const initial: Record<string, { stokAwal: string; rataRataModalAwal: string; keterangan: string }> = {};
+      const initial: Record<
+        string,
+        {
+          stokAwal: string;
+          rataRataModalAwal: string;
+          keterangan: string;
+          tanggalStokAwal: string;
+        }
+      > = {};
       activeStokList.forEach((h) => {
         initial[h.kode] = {
-          stokAwal: h.stokAwal !== undefined && h.stokAwal > 0 ? h.stokAwal.toString() : (formData[h.kode]?.stokAwal || '0'),
-          rataRataModalAwal: h.rataRataModalAwal !== undefined && h.rataRataModalAwal > 0
-            ? h.rataRataModalAwal.toString()
-            : (formData[h.kode]?.rataRataModalAwal || (h.hargaBeliStandar ? h.hargaBeliStandar.toString() : '0')),
-          keterangan: h.keteranganStokAwal || formData[h.kode]?.keterangan || 'Rekap stok manual gudang sebelum aplikasi',
+          stokAwal: h.stokAwal !== undefined ? String(h.stokAwal) : '0',
+          rataRataModalAwal:
+            h.rataRataModalAwal !== undefined && h.rataRataModalAwal > 0
+              ? String(h.rataRataModalAwal)
+              : h.hargaBeliStandar
+              ? String(h.hargaBeliStandar)
+              : '0',
+          keterangan:
+            h.keteranganStokAwal || 'Rekap stok manual gudang sebelum aplikasi',
+          tanggalStokAwal: dmyToIsoInput(h.updateTerakhir),
         };
       });
       setFormData(initial);
     }
-  }, [stokList, isOpen]);
+    setSuccessMsg('');
+    setErrorMsg('');
+  }, [isOpen, stokList]);
 
   useEffect(() => {
-    if (initialSelectedKode) {
+    if (isOpen && initialSelectedKode) {
       setSelectedKode(initialSelectedKode);
+      setViewMode('SINGLE');
     }
-  }, [initialSelectedKode]);
+  }, [isOpen, initialSelectedKode]);
 
   if (!isOpen) return null;
 
   const currentHb = activeStokList.find((h) => h.kode === selectedKode) || activeStokList[0];
-  const currentForm = formData[selectedKode] || { stokAwal: '0', rataRataModalAwal: '0', keterangan: '' };
+  const currentForm = formData[selectedKode] || {
+    stokAwal: '0',
+    rataRataModalAwal: '0',
+    keterangan: '',
+    tanggalStokAwal: dmyToIsoInput(),
+  };
 
-  const handleInputChange = (kode: string, field: 'stokAwal' | 'rataRataModalAwal' | 'keterangan', val: string) => {
+  const handleInputChange = (
+    kode: string,
+    field: 'stokAwal' | 'rataRataModalAwal' | 'keterangan' | 'tanggalStokAwal',
+    val: string
+  ) => {
     setFormData((prev) => ({
       ...prev,
       [kode]: {
-        ...prev[kode],
+        ...(prev[kode] || {
+          stokAwal: '0',
+          rataRataModalAwal: '0',
+          keterangan: '',
+          tanggalStokAwal: dmyToIsoInput(),
+        }),
         [field]: val,
       },
     }));
@@ -126,15 +168,21 @@ export const ModalInputStokAwalHasilBumi: React.FC<Props> = ({
 
     try {
       const itemsToUpdate = (saveAll ? activeStokList : [currentHb]).map((hb) => {
-        const form = formData[hb.kode] || { stokAwal: '0', rataRataModalAwal: '0', keterangan: '' };
-        const sAwal = Number(form.stokAwal) || 0;
-        const rModal = Number(form.rataRataModalAwal) || 0;
+        const form = formData[hb.kode] || {
+          stokAwal: '0',
+          rataRataModalAwal: '0',
+          keterangan: '',
+          tanggalStokAwal: dmyToIsoInput(hb.updateTerakhir),
+        };
+        const sAwal = Math.max(0, Number(form.stokAwal) || 0);
+        const rModal = Math.max(0, Number(form.rataRataModalAwal) || 0);
         return {
           kode: hb.kode,
           stokAwal: sAwal,
           rataRataModalAwal: rModal,
           modalAwalTotal: Math.round(sAwal * rModal),
           keterangan: form.keterangan || 'Rekap manual lama sebelum aplikasi',
+          tanggalStokAwal: form.tanggalStokAwal || undefined,
         };
       });
 
@@ -168,9 +216,9 @@ export const ModalInputStokAwalHasilBumi: React.FC<Props> = ({
             </div>
             <div>
               <h2 className="text-base font-bold tracking-tight flex items-center space-x-2">
-                <span>Input Rekap Stok Lama &amp; Modal Awal Hasil Bumi</span>
+                <span>Input / Edit Stok Awal Gudang &amp; Modal Awal Hasil Bumi</span>
                 <span className="text-[10px] bg-amber-600/80 text-white font-mono px-2 py-0.5 rounded-full uppercase">
-                  Saldo Awal Manual
+                  Edit Saldo Awal
                 </span>
               </h2>
               <p className="text-xs text-amber-200/90 mt-0.5">
@@ -353,17 +401,31 @@ export const ModalInputStokAwalHasilBumi: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
-                    Catatan / Referensi Rekap Manual (Opsional)
-                  </label>
-                  <input
-                    type="text"
-                    value={currentForm.keterangan}
-                    onChange={(e) => handleInputChange(selectedKode, 'keterangan', e.target.value)}
-                    placeholder="Contoh: Rekap fisik gudang s/d tanggal 30 September dari buku catatan"
-                    className="w-full px-3 py-1.5 bg-white border border-zinc-300 rounded-xl text-xs text-zinc-800"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-700 mb-1 flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Tanggal Stok Awal</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={currentForm.tanggalStokAwal}
+                      onChange={(e) => handleInputChange(selectedKode, 'tanggalStokAwal', e.target.value)}
+                      className="w-full px-3 py-1.5 bg-white border border-zinc-300 rounded-xl text-xs font-mono text-zinc-800"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                      Catatan / Referensi Rekap Manual (Opsional)
+                    </label>
+                    <input
+                      type="text"
+                      value={currentForm.keterangan}
+                      onChange={(e) => handleInputChange(selectedKode, 'keterangan', e.target.value)}
+                      placeholder="Contoh: Rekap fisik gudang s/d tanggal 30 Oktober dari buku catatan"
+                      className="w-full px-3 py-1.5 bg-white border border-zinc-300 rounded-xl text-xs text-zinc-800"
+                    />
+                  </div>
                 </div>
               </div>
 

@@ -530,12 +530,14 @@ export const api = {
     rataRataModalAwal?: number;
     modalAwalTotal?: number;
     keterangan?: string;
+    tanggalStokAwal?: string;
     items?: Array<{
       kode: string;
       stokAwal: number;
       rataRataModalAwal: number;
       modalAwalTotal?: number;
       keterangan?: string;
+      tanggalStokAwal?: string;
     }>;
   }): Promise<StokHasilBumi[]> => {
     const data = await requestJson('/api/stok-hasil-bumi/saldo-awal', {
@@ -553,10 +555,12 @@ export const api = {
     namaPembeliManual?: string;
     tipePembeli?: 'UMUM' | 'REKANAN';
     divisi?: string;
+    tanggal?: string;
     metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT' | 'SINKRON' | 'PEMAKAIAN_PENGELUARAN';
     rekeningTujuan?: string;
     kategoriPengeluaran?: string;
     idInventaris?: string;
+    penerimaPengeluaran?: string;
     items: Array<{ kodeProduk: string; qty: number; harga?: number; hargaSugesti?: number }>;
     keterangan?: string;
   }): Promise<TransaksiPenjualan> => {
@@ -585,7 +589,8 @@ export const api = {
     judulRekapan?: string;
     totalNominalRekapan?: number;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG';
+    tanggal?: string;
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG' | 'SINKRON';
     rekeningSumber?: string;
     items?: Array<{
       kodeProduk: string;
@@ -647,8 +652,9 @@ export const api = {
     isNotaLalu?: boolean;
     noNotaLalu?: string;
     tanggalNotaLalu?: string;
+    tanggal?: string;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPembelianHasilBumi> => {
@@ -670,7 +676,9 @@ export const api = {
     isNotaLalu?: boolean;
     noNotaLalu?: string;
     tanggalNotaLalu?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    tanggal?: string;
+    divisi?: string;
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
     rekeningSumber?: string;
     keterangan?: string;
     items: Array<{
@@ -685,6 +693,9 @@ export const api = {
   }): Promise<{
     batchId: string;
     records: TransaksiPembelianHasilBumi[];
+    totalNominal: number;
+    totalNominalDibayarSekarang: number;
+    totalBeratBersih: number;
     totalBayarBatch: number;
     totalNettoBatch: number;
     divisi: string;
@@ -707,8 +718,9 @@ export const api = {
   putusHargaHasilBumi: async (payload: {
     noPembelian: string;
     hargaDealPerKg: number;
+    tanggal?: string;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP';
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON';
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPembelianHasilBumi> => {
@@ -775,7 +787,7 @@ export const api = {
     kategori?: string;
     keterangan?: string;
     nominal: number;
-    metode: 'TUNAI' | 'TRANSFER';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningTujuan?: string;
     idMitra?: string;
     namaPengirimManual?: string;
@@ -818,7 +830,7 @@ export const api = {
     potonganRafaksi?: number;
     hargaJualPerKg?: number;
     divisi?: string;
-    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA';
+    metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA' | 'SINKRON';
     rekeningTujuan?: string;
     noSuratJalan?: string;
     tanggal?: string;
@@ -872,9 +884,10 @@ export const api = {
   // Kasbon Uang (Fitur C)
   processKasbonUang: async (payload: {
     idMitra: string;
-    metode: 'TUNAI' | 'TRANSFER';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningSumber?: string;
     nominal: number;
+    tanggal?: string;
     keterangan?: string;
     fotoNota?: string;
   }): Promise<TransaksiKasbonUang> => {
@@ -1163,6 +1176,7 @@ export const api = {
     nominalBayar: number;
     metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningTujuan?: string;
+    tanggal?: string;
     keterangan?: string;
     idNotaTarget?: string;
   }): Promise<TransaksiBayarBon> => {
@@ -1186,6 +1200,7 @@ export const api = {
     rekeningSumber: string;
     rekeningTujuan: string;
     nominal: number;
+    tanggal?: string;
     keterangan: string;
   }): Promise<TransaksiTransferRekening> => {
     const data = await requestJson('/api/transaksi/transfer-rekening', {
@@ -1291,7 +1306,7 @@ export const api = {
     idKaryawan: string;
     tanggalKerja?: string;
     hariTanggal?: string;
-    divisi: NamaDivisi;
+    divisi: NamaDivisi | string;
     divisiKode?: string;
     item?: string;
     kuantiti?: number;
@@ -1306,7 +1321,7 @@ export const api = {
     rekeningSumber?: string;
     persentasePotongKasbon?: number;
     nominalPotongKustom?: number;
-    metodePembayaran?: 'TUNAI' | 'TRANSFER';
+    metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
   }): Promise<{ catatan: CatatanUpahHarian; slipGaji?: TransaksiPenggajian }> => {
     const data = await requestJson('/api/karyawan/kerja-harian', {
       method: 'POST',
@@ -1326,7 +1341,8 @@ export const api = {
   settleHakUpahKaryawan: async (
     id: string,
     payload: {
-      divisi?: NamaDivisi;
+      divisi?: NamaDivisi | string;
+      tanggalKerja?: string;
       tipeGaji?: 'HARIAN' | 'BULANAN';
       periodeBulan?: string;
       upahHarianIds?: string[];
@@ -1336,7 +1352,7 @@ export const api = {
       rekeningSumber?: string;
       persentasePotongKasbon?: number;
       nominalPotongKustom?: number;
-      metodePembayaran?: 'TUNAI' | 'TRANSFER';
+      metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
       keterangan?: string;
     }
   ): Promise<TransaksiPenggajian> => {
@@ -1395,7 +1411,7 @@ export const api = {
   // Penggajian & Potong Bon
   processPenggajian: async (payload: {
     idKaryawan: string;
-    divisi?: NamaDivisi;
+    divisi?: NamaDivisi | string;
     tipeGaji?: 'HARIAN' | 'BULANAN';
     tanggalKerja?: string;
     periodeBulan?: string;
@@ -1406,7 +1422,7 @@ export const api = {
     upahHarianIds?: string[];
     persentasePotongKasbon: number;
     nominalPotongKustom?: number;
-    metodePembayaran?: 'TUNAI' | 'TRANSFER';
+    metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     rekeningSumber?: string;
     keterangan?: string;
   }): Promise<TransaksiPenggajian> => {
@@ -1423,11 +1439,12 @@ export const api = {
     tanggalKerja: string;
     items: Array<{
       idKaryawan: string;
-      divisi: NamaDivisi;
+      divisi: NamaDivisi | string;
       gajiNominal: number;
       bonus?: number;
       persentasePotongKasbon?: number;
       nominalPotongKustom?: number;
+      metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
       rekeningSumber?: string;
       keterangan?: string;
     }>;
@@ -1634,9 +1651,11 @@ export const api = {
     return data.data;
   },
 
-  deleteMasterItemPengeluaran: async (id: string): Promise<void> => {
-    const data = await requestJson(`/api/master-item-pengeluaran/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
+  deleteMasterItemPengeluaran: async (idOrNama: string): Promise<void> => {
+    const data = await requestJson('/api/master-item-pengeluaran/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idOrNama }),
     });
     if (!data.success) throw new Error(data.message || 'Gagal menghapus item pengeluaran');
   },
@@ -1712,7 +1731,7 @@ export const api = {
     idMitra: string;
     nominal: number;
     rekeningSumber: string;
-    metode: 'TUNAI' | 'TRANSFER';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     keterangan?: string;
     tanggal?: string;
   }): Promise<TransaksiPencairanTitipan> => {
