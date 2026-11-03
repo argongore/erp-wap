@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback, useDeferredValue, useRef } from 'react';
 import {
-  Sprout,
   RefreshCw,
   LogOut,
   Search,
-  FileText,
+  Receipt,
   ArrowUpRight,
   Wallet,
   Landmark,
@@ -12,7 +11,6 @@ import {
   Users,
   Briefcase,
   Boxes,
-  Truck,
   ChevronDown,
   ChevronUp,
   ArrowLeft,
@@ -30,7 +28,6 @@ import {
   DAFTAR_ROLE_MITRA,
   DEFAULT_PT_LOGO_URL,
   getRoleMitraLabel,
-  isKategoriAlatNonStok,
   NamaDivisi,
   normalizeRoleMitra,
   ProfilPerusahaan,
@@ -47,8 +44,6 @@ import {
   TransaksiPenggajian,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
-import { RekapSemuaTransaksiHarianView } from '../laporan/RekapSemuaTransaksiHarianView.tsx';
-import { LabaRugiProdukView } from '../laporan/LabaRugiProdukView.tsx';
 import { CetakRekeningKoranModal } from '../laporan/CetakRekeningKoranModal.tsx';
 import { SlipGajiModal } from '../karyawan/SlipGajiModal.tsx';
 import { InputPayrollHarianDivisiModal } from '../karyawan/InputPayrollHarianDivisiModal.tsx';
@@ -58,13 +53,16 @@ import {
   ModalProfilKaryawan,
   ProfilKaryawanEditableData,
 } from '../karyawan/ModalProfilKaryawan.tsx';
-import { DivisiLogoAvatar, resolveDivisiLogoUrl } from '../common/DivisiLogoAvatar.tsx';
 import { PWAInstallButton } from '../common/PWAInstallButton.tsx';
 import { ModalBackupFullSpreadsheet } from '../database/ModalBackupFullSpreadsheet.tsx';
 import { RekapHarianDanKomoditasBosView } from './RekapHarianDanKomoditasBosView.tsx';
+import { ArusKasDivisiBosView } from './ArusKasDivisiBosView.tsx';
+import { PengeluaranBosView } from './PengeluaranBosView.tsx';
+import { StokDanPembelianHbBosView } from './StokDanPembelianHbBosView.tsx';
 
-type BosTab = 'kas' | 'harian' | 'divisi' | 'karyawan' | 'mitra' | 'jurnal' | 'stok';
+type BosTab = 'kas' | 'harian' | 'divisi' | 'pengeluaran' | 'stok' | 'karyawan' | 'mitra';
 type KaryawanSubView = 'BULANAN' | 'SALDO_TOTAL' | 'SLIP_GAJI';
+type KaryawanQuickFilter = 'ALL' | 'ADA_GAJI' | 'ADA_PIUTANG';
 
 const BULAN_OPTIONS = [
   { value: 1, label: 'Januari' },
@@ -151,11 +149,11 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   // Division financial state
   const [divisiData, setDivisiData] = useState<PergerakanKeuanganDivisiSummary[]>([]);
   const [loadingDivisi, setLoadingDivisi] = useState(false);
-  const [expandedDivisi, setExpandedDivisi] = useState<string | null>(null);
 
-  // Employee recap state (Read-Only)
+  // Employee recap state
   const nowInit = useMemo(() => new Date(), []);
   const [karyawanSubView, setKaryawanSubView] = useState<KaryawanSubView>('BULANAN');
+  const [karyawanQuickFilter, setKaryawanQuickFilter] = useState<KaryawanQuickFilter>('ALL');
   const [selectedBulan, setSelectedBulan] = useState<number>(nowInit.getMonth() + 1);
   const [selectedTahun, setSelectedTahun] = useState<number>(nowInit.getFullYear());
   const [selectedDivisiKaryawan, setSelectedDivisiKaryawan] = useState<string>('ALL');
@@ -195,8 +193,6 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   const [selectedStatement, setSelectedStatement] = useState<RekeningKoranMitraSummary | null>(null);
   const [loadingStatementId, setLoadingStatementId] = useState<string | null>(null);
 
-  // Stok barang progressive display (avoids nested scroll traps on mobile)
-  const [showAllStokBarang, setShowAllStokBarang] = useState(false);
 
   const availableYears = useMemo(() => {
     const cy = nowInit.getFullYear();
@@ -395,18 +391,83 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     return map;
   }, [rekapKaryawan]);
 
+  // Lookup cumulative employee salary/receivable stats by employee ID
+  const rekapKaryawanByIdMap = useMemo(() => {
+    const map = new Map<string, NonNullable<RekapMasterKaryawanSummary['items']>[number]>();
+    for (const k of rekapKaryawan?.items || []) {
+      map.set(k.id, k);
+    }
+    return map;
+  }, [rekapKaryawan]);
+
+  const karyawanGlobalGajiPiutangStats = useMemo(() => {
+    let totalAkumulasiGajiDibayar = 0;
+    let totalAkumulasiUpahBelumCair = 0;
+    let totalPiutangKasbonUang = 0;
+    let totalPiutangKasbonBarang = 0;
+    let adaGajiCount = 0;
+    let adaPiutangCount = 0;
+
+    for (const k of rekapKaryawan?.items || []) {
+      const cair = Number(k.totalGajiSudahDibayar || k.totalUpahSudahDibayar || 0);
+      const belum = Number(k.totalUpahBelumDibayar || 0);
+      const bonUang = Number(k.totalKasbonUang || 0);
+      const bonBrg = Number(k.totalKasbonBarang || 0);
+      const bonTotal = Number(k.totalBonKaryawan || 0);
+
+      totalAkumulasiGajiDibayar += cair;
+      totalAkumulasiUpahBelumCair += belum;
+      totalPiutangKasbonUang += bonUang;
+      totalPiutangKasbonBarang += bonBrg;
+      if (cair > 0 || belum > 0 || (k.totalHakUpahHarian || 0) > 0) adaGajiCount += 1;
+      if (bonTotal > 0) adaPiutangCount += 1;
+    }
+
+    const totalPiutang =
+      rekapKaryawan?.totalBonKaryawan ??
+      rekapPayroll?.totalSisaBonKaryawan ??
+      totalPiutangKasbonUang + totalPiutangKasbonBarang;
+
+    const totalBelumCair =
+      rekapKaryawan?.totalHakUpahBelumDibayar ??
+      rekapPayroll?.totalHakUpahPending ??
+      totalAkumulasiUpahBelumCair;
+
+    return {
+      totalAkumulasiGajiDibayar,
+      totalBelumCair,
+      totalPiutang,
+      totalPiutangKasbonUang,
+      totalPiutangKasbonBarang,
+      selisihBersih: totalBelumCair - totalPiutang,
+      adaGajiCount,
+      adaPiutangCount,
+    };
+  }, [rekapKaryawan, rekapPayroll]);
+
   const filteredPayrollItems = useMemo(() => {
     const items = rekapPayroll?.items || [];
     const q = deferredKaryawanSearch.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (item) =>
+    return items.filter((item) => {
+      const masterRekap = rekapKaryawanByIdMap.get(item.idKaryawan);
+      const nominalGaji =
+        (item.totalGajiKotor || 0) +
+        (item.totalUpahBelumDibayarSemuaPeriode || 0) +
+        (masterRekap?.totalGajiSudahDibayar || 0);
+      const nominalPiutang = item.totalSisaBonKaryawan || masterRekap?.totalBonKaryawan || 0;
+
+      if (karyawanQuickFilter === 'ADA_GAJI' && nominalGaji <= 0) return false;
+      if (karyawanQuickFilter === 'ADA_PIUTANG' && nominalPiutang <= 0) return false;
+
+      if (!q) return true;
+      return (
         item.nama.toLowerCase().includes(q) ||
         item.nik.toLowerCase().includes(q) ||
         item.jabatan.toLowerCase().includes(q) ||
         item.divisiUtama.toLowerCase().includes(q)
-    );
-  }, [rekapPayroll, deferredKaryawanSearch]);
+      );
+    });
+  }, [rekapPayroll, deferredKaryawanSearch, karyawanQuickFilter, rekapKaryawanByIdMap]);
 
   const filteredSaldoKaryawanItems = useMemo(() => {
     const items = rekapKaryawan?.items || [];
@@ -416,6 +477,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
         const div = item.divisi || item.divisiTerakhir || item.departemen || '';
         if (div !== selectedDivisiKaryawan) return false;
       }
+      const totalGajiKumulatif =
+        (item.totalGajiSudahDibayar || item.totalUpahSudahDibayar || 0) +
+        (item.totalUpahBelumDibayar || 0);
+      if (karyawanQuickFilter === 'ADA_GAJI' && totalGajiKumulatif <= 0) return false;
+      if (karyawanQuickFilter === 'ADA_PIUTANG' && (item.totalBonKaryawan || 0) <= 0) return false;
+
       if (!q) return true;
       return (
         item.nama.toLowerCase().includes(q) ||
@@ -424,7 +491,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
         (item.divisi || '').toLowerCase().includes(q)
       );
     });
-  }, [rekapKaryawan, selectedDivisiKaryawan, deferredKaryawanSearch]);
+  }, [rekapKaryawan, selectedDivisiKaryawan, deferredKaryawanSearch, karyawanQuickFilter]);
 
   const filteredSlipGajiItems = useMemo(() => {
     const q = deferredKaryawanSearch.trim().toLowerCase();
@@ -492,22 +559,6 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     [filteredMitraItems, mitraVisibleLimit]
   );
 
-  const sortedStokBarang = useMemo(
-    () =>
-      [...stokBarangList].sort((a, b) => {
-        const alatA = isKategoriAlatNonStok(a.kategori) ? 1 : 0;
-        const alatB = isKategoriAlatNonStok(b.kategori) ? 1 : 0;
-        if (alatA !== alatB) return alatA - alatB;
-        return (a.stok || 0) - (b.stok || 0);
-      }),
-    [stokBarangList]
-  );
-
-  const displayedStokBarang = useMemo(
-    () => (showAllStokBarang ? sortedStokBarang : sortedStokBarang.slice(0, 30)),
-    [sortedStokBarang, showAllStokBarang]
-  );
-
   const rekeningUtamaDetail = useMemo(() => {
     const kode = profilPerusahaan?.rekeningUtama || 'KAS01';
     const found = safeRekening.find((r) => r.kode === kode);
@@ -524,11 +575,11 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     () => [
       { id: 'kas', label: 'Kas & Saldo PT', icon: Wallet },
       { id: 'harian', label: 'Rekap Harian & Komoditas', icon: Calendar },
-      { id: 'divisi', label: 'Divisi & Armada', icon: Layers },
+      { id: 'divisi', label: 'Arus Kas Divisi', icon: Layers },
+      { id: 'pengeluaran', label: 'Pengeluaran', icon: Receipt },
+      { id: 'stok', label: 'Stok & Pembelian HB', icon: Boxes },
       { id: 'karyawan', label: 'Rekap Karyawan', icon: Briefcase },
       { id: 'mitra', label: 'Rekening Mitra', icon: Users },
-      { id: 'jurnal', label: 'Jurnal & Bukti Nota', icon: FileText },
-      { id: 'stok', label: 'Stok & Laba Rugi Divisi', icon: Boxes },
     ],
     []
   );
@@ -798,314 +849,90 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
           <RekapHarianDanKomoditasBosView onRefreshParent={onRefreshAll} />
         )}
 
-        {/* TAB 2: ARUS KAS DIVISI & ARMADA */}
+        {/* TAB 2: ARUS KAS DIVISI (FOKUS CASH FLOW IN / OUT UANG PER DIVISI) */}
         {activeTab === 'divisi' && (
-          <div className="space-y-6">
-            <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                    Pergerakan Arus Kas &amp; Saldo Buku per Divisi Usaha
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Klik baris divisi untuk melihat rincian mutasi transaksi terakhir pada divisi tersebut
-                  </p>
-                </div>
-              </div>
-
-              {loadingDivisi ? (
-                <div className="p-8 text-center text-xs text-slate-500">
-                  Memuat rekap keuangan divisi...
-                </div>
-              ) : divisiData.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-500">
-                  Belum ada data pergerakan divisi.
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                  {divisiData.map((d) => {
-                    const isOpen = expandedDivisi === d.idDivisi;
-                    const divMaster = divisiMasterList.find(
-                      (m) => m.id === d.idDivisi || m.nama.toLowerCase() === d.divisi.toLowerCase()
-                    );
-                    const divLogo = resolveDivisiLogoUrl(
-                      d.divisi,
-                      d.logoUrl || divMaster?.logoUrl,
-                      divisiMasterList
-                    );
-                    const pjLabel = d.penanggungJawab || divMaster?.penanggungJawab;
-                    const descLabel = d.deskripsi || divMaster?.deskripsi;
-                    return (
-                      <div key={d.idDivisi}>
-                        <button
-                          type="button"
-                          onClick={() => setExpandedDivisi(isOpen ? null : d.idDivisi)}
-                          className="w-full px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/70 transition-colors text-left cursor-pointer"
-                        >
-                          <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                            <DivisiLogoAvatar
-                              namaDivisi={d.divisi}
-                              logoUrl={divLogo}
-                              size="md"
-                              theme="light"
-                            />
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                <span className="font-bold text-sm text-slate-900">{d.divisi}</span>
-                                {pjLabel && (
-                                  <span className="text-xs text-slate-500">· PJ: {pjLabel}</span>
-                                )}
-                              </div>
-                              {descLabel && (
-                                <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{descLabel}</p>
-                              )}
-                              <div className="text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono tabular-nums">
-                                <span>Kode {d.kodeRekening}</span>
-                                <span>·</span>
-                                <span className="text-emerald-700">
-                                  Uang Masuk +{formatRupiahSingkat(d.totalPenjualanMasuk || 0)}
-                                </span>
-                                <span>·</span>
-                                <span className="text-rose-700">
-                                  Uang Keluar −
-                                  {formatRupiahSingkat(
-                                    (d.totalPembelianKeluar || 0) +
-                                      (d.totalPengeluaranOperasional || 0) +
-                                      (d.totalGajiKeluar || 0)
-                                  )}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
-                            <div className="text-left sm:text-right">
-                              <div className="text-[11px] text-slate-400">Laba / Rugi Divisi</div>
-                              <div
-                                className={`font-mono text-xs sm:text-sm font-bold tabular-nums ${
-                                  (d.labaRugiBersih ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                                }`}
-                              >
-                                {(d.labaRugiBersih ?? 0) >= 0 ? '+' : ''}
-                                {formatRupiah(d.labaRugiBersih ?? 0)}
-                              </div>
-                            </div>
-                            <div className="text-left sm:text-right">
-                              <div className="text-[11px] text-slate-400">Nilai &amp; Saldo Divisi</div>
-                              <div
-                                className={`font-mono text-sm sm:text-base font-bold tabular-nums ${
-                                  d.saldoSaatIni >= 0 ? 'text-slate-900' : 'text-rose-700'
-                                }`}
-                              >
-                                {formatRupiah(d.saldoSaatIni)}
-                              </div>
-                            </div>
-                            {isOpen ? (
-                              <ChevronUp className="w-4 h-4 text-slate-400" />
-                            ) : (
-                              <ChevronDown className="w-4 h-4 text-slate-400" />
-                            )}
-                          </div>
-                        </button>
-
-                        {isOpen && (
-                          <div className="px-5 pb-5 pt-3 bg-slate-50/60 border-t border-slate-100 space-y-3">
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                              <div>
-                                <span className="text-slate-500">Uang Masuk (+)</span>
-                                <div className="font-mono font-bold text-emerald-700 tabular-nums mt-0.5">
-                                  +{formatRupiah(d.totalPenjualanMasuk || 0)}
-                                </div>
-                              </div>
-                              <div>
-                                <span className="text-slate-500">Uang Keluar (−)</span>
-                                <div className="font-mono font-bold text-rose-700 tabular-nums mt-0.5">
-                                  −
-                                  {formatRupiah(
-                                    (d.totalPembelianKeluar || 0) +
-                                      (d.totalPengeluaranOperasional || 0) +
-                                      (d.totalGajiKeluar || 0)
-                                  )}
-                                </div>
-                              </div>
-                              <div>
-                                <span className="text-slate-500">Laba / Rugi Divisi</span>
-                                <div
-                                  className={`font-mono font-bold tabular-nums mt-0.5 ${
-                                    (d.labaRugiBersih ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                                  }`}
-                                >
-                                  {(d.labaRugiBersih ?? 0) >= 0 ? '+' : ''}
-                                  {formatRupiah(d.labaRugiBersih ?? 0)}
-                                </div>
-                              </div>
-                            </div>
-
-                            {d.mutasi && d.mutasi.length > 0 && (
-                              <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl">
-                                <table className="w-full text-left text-xs border-collapse">
-                                  <thead>
-                                    <tr className="border-b border-slate-100 text-slate-500 bg-slate-50/60">
-                                      <th className="py-2 px-3 font-semibold">Tanggal</th>
-                                      <th className="py-2 px-3 font-semibold">Keterangan</th>
-                                      <th className="py-2 px-3 font-semibold text-right">Masuk</th>
-                                      <th className="py-2 px-3 font-semibold text-right">Keluar</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100">
-                                    {d.mutasi.slice(0, 10).map((m) => (
-                                      <tr key={m.id}>
-                                        <td className="py-2 px-3 font-mono text-slate-600 whitespace-nowrap">
-                                          {m.tanggal}
-                                        </td>
-                                        <td className="py-2 px-3 text-slate-800">{m.keterangan}</td>
-                                        <td className="py-2 px-3 text-right font-mono text-emerald-700 tabular-nums whitespace-nowrap">
-                                          {m.masuk > 0 ? `+${formatRupiah(m.masuk)}` : '-'}
-                                        </td>
-                                        <td className="py-2 px-3 text-right font-mono text-rose-700 tabular-nums whitespace-nowrap">
-                                          {m.keluar > 0 ? `-${formatRupiah(m.keluar)}` : '-'}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-
-            {/* Inventaris & Armada Kendaraan PT */}
-            <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                    Daftar Inventaris Kendaraan &amp; Armada PT ({inventarisList.length} Unit)
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Pantauan sopir penanggung jawab, kondisi unit, dan jadwal pajak STNK
-                  </p>
-                </div>
-                <Truck className="w-4 h-4 text-slate-400" />
-              </div>
-
-              {inventarisList.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-500">
-                  Belum ada unit kendaraan di menu Inventaris.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
-                        <th className="py-3 px-5 font-semibold">No. Polisi / Kode</th>
-                        <th className="py-3 px-4 font-semibold">Nama Armada / Kendaraan</th>
-                        <th className="py-3 px-4 font-semibold">Driver / Penanggung Jawab</th>
-                        <th className="py-3 px-4 font-semibold">Pajak STNK</th>
-                        <th className="py-3 px-5 font-semibold">Kondisi</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {inventarisList.map((inv) => (
-                        <tr key={inv.id} className="hover:bg-slate-50/60">
-                          <td className="py-3 px-5 font-mono font-bold text-slate-900 whitespace-nowrap">
-                            {inv.nomorPlat || inv.kode}
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="font-semibold text-slate-900">{inv.namaItem}</div>
-                            <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
-                              <span>{inv.tahunKeluaran ? `Tahun ${inv.tahunKeluaran}` : inv.kategori}</span>
-                              {inv.divisi && (
-                                <>
-                                  <span>·</span>
-                                  <span className="inline-flex items-center gap-1">
-                                    <DivisiLogoAvatar
-                                      namaDivisi={inv.divisi}
-                                      logoUrl={resolveDivisiLogoUrl(
-                                        inv.divisi,
-                                        undefined,
-                                        divisiData.length > 0 ? divisiData : divisiMasterList
-                                      )}
-                                      size="xs"
-                                    />
-                                    <span>{inv.divisi}</span>
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-3 px-4 text-slate-700">
-                            <div>{inv.driverPenanggungJawab || '-'}</div>
-                            {inv.teleponDriver && (
-                              <div className="font-mono text-xs text-slate-400">{inv.teleponDriver}</div>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 font-mono text-xs text-slate-700 whitespace-nowrap">
-                            {inv.tanggalPajakTahunan || '-'}
-                          </td>
-                          <td className="py-3 px-5 text-xs font-semibold text-slate-700">
-                            {inv.kondisi.replace(/_/g, ' ')}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-          </div>
+          <ArusKasDivisiBosView
+            divisiData={divisiData}
+            divisiMasterList={divisiMasterList}
+            loading={loadingDivisi}
+          />
         )}
 
-        {/* TAB 3: REKAP KARYAWAN, ABSENSI HARIAN, KASBON & SLIP GAJI (READ-ONLY) */}
+        {/* TAB: REKAP KARYAWAN (LANGSUNG MELIHAT NOMINAL GAJI DAN PIUTANG / KASBON) */}
         {activeTab === 'karyawan' && (
           <div className="space-y-5">
-            {/* Executive KPI Summary + Filters */}
-            <section className="bg-white border border-slate-200 rounded-2xl p-5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pb-5 border-b border-slate-100">
+            {/* Executive KPI Summary: Nominal Gaji & Piutang Karyawan */}
+            <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pb-5 border-b border-slate-100">
                 <div>
-                  <div className="text-xs text-slate-500">Total Karyawan Terdaftar</div>
-                  <div className="font-mono text-xl font-bold text-slate-900 tabular-nums mt-0.5">
-                    {rekapKaryawan?.totalKaryawan ?? rekapPayroll?.totalPekerja ?? 0} Orang
+                  <div className="text-xs text-slate-500">
+                    Nominal Gaji ({rekapPayroll?.periodeBulan || 'Bulan Ini'})
                   </div>
-                  <div className="text-[11px] text-slate-400">
-                    Seluruh divisi operasional PT
+                  <div className="font-mono text-xl font-bold text-slate-900 tabular-nums mt-0.5">
+                    {formatRupiah(rekapPayroll?.totalGajiKotor || 0)}
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                    {rekapPayroll?.totalHariKerja || 0} hari kerja ·{' '}
+                    {rekapKaryawan?.totalKaryawan ?? rekapPayroll?.totalPekerja ?? 0} karyawan
                   </div>
                 </div>
 
                 <div className="sm:border-l sm:border-slate-100 sm:pl-4">
-                  <div className="text-xs text-slate-500">Hak Upah Harian Belum Cair</div>
-                  <div className="font-mono text-xl font-bold text-emerald-700 tabular-nums mt-0.5">
-                    {formatRupiah(rekapKaryawan?.totalHakUpahBelumDibayar ?? rekapPayroll?.totalHakUpahPending ?? 0)}
+                  <div className="text-xs text-slate-500">Gaji Sudah Dibayar (Cair)</div>
+                  <div className="font-mono text-xl font-bold text-slate-900 tabular-nums mt-0.5">
+                    {formatRupiah(
+                      karyawanSubView === 'SALDO_TOTAL'
+                        ? karyawanGlobalGajiPiutangStats.totalAkumulasiGajiDibayar
+                        : rekapPayroll?.totalGajiBersihDibayar || 0
+                    )}
                   </div>
-                  <div className="text-[11px] text-slate-400">
-                    {rekapKaryawan?.karyawanDenganUpahPendingCount || 0} karyawan punya saldo upah berjalan
+                  <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                    Total slip cair semua waktu:{' '}
+                    {formatRupiahSingkat(karyawanGlobalGajiPiutangStats.totalAkumulasiGajiDibayar)}
                   </div>
                 </div>
 
                 <div className="lg:border-l lg:border-slate-100 lg:pl-4">
-                  <div className="text-xs text-slate-500">Total Kasbon Karyawan Aktif</div>
-                  <div className="font-mono text-xl font-bold text-amber-700 tabular-nums mt-0.5">
-                    {formatRupiah(rekapKaryawan?.totalBonKaryawan ?? rekapPayroll?.totalSisaBonKaryawan ?? 0)}
+                  <div className="text-xs text-slate-500">Gaji / Upah Belum Cair</div>
+                  <div className="font-mono text-xl font-bold text-emerald-700 tabular-nums mt-0.5">
+                    {formatRupiah(karyawanGlobalGajiPiutangStats.totalBelumCair)}
                   </div>
-                  <div className="text-[11px] text-slate-400">
-                    {rekapKaryawan?.karyawanDenganBonCount || 0} karyawan punya bon uang/barang
+                  <div className="text-[11px] text-slate-500">
+                    {rekapKaryawan?.karyawanDenganUpahPendingCount || 0} karyawan punya hak gaji berjalan
                   </div>
                 </div>
 
                 <div className="sm:border-l sm:border-slate-100 sm:pl-4">
-                  <div className="text-xs text-slate-500">
-                    Gaji Bersih Dibayar ({rekapPayroll?.periodeBulan || 'Bulan Ini'})
+                  <div className="text-xs font-semibold text-amber-800">
+                    Total Piutang / Kasbon Karyawan
                   </div>
-                  <div className="font-mono text-xl font-bold text-slate-900 tabular-nums mt-0.5">
-                    {formatRupiah(rekapPayroll?.totalGajiBersihDibayar || 0)}
+                  <div className="font-mono text-xl font-bold text-amber-700 tabular-nums mt-0.5">
+                    {formatRupiah(karyawanGlobalGajiPiutangStats.totalPiutang)}
                   </div>
-                  <div className="text-[11px] text-slate-400">
-                    {rekapPayroll?.totalHariKerja || 0} hari kerja tercatat periode ini
+                  <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                    {rekapKaryawan?.karyawanDenganBonCount || 0} orang · Uang{' '}
+                    {formatRupiahSingkat(karyawanGlobalGajiPiutangStats.totalPiutangKasbonUang)} · Brg{' '}
+                    {formatRupiahSingkat(karyawanGlobalGajiPiutangStats.totalPiutangKasbonBarang)}
+                  </div>
+                </div>
+
+                <div className="lg:border-l lg:border-slate-100 lg:pl-4">
+                  <div className="text-xs text-slate-500">Selisih (Gaji Belum Cair − Piutang)</div>
+                  <div
+                    className={`font-mono text-xl font-bold tabular-nums mt-0.5 ${
+                      karyawanGlobalGajiPiutangStats.selisihBersih >= 0
+                        ? 'text-emerald-700'
+                        : 'text-amber-700'
+                    }`}
+                  >
+                    {karyawanGlobalGajiPiutangStats.selisihBersih < 0
+                      ? `−${formatRupiah(Math.abs(karyawanGlobalGajiPiutangStats.selisihBersih))}`
+                      : formatRupiah(karyawanGlobalGajiPiutangStats.selisihBersih)}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {karyawanGlobalGajiPiutangStats.selisihBersih >= 0
+                      ? 'Posisi bersih hak karyawan'
+                      : 'Posisi bersih piutang karyawan ke PT'}
                   </div>
                 </div>
               </div>
@@ -1117,29 +944,29 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setKaryawanSubView('BULANAN')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                         karyawanSubView === 'BULANAN'
                           ? 'bg-white text-slate-900 shadow-2xs'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Rekap Bulanan &amp; Absensi
+                      Gaji &amp; Piutang Bulanan
                     </button>
                     <button
                       type="button"
                       onClick={() => setKaryawanSubView('SALDO_TOTAL')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                         karyawanSubView === 'SALDO_TOTAL'
                           ? 'bg-white text-slate-900 shadow-2xs'
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Saldo Kumulatif ({rekapKaryawan?.items.length || 0})
+                      Saldo Gaji &amp; Piutang Kumulatif ({rekapKaryawan?.items.length || 0})
                     </button>
                     <button
                       type="button"
                       onClick={() => setKaryawanSubView('SLIP_GAJI')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                         karyawanSubView === 'SLIP_GAJI'
                           ? 'bg-white text-slate-900 shadow-2xs'
                           : 'text-slate-600 hover:text-slate-900'
@@ -1197,17 +1024,57 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                   </div>
                 </div>
 
-                {/* Search Input + Direct Input Gaji Action */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="relative flex-1 max-w-md">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={karyawanSearch}
-                      onChange={(e) => setKaryawanSearch(e.target.value)}
-                      placeholder="Cari nama karyawan, NIK, jabatan, atau divisi..."
-                      className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                    />
+                {/* Quick Filter Gaji / Piutang + Search Input + Direct Input Gaji Action */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2 flex-1">
+                    {karyawanSubView !== 'SLIP_GAJI' && (
+                      <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setKaryawanQuickFilter('ALL')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                            karyawanQuickFilter === 'ALL'
+                              ? 'bg-white text-slate-900 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Semua
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setKaryawanQuickFilter('ADA_GAJI')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                            karyawanQuickFilter === 'ADA_GAJI'
+                              ? 'bg-white text-emerald-800 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Ada Nominal Gaji ({karyawanGlobalGajiPiutangStats.adaGajiCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setKaryawanQuickFilter('ADA_PIUTANG')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                            karyawanQuickFilter === 'ADA_PIUTANG'
+                              ? 'bg-white text-amber-800 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Ada Piutang / Kasbon ({karyawanGlobalGajiPiutangStats.adaPiutangCount})
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="relative flex-1 min-w-[220px] max-w-md">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={karyawanSearch}
+                        onChange={(e) => setKaryawanSearch(e.target.value)}
+                        placeholder="Cari nama karyawan, NIK, jabatan, atau divisi..."
+                        className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                      />
+                    </div>
                   </div>
 
                   <button
@@ -1221,7 +1088,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                             : 'Gudang Wijaya Agro',
                       })
                     }
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer self-start sm:self-auto"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer self-start lg:self-auto whitespace-nowrap shrink-0"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Input Gaji Harian Karyawan</span>
@@ -1230,53 +1097,78 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
               </div>
             </section>
 
-            {/* SUB-VIEW 1: REKAP BULANAN & RINCIAN KERJA HARIAN */}
+            {/* SUB-VIEW 1: REKAP BULANAN NOMINAL GAJI & PIUTANG KARYAWAN */}
             {karyawanSubView === 'BULANAN' && (
               <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
                 <div className="px-5 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
                     <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                      Rekapitulasi Upah Harian &amp; Kasbon Karyawan —{' '}
-                      {rekapPayroll?.periodeBulan || `${BULAN_OPTIONS[selectedBulan - 1]?.label} ${selectedTahun}`}
+                      Rekapitulasi Nominal Gaji &amp; Piutang (Kasbon) Karyawan —{' '}
+                      {rekapPayroll?.periodeBulan ||
+                        `${BULAN_OPTIONS[selectedBulan - 1]?.label} ${selectedTahun}`}
                     </h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Klik baris karyawan untuk rincian absensi, atau klik <strong>Profil &amp; Divisi</strong> untuk update foto serta upgrade unit divisi (mis. Gudang → CV Wijaya Agro / PT Wijaya Agro Perkasa)
+                      Menampilkan langsung nominal gaji periode ini, hak gaji belum cair, dan nominal piutang kasbon setiap karyawan
                     </p>
                   </div>
                 </div>
 
                 {loadingKaryawan && !rekapPayroll ? (
                   <div className="p-8 text-center text-xs text-slate-500">
-                    Memuat rekapitulasi karyawan...
+                    Memuat rekapitulasi gaji &amp; piutang karyawan...
                   </div>
                 ) : filteredPayrollItems.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-500">
-                    Tidak ada data karyawan yang sesuai untuk periode atau pencarian ini.
+                    Tidak ada data karyawan yang sesuai untuk periode atau filter ini.
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse text-xs sm:text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
-                          <th className="py-3 px-5 font-semibold">Profil Karyawan &amp; Unit Divisi</th>
+                          <th className="py-3 px-5 font-semibold">Profil Karyawan &amp; Divisi</th>
                           <th className="py-3 px-3 font-semibold text-right">Kehadiran</th>
-                          <th className="py-3 px-4 font-semibold text-right">Total Upah Kotor</th>
-                          <th className="py-3 px-4 font-semibold text-right">Sisa Bon Aktif</th>
-                          <th className="py-3 px-4 font-semibold text-right">Sudah Dibayar</th>
-                          <th className="py-3 px-4 font-semibold text-right">Upah Belum Cair</th>
-                          <th className="py-3 px-5 font-semibold text-right">Profil &amp; Gaji</th>
+                          <th className="py-3 px-4 font-semibold text-right">
+                            Nominal Gaji (Periode)
+                          </th>
+                          <th className="py-3 px-4 font-semibold text-right">
+                            Gaji Belum Cair
+                          </th>
+                          <th className="py-3 px-4 font-bold text-right text-amber-800 bg-amber-50/40">
+                            Nominal Piutang (Kasbon)
+                          </th>
+                          <th className="py-3 px-4 font-semibold text-right">
+                            Selisih Bersih
+                          </th>
+                          <th className="py-3 px-5 font-semibold text-right">Aksi</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredPayrollItems.map((item) => {
                           const isExpanded = expandedKaryawanId === item.idKaryawan;
-                          const mitraId = item.idMitraTerkait || karyawanMitraMap.get(item.idKaryawan);
+                          const mitraId =
+                            item.idMitraTerkait || karyawanMitraMap.get(item.idKaryawan);
                           const isOpeningStmt = mitraId ? loadingStatementId === mitraId : false;
-                          const divisiAktif = item.divisiAktifSaatIni || item.departemen || item.divisiUtama;
+                          const divisiAktif =
+                            item.divisiAktifSaatIni || item.departemen || item.divisiUtama;
                           const hasUpgradedDivisi = divisiAktif !== item.divisiUtama;
                           const riwayatDivisi = item.riwayatDivisi || [];
                           const latestUpgrade =
-                            riwayatDivisi.length > 0 ? riwayatDivisi[riwayatDivisi.length - 1] : undefined;
+                            riwayatDivisi.length > 0
+                              ? riwayatDivisi[riwayatDivisi.length - 1]
+                              : undefined;
+                          const masterRekap = rekapKaryawanByIdMap.get(item.idKaryawan);
+                          const upahBelumCairTotal =
+                            item.totalUpahBelumDibayarSemuaPeriode ??
+                            masterRekap?.totalUpahBelumDibayar ??
+                            item.totalHakUpahPending;
+                          const piutangTotal =
+                            item.totalSisaBonKaryawan || masterRekap?.totalBonKaryawan || 0;
+                          const bonUang =
+                            item.sisaKasbonUang || masterRekap?.totalKasbonUang || 0;
+                          const bonBrg =
+                            item.sisaKasbonBarang || masterRekap?.totalKasbonBarang || 0;
+                          const selisih = upahBelumCairTotal - piutangTotal;
 
                           return (
                             <React.Fragment key={item.idKaryawan}>
@@ -1313,7 +1205,9 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                     />
                                     <div className="min-w-0">
                                       <div className="flex items-center gap-2">
-                                        <span className="font-semibold text-slate-900">{item.nama}</span>
+                                        <span className="font-semibold text-slate-900">
+                                          {item.nama}
+                                        </span>
                                         {isExpanded ? (
                                           <ChevronUp className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                         ) : (
@@ -1326,8 +1220,10 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                           {item.divisiUtama}
                                         </strong>
                                         {(item.saldoTitipHasilPanenMitra || 0) > 0 && (
-                                          <span className="text-amber-700 font-semibold font-mono tabular-nums">
-                                            {' '}· Titip Panen: {formatRupiah(item.saldoTitipHasilPanenMitra || 0)}
+                                          <span className="text-purple-800 font-semibold font-mono tabular-nums">
+                                            {' '}
+                                            · Titip Panen:{' '}
+                                            {formatRupiah(item.saldoTitipHasilPanenMitra || 0)}
                                           </span>
                                         )}
                                       </div>
@@ -1336,19 +1232,23 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                           Unit aktif saat ini: <strong>{divisiAktif}</strong>
                                         </div>
                                       ) : latestUpgrade?.divisiSebelumnya &&
-                                        latestUpgrade.divisiSebelumnya !== latestUpgrade.divisiBaru ? (
+                                        latestUpgrade.divisiSebelumnya !==
+                                          latestUpgrade.divisiBaru ? (
                                         <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
                                           Upgrade divisi: {latestUpgrade.divisiSebelumnya} →{' '}
                                           <strong>{latestUpgrade.divisiBaru}</strong>
-                                          {latestUpgrade.periodeBulan ? ` (${latestUpgrade.periodeBulan})` : ''}
+                                          {latestUpgrade.periodeBulan
+                                            ? ` (${latestUpgrade.periodeBulan})`
+                                            : ''}
                                         </div>
                                       ) : null}
                                     </div>
                                   </div>
                                 </td>
+
                                 <td className="py-3.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
                                   <div className="font-semibold text-slate-800">
-                                    {item.totalHariKerja} Hari Masuk
+                                    {item.totalHariKerja} Hari
                                   </div>
                                   <div className="text-[11px] text-slate-400">
                                     {item.totalHariTidakMasuk ??
@@ -1357,27 +1257,98 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                         new Date(selectedTahun, selectedBulan, 0).getDate() -
                                           item.totalHariKerja
                                       )}{' '}
-                                    Tidak Masuk
+                                    Off
                                   </div>
                                 </td>
-                                <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
-                                  {item.totalGajiKotor > 0 ? formatRupiah(item.totalGajiKotor) : '-'}
+
+                                {/* Nominal Gaji Periode Ini */}
+                                <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap">
+                                  {item.totalGajiKotor > 0 ? (
+                                    <>
+                                      <div className="font-bold text-slate-900">
+                                        {formatRupiah(item.totalGajiKotor)}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500">
+                                        {item.totalGajiBersihDibayar > 0
+                                          ? `Sudah cair ${formatRupiahSingkat(
+                                              item.totalGajiBersihDibayar
+                                            )}`
+                                          : 'Belum dicairkan'}
+                                      </div>
+                                    </>
+                                  ) : (masterRekap?.totalGajiSudahDibayar || 0) > 0 ? (
+                                    <>
+                                      <div className="font-semibold text-slate-600">Rp 0</div>
+                                      <div className="text-[11px] text-slate-400">
+                                        Total cair lalu{' '}
+                                        {formatRupiahSingkat(
+                                          masterRekap?.totalGajiSudahDibayar || 0
+                                        )}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <span className="text-slate-400">Rp 0</span>
+                                  )}
                                 </td>
-                                <td className="py-3.5 px-4 text-right font-mono font-bold text-amber-700 tabular-nums whitespace-nowrap">
-                                  {item.totalSisaBonKaryawan > 0
-                                    ? formatRupiah(item.totalSisaBonKaryawan)
-                                    : '-'}
+
+                                {/* Gaji Belum Cair */}
+                                <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap">
+                                  {upahBelumCairTotal > 0 ? (
+                                    <>
+                                      <div className="font-bold text-emerald-700">
+                                        {formatRupiah(upahBelumCairTotal)}
+                                      </div>
+                                      {item.totalHakUpahPending !== upahBelumCairTotal && (
+                                        <div className="text-[11px] text-slate-500">
+                                          Bulan ini: {formatRupiahSingkat(item.totalHakUpahPending)}
+                                        </div>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <span className="text-slate-400">Rp 0</span>
+                                  )}
                                 </td>
-                                <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-700 tabular-nums whitespace-nowrap">
-                                  {item.totalGajiBersihDibayar > 0
-                                    ? formatRupiah(item.totalGajiBersihDibayar)
-                                    : '-'}
+
+                                {/* Nominal Piutang / Kasbon */}
+                                <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap bg-amber-50/30">
+                                  {piutangTotal > 0 ? (
+                                    <>
+                                      <div className="font-bold text-amber-800">
+                                        {formatRupiah(piutangTotal)}
+                                      </div>
+                                      <div className="text-[11px] text-amber-700/80">
+                                        {bonUang > 0 ? `Uang ${formatRupiahSingkat(bonUang)}` : ''}
+                                        {bonUang > 0 && bonBrg > 0 ? ' · ' : ''}
+                                        {bonBrg > 0 ? `Brg ${formatRupiahSingkat(bonBrg)}` : ''}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <span className="text-slate-400">Rp 0</span>
+                                  )}
                                 </td>
-                                <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-700 tabular-nums whitespace-nowrap">
-                                  {item.totalHakUpahPending > 0
-                                    ? formatRupiah(item.totalHakUpahPending)
-                                    : '-'}
+
+                                {/* Selisih Bersih */}
+                                <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap">
+                                  {selisih === 0 ? (
+                                    <span className="text-slate-400">Impas</span>
+                                  ) : (
+                                    <>
+                                      <div
+                                        className={`font-bold ${
+                                          selisih > 0 ? 'text-emerald-700' : 'text-rose-700'
+                                        }`}
+                                      >
+                                        {selisih > 0
+                                          ? `+${formatRupiah(selisih)}`
+                                          : `−${formatRupiah(Math.abs(selisih))}`}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500 font-sans">
+                                        {selisih > 0 ? 'Hak Gaji' : 'Sisa Piutang'}
+                                      </div>
+                                    </>
+                                  )}
                                 </td>
+
                                 <td
                                   className="py-3.5 px-5 text-right whitespace-nowrap"
                                   onClick={(e) => e.stopPropagation()}
@@ -1397,6 +1368,17 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                     >
                                       + Gaji
                                     </button>
+                                    {mitraId && piutangTotal > 0 && (
+                                      <button
+                                        type="button"
+                                        disabled={isOpeningStmt}
+                                        onClick={() => void handleOpenStatement(mitraId)}
+                                        className="px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-700 text-amber-900 hover:text-white border border-amber-200 text-xs font-semibold transition-colors cursor-pointer"
+                                        title="Buka Rekening Koran Piutang / Kasbon Karyawan"
+                                      >
+                                        {isOpeningStmt ? '...' : 'Buku Bon'}
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={() => openProfilKaryawanModalById(item.idKaryawan)}
@@ -1404,7 +1386,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                       title="Update Profil, Foto & Upgrade Unit Divisi Karyawan"
                                     >
                                       <UserCog className="w-3.5 h-3.5" />
-                                      <span>Profil &amp; Divisi</span>
+                                      <span>Profil</span>
                                     </button>
                                   </div>
                                 </td>
@@ -1434,10 +1416,14 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                           }}
                                         />
                                         <div className="min-w-0">
-                                          <div className="font-bold text-slate-900 text-sm">{item.nama}</div>
+                                          <div className="font-bold text-slate-900 text-sm">
+                                            {item.nama}
+                                          </div>
                                           <div className="text-slate-600">
                                             {item.nik} · {item.jabatan} · Unit Aktif:{' '}
-                                            <strong className="text-emerald-800">{divisiAktif}</strong>
+                                            <strong className="text-emerald-800">
+                                              {divisiAktif}
+                                            </strong>
                                           </div>
                                         </div>
                                       </div>
@@ -1456,19 +1442,23 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                           </div>
                                         </div>
                                         <div>
-                                          <span className="text-slate-500">Bon Uang / Barang</span>
+                                          <span className="text-slate-500">
+                                            Piutang Uang / Barang
+                                          </span>
                                           <div className="font-mono font-bold text-amber-700 tabular-nums mt-0.5">
-                                            {formatRupiah(item.sisaKasbonUang)} / {formatRupiah(item.sisaKasbonBarang)}
+                                            {formatRupiah(bonUang)} / {formatRupiah(bonBrg)}
                                           </div>
                                         </div>
                                         <div>
-                                          <span className="text-slate-500">Selisih Bersih (Upah − Bon)</span>
+                                          <span className="text-slate-500">
+                                            Selisih Bersih (Gaji − Piutang)
+                                          </span>
                                           <div
                                             className={`font-mono font-bold tabular-nums mt-0.5 ${
-                                              item.saldoBersih >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                                              selisih >= 0 ? 'text-emerald-700' : 'text-rose-700'
                                             }`}
                                           >
-                                            {formatRupiah(item.saldoBersih)}
+                                            {formatRupiah(selisih)}
                                           </div>
                                         </div>
                                       </div>
@@ -1483,7 +1473,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition-colors cursor-pointer"
                                         >
                                           <UserCog className="w-3.5 h-3.5" />
-                                          <span>Update Profil, Foto &amp; Divisi</span>
+                                          <span>Update Profil &amp; Divisi</span>
                                         </button>
 
                                         {mitraId && (
@@ -1497,7 +1487,9 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer"
                                           >
                                             <span>
-                                              {isOpeningStmt ? 'Memuat...' : 'Rekening Koran Bon & PDF'}
+                                              {isOpeningStmt
+                                                ? 'Memuat...'
+                                                : 'Rekening Koran Piutang & PDF'}
                                             </span>
                                             <ArrowUpRight className="w-3.5 h-3.5" />
                                           </button>
@@ -1518,20 +1510,31 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                               className="py-1.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1"
                                             >
                                               <div className="flex flex-wrap items-center gap-1.5 text-slate-800 font-medium">
-                                                {rw.divisiSebelumnya && rw.divisiSebelumnya !== rw.divisiBaru ? (
+                                                {rw.divisiSebelumnya &&
+                                                rw.divisiSebelumnya !== rw.divisiBaru ? (
                                                   <>
-                                                    <span className="text-slate-500">{rw.divisiSebelumnya}</span>
+                                                    <span className="text-slate-500">
+                                                      {rw.divisiSebelumnya}
+                                                    </span>
                                                     <ArrowRight className="w-3 h-3 text-emerald-600" />
-                                                    <span className="font-bold text-emerald-800">{rw.divisiBaru}</span>
+                                                    <span className="font-bold text-emerald-800">
+                                                      {rw.divisiBaru}
+                                                    </span>
                                                   </>
                                                 ) : (
-                                                  <span className="font-semibold text-slate-900">{rw.divisiBaru}</span>
+                                                  <span className="font-semibold text-slate-900">
+                                                    {rw.divisiBaru}
+                                                  </span>
                                                 )}
                                                 {rw.jabatanBaru && (
-                                                  <span className="text-slate-500">· {rw.jabatanBaru}</span>
+                                                  <span className="text-slate-500">
+                                                    · {rw.jabatanBaru}
+                                                  </span>
                                                 )}
                                                 {rw.catatan && (
-                                                  <span className="text-slate-500">({rw.catatan})</span>
+                                                  <span className="text-slate-500">
+                                                    ({rw.catatan})
+                                                  </span>
                                                 )}
                                               </div>
                                               <div className="font-mono text-[11px] text-slate-500">
@@ -1547,11 +1550,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                     {/* Rincian Hari Kerja & Tugas Harian */}
                                     <div className="space-y-1.5">
                                       <div className="text-xs font-bold text-slate-800">
-                                        Catatan Kerja &amp; Upah Harian ({item.rincianHarian.length} Catatan)
+                                        Catatan Kerja &amp; Upah Harian ({item.rincianHarian.length}{' '}
+                                        Catatan)
                                       </div>
                                       {item.rincianHarian.length === 0 ? (
                                         <div className="text-xs text-slate-500 bg-white border border-slate-200 rounded-xl p-3">
-                                          Belum ada catatan kerja harian pada periode bulan ini (terhitung belum ada hari masuk).
+                                          Belum ada catatan kerja harian pada periode bulan ini.
                                         </div>
                                       ) : (
                                         <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl">
@@ -1560,11 +1564,21 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                               <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500">
                                                 <th className="py-2 px-3 font-semibold">Tanggal</th>
                                                 <th className="py-2 px-3 font-semibold">Divisi</th>
-                                                <th className="py-2 px-3 font-semibold">Item / Tugas Pekerjaan</th>
-                                                <th className="py-2 px-3 font-semibold text-right">Upah Pokok</th>
-                                                <th className="py-2 px-3 font-semibold text-right">Lembur/Makan</th>
-                                                <th className="py-2 px-3 font-semibold text-right">Total</th>
-                                                <th className="py-2 px-3 font-semibold text-right">Status</th>
+                                                <th className="py-2 px-3 font-semibold">
+                                                  Item / Tugas Pekerjaan
+                                                </th>
+                                                <th className="py-2 px-3 font-semibold text-right">
+                                                  Upah Pokok
+                                                </th>
+                                                <th className="py-2 px-3 font-semibold text-right">
+                                                  Lembur/Makan
+                                                </th>
+                                                <th className="py-2 px-3 font-semibold text-right">
+                                                  Total Gaji
+                                                </th>
+                                                <th className="py-2 px-3 font-semibold text-right">
+                                                  Status
+                                                </th>
                                               </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
@@ -1599,7 +1613,9 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                                         : 'text-emerald-700'
                                                     }`}
                                                   >
-                                                    {rh.status === 'SUDAH_DIBAYAR' ? 'Sudah Cair' : 'Belum Cair'}
+                                                    {rh.status === 'SUDAH_DIBAYAR'
+                                                      ? 'Sudah Cair'
+                                                      : 'Belum Cair'}
                                                   </td>
                                                 </tr>
                                               ))}
@@ -1609,21 +1625,28 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                       )}
                                     </div>
 
-                                    {/* Rincian Bon Aktif (Jika Ada) */}
+                                    {/* Rincian Piutang / Kasbon Aktif (Jika Ada) */}
                                     {((item.rincianBonUang && item.rincianBonUang.length > 0) ||
-                                      (item.rincianBonBarang && item.rincianBonBarang.length > 0)) && (
+                                      (item.rincianBonBarang &&
+                                        item.rincianBonBarang.length > 0)) && (
                                       <div className="space-y-1.5">
                                         <div className="text-xs font-bold text-slate-800">
-                                          Rincian Pinjaman / Kasbon Aktif Karyawan
+                                          Rincian Piutang / Kasbon Aktif Karyawan
                                         </div>
                                         <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl">
                                           <table className="w-full text-left text-xs border-collapse">
                                             <thead>
                                               <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500">
                                                 <th className="py-2 px-3 font-semibold">Tanggal</th>
-                                                <th className="py-2 px-3 font-semibold">Jenis Bon</th>
-                                                <th className="py-2 px-3 font-semibold">Keterangan</th>
-                                                <th className="py-2 px-3 font-semibold text-right">Sisa Kewajiban</th>
+                                                <th className="py-2 px-3 font-semibold">
+                                                  Jenis Piutang / Bon
+                                                </th>
+                                                <th className="py-2 px-3 font-semibold">
+                                                  Keterangan
+                                                </th>
+                                                <th className="py-2 px-3 font-semibold text-right">
+                                                  Sisa Piutang
+                                                </th>
                                               </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
@@ -1653,7 +1676,10 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                                   </td>
                                                   <td className="py-2 px-3 text-slate-700">
                                                     {bb.items
-                                                      ?.map((it) => `${it.namaProduk} (${it.qty} ${it.satuan})`)
+                                                      ?.map(
+                                                        (it) =>
+                                                          `${it.namaProduk} (${it.qty} ${it.satuan})`
+                                                      )
                                                       .join(', ') || bb.keterangan}
                                                   </td>
                                                   <td className="py-2 px-3 text-right font-mono font-bold text-amber-700 tabular-nums whitespace-nowrap">
@@ -1679,21 +1705,21 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
               </section>
             )}
 
-            {/* SUB-VIEW 2: SALDO KUMULATIF KARYAWAN (LINTAS BULAN) */}
+            {/* SUB-VIEW 2: SALDO KUMULATIF GAJI & PIUTANG SELURUH KARYAWAN (LINTAS BULAN) */}
             {karyawanSubView === 'SALDO_TOTAL' && (
               <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
                 <div className="px-5 py-4 border-b border-slate-100">
                   <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                    Posisi Saldo Kumulatif Seluruh Karyawan (Lintas Periode)
+                    Posisi Kumulatif Nominal Gaji &amp; Piutang Seluruh Karyawan (Lintas Periode)
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Menampilkan akumulasi hak upah belum dibayar dan sisa bon aktif setiap karyawan hingga hari ini
+                    Menampilkan akumulasi gaji yang sudah dibayar, gaji belum cair, dan total piutang kasbon aktif setiap karyawan
                   </p>
                 </div>
 
                 {loadingKaryawan && !rekapKaryawan ? (
                   <div className="p-8 text-center text-xs text-slate-500">
-                    Memuat saldo kumulatif karyawan...
+                    Memuat saldo kumulatif gaji &amp; piutang karyawan...
                   </div>
                 ) : filteredSaldoKaryawanItems.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-500">
@@ -1706,10 +1732,19 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                         <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
                           <th className="py-3 px-5 font-semibold">Profil Karyawan</th>
                           <th className="py-3 px-3 font-semibold text-right">Total Kerja</th>
-                          <th className="py-3 px-4 font-semibold text-right">Upah Belum Cair</th>
-                          <th className="py-3 px-4 font-semibold text-right">Total Bon Aktif</th>
+                          <th className="py-3 px-4 font-semibold text-right">
+                            Total Gaji (Akumulasi)
+                          </th>
+                          <th className="py-3 px-4 font-semibold text-right">
+                            Gaji Belum Cair
+                          </th>
+                          <th className="py-3 px-4 font-bold text-right text-amber-800 bg-amber-50/40">
+                            Nominal Piutang (Kasbon)
+                          </th>
                           <th className="py-3 px-4 font-semibold text-right">Posisi Bersih</th>
-                          <th className="py-3 px-5 font-semibold text-right">Profil &amp; Rekening</th>
+                          <th className="py-3 px-5 font-semibold text-right">
+                            Profil &amp; Buku Piutang
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -1717,6 +1752,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           const isLoadingStmt = loadingStatementId === k.idMitraTerkait;
                           const rw = k.riwayatDivisi || [];
                           const latestRw = rw.length > 0 ? rw[rw.length - 1] : undefined;
+                          const gajiCair = k.totalGajiSudahDibayar || k.totalUpahSudahDibayar || 0;
+                          const totalGajiKumulatif =
+                            k.totalHakUpahHarian > 0
+                              ? k.totalHakUpahHarian
+                              : gajiCair + (k.totalUpahBelumDibayar || 0);
+
                           return (
                             <tr key={k.id} className="hover:bg-slate-50/70">
                               <td className="py-3.5 px-5">
@@ -1753,17 +1794,17 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                           <strong>{latestRw.divisiBaru}</strong>
                                         </div>
                                       )}
-                                    {((k.totalTitipHasilPanen || 0) > 0 || (k.totalGajiSudahDibayar || 0) > 0) && (
-                                      <div className="text-[11px] text-slate-600 font-mono tabular-nums mt-0.5">
-                                        {(k.totalGajiSudahDibayar || 0) > 0 ? `Gaji Cair: ${formatRupiah(k.totalGajiSudahDibayar || 0)}` : ''}
-                                        {(k.totalGajiSudahDibayar || 0) > 0 && (k.totalTitipHasilPanen || 0) > 0 ? ' · ' : ''}
-                                        {(k.totalTitipHasilPanen || 0) > 0 ? `Titip Panen Mitra: ${formatRupiah(k.totalTitipHasilPanen || 0)}` : ''}
+                                    {(k.totalTitipHasilPanen || 0) > 0 && (
+                                      <div className="text-[11px] text-purple-800 font-mono tabular-nums mt-0.5">
+                                        Titip Panen Mitra: {formatRupiah(k.totalTitipHasilPanen || 0)}
                                       </div>
                                     )}
                                     {k.tanggalKerjaTerakhir && (
                                       <div className="text-[11px] text-slate-400 mt-0.5">
                                         Terakhir kerja: {k.tanggalKerjaTerakhir}
-                                        {k.pekerjaanHarianTerakhir ? ` — ${k.pekerjaanHarianTerakhir}` : ''}
+                                        {k.pekerjaanHarianTerakhir
+                                          ? ` — ${k.pekerjaanHarianTerakhir}`
+                                          : ''}
                                       </div>
                                     )}
                                   </div>
@@ -1772,11 +1813,46 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                               <td className="py-3.5 px-3 text-right font-mono text-slate-700 tabular-nums whitespace-nowrap">
                                 {k.totalHariKerja} Hari
                               </td>
-                              <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-700 tabular-nums whitespace-nowrap">
-                                {k.totalUpahBelumDibayar > 0 ? formatRupiah(k.totalUpahBelumDibayar) : '-'}
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap">
+                                {totalGajiKumulatif > 0 ? (
+                                  <>
+                                    <div className="font-bold text-slate-900">
+                                      {formatRupiah(totalGajiKumulatif)}
+                                    </div>
+                                    <div className="text-[11px] text-slate-500">
+                                      Sudah cair: {formatRupiahSingkat(gajiCair)}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <span className="text-slate-400">Rp 0</span>
+                                )}
                               </td>
-                              <td className="py-3.5 px-4 text-right font-mono font-bold text-amber-700 tabular-nums whitespace-nowrap">
-                                {k.totalBonKaryawan > 0 ? formatRupiah(k.totalBonKaryawan) : '-'}
+                              <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-700 tabular-nums whitespace-nowrap">
+                                {k.totalUpahBelumDibayar > 0
+                                  ? formatRupiah(k.totalUpahBelumDibayar)
+                                  : 'Rp 0'}
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap bg-amber-50/30">
+                                {k.totalBonKaryawan > 0 ? (
+                                  <>
+                                    <div className="font-bold text-amber-800">
+                                      {formatRupiah(k.totalBonKaryawan)}
+                                    </div>
+                                    <div className="text-[11px] text-amber-700/80">
+                                      {k.totalKasbonUang > 0
+                                        ? `Uang ${formatRupiahSingkat(k.totalKasbonUang)}`
+                                        : ''}
+                                      {k.totalKasbonUang > 0 && k.totalKasbonBarang > 0
+                                        ? ' · '
+                                        : ''}
+                                      {k.totalKasbonBarang > 0
+                                        ? `Brg ${formatRupiahSingkat(k.totalKasbonBarang)}`
+                                        : ''}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <span className="text-slate-400">Rp 0</span>
+                                )}
                               </td>
                               <td className="py-3.5 px-4 text-right whitespace-nowrap">
                                 <div
@@ -1785,16 +1861,18 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                       ? 'text-emerald-700'
                                       : k.saldoBersih < 0
                                       ? 'text-amber-700'
-                                      : 'text-slate-500'
+                                      : 'text-slate-400'
                                   }`}
                                 >
-                                  {k.saldoBersih === 0 ? 'Impas' : formatRupiah(Math.abs(k.saldoBersih))}
+                                  {k.saldoBersih === 0
+                                    ? 'Impas'
+                                    : formatRupiah(Math.abs(k.saldoBersih))}
                                 </div>
-                                <div className="text-[11px] text-slate-400">
+                                <div className="text-[11px] text-slate-500">
                                   {k.posisiStatus === 'PERUSAHAAN_BERHUTANG_UPAH'
-                                    ? 'Hak Karyawan'
+                                    ? 'Hak Gaji Karyawan'
                                     : k.posisiStatus === 'KARYAWAN_BERHUTANG_BON'
-                                    ? 'Sisa Bon ke PT'
+                                    ? 'Piutang ke PT'
                                     : 'Lunas'}
                                 </div>
                               </td>
@@ -1815,7 +1893,7 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                                       onClick={() => void handleOpenStatement(k.idMitraTerkait)}
                                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-emerald-700 hover:text-white text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
                                     >
-                                      <span>{isLoadingStmt ? 'Memuat...' : 'Buku Bon & PDF'}</span>
+                                      <span>{isLoadingStmt ? 'Memuat...' : 'Buku Piutang'}</span>
                                       <ArrowUpRight className="w-3.5 h-3.5" />
                                     </button>
                                   ) : null}
@@ -2311,128 +2389,20 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
           </div>
         )}
 
-        {/* TAB 5: JURNAL SEMUA TRANSAKSI HARIAN & BUKTI NOTA (STRICT READ-ONLY) */}
-        {activeTab === 'jurnal' && (
-          <RekapSemuaTransaksiHarianView readOnly onRefreshParent={onRefreshAll} />
+        {/* TAB: PENGELUARAN (MENGGANTIKAN JURNAL & BUKTI NOTA) */}
+        {activeTab === 'pengeluaran' && (
+          <PengeluaranBosView
+            divisiMasterList={divisiMasterList}
+            inventarisList={inventarisList}
+          />
         )}
 
-        {/* TAB 6: STOK GUDANG & LABA RUGI */}
+        {/* TAB: STOK BARANG & PEMBELIAN HASIL BUMI */}
         {activeTab === 'stok' && (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Stok Hasil Bumi */}
-              <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100">
-                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                    Stok Gudang Hasil Bumi
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Volume komoditas hasil bumi tersedia saat ini
-                  </p>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-100 bg-slate-50/70 text-slate-500 text-xs">
-                        <th className="py-2.5 px-4 font-semibold">Komoditas</th>
-                        <th className="py-2.5 px-4 font-semibold text-right">Stok (Kg)</th>
-                        <th className="py-2.5 px-4 font-semibold text-right">Tonase</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {stokHasilBumiList.map((hb) => (
-                        <tr key={hb.kode}>
-                          <td className="py-3 px-4 font-medium text-slate-900">{hb.nama}</td>
-                          <td className="py-3 px-4 text-right font-mono font-bold text-slate-900 tabular-nums">
-                            {Number(hb.stok || 0).toLocaleString('id-ID')} {hb.satuan}
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono text-slate-500 tabular-nums">
-                            {(Number(hb.stok || 0) / 1000).toFixed(2)} Ton
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              {/* Stok Barang Toko (No nested scroll trap — smooth page scrolling) */}
-              <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100">
-                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                    Stok Barang Dagangan Toko ({stokBarangList.length} Item)
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Diurutkan dari stok yang paling memerlukan perhatian kulakan
-                  </p>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
-                    <thead className="bg-slate-50/70">
-                      <tr className="border-b border-slate-100 text-slate-500 text-xs">
-                        <th className="py-2.5 px-4 font-semibold">Nama Barang</th>
-                        <th className="py-2.5 px-4 font-semibold text-right">Sisa Stok</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {displayedStokBarang.map((sb) => {
-                        const isAlatJasa = isKategoriAlatNonStok(sb.kategori);
-                        const isLow = !isAlatJasa && (sb.stok || 0) <= (sb.minimum || 5);
-                        return (
-                          <tr key={sb.kode}>
-                            <td className="py-2.5 px-4">
-                              <div className="font-medium text-slate-900">{sb.namaProduk}</div>
-                              {isAlatJasa ? (
-                                <div className="text-[11px] text-sky-700">
-                                  Sewa jasa ({sb.satuan}) — tanpa stok fisik
-                                </div>
-                              ) : (
-                                isLow && (
-                                  <div className="text-[11px] text-rose-700">
-                                    Stok menipis (min. {sb.minimum || 5} {sb.satuan})
-                                  </div>
-                                )
-                              )}
-                            </td>
-                            <td
-                              className={`py-2.5 px-4 text-right font-mono font-bold tabular-nums ${
-                                isAlatJasa
-                                  ? 'text-sky-700'
-                                  : isLow
-                                  ? 'text-rose-700'
-                                  : 'text-slate-900'
-                              }`}
-                            >
-                              {isAlatJasa
-                                ? 'Tanpa Stok'
-                                : `${Number(sb.stok || 0).toLocaleString('id-ID')} ${sb.satuan}`}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {sortedStokBarang.length > 30 && (
-                  <div className="px-4 py-3 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
-                    <span>
-                      Menampilkan {displayedStokBarang.length} dari {sortedStokBarang.length} item barang
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowAllStokBarang((prev) => !prev)}
-                      className="font-semibold text-emerald-700 hover:text-emerald-900 cursor-pointer"
-                    >
-                      {showAllStokBarang ? 'Ringkas Tampilan' : 'Tampilkan Semua Barang'}
-                    </button>
-                  </div>
-                )}
-              </section>
-            </div>
-
-            {/* Laba & Rugi Per Divisi */}
-            <LabaRugiProdukView readOnly divisiMasterList={divisiMasterList} />
-          </div>
+          <StokDanPembelianHbBosView
+            stokHasilBumiList={stokHasilBumiList}
+            stokBarangList={stokBarangList}
+          />
         )}
       </main>
 
