@@ -1031,6 +1031,7 @@ export default function App() {
                   mitraList={mitraList}
                   penjualanHasilBumiList={penjualanHasilBumiList}
                   uangMasukList={uangMasukList}
+                  brilinkList={brilinkList}
                   initialNoPenjualanHb={selectedNoPenjualanHbForUangMasuk}
                   onClearInitialNoPenjualanHb={() => setSelectedNoPenjualanHbForUangMasuk(undefined)}
                   onSuccess={handleTransactionSuccess}

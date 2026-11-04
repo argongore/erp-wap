@@ -10,7 +10,8 @@ import {
   Wallet,
   UserCheck,
   Pencil,
-  ArrowRight,
+  ArrowRightLeft,
+  Scale,
 } from 'lucide-react';
 import {
   getRoleMitraLabel,
@@ -44,6 +45,8 @@ interface Props {
   onOpenKliringSilang?: (idMitra: string) => void;
 }
 
+type ModePembayaranTitipan = 'AMBIL_TANPA_POTONG_BON' | 'KLIRING_DAN_BAYAR';
+
 export const BayarTitipanHasilBumiView: React.FC<Props> = ({
   mitraList,
   rekeningList,
@@ -53,11 +56,12 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
   penjualanHasilBumiList = [],
   kasbonUangList = [],
   initialSelectedMitraId,
-  onNavigateToBayarBon,
   onRefresh,
   onPrintReceipt,
 }) => {
   const [selectedMitraId, setSelectedMitraId] = useState<string>(initialSelectedMitraId || '');
+  const [modeBayar, setModeBayar] = useState<ModePembayaranTitipan>('AMBIL_TANPA_POTONG_BON');
+  const [nominalPotongBonInput, setNominalPotongBonInput] = useState<string>('');
   const [nominalInput, setNominalInput] = useState<string>('');
   const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
   const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
@@ -74,14 +78,12 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
   const [editTxId, setEditTxId] = useState<string | null>(null);
 
-  // Sync external navigation target if provided
   useEffect(() => {
     if (initialSelectedMitraId) {
       setSelectedMitraId(initialSelectedMitraId);
     }
   }, [initialSelectedMitraId]);
 
-  // Load history of disbursements
   const loadHistory = async (silent = false) => {
     if (!silent && pencairanList.length === 0) setLoadingHistory(true);
     try {
@@ -101,7 +103,7 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
     return () => window.removeEventListener('erp:data-updated', onErpUpdated);
   }, []);
 
-  // Compute titipan & active bon balances for each partner (with automatic cross-deduction)
+  // Hitung saldo Titipan & Piutang berjalan tiap mitra (selisih ditampilkan walau belum kliring)
   const partnerPositionMap = useMemo(() => {
     const map = new Map<
       string,
@@ -110,9 +112,9 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
         totalDicairkan: number;
         saldoTitipAktif: number;
         saldoBonAktif: number;
-        potongBonOtomatis: number;
-        saldoSiapBayarBersih: number;
-        sisaBonMitraBersih: number;
+        potongBonMaksimal: number;
+        selisihHutangPt: number;
+        selisihPiutangMitra: number;
       }
     >();
 
@@ -124,16 +126,15 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
           totalDicairkan: 0,
           saldoTitipAktif: 0,
           saldoBonAktif: 0,
-          potongBonOtomatis: 0,
-          saldoSiapBayarBersih: 0,
-          sisaBonMitraBersih: 0,
+          potongBonMaksimal: 0,
+          selisihHutangPt: 0,
+          selisihPiutangMitra: 0,
         };
         map.set(idMitra, cur);
       }
       return cur;
     };
 
-    // 1. Add titip hasil bumi & pinjaman dana
     for (const p of pembelianList) {
       if (p.metodePembayaran === 'TITIP' && p.idMitra) {
         const cur = ensureEntry(p.idMitra);
@@ -141,7 +142,6 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       }
     }
 
-    // 2. Add unpaid supplier HUTANG purchases (Kulakan Tempo)
     for (const pb of pembelianBarangList) {
       if (pb.metodePembayaran === 'HUTANG' && pb.status !== 'LUNAS' && pb.idMitra) {
         const cur = ensureEntry(pb.idMitra);
@@ -149,7 +149,6 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       }
     }
 
-    // 3. Deduct historical disbursements (including KOMPENSASI_BON)
     for (const pt of pencairanList) {
       if (pt.idMitra) {
         const cur = ensureEntry(pt.idMitra);
@@ -157,7 +156,6 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       }
     }
 
-    // 4. Add all active Bon Mitra (Penjualan Toko KASBON + Penjualan Hasil Bumi PIUTANG + Kasbon Uang)
     for (const pj of penjualanList) {
       if (
         pj.idMitra &&
@@ -189,12 +187,11 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       }
     }
 
-    // 5. Finalize net cross-deduction per partner
     map.forEach((cur) => {
       cur.saldoTitipAktif = Math.max(0, cur.totalTitipKotor - cur.totalDicairkan);
-      cur.potongBonOtomatis = Math.min(cur.saldoTitipAktif, cur.saldoBonAktif);
-      cur.saldoSiapBayarBersih = Math.max(0, cur.saldoTitipAktif - cur.saldoBonAktif);
-      cur.sisaBonMitraBersih = Math.max(0, cur.saldoBonAktif - cur.saldoTitipAktif);
+      cur.potongBonMaksimal = Math.min(cur.saldoTitipAktif, cur.saldoBonAktif);
+      cur.selisihHutangPt = Math.max(0, cur.saldoTitipAktif - cur.saldoBonAktif);
+      cur.selisihPiutangMitra = Math.max(0, cur.saldoBonAktif - cur.saldoTitipAktif);
     });
 
     return map;
@@ -207,7 +204,6 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
     kasbonUangList,
   ]);
 
-  // List of partners relevant to Titipan (prioritize those with net payable > 0)
   const activeTitipPartners = useMemo(() => {
     return mitraList
       .map((m) => {
@@ -216,9 +212,9 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
           totalDicairkan: 0,
           saldoTitipAktif: 0,
           saldoBonAktif: 0,
-          potongBonOtomatis: 0,
-          saldoSiapBayarBersih: 0,
-          sisaBonMitraBersih: 0,
+          potongBonMaksimal: 0,
+          selisihHutangPt: 0,
+          selisihPiutangMitra: 0,
         };
         return {
           ...m,
@@ -227,27 +223,28 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       })
       .filter((m) => m.saldoTitipAktif > 0 || m.id === selectedMitraId)
       .sort((a, b) => {
-        if (b.saldoSiapBayarBersih !== a.saldoSiapBayarBersih) {
-          return b.saldoSiapBayarBersih - a.saldoSiapBayarBersih;
+        if (b.saldoTitipAktif !== a.saldoTitipAktif) {
+          return b.saldoTitipAktif - a.saldoTitipAktif;
         }
-        return b.saldoTitipAktif - a.saldoTitipAktif;
+        return b.selisihHutangPt - a.selisihHutangPt;
       });
   }, [mitraList, partnerPositionMap, selectedMitraId]);
 
-  // Totals across all partners
-  const { grandTotalSiapBayarBersih, grandTotalPotongBon, readyPartnerCount } = useMemo(() => {
-    let netSum = 0;
-    let potongSum = 0;
+  const { grandTotalTitipAktif, grandTotalSelisihHutang, activeTitipPartnerCount } = useMemo(() => {
+    let titipSum = 0;
+    let netHutangSum = 0;
     let count = 0;
     partnerPositionMap.forEach((v) => {
-      netSum += v.saldoSiapBayarBersih;
-      potongSum += v.potongBonOtomatis;
-      if (v.saldoSiapBayarBersih > 0) count += 1;
+      if (v.saldoTitipAktif > 0) {
+        titipSum += v.saldoTitipAktif;
+        netHutangSum += v.selisihHutangPt;
+        count += 1;
+      }
     });
     return {
-      grandTotalSiapBayarBersih: netSum,
-      grandTotalPotongBon: potongSum,
-      readyPartnerCount: count,
+      grandTotalTitipAktif: titipSum,
+      grandTotalSelisihHutang: netHutangSum,
+      activeTitipPartnerCount: count,
     };
   }, [partnerPositionMap]);
 
@@ -264,66 +261,115 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
         totalDicairkan: 0,
         saldoTitipAktif: 0,
         saldoBonAktif: 0,
-        potongBonOtomatis: 0,
-        saldoSiapBayarBersih: 0,
-        sisaBonMitraBersih: 0,
+        potongBonMaksimal: 0,
+        selisihHutangPt: 0,
+        selisihPiutangMitra: 0,
       }
     );
   }, [selectedMitraId, partnerPositionMap]);
 
   const selectedMitraTitipanKotor = selectedPos?.saldoTitipAktif || 0;
   const selectedMitraBonAktif = selectedPos?.saldoBonAktif || 0;
-  const selectedPotongBonOtomatis = selectedPos?.potongBonOtomatis || 0;
-  // Nominal bersih maksimal yang wajib dibayar PT ke Mitra setelah potong bon otomatis
-  const selectedMitraSiapBayarBersih = selectedPos?.saldoSiapBayarBersih || 0;
-  const selectedSisaBonMitraBersih = selectedPos?.sisaBonMitraBersih || 0;
+  const selectedPotongBonMaks = selectedPos?.potongBonMaksimal || 0;
+  const selectedSelisihHutangPt = selectedPos?.selisihHutangPt || 0;
+  const selectedSelisihPiutangMitra = selectedPos?.selisihPiutangMitra || 0;
 
-  // Auto-fill nominal input to net payable whenever partner changes
+  // Reset form defaults when partner changes
   useEffect(() => {
     if (!selectedMitraId) {
       setNominalInput('');
+      setNominalPotongBonInput('');
+      setModeBayar('AMBIL_TANPA_POTONG_BON');
       return;
     }
-    if (selectedMitraSiapBayarBersih > 0) {
-      setNominalInput(String(selectedMitraSiapBayarBersih));
+    setModeBayar('AMBIL_TANPA_POTONG_BON');
+    setNominalPotongBonInput(
+      selectedPotongBonMaks > 0 ? String(selectedPotongBonMaks) : '0'
+    );
+    if (selectedSelisihHutangPt > 0) {
+      setNominalInput(String(selectedSelisihHutangPt));
+    } else if (selectedMitraTitipanKotor > 0) {
+      setNominalInput(String(selectedMitraTitipanKotor));
     } else {
       setNominalInput('0');
     }
-  }, [selectedMitraId, selectedMitraSiapBayarBersih]);
+  }, [selectedMitraId]);
+
+  const isKliringMode = selectedMitraBonAktif > 0 && modeBayar === 'KLIRING_DAN_BAYAR';
+  const parsedPotongBon = isKliringMode
+    ? Math.min(
+        Math.max(0, Math.round(Number(nominalPotongBonInput) || 0)),
+        selectedPotongBonMaks
+      )
+    : 0;
+  const batasMaksAmbilUang = Math.max(0, selectedMitraTitipanKotor - parsedPotongBon);
+  const parsedNominalFisik = Math.max(0, Math.round(Number(nominalInput) || 0));
+
+  const simSisaTitipAkhir = Math.max(
+    0,
+    selectedMitraTitipanKotor - parsedPotongBon - parsedNominalFisik
+  );
+  const simSisaPiutangAkhir = Math.max(0, selectedMitraBonAktif - parsedPotongBon);
+  const simNetHutangAkhir = Math.max(0, simSisaTitipAkhir - simSisaPiutangAkhir);
+  const simNetPiutangAkhir = Math.max(0, simSisaPiutangAkhir - simSisaTitipAkhir);
+
+  const handleSwitchMode = (nextMode: ModePembayaranTitipan) => {
+    setModeBayar(nextMode);
+    if (nextMode === 'AMBIL_TANPA_POTONG_BON') {
+      setNominalPotongBonInput('0');
+      setNominalInput(
+        String(
+          selectedSelisihHutangPt > 0
+            ? selectedSelisihHutangPt
+            : selectedMitraTitipanKotor
+        )
+      );
+    } else {
+      const defPotong = selectedPotongBonMaks;
+      setNominalPotongBonInput(String(defPotong));
+      const sisaCair = Math.max(0, selectedMitraTitipanKotor - defPotong);
+      setNominalInput(String(sisaCair));
+    }
+  };
 
   const selectedRekening = useMemo(
     () => rekeningList.find((r) => r.kode === rekeningSumber),
     [rekeningList, rekeningSumber]
   );
 
-  const handleQuickPercent = (pct: number) => {
-    if (selectedMitraSiapBayarBersih <= 0) return;
-    const amount = Math.round((selectedMitraSiapBayarBersih * pct) / 100);
-    setNominalInput(String(amount));
-  };
-
-  const executePayment = async (nominalToPay: number) => {
+  const executePayment = async (nominalToPay: number, potongBonNominal: number) => {
     setErrorMsg('');
     setSuccessMsg('');
 
     if (!selectedMitraId) {
-      setErrorMsg('Pilih mitra yang akan dibayarkan dana titipannya.');
+      setErrorMsg('Pilih mitra yang akan mengambil uang titipan / kliring.');
       return;
     }
 
-    const isImpasZeroCash =
-      nominalToPay === 0 && selectedPotongBonOtomatis > 0 && selectedMitraSiapBayarBersih === 0;
-
-    if (!isImpasZeroCash && (!nominalToPay || nominalToPay <= 0)) {
-      setErrorMsg('Nominal pembayaran dari PT ke mitra harus lebih dari Rp 0.');
+    if (selectedMitraTitipanKotor <= 0) {
+      setErrorMsg('Mitra ini tidak memiliki saldo titipan aktif.');
       return;
     }
 
-    if (nominalToPay > selectedMitraSiapBayarBersih) {
+    const useKliring = potongBonNominal > 0;
+    const isZeroCashKliringOnly = nominalToPay === 0 && useKliring;
+
+    if (!isZeroCashKliringOnly && nominalToPay <= 0) {
+      setErrorMsg('Masukkan nominal pengambilan uang lebih dari Rp 0 (atau isi nominal potong bon).');
+      return;
+    }
+
+    if (potongBonNominal > selectedPotongBonMaks) {
       setErrorMsg(
-        `Nominal melebihi sisa wajib bayar bersih PT ke mitra (${formatRupiah(
-          selectedMitraSiapBayarBersih
-        )}).`
+        `Nominal potong bon melebihi batas maksimal kliring (${formatRupiah(selectedPotongBonMaks)}).`
+      );
+      return;
+    }
+
+    const maxCashAllowed = Math.max(0, selectedMitraTitipanKotor - potongBonNominal);
+    if (nominalToPay > maxCashAllowed) {
+      setErrorMsg(
+        `Nominal uang diambil (${formatRupiah(nominalToPay)}) melebihi sisa saldo titipan (${formatRupiah(maxCashAllowed)}).`
       );
       return;
     }
@@ -355,27 +401,48 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       const record = await api.cairkanTitipan({
         idMitra: selectedMitraId,
         nominal: nominalToPay,
-        rekeningSumber: metode === 'SINKRON' ? 'SINKRON' : rekeningSumber,
-        metode,
+        rekeningSumber:
+          isZeroCashKliringOnly || metode === 'SINKRON' ? 'SINKRON' : rekeningSumber,
+        metode: isZeroCashKliringOnly ? 'SINKRON' : metode,
         keterangan: keterangan.trim() || undefined,
         tanggal: tanggalInput,
+        potongBonOtomatis: useKliring,
+        nominalPotongBon: useKliring ? potongBonNominal : 0,
       });
 
-      if (isImpasZeroCash) {
+      const sisaPiutangBaru = Math.max(0, selectedMitraBonAktif - potongBonNominal);
+      const sisaTitipBaru = Math.max(
+        0,
+        selectedMitraTitipanKotor - potongBonNominal - nominalToPay
+      );
+      const labelPosisiBaru =
+        sisaTitipBaru > sisaPiutangBaru
+          ? `HUTANG ${formatRupiah(sisaTitipBaru - sisaPiutangBaru)}`
+          : sisaPiutangBaru > sisaTitipBaru
+            ? `PIUTANG ${formatRupiah(sisaPiutangBaru - sisaTitipBaru)}`
+            : 'IMPAS (Rp 0)';
+
+      if (isZeroCashKliringOnly) {
         setSuccessMsg(
-          `Tutup buku impas otomatis berhasil! Titipan & Bon ${selectedMitra?.nama} sebesar ${formatRupiah(
-            selectedPotongBonOtomatis
-          )} telah ditutup lunas tanpa uang keluar.`
+          `Kliring silang berhasil! Piutang ${selectedMitra?.nama} berkurang ${formatRupiah(
+            potongBonNominal
+          )} menjadi sisa ${formatRupiah(sisaPiutangBaru)} (Posisi sekarang: ${labelPosisiBaru}).`
         );
-      } else if (selectedPotongBonOtomatis > 0) {
+      } else if (useKliring) {
         setSuccessMsg(
-          `Berhasil! Bon ${selectedMitra?.nama} (${formatRupiah(
-            selectedPotongBonOtomatis
-          )}) otomatis lunas terpotong & sisa bersih ${formatRupiah(nominalToPay)} telah dibayarkan ke mitra!`
+          `Berhasil! Bon ${selectedMitra?.nama} dipotong ${formatRupiah(
+            potongBonNominal
+          )} & uang tunai/transfer ${formatRupiah(
+            nominalToPay
+          )} diserahkan. Posisi sekarang: ${labelPosisiBaru}.`
         );
       } else {
         setSuccessMsg(
-          `Pembayaran dari PT ke ${selectedMitra?.nama} sebesar ${formatRupiah(nominalToPay)} berhasil diproses!`
+          `Uang titipan ${formatRupiah(nominalToPay)} diserahkan ke ${
+            selectedMitra?.nama
+          } tanpa potong bon (Piutang tetap ${formatRupiah(
+            selectedMitraBonAktif
+          )} · Yang Harus Dibayar sekarang: ${labelPosisiBaru}).`
         );
       }
 
@@ -383,91 +450,105 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       onRefresh();
       await loadHistory();
 
-      if (onPrintReceipt && selectedMitra && nominalToPay > 0) {
-        const potongBon = record.nominalPotongBonOtomatis || selectedPotongBonOtomatis;
+      if (onPrintReceipt && selectedMitra && (nominalToPay > 0 || potongBonNominal > 0)) {
+        const potongBon = record.nominalPotongBonOtomatis || potongBonNominal;
         const titipAwalKotor = record.totalTitipanAwalKotor || selectedMitraTitipanKotor;
 
         const detailRows: ReceiptData['detailRows'] = [
           { label: 'Nomor Transaksi', value: record.idPencairan },
           { label: 'Penerima / Mitra', value: `${selectedMitra.nama} (${selectedMitra.kode})` },
           {
-            label: 'Metode Pembayaran PT',
-            value: `${metode} via ${selectedRekening?.nama || rekeningSumber}`,
+            label: 'Metode Penyelesaian',
+            value: isZeroCashKliringOnly
+              ? 'KLIRING SILANG NON-TUNAI'
+              : `${metode} via ${selectedRekening?.nama || rekeningSumber}`,
           },
+          { label: 'Piutang Mitra Sebelum', value: formatRupiah(selectedMitraBonAktif) },
+          { label: 'Saldo Titipan Sebelum', value: formatRupiah(titipAwalKotor) },
         ];
 
         if (potongBon > 0) {
           detailRows.push({
-            label: 'Total Titipan Hasil Bumi',
-            value: formatRupiah(titipAwalKotor),
-          });
-          detailRows.push({
-            label: 'Dipotong Otomatis Bon Mitra',
+            label: 'Kliring Potong / Angsur Bon',
             value: `- ${formatRupiah(potongBon)}`,
+            highlight: true,
           });
+        }
+
+        if (nominalToPay > 0) {
           detailRows.push({
-            label: 'Hak Bersih Mitra',
-            value: formatRupiah(record.saldoTitipanSebelum),
-          });
-        } else {
-          detailRows.push({
-            label: 'Saldo Titipan Sebelum',
-            value: formatRupiah(record.saldoTitipanSebelum),
+            label:
+              potongBon > 0
+                ? 'Uang Bersih Diserahkan ke Mitra'
+                : 'Uang Titipan Diambil (Tanpa Potong Bon)',
+            value: formatRupiah(nominalToPay),
+            isTotal: true,
+            highlight: true,
           });
         }
 
         detailRows.push({
-          label: 'Dibayarkan PT ke Mitra',
-          value: formatRupiah(nominalToPay),
-          isTotal: true,
-          highlight: true,
+          label: 'Sisa Piutang Mitra',
+          value: formatRupiah(sisaPiutangBaru),
         });
         detailRows.push({
           label: 'Sisa Saldo Titipan',
-          value: formatRupiah(record.saldoTitipanSisa),
+          value: formatRupiah(sisaTitipBaru),
+        });
+        detailRows.push({
+          label: 'Yang Harus Dibayar Sesudahnya',
+          value: labelPosisiBaru,
+          isTotal: nominalToPay === 0,
         });
 
         onPrintReceipt({
-          title: 'BUKTI PEMBAYARAN PT KE MITRA (TITIPAN HASIL BUMI)',
-          subtitle: potongBon > 0 ? 'TERMASUK POTONG BON OTOMATIS' : 'PT WIJAYA AGRO PERKASA',
+          title: isZeroCashKliringOnly
+            ? 'BUKTI KLIRING SILANG TITIPAN KE BON MITRA'
+            : 'BUKTI PEMBAYARAN PT KE MITRA (TITIPAN / PANEN)',
+          subtitle:
+            potongBon > 0
+              ? 'TERMASUK KLIRING POTONG / ANGSUR BON MITRA'
+              : selectedMitraBonAktif > 0
+                ? 'AMBIL UANG DULU TANPA POTONG BON (PIUTANG TETAP)'
+                : 'PT WIJAYA AGRO PERKASA',
           nomorTransaksi: record.idPencairan,
           nomorNota: record.idPencairan,
           tanggal: record.tanggal,
           jam: record.jam,
           kasir: 'KasirWap',
-          kategori: 'PEMBAYARAN PT KE MITRA',
+          kategori: isZeroCashKliringOnly ? 'KLIRING SILANG' : 'PEMBAYARAN PT KE MITRA',
           mitra: selectedMitra.nama,
           namaMitra: selectedMitra.nama,
           roleMitra: getRoleMitraLabel(selectedMitra.role, {
             isAnakPerusahaan: selectedMitra.isAnakPerusahaan,
             isKaryawan: Boolean(selectedMitra.idKaryawanTerkait),
           }),
-          rekening: selectedRekening?.nama || rekeningSumber,
+          rekening: isZeroCashKliringOnly
+            ? 'KLIRING NON-TUNAI'
+            : selectedRekening?.nama || rekeningSumber,
           detailRows,
           items: [
             {
-              nama:
-                potongBon > 0
-                  ? `Pembayaran Bersih Titipan Hasil Bumi (Setelah Potong Bon ${formatRupiah(potongBon)})`
-                  : 'Pembayaran Titipan Pembelian Hasil Bumi',
+              nama: isZeroCashKliringOnly
+                ? `Kliring Silang Titipan ke Piutang Bon (${formatRupiah(potongBon)})`
+                : potongBon > 0
+                  ? `Pembayaran Titipan (Setelah Kliring Bon ${formatRupiah(potongBon)})`
+                  : 'Pengambilan Uang Titipan (Tanpa Potong Bon)',
               qty: 1,
               satuan: 'Trx',
-              harga: nominalToPay,
-              subtotal: nominalToPay,
+              harga: nominalToPay > 0 ? nominalToPay : potongBon,
+              subtotal: nominalToPay > 0 ? nominalToPay : potongBon,
             },
           ],
-          total: nominalToPay,
-          terbilang: `${formatRupiah(nominalToPay)}`,
-          catatan:
-            potongBon > 0
-              ? `Bon Mitra ${formatRupiah(potongBon)} telah lunas dipotong otomatis. Sisa Titipan: ${formatRupiah(
-                  record.saldoTitipanSisa
-                )}`
-              : `Sisa Saldo Titipan Mitra: ${formatRupiah(record.saldoTitipanSisa)}`,
+          total: nominalToPay > 0 ? nominalToPay : potongBon,
+          terbilang: `${formatRupiah(nominalToPay > 0 ? nominalToPay : potongBon)}`,
+          catatan: `Yang Harus Dibayar sekarang: ${labelPosisiBaru} (Sisa Piutang: ${formatRupiah(
+            sisaPiutangBaru
+          )}, Sisa Titipan: ${formatRupiah(sisaTitipBaru)})`,
         });
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Gagal memproses pembayaran dari PT ke mitra');
+      setErrorMsg(err.message || 'Gagal memproses transaksi pembayaran ke mitra');
     } finally {
       setSubmitting(false);
     }
@@ -475,7 +556,7 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await executePayment(Number(nominalInput) || 0);
+    await executePayment(parsedNominalFisik, parsedPotongBon);
   };
 
   const filteredHistory = useMemo(() => {
@@ -494,16 +575,11 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl font-bold text-zinc-900 tracking-tight">
-              Pembayaran dari PT ke Mitra (Titipan Hasil Bumi)
-            </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
-              POTONG BON OTOMATIS
-            </span>
-          </div>
+          <h1 className="text-xl font-bold text-zinc-900 tracking-tight">
+            Pembayaran Titipan Hasil Bumi &amp; Kliring Bon Mitra
+          </h1>
           <p className="text-xs text-zinc-500 mt-0.5">
-            Pembayaran hak bersih titipan hasil bumi dari PT ke mitra — apabila mitra memiliki bon, bon otomatis dipotong terlebih dahulu tanpa perlu kliring manual.
+            Tampilkan posisi Hutang/Piutang bersih sebelum kliring — mitra bebas ambil uang titipan dulu tanpa potong bon, atau kliring angsur/lunasi bon saat pembayaran.
           </p>
         </div>
 
@@ -533,26 +609,24 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       {/* Summary KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between gap-2 text-xs text-amber-800 font-semibold mb-1 min-w-0">
-            <span className="truncate">SIAP BAYAR BERSIH PT KE MITRA</span>
-            <Wheat className="w-4 h-4 text-amber-600 shrink-0" />
+          <div className="flex items-center justify-between gap-2 text-xs text-amber-900 font-semibold mb-1 min-w-0">
+            <span className="truncate">Total Saldo Titipan Aktif</span>
+            <Wheat className="w-4 h-4 text-amber-700 shrink-0" />
           </div>
           <div
             className="text-2xl font-black text-amber-950 font-mono tabular-nums truncate whitespace-nowrap"
-            title={formatRupiah(grandTotalSiapBayarBersih)}
+            title={formatRupiah(grandTotalTitipAktif)}
           >
-            {formatRupiahSingkat(grandTotalSiapBayarBersih)}
+            {formatRupiahSingkat(grandTotalTitipAktif)}
           </div>
-          <div className="text-[11px] text-amber-700 mt-1 truncate">
-            {grandTotalPotongBon > 0
-              ? `Sudah dikurangi bon otomatis ${formatRupiahSingkat(grandTotalPotongBon)}`
-              : 'Kewajiban bersih kas PT kepada mitra'}
+          <div className="text-[11px] text-amber-800 mt-1 truncate">
+            Selisih Hutang Bersih PT: {formatRupiahSingkat(grandTotalSelisihHutang)}
           </div>
         </div>
 
         <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 min-w-0 overflow-hidden">
           <div className="flex items-center justify-between gap-2 text-xs text-emerald-800 font-semibold mb-1 min-w-0">
-            <span className="truncate">KAS KASIR BERSIH TERSEDIA</span>
+            <span className="truncate">Kas Kasir Bersih Tersedia</span>
             <Wallet className="w-4 h-4 text-emerald-600 shrink-0" />
           </div>
           <div
@@ -562,20 +636,20 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
             {formatRupiahSingkat(rekeningList.find((r) => r.kode === 'KAS01')?.saldoSaatIni || 0)}
           </div>
           <div className="text-[11px] text-emerald-700 mt-1 truncate">
-            Siap untuk pembayaran tunai di kasir
+            Siap untuk penyerahan uang tunai di kasir
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between gap-2 text-xs text-indigo-800 font-semibold mb-1 min-w-0">
-            <span className="truncate">MITRA SIAP TERIMA PEMBAYARAN</span>
-            <UserCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+        <div className="p-4 rounded-xl bg-zinc-100 border border-zinc-200 min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 text-xs text-zinc-700 font-semibold mb-1 min-w-0">
+            <span className="truncate">Mitra Memiliki Saldo Titipan</span>
+            <UserCheck className="w-4 h-4 text-zinc-600 shrink-0" />
           </div>
-          <div className="text-2xl font-black text-indigo-950 font-mono tabular-nums truncate whitespace-nowrap">
-            {readyPartnerCount} Mitra
+          <div className="text-2xl font-black text-zinc-950 font-mono tabular-nums truncate whitespace-nowrap">
+            {activeTitipPartnerCount} Mitra
           </div>
-          <div className="text-[11px] text-indigo-700 mt-1 truncate">
-            Memiliki sisa hak bersih setelah potong bon
+          <div className="text-[11px] text-zinc-600 mt-1 truncate">
+            Bisa ambil uang dulu atau kliring potong bon
           </div>
         </div>
       </div>
@@ -587,23 +661,23 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
           <div className="border-b border-zinc-100 pb-3">
             <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
               <HandCoins className="w-4 h-4 text-amber-600" />
-              <span>Formulir Pembayaran dari PT ke Mitra</span>
+              <span>Formulir Pengambilan Titipan &amp; Kliring Pembayaran</span>
             </h2>
             <p className="text-[11px] text-zinc-500 mt-0.5">
-              Bon mitra otomatis dipotong dari titipan hasil bumi, kasir tinggal membayar sisanya
+              Pilih ambil uang dulu (piutang tetap) atau potong/angsur bon saat pembayaran
             </p>
           </div>
 
           {successMsg && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center space-x-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 flex items-start space-x-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <span>{successMsg}</span>
             </div>
           )}
 
           {errorMsg && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-start space-x-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
           )}
@@ -612,30 +686,27 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
             {/* Pilih Mitra */}
             <div>
               <label className="block font-semibold text-zinc-700 mb-1">
-                Pilih Mitra Penerima Pembayaran <span className="text-rose-500">*</span>
+                Pilih Mitra Pemilik Titipan <span className="text-rose-500">*</span>
               </label>
               <select
                 required
                 value={selectedMitraId}
                 onChange={(e) => setSelectedMitraId(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 font-semibold"
+                className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800 font-semibold"
               >
                 <option value="">-- Pilih Mitra --</option>
                 {activeTitipPartners.map((m) => {
-                  let labelSaldo = `Siap Bayar: ${formatRupiah(m.saldoSiapBayarBersih)}`;
-                  if (m.saldoSiapBayarBersih > 0 && m.potongBonOtomatis > 0) {
-                    labelSaldo = `Siap Bayar Bersih: ${formatRupiah(
-                      m.saldoSiapBayarBersih
-                    )} (Titip ${formatRupiahSingkat(m.saldoTitipAktif)} - Bon ${formatRupiahSingkat(
-                      m.potongBonOtomatis
-                    )})`;
-                  } else if (m.saldoSiapBayarBersih === 0 && m.saldoTitipAktif > 0) {
-                    labelSaldo =
-                      m.sisaBonMitraBersih > 0
-                        ? `Rp 0 (Habis Potong Bon — Sisa Bon Mitra ${formatRupiahSingkat(
-                            m.sisaBonMitraBersih
-                          )})`
-                        : `Rp 0 (Impas dengan Bon ${formatRupiahSingkat(m.potongBonOtomatis)})`;
+                  let labelSaldo = '';
+                  if (m.selisihHutangPt > 0) {
+                    labelSaldo = `Hutang: ${formatRupiah(m.selisihHutangPt)} (Titip ${formatRupiahSingkat(
+                      m.saldoTitipAktif
+                    )}${m.saldoBonAktif > 0 ? ` − Piutang ${formatRupiahSingkat(m.saldoBonAktif)}` : ''})`;
+                  } else if (m.selisihPiutangMitra > 0) {
+                    labelSaldo = `Titip ${formatRupiahSingkat(
+                      m.saldoTitipAktif
+                    )} | Piutang: ${formatRupiah(m.selisihPiutangMitra)}`;
+                  } else {
+                    labelSaldo = `Impas Rp 0 (Titip ${formatRupiahSingkat(m.saldoTitipAktif)} = Piutang)`;
                   }
                   return (
                     <option key={m.id} value={m.id}>
@@ -646,159 +717,250 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
               </select>
             </div>
 
-            {/* Rincian Otomatis Titipan vs Potong Bon */}
+            {/* Rincian Posisi Berjalan (Walaupun Belum Di-Kliring) */}
             {selectedMitra && (
-              <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 text-xs space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-amber-950">
-                    Rincian Hak Bersih {selectedMitra.nama}
+              <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-zinc-900">
+                    Posisi Saldo {selectedMitra.nama} (Sebelum Kliring)
                   </span>
-                  {selectedMitraSiapBayarBersih > 0 && (
-                    <div className="flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleQuickPercent(100)}
-                        className="px-2.5 py-1 text-[10px] font-bold bg-amber-700 text-white rounded hover:bg-amber-800 transition-colors cursor-pointer"
-                      >
-                        100% LUNAS
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleQuickPercent(50)}
-                        className="px-2 py-1 text-[10px] font-bold bg-white text-amber-800 border border-amber-300 rounded hover:bg-amber-100 transition-colors cursor-pointer"
-                      >
-                        50%
-                      </button>
-                    </div>
-                  )}
                 </div>
 
-                <div className="p-3 rounded-lg bg-white border border-amber-200/90 space-y-1.5 font-mono text-[11px]">
+                <div className="p-3 rounded-lg bg-white border border-zinc-200 space-y-1.5 font-mono tabular-nums text-[11px]">
                   <div className="flex justify-between text-zinc-600">
-                    <span className="font-sans">Total Titipan Hasil Bumi:</span>
-                    <span className="font-semibold text-zinc-900">
+                    <span className="font-sans">Saldo Titipan / Hasil Panen:</span>
+                    <span className="font-bold text-emerald-800">
                       {formatRupiah(selectedMitraTitipanKotor)}
                     </span>
                   </div>
-
-                  {selectedPotongBonOtomatis > 0 && (
-                    <div className="flex justify-between text-emerald-700">
-                      <span className="font-sans font-medium">
-                        Otomatis Dipotong Bon Mitra:
-                      </span>
-                      <span className="font-bold">- {formatRupiah(selectedPotongBonOtomatis)}</span>
-                    </div>
-                  )}
-
-                  <div className="flex justify-between pt-1.5 border-t border-zinc-200 text-amber-950">
-                    <span className="font-sans font-bold">
-                      Sisa Wajib Bayar PT ke Mitra:
+                  <div className="flex justify-between text-zinc-600">
+                    <span className="font-sans">Saldo Piutang / Bon Berjalan:</span>
+                    <span className="font-bold text-rose-800">
+                      {formatRupiah(selectedMitraBonAktif)}
                     </span>
-                    <span className="font-extrabold text-sm">
-                      {formatRupiah(selectedMitraSiapBayarBersih)}
+                  </div>
+                  <div className="flex justify-between pt-1.5 border-t border-zinc-200">
+                    <span className="font-sans font-bold text-zinc-900">
+                      Yang Harus Dibayar Saat Ini:
+                    </span>
+                    <span
+                      className={`font-black text-sm ${
+                        selectedSelisihHutangPt > 0
+                          ? 'text-emerald-800'
+                          : selectedSelisihPiutangMitra > 0
+                            ? 'text-rose-800'
+                            : 'text-zinc-800'
+                      }`}
+                    >
+                      {selectedSelisihHutangPt > 0
+                        ? `HUTANG ${formatRupiah(selectedSelisihHutangPt)}`
+                        : selectedSelisihPiutangMitra > 0
+                          ? `PIUTANG ${formatRupiah(selectedSelisihPiutangMitra)}`
+                          : 'IMPAS (Rp 0)'}
                     </span>
                   </div>
                 </div>
 
-                {selectedPotongBonOtomatis > 0 && selectedMitraSiapBayarBersih > 0 && (
-                  <div className="flex items-start space-x-2 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span>
-                      Saat Anda klik <strong>Bayar ke Mitra Sekarang</strong>, bon mitra sebesar{' '}
-                      <strong className="font-mono">{formatRupiah(selectedPotongBonOtomatis)}</strong>{' '}
-                      otomatis ditutup lunas dan kas PT hanya keluar sebesar{' '}
-                      <strong className="font-mono">{formatRupiah(Number(nominalInput) || 0)}</strong>.
-                    </span>
-                  </div>
-                )}
+                {/* Pilihan Mode Saat Mitra Memiliki Bon Aktif */}
+                {selectedMitraBonAktif > 0 && selectedMitraTitipanKotor > 0 && (
+                  <div className="space-y-2.5 pt-1">
+                    <label className="block font-bold text-zinc-800">
+                      Pilih Opsi Proses Pembayaran:
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 p-1 bg-zinc-200/70 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => handleSwitchMode('AMBIL_TANPA_POTONG_BON')}
+                        className={`py-2 px-2.5 rounded-md font-bold text-[11px] transition-colors cursor-pointer ${
+                          modeBayar === 'AMBIL_TANPA_POTONG_BON'
+                            ? 'bg-white text-emerald-900 shadow-2xs'
+                            : 'text-zinc-600 hover:text-zinc-900'
+                        }`}
+                      >
+                        Ambil Uang Dulu (Tanpa Potong Bon)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSwitchMode('KLIRING_DAN_BAYAR')}
+                        className={`py-2 px-2.5 rounded-md font-bold text-[11px] transition-colors cursor-pointer ${
+                          modeBayar === 'KLIRING_DAN_BAYAR'
+                            ? 'bg-white text-zinc-900 shadow-2xs'
+                            : 'text-zinc-600 hover:text-zinc-900'
+                        }`}
+                      >
+                        Kliring / Angsur Bon Saat Bayar
+                      </button>
+                    </div>
 
-                {/* Jika Impas 100% (Titipan == Bon) */}
-                {selectedPotongBonOtomatis > 0 &&
-                  selectedMitraSiapBayarBersih === 0 &&
-                  selectedSisaBonMitraBersih === 0 && (
-                    <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 space-y-2">
-                      <div className="text-[11px] text-emerald-900">
-                        Titipan Hasil Bumi dan Bon {selectedMitra.nama} <strong>impas persis (Rp 0)</strong>. Tidak ada uang kas keluar maupun masuk.
+                    {modeBayar === 'KLIRING_DAN_BAYAR' && (
+                      <div className="p-3 rounded-lg bg-white border border-zinc-200 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-1">
+                          <label className="font-bold text-zinc-800 flex items-center gap-1">
+                            <ArrowRightLeft className="w-3.5 h-3.5 text-zinc-700" />
+                            <span>Nominal Potong / Angsur Bon (Rp)</span>
+                          </label>
+                          <div className="flex flex-wrap gap-1">
+                            {selectedSelisihHutangPt > 0 &&
+                              selectedSelisihHutangPt < selectedPotongBonMaks && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNominalPotongBonInput(String(selectedSelisihHutangPt));
+                                    setNominalInput('0');
+                                  }}
+                                  className="px-2 py-0.5 text-[10px] font-bold bg-emerald-50 text-emerald-900 border border-emerald-300 rounded hover:bg-emerald-100 cursor-pointer"
+                                >
+                                  Senilai Hutang ({formatRupiahSingkat(selectedSelisihHutangPt)})
+                                </button>
+                              )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNominalPotongBonInput(String(selectedPotongBonMaks));
+                                setNominalInput(
+                                  String(
+                                    Math.max(0, selectedMitraTitipanKotor - selectedPotongBonMaks)
+                                  )
+                                );
+                              }}
+                              className="px-2 py-0.5 text-[10px] font-bold bg-zinc-900 text-white rounded hover:bg-zinc-800 cursor-pointer"
+                            >
+                              Maks Kliring ({formatRupiahSingkat(selectedPotongBonMaks)})
+                            </button>
+                          </div>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          max={selectedPotongBonMaks}
+                          value={nominalPotongBonInput}
+                          onChange={(e) => setNominalPotongBonInput(e.target.value)}
+                          className="w-full px-3 py-1.5 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-zinc-900"
+                        />
+                        <div className="text-[10px] text-zinc-500">
+                          Isi nominal bon yang ingin dipotong/diangsur dari titipan. Bila mitra hanya ingin kliring tanpa ambil uang lagi, isi uang diambil = 0.
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        disabled={submitting}
-                        onClick={() => executePayment(0)}
-                        className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg transition-colors cursor-pointer"
-                      >
-                        {submitting
-                          ? 'Memproses...'
-                          : `Tutup Buku Lunas Impas (Rp 0 Tanpa Uang Keluar)`}
-                      </button>
-                    </div>
-                  )}
-
-                {/* Jika Bon Mitra ternyata lebih besar dari Titipan (PT tidak bayar, justru Mitra masih kurang bayar bon) */}
-                {selectedSisaBonMitraBersih > 0 && (
-                  <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 space-y-2">
-                    <div className="text-[11px] text-rose-900">
-                      Titipan Hasil Bumi ({formatRupiah(selectedMitraTitipanKotor)}) sudah habis memotong Bon ({formatRupiah(selectedMitraBonAktif)}). PT tidak membayar uang ke mitra — justru mitra masih memiliki sisa bon bersih{' '}
-                      <strong className="font-mono">{formatRupiah(selectedSisaBonMitraBersih)}</strong>.
-                    </div>
-                    {onNavigateToBayarBon && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateToBayarBon(selectedMitra.id)}
-                        className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
-                      >
-                        <span>
-                          Ke Pelunasan Sisa Bon Mitra ({formatRupiah(selectedSisaBonMitraBersih)})
-                        </span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
                     )}
                   </div>
                 )}
               </div>
             )}
 
-            {/* Nominal Pembayaran PT ke Mitra */}
+            {/* Nominal Uang Diambil / Dibayar PT ke Mitra */}
             <div>
-              <label className="block font-semibold text-zinc-700 mb-1">
-                Nominal Dibayar PT ke Mitra (Rp) <span className="text-rose-500">*</span>
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1">
+                <label className="font-semibold text-zinc-700">
+                  Nominal Uang Diambil Mitra (Rp)
+                </label>
+                {selectedMitra && batasMaksAmbilUang > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {!isKliringMode &&
+                      selectedSelisihHutangPt > 0 &&
+                      selectedSelisihHutangPt < batasMaksAmbilUang && (
+                        <button
+                          type="button"
+                          onClick={() => setNominalInput(String(selectedSelisihHutangPt))}
+                          className="px-2 py-0.5 text-[10px] font-bold bg-emerald-50 text-emerald-900 border border-emerald-300 rounded hover:bg-emerald-100 cursor-pointer"
+                        >
+                          Senilai Hutang ({formatRupiahSingkat(selectedSelisihHutangPt)})
+                        </button>
+                      )}
+                    <button
+                      type="button"
+                      onClick={() => setNominalInput(String(batasMaksAmbilUang))}
+                      className="px-2 py-0.5 text-[10px] font-bold bg-amber-700 text-white rounded hover:bg-amber-800 cursor-pointer"
+                    >
+                      {isKliringMode
+                        ? `Sisa Bersih (${formatRupiahSingkat(batasMaksAmbilUang)})`
+                        : `Penuh Titip (${formatRupiahSingkat(batasMaksAmbilUang)})`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNominalInput(String(Math.round(batasMaksAmbilUang / 2)))}
+                      className="px-2 py-0.5 text-[10px] font-bold bg-white text-zinc-700 border border-zinc-300 rounded hover:bg-zinc-50 cursor-pointer"
+                    >
+                      50%
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="relative">
                 <span className="absolute left-3 top-2.5 font-bold text-zinc-400">Rp</span>
                 <input
                   type="number"
-                  required
                   min={0}
-                  max={selectedMitraSiapBayarBersih || undefined}
-                  disabled={!selectedMitraId || selectedMitraSiapBayarBersih <= 0}
+                  max={batasMaksAmbilUang || 0}
+                  disabled={!selectedMitraId || selectedMitraTitipanKotor <= 0}
                   value={nominalInput}
                   onChange={(e) => setNominalInput(e.target.value)}
                   placeholder="0"
-                  className="w-full pl-9 pr-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 font-mono font-bold text-sm text-zinc-900 disabled:bg-zinc-100 disabled:text-zinc-400"
+                  className="w-full pl-9 pr-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 font-mono tabular-nums font-bold text-sm text-zinc-900 disabled:bg-zinc-100 disabled:text-zinc-400"
                 />
               </div>
-              {Number(nominalInput) > 0 && (
-                <div className="text-[11px] text-emerald-700 font-semibold mt-1">
-                  {metode === 'SINKRON'
-                    ? `Diselesaikan via SINKRON (Rp 0 Uang Kas Keluar): ${formatRupiah(Number(nominalInput))}`
-                    : `Dibayarkan bersih dari kas/bank PT: ${formatRupiah(Number(nominalInput))}`}
+              {selectedMitra && selectedMitraTitipanKotor > 0 && (
+                <div className="text-[11px] text-zinc-500 mt-1">
+                  Maksimal uang titipan bisa diambil:{' '}
+                  <strong className="font-mono text-zinc-800">
+                    {formatRupiah(batasMaksAmbilUang)}
+                  </strong>
                 </div>
               )}
             </div>
+
+            {/* Simulasi Posisi Akhir */}
+            {selectedMitra && selectedMitraTitipanKotor > 0 && (
+              <div className="p-3 rounded-xl bg-zinc-900 text-white space-y-2 text-[11px]">
+                <div className="flex items-center gap-1.5 text-zinc-300 font-semibold">
+                  <Scale className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Simulasi Setelah Transaksi</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 font-mono tabular-nums">
+                  <div className="bg-zinc-800 px-2.5 py-1.5 rounded border border-zinc-700 flex justify-between">
+                    <span className="font-sans text-zinc-300">Sisa Piutang:</span>
+                    <strong className="text-amber-300">{formatRupiah(simSisaPiutangAkhir)}</strong>
+                  </div>
+                  <div className="bg-zinc-800 px-2.5 py-1.5 rounded border border-zinc-700 flex justify-between">
+                    <span className="font-sans text-zinc-300">Sisa Titipan:</span>
+                    <strong className="text-emerald-300">{formatRupiah(simSisaTitipAkhir)}</strong>
+                  </div>
+                </div>
+                <div className="pt-1.5 border-t border-zinc-800 flex items-center justify-between">
+                  <span className="text-zinc-300">Yang Harus Dibayar Nanti:</span>
+                  <strong
+                    className={`font-mono tabular-nums text-xs ${
+                      simNetHutangAkhir > 0
+                        ? 'text-emerald-400'
+                        : simNetPiutangAkhir > 0
+                          ? 'text-amber-300'
+                          : 'text-emerald-300'
+                    }`}
+                  >
+                    {simNetHutangAkhir > 0
+                      ? `HUTANG ${formatRupiah(simNetHutangAkhir)}`
+                      : simNetPiutangAkhir > 0
+                        ? `PIUTANG ${formatRupiah(simNetPiutangAkhir)}`
+                        : 'IMPAS (Rp 0)'}
+                  </strong>
+                </div>
+              </div>
+            )}
 
             {/* Sumber Dana & Metode */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">Sumber Kas / Bank PT</label>
-                {metode === 'SINKRON' ? (
-                  <div className="w-full px-3 py-2 border border-cyan-300 bg-cyan-50 text-cyan-900 rounded-lg font-mono font-bold text-xs">
-                    SINKRON — Non-Kas (Rp 0 Uang Riil)
+                {metode === 'SINKRON' || (parsedNominalFisik === 0 && parsedPotongBon > 0) ? (
+                  <div className="w-full px-3 py-2 border border-zinc-300 bg-zinc-100 text-zinc-700 rounded-lg font-mono font-bold text-xs">
+                    NON-KAS (Rp 0 Uang Keluar)
                   </div>
                 ) : (
                   <select
                     value={rekeningSumber}
                     onChange={(e) => setRekeningSumber(e.target.value)}
-                    disabled={selectedMitraSiapBayarBersih <= 0}
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 disabled:bg-zinc-100"
+                    disabled={!selectedMitraId || selectedMitraTitipanKotor <= 0}
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800 disabled:bg-zinc-100"
                   >
                     {rekeningList
                       .filter((r) => !r.isVirtual && r.status === 'AKTIF')
@@ -816,8 +978,8 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                 <select
                   value={metode}
                   onChange={(e) => setMetode(e.target.value as 'TUNAI' | 'TRANSFER' | 'SINKRON')}
-                  disabled={selectedMitraSiapBayarBersih <= 0}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 disabled:bg-zinc-100"
+                  disabled={!selectedMitraId || selectedMitraTitipanKotor <= 0}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800 disabled:bg-zinc-100"
                 >
                   <option value="TUNAI">TUNAI (Kas Kasir)</option>
                   <option value="TRANSFER">TRANSFER BANK</option>
@@ -830,13 +992,13 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Tanggal Bayar (Fleksibel)
+                  Tanggal Bayar
                 </label>
                 <input
                   type="date"
                   value={tanggalInput}
                   onChange={(e) => setTanggalInput(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800 font-mono"
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800 font-mono"
                 />
               </div>
 
@@ -846,8 +1008,12 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                   type="text"
                   value={keterangan}
                   onChange={(e) => setKeterangan(e.target.value)}
-                  placeholder="Cth: Pelunasan sisa panen setelah potong bon"
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-amber-500 text-zinc-800"
+                  placeholder={
+                    isKliringMode
+                      ? 'Cth: Angsur bon & ambil sisa panen'
+                      : 'Cth: Ambil uang titipan dulu untuk modal'
+                  }
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800"
                 />
               </div>
             </div>
@@ -857,19 +1023,21 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
               disabled={
                 submitting ||
                 !selectedMitraId ||
-                selectedMitraSiapBayarBersih <= 0 ||
-                Number(nominalInput) <= 0 ||
-                Number(nominalInput) > selectedMitraSiapBayarBersih
+                selectedMitraTitipanKotor <= 0 ||
+                (parsedNominalFisik <= 0 && parsedPotongBon <= 0) ||
+                parsedNominalFisik > batasMaksAmbilUang
               }
-              className="w-full py-2.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 text-white font-bold rounded-lg shadow-xs transition-colors flex items-center justify-center space-x-2 cursor-pointer disabled:cursor-not-allowed mt-2"
+              className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-bold rounded-lg shadow-xs transition-colors flex items-center justify-center space-x-2 cursor-pointer disabled:cursor-not-allowed mt-2"
             >
               <HandCoins className="w-4 h-4" />
               <span>
                 {submitting
-                  ? 'Memproses Pembayaran...'
-                  : selectedMitraSiapBayarBersih > 0
-                  ? `Bayar ke Mitra Sekarang (${formatRupiah(Number(nominalInput) || 0)})`
-                  : 'Tidak Ada Sisa Pembayaran PT ke Mitra (Rp 0)'}
+                  ? 'Memproses...'
+                  : parsedNominalFisik === 0 && parsedPotongBon > 0
+                    ? `Proses Kliring Potong Bon (${formatRupiah(parsedPotongBon)})`
+                    : isKliringMode
+                      ? `Kliring Bon ${formatRupiahSingkat(parsedPotongBon)} & Bayar ${formatRupiah(parsedNominalFisik)}`
+                      : `Serahkan Uang Titipan (${formatRupiah(parsedNominalFisik)})`}
               </span>
             </button>
           </form>
@@ -881,10 +1049,10 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
             <div>
               <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
                 <Receipt className="w-4 h-4 text-zinc-700" />
-                <span>Riwayat Pembayaran PT ke Mitra (Titipan Hasil Bumi)</span>
+                <span>Riwayat Pengambilan Titipan &amp; Kliring Bon Mitra</span>
               </h2>
               <p className="text-[11px] text-zinc-500">
-                Histori pembayaran bersih ke mitra &amp; potongan bon otomatis
+                Histori uang titipan diambil mitra maupun potongan kliring bon
               </p>
             </div>
 
@@ -929,7 +1097,7 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                       Boolean(pt.isKompensasiBon);
                     return (
                       <tr key={pt.idPencairan} className="hover:bg-zinc-50/80 transition-colors">
-                        <td className="py-2.5 px-3 whitespace-nowrap text-zinc-600 font-mono">
+                        <td className="py-2.5 px-3 whitespace-nowrap text-zinc-600 font-mono tabular-nums">
                           <div>{pt.tanggal}</div>
                           <div className="text-[10px] text-zinc-400">{pt.jam}</div>
                         </td>
@@ -938,29 +1106,27 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                         </td>
                         <td className="py-2.5 px-3 font-semibold text-zinc-900">
                           <div>{pt.namaMitra}</div>
-                          {(pt.nominalPotongBonOtomatis || 0) > 0 && (
+                          {(pt.nominalPotongBonOtomatis || 0) > 0 ? (
                             <div className="text-[10px] text-cyan-800 font-medium">
-                              Sinkron potong bon {formatRupiahSingkat(pt.nominalPotongBonOtomatis || 0)}
+                              Kliring potong bon {formatRupiahSingkat(pt.nominalPotongBonOtomatis || 0)}
                             </div>
-                          )}
+                          ) : pt.keterangan ? (
+                            <div className="text-[10px] text-zinc-500 font-normal truncate max-w-[200px]">
+                              {pt.keterangan}
+                            </div>
+                          ) : null}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-amber-800 whitespace-nowrap">
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-amber-800 whitespace-nowrap">
                           {formatRupiah(pt.nominalPencairan)}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-zinc-600 whitespace-nowrap">
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
                           {formatRupiah(pt.saldoTitipanSisa)}
                         </td>
                         <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                              isPotongBon
-                                ? 'bg-cyan-50 text-cyan-900 border border-cyan-200'
-                                : 'bg-zinc-100 text-zinc-700'
-                            }`}
-                          >
+                          <span className="text-[11px] font-medium text-zinc-700">
                             {isPotongBon
-                              ? 'SINKRON POTONG BON'
-                              : `${pt.rekeningSumber} (${pt.metodePembayaran})`}
+                              ? 'Kliring Potong Bon'
+                              : `${pt.rekeningSumber} · ${pt.metodePembayaran}`}
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center whitespace-nowrap">
@@ -1012,7 +1178,7 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                                               ),
                                             },
                                             {
-                                              label: 'Potong Bon Otomatis',
+                                              label: 'Kliring Potong Bon',
                                               value: `- ${formatRupiah(pt.nominalPotongBonOtomatis)}`,
                                             },
                                           ]
@@ -1022,7 +1188,7 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                                         value: `${pt.metodePembayaran} (${pt.rekeningSumber})`,
                                       },
                                       {
-                                        label: 'Nominal Dibayarkan PT',
+                                        label: 'Nominal Transaksi',
                                         value: formatRupiah(pt.nominalPencairan),
                                         isTotal: true,
                                         highlight: true,
@@ -1034,7 +1200,9 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                                     ],
                                     items: [
                                       {
-                                        nama: 'Pembayaran Titipan Hasil Bumi dari PT ke Mitra',
+                                        nama:
+                                          pt.keterangan ||
+                                          'Pembayaran Titipan Hasil Bumi dari PT ke Mitra',
                                         qty: 1,
                                         satuan: 'Trx',
                                         harga: pt.nominalPencairan,

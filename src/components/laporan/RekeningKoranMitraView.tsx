@@ -31,6 +31,7 @@ import {
   Lock,
   Unlock,
   RefreshCw,
+  Wallet,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -45,10 +46,12 @@ import {
   AreaChart,
 } from 'recharts';
 import {
+  DEFAULT_PT_LOGO_URL,
   getRoleMitraLabel,
   Mitra,
   ProfilPerusahaan,
   Rekening,
+  RekeningKoranHistoryItem,
   RekeningKoranMitraSummary,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat, formatTanggalIndo } from '../../utils/format.ts';
@@ -60,7 +63,10 @@ import { ShareLinkModal } from '../public/ShareLinkModal.tsx';
 import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
-import { ModalKliringSilangMitra } from '../common/ModalKliringSilangMitra.tsx';
+import {
+  KliringModalMode,
+  ModalKliringSilangMitra,
+} from '../common/ModalKliringSilangMitra.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalToggleNotaNgunci } from '../master/RekapKhususMitraNgunciSection.tsx';
 
@@ -100,9 +106,11 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [modalBersihkanNotaOpen, setModalBersihkanNotaOpen] = useState<boolean>(false);
   const [anakPerusahaanModalOpen, setAnakPerusahaanModalOpen] = useState<boolean>(false);
   const [kliringModalOpen, setKliringModalOpen] = useState<boolean>(false);
+  const [kliringInitialMode, setKliringInitialMode] = useState<KliringModalMode>('KLIRING_SILANG');
   const [shareModalOpen, setShareModalOpen] = useState<boolean>(false);
   const [quickCopied, setQuickCopied] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'TABEL' | 'LEMBAR_CETAK'>('TABEL');
+  const [ledgerTab, setLedgerTab] = useState<'SALDO_BERJALAN' | 'HISTORY_SELESAI'>('SALDO_BERJALAN');
   const [showMockupPreview, setShowMockupPreview] = useState<boolean>(false);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
 
@@ -121,6 +129,15 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [editSuccessMsg, setEditSuccessMsg] = useState<string>('');
   const [editErrorMsg, setEditErrorMsg] = useState<string>('');
   const [universalEditId, setUniversalEditId] = useState<string | null>(null);
+  const [deleteTxTarget, setDeleteTxTarget] = useState<{
+    idTransaksi: string;
+    tanggal: string;
+    uraian: string;
+    nominal: number;
+    keterangan?: string;
+  } | null>(null);
+  const [deletingTx, setDeletingTx] = useState<boolean>(false);
+  const [deleteTxError, setDeleteTxError] = useState<string>('');
   const [confirmResetOpen, setConfirmResetOpen] = useState<boolean>(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState<boolean>(false);
   const [partnerActionBusy, setPartnerActionBusy] = useState<boolean>(false);
@@ -369,19 +386,19 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     const bonKotor = statement.totalBonKeseluruhan || 0;
     const titipAktif = statement.totalTitip || 0;
     const maksSinkron = Math.min(bonKotor, titipAktif);
-    const sisaFisik = statement.sisaBonBersih ?? Math.max(0, bonKotor - titipAktif);
+    const selisihBonBersih = statement.sisaBonBersih ?? Math.max(0, bonKotor - titipAktif);
 
     let defaultMetode: 'TUNAI' | 'TRANSFER' | 'SINKRON' = 'TUNAI';
-    let defaultMax = sisaFisik;
-    if (sisaFisik <= 0 && maksSinkron > 0) {
+    let defaultNominal = selisihBonBersih > 0 ? selisihBonBersih : bonKotor;
+    if (selisihBonBersih <= 0 && maksSinkron > 0) {
       defaultMetode = 'SINKRON';
-      defaultMax = maksSinkron;
+      defaultNominal = maksSinkron;
     }
 
     const suggestedNominal =
       opts?.sisaNotaTarget && opts.sisaNotaTarget > 0
-        ? Math.min(opts.sisaNotaTarget, defaultMax)
-        : defaultMax;
+        ? Math.min(opts.sisaNotaTarget, defaultMetode === 'SINKRON' ? maksSinkron : bonKotor)
+        : defaultNominal;
 
     setQuickPayMetode(defaultMetode);
     setQuickPayRekening(availableBanks[0]?.kode || 'BNI01');
@@ -544,13 +561,22 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
   const activeProfil = useMemo<ProfilPerusahaan>(() => {
     const src = profilPerusahaan || statement?.profilPerusahaan || fetchedProfilFallback;
+    const rawAlamat = src?.alamat?.trim();
+    const rawTelp = src?.telepon?.trim();
+    const rawEmail = src?.email?.trim();
     return {
-      namaPerusahaan: src?.namaPerusahaan?.trim() || 'PT. WIJAYA AGRO PERKASA',
+      namaPerusahaan: src?.namaPerusahaan?.trim() || 'PT WIJAYA AGRO PERKASA',
       badanHukum: src?.badanHukum?.trim() || 'PT (Perseroan Terbatas)',
-      alamat: src?.alamat?.trim() || '-',
-      telepon: src?.telepon?.trim() || '-',
-      email: src?.email?.trim() || '-',
-      penanggungJawab: src?.penanggungJawab?.trim() || 'Bagian Keuangan & Manajemen',
+      alamat:
+        rawAlamat && rawAlamat !== '-'
+          ? rawAlamat
+          : 'Jl Kalangan Desa Simpang Luas, Kec. Sungai Are, OKUS SUMSEL',
+      telepon:
+        rawTelp && rawTelp !== '-'
+          ? rawTelp
+          : 'KASIR 0821 44 999 305 | ADM 0812 2000 3305',
+      email: rawEmail && rawEmail !== '-' ? rawEmail : 'wijayaagroperkasa@gmail.com',
+      penanggungJawab: src?.penanggungJawab?.trim() || 'KASIR / ADM KEUANGAN',
       rekeningUtama: src?.rekeningUtama?.trim() || 'KAS01',
       catatanHeaderNota: src?.catatanHeaderNota?.trim() || '',
       updateTerakhir: src?.updateTerakhir,
@@ -569,6 +595,25 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     }
     return statement?.rekeningUtamaDetail;
   }, [rekeningList, activeProfil.rekeningUtama, statement?.rekeningUtamaDetail]);
+
+  // Pisahkan Saldo Sedang Berjalan (Piutang & Titip belum cair/lunas) vs History Transaksi Selesai (Lunas & Cair)
+  const historyBerjalanList = useMemo<RekeningKoranHistoryItem[]>(() => {
+    if (!statement) return [];
+    if (Array.isArray(statement.historySaldoBerjalan)) {
+      return statement.historySaldoBerjalan;
+    }
+    return (statement.history || []).filter((h) => h.isSaldoBerjalan !== false);
+  }, [statement]);
+
+  const historySelesaiList = useMemo<RekeningKoranHistoryItem[]>(() => {
+    if (!statement) return [];
+    if (Array.isArray(statement.historySelesai)) {
+      return statement.historySelesai;
+    }
+    return (statement.history || []).filter((h) => h.isSaldoBerjalan === false);
+  }, [statement]);
+
+  const displayedRows = ledgerTab === 'SALDO_BERJALAN' ? historyBerjalanList : historySelesaiList;
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1086,13 +1131,34 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {nomHutangPt > 0 && (
+                      <button
+                        type="button"
+                        disabled={partnerActionBusy}
+                        onClick={() => {
+                          setKliringInitialMode('AMBIL_UANG_DULU');
+                          setKliringModalOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                        title="Mitra mengambil uang titipan dulu dengan input nominal bebas tanpa memotong bon (Piutang tetap)"
+                      >
+                        <Wallet className="w-3.5 h-3.5" />
+                        <span>
+                          Ambil Uang Titipan ({formatRupiahSingkat(nomHutangPt)})
+                        </span>
+                      </button>
+                    )}
+
                     {statement.totalBonKeseluruhan > 0 && nomHutangPt > 0 && (
                       <button
                         type="button"
                         disabled={partnerActionBusy}
-                        onClick={() => setKliringModalOpen(true)}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-                        title="Potong silang langsung antara Piutang Mitra dengan Hutang / Titipan PT"
+                        onClick={() => {
+                          setKliringInitialMode('KLIRING_SILANG');
+                          setKliringModalOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                        title="Kliring silang untuk angsur atau lunasi piutang bon dari saldo titipan"
                       >
                         <ArrowRightLeft className="w-3.5 h-3.5" />
                         <span>
@@ -1193,23 +1259,39 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {/* Card 3: TOTAL REKENING MITRA / NOTA SUPPLIER (Piutang - Hutang, Tanpa Ngunci) */}
+                  {/* Card 3: YANG HARUS DIBAYAR (Selisih Piutang vs Hutang/Titip walau belum kliring) */}
                   <div className="bg-emerald-50/70 p-4 rounded-xl border border-emerald-300 shadow-2xs min-w-0 overflow-hidden">
                     <span className="text-[10px] font-bold text-emerald-900 uppercase tracking-wider block truncate">
-                      TOTAL REKENING MITRA / NOTA SUPPLIER
+                      YANG HARUS DIBAYAR (SELISIH AKTIF)
                     </span>
                     <div
                       className={`text-xl font-black mt-1 font-mono tabular-nums truncate whitespace-nowrap ${
-                        totalRekeningMitraNotaSupplier >= 0 ? 'text-emerald-900' : 'text-purple-900'
+                        totalRekeningMitraNotaSupplier > 0
+                          ? 'text-rose-900'
+                          : totalRekeningMitraNotaSupplier < 0
+                            ? 'text-emerald-900'
+                            : 'text-zinc-900'
                       }`}
-                      title={formatRupiah(totalRekeningMitraNotaSupplier)}
+                      title={
+                        totalRekeningMitraNotaSupplier < 0
+                          ? `HUTANG PT KE MITRA: ${formatRupiah(Math.abs(totalRekeningMitraNotaSupplier))}`
+                          : totalRekeningMitraNotaSupplier > 0
+                            ? `PIUTANG MITRA KE PT: ${formatRupiah(totalRekeningMitraNotaSupplier)}`
+                            : 'IMPAS (Rp 0)'
+                      }
                     >
                       {totalRekeningMitraNotaSupplier < 0
-                        ? `-${formatRupiahSingkat(Math.abs(totalRekeningMitraNotaSupplier))}`
-                        : formatRupiahSingkat(totalRekeningMitraNotaSupplier)}
+                        ? `Hutang ${formatRupiahSingkat(Math.abs(totalRekeningMitraNotaSupplier))}`
+                        : totalRekeningMitraNotaSupplier > 0
+                          ? `Piutang ${formatRupiahSingkat(totalRekeningMitraNotaSupplier)}`
+                          : 'Impas Rp 0'}
                     </div>
                     <div className="text-[11px] text-emerald-800 font-medium mt-1 truncate">
-                      Rumus: 1. Piutang − 2. Hutang (Tanpa Ngunci)
+                      {totalRekeningMitraNotaSupplier < 0
+                        ? 'Hutang PT ke Mitra (2. Hutang − 1. Piutang)'
+                        : totalRekeningMitraNotaSupplier > 0
+                          ? 'Piutang Mitra ke PT (1. Piutang − 2. Hutang)'
+                          : 'Piutang & Titip seimbang (Tanpa Ngunci)'}
                     </div>
                   </div>
 
@@ -1629,636 +1711,810 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
             )}
           </div>
 
-          {/* VIEW MODE 1: MODERN RESPONSIVE TABLE VIEW */}
+          {/* TAB PEMISAH: SALDO SEDANG BERJALAN (DEFAULT REKENING KORAN) VS HISTORY TRANSAKSI SELESAI (LUNAS / CAIR) */}
+          <div className="bg-white rounded-xl border border-zinc-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+            <div className="inline-flex rounded-xl border border-zinc-200 bg-zinc-100 p-1 text-xs gap-1">
+              <button
+                type="button"
+                onClick={() => setLedgerTab('SALDO_BERJALAN')}
+                className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                  ledgerTab === 'SALDO_BERJALAN'
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                <span>Rekening Koran Aktif (Saldo Sedang Berjalan)</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                    ledgerTab === 'SALDO_BERJALAN'
+                      ? 'bg-amber-400 text-slate-950 font-extrabold'
+                      : 'bg-zinc-200 text-zinc-700'
+                  }`}
+                >
+                  {historyBerjalanList.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setLedgerTab('HISTORY_SELESAI')}
+                className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                  ledgerTab === 'HISTORY_SELESAI'
+                    ? 'bg-emerald-800 text-white shadow-xs'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                <span>History Transaksi Selesai (Lunas &amp; Cair)</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                    ledgerTab === 'HISTORY_SELESAI'
+                      ? 'bg-emerald-200 text-emerald-950 font-extrabold'
+                      : 'bg-zinc-200 text-zinc-700'
+                  }`}
+                >
+                  {historySelesaiList.length}
+                </span>
+              </button>
+            </div>
+
+            <div className="text-[11px] text-zinc-500">
+              {ledgerTab === 'SALDO_BERJALAN' ? (
+                <span>
+                  Menampilkan <strong>hanya saldo piutang &amp; titipan/upah yang sedang berjalan</strong>. Transaksi yang sudah lunas/cair tersimpan rapi di tab History.
+                </span>
+              ) : (
+                <span>
+                  Arsip riwayat transaksi yang sudah <strong>lunas dibayar</strong> atau <strong>sudah dicairkan</strong> (tidak ikut ditagihkan di Rekening Koran aktif).
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* VIEW MODE 1: MODERN CORPORATE INVOICE TABLE VIEW */}
           {viewMode === 'TABEL' && (
-            <div className="bg-white rounded-xl border border-zinc-200 shadow-2xs overflow-hidden">
-              <div className="p-4 border-b border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-sm font-bold text-zinc-900">
-                    Buku Besar Mutasi: {statement.namaMitra} ({statement.kodeMitra})
-                  </h2>
-                  <p className="text-xs text-zinc-500">
-                    Daftar kronologis lengkap dengan kuantitas (Qty), harga satuan, dan rincian per barang
-                  </p>
+            <div className="bg-white rounded-xl border border-zinc-300 shadow-2xs overflow-hidden">
+              {/* Corporate Mini-Header Banner */}
+              <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <img
+                    src={DEFAULT_PT_LOGO_URL}
+                    alt="Logo PT Wijaya Agro Perkasa"
+                    className="w-12 h-12 rounded-lg object-cover border border-amber-400/50 bg-white p-0.5 shrink-0"
+                  />
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-sm sm:text-base font-black tracking-wide uppercase text-white">
+                        {activeProfil.namaPerusahaan}
+                      </h2>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-400 text-slate-950 uppercase">
+                        {ledgerTab === 'SALDO_BERJALAN' ? 'REKENING KORAN BERJALAN' : 'ARSIP HISTORY LUNAS / CAIR'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 mt-0.5">
+                      Kepada YTH: <strong className="text-white">{statement.namaMitra}</strong> ({statement.kodeMitra}) ·{' '}
+                      {statement.alamat && statement.alamat !== '-' ? `${statement.alamat} · ` : ''}
+                      Telp: {statement.telepon || '-'}
+                    </p>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-zinc-500 font-medium">
-                    {statement.history.length} Catatan Transaksi
-                  </span>
+
+                <div className="bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-right shrink-0">
+                  {(() => {
+                    const sisaBayar = statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip);
+                    const sisaTitip = statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan);
+                    const adaSaldoSilang = statement.totalBonKeseluruhan > 0 && statement.totalTitip > 0;
+                    if (sisaBayar > 0) {
+                      return (
+                        <>
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                            Yang Harus Dibayar (Piutang Mitra)
+                          </div>
+                          <div className="text-base sm:text-lg font-black font-mono tabular-nums text-white">
+                            Piutang {formatRupiah(sisaBayar)}
+                          </div>
+                          {adaSaldoSilang && (
+                            <div className="text-[10px] font-mono tabular-nums text-slate-300">
+                              Piutang {formatRupiahSingkat(statement.totalBonKeseluruhan)} − Titip {formatRupiahSingkat(statement.totalTitip)} · Belum Kliring
+                            </div>
+                          )}
+                        </>
+                      );
+                    }
+                    if (sisaTitip > 0) {
+                      return (
+                        <>
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                            Yang Harus Dibayar (Hutang PT ke Mitra)
+                          </div>
+                          <div className="text-base sm:text-lg font-black font-mono tabular-nums text-emerald-300">
+                            Hutang {formatRupiah(sisaTitip)}
+                          </div>
+                          {adaSaldoSilang && (
+                            <div className="text-[10px] font-mono tabular-nums text-slate-300">
+                              Titip {formatRupiahSingkat(statement.totalTitip)} − Piutang {formatRupiahSingkat(statement.totalBonKeseluruhan)} · Belum Kliring
+                            </div>
+                          )}
+                        </>
+                      );
+                    }
+                    return (
+                      <>
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
+                          Yang Harus Dibayar
+                        </div>
+                        <div className="text-base font-black font-mono tabular-nums text-emerald-300">
+                          {adaSaldoSilang ? 'Impas Rp 0 (Belum Kliring)' : 'LUNAS / IMPAS (Rp 0)'}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left border-collapse">
-                  <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-semibold uppercase tracking-wider text-[10px]">
+                  <thead className="bg-zinc-100 border-b-2 border-zinc-300 text-zinc-800 font-extrabold uppercase tracking-wider text-[10px]">
                     <tr>
-                      <th className="py-3 px-3 w-24">TANGGAL &amp; JAM</th>
-                      <th className="py-3 px-3 w-28">NO. BUKTI</th>
-                      <th className="py-3 px-3 w-28">JENIS</th>
-                      <th className="py-3 px-3">KETERANGAN &amp; RINCIAN</th>
+                      <th className="py-3 px-3 w-10 text-center">NO.</th>
+                      <th className="py-3 px-3 w-24">TANGGAL</th>
+                      <th className="py-3 px-3 min-w-[230px]">ITEM / URAIAN BARANG</th>
                       <th className="py-3 px-3 text-center w-20">QTY</th>
-                      <th className="py-3 px-3 text-right w-24">HARGA SATUAN</th>
-                      <th className="py-3 px-3 text-right w-24">MUTASI BON (+)</th>
-                      <th className="py-3 px-3 text-right w-24">BAYAR BON (-)</th>
-                      <th className="py-3 px-3 text-right font-bold w-28">SALDO BON</th>
-                      <th className="py-3 px-3 text-center w-20">AKSI NEGO</th>
+                      <th className="py-3 px-3 text-right w-28">HARGA</th>
+                      <th className="py-3 px-3 text-right w-32 bg-rose-50/60 text-rose-900">
+                        {ledgerTab === 'SALDO_BERJALAN' ? 'PIUTANG' : 'BON / KELUAR'}
+                      </th>
+                      <th className="py-3 px-3 text-right w-32 bg-emerald-50/60 text-emerald-900">
+                        {ledgerTab === 'SALDO_BERJALAN' ? 'TITIP / HAK' : 'BAYAR / CAIR'}
+                      </th>
+                      <th className="py-3 px-3 min-w-[190px]">KETERANGAN</th>
+                      <th className="py-3 px-3 text-center w-28">AKSI</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-100 text-zinc-800">
-                    {statement.history.length === 0 ? (
+                  <tbody className="divide-y divide-zinc-200 text-zinc-800">
+                    {displayedRows.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="py-8 text-center text-zinc-400">
-                          Belum ada histori transaksi untuk mitra ini
+                        <td colSpan={9} className="py-10 text-center text-zinc-500">
+                          {ledgerTab === 'SALDO_BERJALAN'
+                            ? 'Tidak ada saldo piutang atau titipan yang sedang berjalan (Semua transaksi sudah Lunas / Cair).'
+                            : 'Belum ada riwayat transaksi selesai (lunas / cair) untuk mitra ini.'}
                         </td>
                       </tr>
                     ) : (
-                      statement.history.map((row) => {
-                        const isExpanded = expandedRowId === row.id;
-                        const hasItems = row.itemsDetail && row.itemsDetail.length > 0;
+                      displayedRows.map((row, rowIdx) => {
+                        const items = row.itemsDetail || [];
+                        const isMultiItem = items.length > 1;
+                        const singleItem = items.length === 1 ? items[0] : null;
+                        const parentTxId = row.idTransaksiInduk || row.id;
+                        const sisaNotaIndukVal =
+                          row.sisaPiutangNotaInduk ?? row.sisaPiutangNota ?? row.debet;
+
+                        const nominalPiutangCol =
+                          ledgerTab === 'SALDO_BERJALAN'
+                            ? row.piutangBerjalan ?? row.sisaPiutangNota ?? row.debet
+                            : row.debet;
+                        const nominalTitipCol =
+                          ledgerTab === 'SALDO_BERJALAN'
+                            ? row.titipBerjalan ?? (row.kredit === 0 ? row.nominalMutasiHak || 0 : 0)
+                            : row.kredit > 0
+                            ? row.kredit
+                            : row.nominalMutasiHak || 0;
+
+                        const ketUtama = (row.catatanTransaksi || '').trim();
 
                         return (
-                          <React.Fragment key={row.id}>
-                            <tr className="hover:bg-zinc-50/80 transition-colors">
-                              <td className="py-3 px-3 text-zinc-500 whitespace-nowrap text-[11px]">
-                                <div>{row.tanggal}</div>
-                                <div className="text-[10px] text-zinc-400">{row.jam}</div>
-                              </td>
-                              <td className="py-3 px-3 font-mono font-bold text-zinc-900 whitespace-nowrap text-[11px]">
-                                {row.id}
-                              </td>
-                              <td className="py-3 px-3 whitespace-nowrap">
-                                <span
-                                  className={`text-[10px] font-semibold ${
-                                    row.jenis === 'PENJUALAN_KASBON'
-                                      ? 'text-amber-800'
-                                      : row.jenis === 'KASBON_UANG'
-                                      ? 'text-rose-800'
-                                      : row.jenis === 'BAYAR_BON'
-                                      ? 'text-emerald-800'
-                                      : row.jenis === 'PEMBELIAN_TITIP'
-                                      ? 'text-purple-800 font-bold'
-                                      : row.jenis.includes('UPAH KERJA (BELUM CAIR)')
-                                      ? 'text-amber-700 font-bold'
-                                      : row.jenis.includes('PEMBAYARAN GAJI')
-                                      ? 'text-emerald-700 font-bold'
-                                      : row.jenis.includes('UPAH KERJA')
-                                      ? 'text-slate-600'
-                                      : row.jenis.includes('ANAK_PERUSAHAAN')
-                                      ? 'text-teal-800 font-bold'
-                                      : 'text-zinc-700'
-                                  }`}
-                                >
-                                  {row.jenis.replace(/_/g, ' ')}
-                                </span>
-                              </td>
-                              <td className="py-3 px-3">
-                                <div className="space-y-1">
-                                  <div className="flex items-center justify-between gap-1 flex-wrap">
-                                    <div className="flex items-center space-x-1.5 flex-wrap">
-                                      {row.isNotaLalu && (
-                                        <span className="text-[10px] font-bold text-amber-800">
-                                          [NOTA LALU{row.noNotaLalu ? `: ${row.noNotaLalu}` : ''}]
-                                        </span>
-                                      )}
-                                      {row.debet > 0 && (row.sisaPiutangNota ?? 0) > 0 ? (
-                                        row.isNotaNgunci ? (
-                                          <span className="text-[10px] font-bold text-rose-800">
-                                            [NOTA KUNCI · Sisa: <span className="font-mono tabular-nums">{formatRupiah(row.sisaPiutangNota || 0)}</span>]
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] font-semibold text-amber-800">
-                                            [NOTA PIUTANG · Sisa: <span className="font-mono tabular-nums">{formatRupiah(row.sisaPiutangNota || 0)}</span>]
-                                          </span>
-                                        )
-                                      ) : row.debet > 0 && row.sisaPiutangNota === 0 ? (
-                                        <span className="text-[10px] font-semibold text-emerald-700">
-                                          [LUNAS]
-                                        </span>
-                                      ) : null}
-                                      <span className="font-medium text-zinc-900">{row.keterangan || '-'}</span>
-                                      {row.catatanNgunci && (
-                                        <span className="text-[10px] text-rose-700 font-medium">
-                                          · Kronologi: {row.catatanNgunci}
-                                        </span>
-                                      )}
-                                      {row.nominalMutasiHak && row.nominalMutasiHak > 0 ? (
-                                        <span className="font-mono tabular-nums font-bold text-[11px] text-purple-800">
-                                          · Nilai: {formatRupiah(row.nominalMutasiHak)}
-                                        </span>
-                                      ) : null}
-                                    </div>
+                          <tr key={row.id} className="hover:bg-amber-50/30 transition-colors align-top">
+                            <td className="py-3 px-3 text-center font-mono tabular-nums font-bold text-zinc-500 text-[11px]">
+                              {rowIdx + 1}
+                            </td>
+                            <td className="py-3 px-3 whitespace-nowrap font-mono tabular-nums text-[11px] text-zinc-700">
+                              <div className="font-bold text-zinc-900">{row.tanggal}</div>
+                              <div className="text-[10px] text-zinc-400">{parentTxId}</div>
+                            </td>
 
-                                    <div className="flex items-center space-x-1.5 shrink-0">
-                                      {row.fotoNota && (
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            setPreviewPhoto({
-                                              imageUrl: row.fotoNota!,
-                                              title: `Foto Fisik Nota Manual - ${row.id}`,
-                                              nomorBukti: row.id,
-                                              namaMitra: statement?.namaMitra,
-                                              tanggal: row.tanggal,
-                                              nominalText:
-                                                row.debet > 0
-                                                  ? `+${formatRupiah(row.debet)}`
-                                                  : row.kredit > 0
-                                                  ? `-${formatRupiah(row.kredit)}`
-                                                  : formatRupiah(row.nominalMutasiHak || 0),
-                                              keterangan: row.keterangan,
-                                            })
-                                          }
-                                          className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-semibold text-[10px] flex items-center space-x-1 transition-colors cursor-pointer"
-                                          title="Lihat Foto Fisik Nota Manual"
-                                        >
-                                          <Camera className="w-3 h-3 text-amber-700" />
-                                          <span>Foto Nota</span>
-                                        </button>
-                                      )}
-
-                                      {hasItems && row.itemsDetail!.length > 1 && (
-                                        <button
-                                          type="button"
-                                          onClick={() => setExpandedRowId(isExpanded ? null : row.id)}
-                                          className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5 cursor-pointer font-medium ml-1"
-                                        >
-                                          <span>{row.itemsDetail!.length} item</span>
-                                          {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                                        </button>
-                                      )}
-                                    </div>
+                            {/* ITEM / NAMA BARANG */}
+                            <td className="py-3 px-3">
+                              <div className="space-y-1">
+                                {(row.isNotaLalu || row.isNotaNgunci || row.fotoNota || !row.isNotaSilang) && (
+                                  <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-zinc-500">
+                                    {!row.isNotaSilang && (
+                                      <span className="font-bold uppercase tracking-wide text-zinc-600">
+                                        {row.jenis.replace(/_/g, ' ')}
+                                      </span>
+                                    )}
+                                    {row.isNotaLalu && (
+                                      <span className="font-bold text-amber-800">
+                                        Nota Lalu{row.noNotaLalu ? `: ${row.noNotaLalu}` : ''}
+                                      </span>
+                                    )}
+                                    {row.isNotaNgunci && (
+                                      <span className="font-bold text-rose-700">
+                                        · Nota Kunci
+                                      </span>
+                                    )}
+                                    {row.fotoNota && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setPreviewPhoto({
+                                            imageUrl: row.fotoNota!,
+                                            title: `Bukti Fisik Nota - ${parentTxId}`,
+                                            nomorBukti: parentTxId,
+                                            namaMitra: statement?.namaMitra,
+                                            tanggal: row.tanggal,
+                                            nominalText:
+                                              nominalPiutangCol > 0
+                                                ? formatRupiah(nominalPiutangCol)
+                                                : formatRupiah(nominalTitipCol),
+                                            keterangan: ketUtama || row.keterangan,
+                                          })
+                                        }
+                                        className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-semibold text-[10px] inline-flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Camera className="w-3 h-3 text-amber-700" />
+                                        <span>Foto Nota</span>
+                                      </button>
+                                    )}
                                   </div>
+                                )}
+
+                                {isMultiItem ? (
+                                  <div className="border border-zinc-200 rounded-lg overflow-hidden bg-zinc-50/70">
+                                    <table className="w-full text-[11px] border-collapse">
+                                      <thead className="bg-zinc-100 border-b border-zinc-200 text-[9px] font-bold uppercase text-zinc-600">
+                                        <tr>
+                                          <th className="py-1 px-2 text-left">Nama Barang</th>
+                                          <th className="py-1 px-2 text-center">Qty</th>
+                                          <th className="py-1 px-2 text-right">Harga</th>
+                                          <th className="py-1 px-2 text-right">Jumlah</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-zinc-200/70 bg-white">
+                                        {items.map((it, idx) => (
+                                          <tr key={idx}>
+                                            <td className="py-1 px-2 font-semibold text-zinc-900">
+                                              {idx + 1}. {it.nama}
+                                            </td>
+                                            <td className="py-1 px-2 text-center font-mono tabular-nums text-zinc-700 whitespace-nowrap">
+                                              {it.qty} {it.satuan}
+                                            </td>
+                                            <td className="py-1 px-2 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
+                                              {formatRupiah(it.harga)}
+                                            </td>
+                                            <td className="py-1 px-2 text-right font-mono tabular-nums font-bold text-zinc-900 whitespace-nowrap">
+                                              {formatRupiah(it.subtotal)}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : singleItem ? (
+                                  <div className="font-bold text-zinc-900 text-xs">
+                                    {singleItem.nama}
+                                  </div>
+                                ) : (
+                                  <div className="font-medium text-zinc-900 text-xs">
+                                    {row.keterangan || '-'}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* QTY */}
+                            <td className="py-3 px-3 text-center font-mono tabular-nums font-bold text-zinc-800 whitespace-nowrap text-[11px]">
+                              {isMultiItem
+                                ? `${items.length} Brg`
+                                : singleItem
+                                ? `${singleItem.qty} ${singleItem.satuan}`
+                                : row.qtyDisplay || '-'}
+                            </td>
+
+                            {/* HARGA */}
+                            <td className="py-3 px-3 text-right font-mono tabular-nums text-zinc-700 whitespace-nowrap text-[11px]">
+                              {isMultiItem
+                                ? 'Terlampir'
+                                : singleItem
+                                ? formatRupiah(singleItem.harga)
+                                : row.hargaSatuanDisplay || '-'}
+                            </td>
+
+                            {/* PIUTANG */}
+                            <td className="py-3 px-3 text-right font-mono tabular-nums font-bold text-rose-800 bg-rose-50/20 whitespace-nowrap text-xs">
+                              {nominalPiutangCol > 0 ? formatRupiah(nominalPiutangCol) : '-'}
+                              {ledgerTab === 'SALDO_BERJALAN' &&
+                                row.debet > 0 &&
+                                nominalPiutangCol > 0 &&
+                                nominalPiutangCol < row.debet && (
+                                  <div className="text-[9px] font-normal text-zinc-500">
+                                    Awal: {formatRupiah(row.debet)}
+                                  </div>
+                                )}
+                            </td>
+
+                            {/* TITIP / HAK */}
+                            <td className="py-3 px-3 text-right font-mono tabular-nums font-bold text-emerald-800 bg-emerald-50/20 whitespace-nowrap text-xs">
+                              {nominalTitipCol > 0 ? formatRupiah(nominalTitipCol) : '-'}
+                              {ledgerTab === 'SALDO_BERJALAN' &&
+                                (row.nominalMutasiHak || 0) > 0 &&
+                                nominalTitipCol > 0 &&
+                                nominalTitipCol < (row.nominalMutasiHak || 0) && (
+                                  <div className="text-[9px] font-normal text-zinc-500">
+                                    Awal: {formatRupiah(row.nominalMutasiHak || 0)}
+                                  </div>
+                                )}
+                            </td>
+
+                            {/* KETERANGAN TRANSAKSI (JELAS UNTUK MITRA) */}
+                            <td className="py-3 px-3 text-[11px] text-zinc-800">
+                              {ketUtama ? (
+                                <div className="font-semibold text-zinc-900 leading-snug">
+                                  {ketUtama}
                                 </div>
-                              </td>
+                              ) : row.catatanNgunci ? (
+                                <div className="text-rose-800 font-medium leading-snug">
+                                  Kronologi: {row.catatanNgunci}
+                                </div>
+                              ) : (
+                                <span className="text-zinc-400">-</span>
+                              )}
+                            </td>
 
-                              {/* Quantity Column */}
-                              <td className="py-3 px-3 text-center whitespace-nowrap">
-                                <span className="inline-block px-2 py-0.5 bg-zinc-100 rounded text-zinc-800 font-bold text-[11px]">
-                                  {row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1' : '-')}
-                                </span>
-                              </td>
-
-                              {/* Harga Satuan Column */}
-                              <td className="py-3 px-3 text-right font-mono text-zinc-700 whitespace-nowrap text-[11px]">
-                                {row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-')}
-                              </td>
-
-                              {/* Mutasi Bon (+) */}
-                              <td className="py-3 px-3 text-right font-mono text-rose-700 whitespace-nowrap font-medium text-[11px]">
-                                {row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-'}
-                              </td>
-
-                              {/* Bayar Bon (-) */}
-                              <td className="py-3 px-3 text-right font-mono text-emerald-700 whitespace-nowrap font-medium text-[11px]">
-                                {row.kredit > 0
-                                  ? `-${formatRupiah(row.kredit)}`
-                                  : row.nominalMutasiHak && row.nominalMutasiHak > 0
-                                  ? (
-                                    <span
-                                      className={
-                                        row.kategoriMutasiHak === 'SLIP_GAJI' || row.kategoriMutasiHak === 'TITIP_CAIR'
-                                          ? 'text-emerald-700'
-                                          : 'text-purple-700'
+                            {/* AKSI */}
+                            <td className="py-3 px-3 text-center whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1 flex-wrap justify-center">
+                                {row.debet > 0 && (row.sisaPiutangNota ?? 0) > 0 && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={partnerActionBusy}
+                                      onClick={() =>
+                                        openQuickPayModal({
+                                          idNotaTarget: parentTxId,
+                                          noNotaLabel: row.noNotaLalu || parentTxId,
+                                          sisaNotaTarget: sisaNotaIndukVal || row.debet,
+                                          isTargetNgunci: Boolean(row.isNotaNgunci),
+                                        })
                                       }
+                                      className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold rounded border text-emerald-800 bg-emerald-50 hover:bg-emerald-700 hover:text-white border-emerald-300 transition-colors cursor-pointer"
+                                      title="Terima pembayaran piutang nota ini"
                                     >
-                                      {row.kategoriMutasiHak === 'SLIP_GAJI'
-                                        ? `Cair ${formatRupiah(row.nominalMutasiHak)}`
-                                        : row.kategoriMutasiHak === 'UPAH_TERCATAT'
-                                        ? `+Upah ${formatRupiah(row.nominalMutasiHak)}`
-                                        : row.kategoriMutasiHak === 'UPAH_SUDAH_CAIR'
-                                        ? `Upah ${formatRupiah(row.nominalMutasiHak)}`
-                                        : row.kategoriMutasiHak === 'TITIP_MASUK'
-                                        ? `+Titip ${formatRupiah(row.nominalMutasiHak)}`
-                                        : formatRupiah(row.nominalMutasiHak)}
-                                    </span>
-                                  )
-                                  : '-'}
-                              </td>
+                                      <HandCoins className="w-3 h-3" />
+                                      <span>Bayar</span>
+                                    </button>
 
-                              {/* Saldo Bon Mitra */}
-                              <td className="py-3 px-3 text-right font-mono font-bold text-zinc-900 whitespace-nowrap text-[11px]">
-                                {formatRupiah(row.saldoAkumulasi)}
-                              </td>
-
-                              {/* Aksi Edit Detail / Nego Transaksi, Ubah Status Nota Kunci & Bayar */}
-                              <td className="py-3 px-3 text-center whitespace-nowrap">
-                                <div className="inline-flex items-center gap-1">
-                                  {row.debet > 0 && (row.sisaPiutangNota ?? 0) > 0 && (
-                                    <>
-                                      <button
-                                        type="button"
-                                        disabled={partnerActionBusy}
-                                        onClick={() =>
-                                          openQuickPayModal({
-                                            idNotaTarget: row.id,
-                                            noNotaLabel: row.noNotaLalu || row.id,
-                                            sisaNotaTarget: row.sisaPiutangNota || row.debet,
-                                            isTargetNgunci: Boolean(row.isNotaNgunci),
-                                          })
-                                        }
-                                        className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold rounded border text-emerald-800 bg-emerald-50 hover:bg-emerald-700 hover:text-white border-emerald-300 transition-colors cursor-pointer"
-                                        title={
-                                          row.isNotaNgunci
-                                            ? 'Terima pembayaran nota kunci ini (otomatis mengurangi nominal tidak bisa kembali)'
-                                            : 'Terima pembayaran piutang nota ini'
-                                        }
-                                      >
-                                        <HandCoins className="w-3 h-3" />
-                                        <span>Bayar</span>
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        disabled={partnerActionBusy}
-                                        onClick={() =>
-                                          openModalUbahStatusNota({
-                                            idNota: row.id,
-                                            noNota: row.noNotaLalu || row.id,
-                                            nominal: row.sisaPiutangNota || row.debet,
-                                            targetNgunci: !row.isNotaNgunci,
-                                            currentCatatan: row.catatanNgunci,
-                                          })
-                                        }
-                                        className={`inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold rounded border transition-colors cursor-pointer ${
-                                          row.isNotaNgunci
-                                            ? 'text-emerald-800 bg-white hover:bg-emerald-50 border-emerald-300'
-                                            : 'text-rose-800 bg-rose-50 hover:bg-rose-100 border-rose-200'
-                                        }`}
-                                        title={
-                                          row.isNotaNgunci
-                                            ? 'Pulihkan nota kunci ini kembali menjadi Nota Piutang Aktif'
-                                            : 'Ubah status nota piutang ini menjadi Nota Kunci (uang tidak bisa kembali)'
-                                        }
-                                      >
-                                        {row.isNotaNgunci ? (
-                                          <>
-                                            <Unlock className="w-3 h-3" />
-                                            <span>Ke Aktif</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <Lock className="w-3 h-3" />
-                                            <span>Jadi Kunci</span>
-                                          </>
-                                        )}
-                                      </button>
-                                    </>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setUniversalEditId(row.id)}
-                                    className="inline-flex items-center space-x-1 px-2.5 py-1 text-[10px] font-bold text-zinc-800 hover:text-white bg-zinc-100 hover:bg-zinc-900 rounded border border-zinc-300 hover:border-zinc-900 transition-colors cursor-pointer shadow-2xs"
-                                    title="Edit detail nominal, tonase, qty, harga satuan, rekening, atau tanggal transaksi"
-                                  >
-                                    <Pencil className="w-3 h-3" />
-                                    <span>Edit Detail</span>
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-
-                            {/* Sub-item breakdown row if expanded */}
-                            {isExpanded && hasItems && (
-                              <tr className="bg-amber-50/40">
-                                <td colSpan={10} className="py-2.5 px-6">
-                                  <div className="bg-white rounded-lg border border-amber-200 p-3 space-y-1.5 shadow-2xs">
-                                    <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider block">
-                                      Rincian Item Pembelian Kasbon:
-                                    </span>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                                      {row.itemsDetail!.map((it, idx) => (
-                                        <div
-                                          key={idx}
-                                          className="p-2 bg-zinc-50 rounded border border-zinc-200 text-[11px] flex justify-between items-center"
-                                        >
-                                          <div>
-                                            <div className="font-semibold text-zinc-800">{it.nama}</div>
-                                            <div className="text-[10px] text-zinc-500">
-                                              {it.qty} {it.satuan} &times; {formatRupiah(it.harga)}
-                                            </div>
-                                          </div>
-                                          <div className="font-mono font-bold text-zinc-900">
-                                            {formatRupiah(it.subtotal)}
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </React.Fragment>
+                                    <button
+                                      type="button"
+                                      disabled={partnerActionBusy}
+                                      onClick={() =>
+                                        openModalUbahStatusNota({
+                                          idNota: parentTxId,
+                                          noNota: row.noNotaLalu || parentTxId,
+                                          nominal: sisaNotaIndukVal || row.debet,
+                                          targetNgunci: !row.isNotaNgunci,
+                                          currentCatatan: row.catatanNgunci,
+                                        })
+                                      }
+                                      className={`inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold rounded border transition-colors cursor-pointer ${
+                                        row.isNotaNgunci
+                                          ? 'text-emerald-800 bg-white hover:bg-emerald-50 border-emerald-300'
+                                          : 'text-rose-800 bg-rose-50 hover:bg-rose-100 border-rose-200'
+                                      }`}
+                                    >
+                                      {row.isNotaNgunci ? (
+                                        <>
+                                          <Unlock className="w-3 h-3" />
+                                          <span>Aktifkan</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Lock className="w-3 h-3" />
+                                          <span>Kunci</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setUniversalEditId(parentTxId)}
+                                  className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold text-zinc-800 hover:text-white bg-zinc-100 hover:bg-zinc-900 rounded border border-zinc-300 hover:border-zinc-900 transition-colors cursor-pointer"
+                                  title="Edit detail nominal, qty, harga, keterangan, atau tanggal"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                  <span>Edit</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={partnerActionBusy || deletingTx}
+                                  onClick={() => {
+                                    setDeleteTxError('');
+                                    setDeleteTxTarget({
+                                      idTransaksi: parentTxId,
+                                      tanggal: row.tanggal,
+                                      uraian:
+                                        singleItem?.nama ||
+                                        (isMultiItem ? `${items.length} Barang (${items.map((x) => x.nama).join(', ')})` : '') ||
+                                        row.keterangan ||
+                                        row.jenis.replace(/_/g, ' '),
+                                      nominal:
+                                        nominalPiutangCol ||
+                                        nominalTitipCol ||
+                                        row.debet ||
+                                        row.kredit ||
+                                        row.nominalMutasiHak ||
+                                        0,
+                                      keterangan: ketUtama || undefined,
+                                    });
+                                  }}
+                                  className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-700 rounded border border-rose-200 hover:border-rose-700 transition-colors cursor-pointer"
+                                  title="Hapus transaksi ini (misal salah input / double input)"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Hapus</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
                         );
                       })
                     )}
                   </tbody>
-                  {statement.history.length > 0 && (
-                    <tfoot className="bg-zinc-50 font-bold border-t-2 border-zinc-300">
+                  {ledgerTab === 'SALDO_BERJALAN' && (
+                    <tfoot className="bg-zinc-100 font-bold border-t-2 border-zinc-300 text-xs">
                       <tr>
-                        <td colSpan={6} className="py-3 px-4 text-right uppercase text-[11px] text-zinc-700">
-                          Total Sisa Kewajiban Bon Mitra:
+                        <td colSpan={5} className="py-3 px-4 text-right uppercase text-[11px] text-zinc-700">
+                          Total Saldo Berjalan (Piutang vs Titip/Hak Mitra):
                         </td>
-                        <td colSpan={3} className="py-3 px-4 text-right font-mono text-base text-amber-900">
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-rose-800 bg-rose-50/50">
                           {formatRupiah(statement.totalBonKeseluruhan)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-emerald-800 bg-emerald-50/50">
+                          {formatRupiah(statement.totalTitip)}
+                        </td>
+                        <td colSpan={2} className="py-3 px-4 text-left font-mono tabular-nums text-slate-900">
+                          {(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)) > 0
+                            ? `Yang Harus Dibayar: Piutang ${formatRupiah(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip))}`
+                            : (statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)) > 0
+                            ? `Yang Harus Dibayar: Hutang ${formatRupiah(statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan))}`
+                            : 'IMPAS (Rp 0)'}
                         </td>
                       </tr>
                     </tfoot>
                   )}
                 </table>
               </div>
+
+              {/* Footer Rekening Bank Perusahaan Khas Nota Lama */}
+              <div className="p-4 bg-zinc-50 border-t border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="space-y-0.5">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-zinc-500">
+                    TF REKENING RESMI PERUSAHAAN VIA:
+                  </div>
+                  <div className="font-mono font-bold text-zinc-800 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                    <span>BNI : 035 285 1268</span>
+                    <span>BRI : 8052 0103 2353 539</span>
+                    <span>MANDIRI : 112000 1596 3635</span>
+                  </div>
+                  <div className="text-[11px] font-bold text-slate-700">
+                    A/N : FAHLEVI MARTA WIJAYA
+                  </div>
+                </div>
+                <div className="sm:text-right text-[11px] text-zinc-600">
+                  <div className="font-black text-zinc-900 uppercase">TERIMA KASIH</div>
+                  <div>{activeProfil.namaPerusahaan} — KASIR / ADM</div>
+                </div>
+              </div>
             </div>
           )}
 
-          {/* VIEW MODE 2: AUTHENTIC PRINT PAPER A4 LAYOUT (PERSIS DOKUMEN CETAK & BACKUP HARIAN) */}
+          {/* VIEW MODE 2: MODERN CORPORATE INVOICE A4 PRINT SHEET (MIRIP NOTA PERUSAHAAN) */}
           {viewMode === 'LEMBAR_CETAK' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 text-xs text-indigo-900">
+              <div className="flex items-center justify-between bg-slate-900 text-white rounded-xl px-4 py-3 text-xs">
                 <div className="flex items-center space-x-2">
-                  <FileText className="w-4 h-4 text-indigo-700 shrink-0" />
+                  <FileText className="w-4 h-4 text-amber-400 shrink-0" />
                   <span>
-                    <strong>Mode Lembar Cetak A4 Aktif:</strong> Format tata letak dokumen fisik dengan kop resmi, biodata mitra, tabel mutasi rincian Qty/Harga, dan kolom tanda tangan siap cetak.
+                    <strong>Mode Nota / Rekening Koran Resmi Perusahaan:</strong> Menampilkan tata letak khas nota PT Wijaya Agro Perkasa (Kolom ITEM, QTY, HARGA, PIUTANG, TITIP, KETERANGAN).
                   </span>
                 </div>
                 <button
                   type="button"
                   onClick={handlePrintClick}
-                  className="bg-indigo-700 hover:bg-indigo-800 text-white font-semibold px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow-2xs shrink-0 cursor-pointer"
+                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow-2xs shrink-0 cursor-pointer"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Buka Dialog Cetak / PDF</span>
+                  <span>Cetak / Download PDF</span>
                 </button>
               </div>
 
-              {/* Physical Document Paper Simulation */}
-              <div className="bg-white rounded-xl shadow-md border border-zinc-300 p-6 sm:p-10 space-y-6 max-w-4xl mx-auto text-zinc-900 print:shadow-none print:border-none print:p-0">
-                {/* 1. KOP SURAT RESMI (DINAMIS DARI MENU PROFIL PERUSAHAAN) */}
+              <div className="bg-white rounded-xl shadow-md border-2 border-zinc-800 p-6 sm:p-8 space-y-5 max-w-5xl mx-auto text-zinc-900 print:shadow-none print:border-none print:p-0">
+                {/* 1. KOP NOTA MODERN KHAS PT WIJAYA AGRO PERKASA */}
                 <div className="border-b-2 border-zinc-900 pb-4 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <div className="flex items-center space-x-2">
-                      <Building2 className="w-7 h-7 text-emerald-800 shrink-0" />
-                      <span className="text-2xl font-black text-zinc-900 tracking-tight">
+                  <div className="flex items-start gap-3.5">
+                    <img
+                      src={DEFAULT_PT_LOGO_URL}
+                      alt="Logo PT Wijaya Agro Perkasa"
+                      className="w-16 h-16 rounded-lg object-cover border border-zinc-300 shrink-0"
+                    />
+                    <div className="space-y-0.5">
+                      <h3 className="text-xl font-black text-zinc-900 tracking-tight uppercase">
                         {activeProfil.namaPerusahaan}
-                      </span>
-                    </div>
-                    <p className="text-xs font-bold text-zinc-700">
-                      {activeProfil.badanHukum}
-                    </p>
-                    <p className="text-[11px] text-zinc-500">
-                      {activeProfil.alamat} · Telp: {activeProfil.telepon}
-                      {activeProfil.email && activeProfil.email !== '-' ? ` · Email: ${activeProfil.email}` : ''}
-                    </p>
-                    {activeRekeningUtama && (
-                      <p className="text-[11px] text-zinc-600 font-medium pt-0.5">
-                        Rekening Utama: <span className="font-mono font-semibold">{activeRekeningUtama.nama}</span>
-                        {activeRekeningUtama.nomorRekening ? ` (${activeRekeningUtama.nomorRekening})` : ` (${activeRekeningUtama.kode})`}
-                        {activeRekeningUtama.atasNama ? ` a.n. ${activeRekeningUtama.atasNama}` : ''}
+                      </h3>
+                      <p className="text-[11px] font-semibold text-zinc-700">
+                        {activeProfil.alamat}
                       </p>
-                    )}
-                  </div>
-
-                  <div className="sm:text-right border-t sm:border-t-0 pt-2 sm:pt-0 border-zinc-200">
-                    <span className="text-xs font-black uppercase tracking-wider text-indigo-950 bg-indigo-50 px-3 py-1 rounded border border-indigo-300">
-                      REKENING KORAN MITRA
-                    </span>
-                    <p className="text-[11px] text-zinc-500 font-mono mt-1.5">
-                      No. Dokumen: RK/{statement.kodeMitra}/{now.getFullYear()}{String(now.getMonth() + 1).padStart(2, '0')}{String(now.getDate()).padStart(2, '0')}
-                    </p>
-                    <p className="text-[10px] text-zinc-400">
-                      Dicetak: {tglCetak} · {jamCetak} WIB
-                    </p>
-                  </div>
-                </div>
-
-                {/* 2. IDENTITAS MITRA BOX */}
-                <div className="bg-zinc-50 rounded-lg border border-zinc-300 p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
-                      DATA MITRA / PETANI
-                    </span>
-                    <div className="text-sm font-bold text-zinc-900">
-                      {statement.namaMitra}{' '}
-                      <span className="font-mono text-xs font-normal text-zinc-600">
-                        ({statement.kodeMitra})
-                      </span>
-                    </div>
-                    <div className="text-zinc-600">
-                      Peran: <strong className="text-zinc-800">{statement.role}</strong> · Status: <strong className="text-emerald-700">{statement.status}</strong>
+                      <p className="text-[10px] font-mono font-bold text-zinc-700">
+                        TELPON KASIR 0821 44 999 305 · TELPON ADM 0812 2000 3305
+                      </p>
+                      <p className="text-[10px] text-zinc-600">
+                        EMAIL : {activeProfil.email}
+                      </p>
                     </div>
                   </div>
 
-                  <div className="space-y-1 sm:text-right">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
-                      KONTAK &amp; LOKASI
-                    </span>
-                    <div className="font-medium text-zinc-800">
-                      HP / WA: <span className="font-mono font-bold">{statement.telepon || '-'}</span>
+                  <div className="sm:text-right border border-zinc-800 rounded-lg p-2.5 bg-zinc-50 min-w-[230px]">
+                    <div className="text-xs font-black uppercase tracking-wider text-zinc-900 border-b border-zinc-300 pb-1 mb-1">
+                      INVOICE / REKENING KORAN
                     </div>
-                    <div className="text-zinc-600">
-                      Alamat: {statement.alamat || '-'}
+                    <div className="text-[10px] space-y-0.5 font-mono">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-zinc-500 font-sans">Tanggal:</span>
+                        <strong className="text-zinc-900">{tglCetak}</strong>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-zinc-500 font-sans">Kategori:</span>
+                        <strong className="text-zinc-900">
+                          {getRoleMitraLabel(statement.role, {
+                            isAnakPerusahaan: statement.isAnakPerusahaan,
+                            isKaryawan: statement.isKaryawan,
+                          })}
+                        </strong>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-zinc-500 font-sans">Jenis Buku:</span>
+                        <strong className="text-amber-900">
+                          {ledgerTab === 'SALDO_BERJALAN' ? 'SALDO BERJALAN' : 'HISTORY SELESAI'}
+                        </strong>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                {/* 3. RINGKASAN SALDO 4 BOX */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-                  <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200">
-                    <span className="text-[10px] font-bold text-zinc-500 uppercase">Kasbon Barang</span>
-                    <p className="text-sm font-bold text-zinc-900 mt-0.5">
-                      {formatRupiah(statement.totalKasbonBarang)}
-                    </p>
-                    <span className="text-[9px] text-zinc-400">Pupuk / benih / obat</span>
+                {/* 2. SUB-HEADER KEPADA YTH & KOTAK JUMLAH YANG HARUS DIBAYAR */}
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-stretch">
+                  <div className="sm:col-span-7 border border-zinc-400 rounded-lg p-3.5 text-xs space-y-1 bg-white">
+                    <div className="text-[10px] font-extrabold uppercase tracking-wider text-zinc-500">
+                      KEPADA YTH :
+                    </div>
+                    <div className="grid grid-cols-[75px_1fr] gap-y-0.5 text-[11px]">
+                      <span className="font-semibold text-zinc-600">NAMA</span>
+                      <span className="font-black text-zinc-900 uppercase">
+                        : {statement.namaMitra} ({statement.kodeMitra})
+                      </span>
+                      <span className="font-semibold text-zinc-600">ALAMAT</span>
+                      <span className="font-medium text-zinc-800">: {statement.alamat || '-'}</span>
+                      <span className="font-semibold text-zinc-600">PHONE</span>
+                      <span className="font-mono font-semibold text-zinc-800">: {statement.telepon || '-'}</span>
+                      <span className="font-semibold text-zinc-600">STATUS</span>
+                      <span className="font-bold text-amber-900">
+                        : {statement.totalBonKeseluruhan > statement.totalTitip
+                          ? 'PIUTANG MITRA BERJALAN'
+                          : statement.totalTitip > statement.totalBonKeseluruhan
+                          ? 'HUTANG PT KE MITRA (TITIPAN)'
+                          : 'SALDO IMPAS / LUNAS'}
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="p-3 bg-rose-50/60 rounded-lg border border-rose-200">
-                    <span className="text-[10px] font-bold text-rose-700 uppercase">Kasbon Uang</span>
-                    <p className="text-sm font-bold text-rose-800 mt-0.5">
-                      {formatRupiah(statement.totalKasbonUang)}
-                    </p>
-                    <span className="text-[9px] text-rose-500">Pinjaman tunai aktif</span>
-                  </div>
-
-                  <div className="p-3 bg-amber-50 rounded-lg border-2 border-amber-400 shadow-2xs">
-                    <span className="text-[10px] font-black text-amber-900 uppercase">TOTAL SISA BON</span>
-                    <p className="text-base font-black text-amber-950 mt-0.5 font-mono">
-                      {formatRupiah(statement.totalBonKeseluruhan)}
-                    </p>
-                    <span className="text-[9px] font-semibold text-amber-800">Wajib dibayar mitra</span>
-                  </div>
-
-                  <div className="p-3 bg-purple-50/60 rounded-lg border border-purple-200">
-                    <span className="text-[10px] font-bold text-purple-900 uppercase">Titip Hasil Bumi</span>
-                    <p className="text-sm font-bold text-purple-950 mt-0.5 font-mono tabular-nums">
-                      {formatRupiah(statement.totalTitip)}
-                    </p>
-                    <span className="text-[9px] text-purple-600">Hasil panen tersimpan</span>
+                  <div className="sm:col-span-5 border-2 border-zinc-900 rounded-lg p-3.5 bg-amber-50/70 flex flex-col justify-between">
+                    {(() => {
+                      const sisaBayar = statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip);
+                      const sisaTitip = statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan);
+                      if (sisaBayar > 0) {
+                        return (
+                          <>
+                            <div className="text-[10px] font-black uppercase tracking-wider text-zinc-800">
+                              YANG HARUS DI BAYAR (PIUTANG) :
+                            </div>
+                            <div className="text-xl font-black font-mono tabular-nums text-rose-900 my-1">
+                              PIUTANG {formatRupiah(sisaBayar)}
+                            </div>
+                            <div className="text-[10px] font-mono text-zinc-600 border-t border-amber-300 pt-1 flex justify-between">
+                              <span>Piutang: {formatRupiah(statement.totalBonKeseluruhan)}</span>
+                              <span>Titip: {formatRupiah(statement.totalTitip)}</span>
+                            </div>
+                          </>
+                        );
+                      }
+                      if (sisaTitip > 0) {
+                        return (
+                          <>
+                            <div className="text-[10px] font-black uppercase tracking-wider text-emerald-900">
+                              YANG HARUS DI BAYAR (HUTANG PT) :
+                            </div>
+                            <div className="text-xl font-black font-mono tabular-nums text-emerald-900 my-1">
+                              HUTANG {formatRupiah(sisaTitip)}
+                            </div>
+                            <div className="text-[10px] font-mono text-zinc-600 border-t border-amber-300 pt-1 flex justify-between">
+                              <span>Titip: {formatRupiah(statement.totalTitip)}</span>
+                              <span>Piutang: {formatRupiah(statement.totalBonKeseluruhan)}</span>
+                            </div>
+                          </>
+                        );
+                      }
+                      return (
+                        <>
+                          <div className="text-[10px] font-black uppercase tracking-wider text-zinc-800">
+                            JUMLAH YANG HARUS DI BAYAR :
+                          </div>
+                          <div className="text-xl font-black font-mono tabular-nums text-emerald-800 my-1">
+                            Rp 0 (IMPAS)
+                          </div>
+                          <div className="text-[10px] text-zinc-600">Tidak ada selisih berjalan</div>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
-                {(statement.isAnakPerusahaan || statement.role === 'ANAK_PERUSAHAAN') && (
-                  <div className="p-3.5 bg-teal-50/70 rounded-lg border border-teal-300 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                    <div>
-                      <span className="text-[10px] font-bold text-teal-900 uppercase block">
-                        Saldo Rekening {statement.kodeRekeningTerkait || 'REK-DPPARABO'}
-                      </span>
-                      <span className="text-sm font-black font-mono text-teal-950 tabular-nums">
-                        {formatRupiah(statement.saldoRekeningAnakPerusahaan || 0)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-zinc-600 uppercase block">
-                        Mutasi Masuk / Keluar Rekening
-                      </span>
-                      <span className="text-xs font-mono font-bold text-zinc-800 tabular-nums">
-                        +{formatRupiah(statement.totalSimpanKeAnakPerusahaan || 0)} / -{formatRupiah(statement.totalPakaiDariAnakPerusahaan || 0)}
-                      </span>
-                    </div>
-                    <div className="sm:text-right">
-                      <span className="text-[10px] font-bold text-teal-900 uppercase block">
-                        Posisi Bersih Terpadu
-                      </span>
-                      <span className="text-sm font-black font-mono text-teal-950 tabular-nums">
-                        {formatRupiah(statement.posisiBersihTerpadu || 0)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* 4. TABEL BUKU BESAR MUTASI RINCIAN */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs font-semibold text-zinc-700">
-                    <span>RINCIAN MUTASI TRANSAKSI BUKU BESAR</span>
-                    <span className="text-[10px] text-zinc-400 font-mono">Mata Uang: IDR</span>
-                  </div>
-
-                  <div className="border border-zinc-300 rounded-lg overflow-x-auto">
-                    <table className="w-full text-xs text-left border-collapse">
-                      <thead className="bg-zinc-100 text-zinc-800 font-bold uppercase text-[9px] border-b border-zinc-300">
+                {/* 3. TABEL REKENING KORAN (NO | TANGGAL | ITEM | QTY | HARGA | PIUTANG | TITIP | KETERANGAN) */}
+                <div className="border-2 border-zinc-900 rounded-lg overflow-x-auto">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead className="bg-zinc-900 text-white font-bold uppercase text-[9px]">
+                      <tr>
+                        <th className="py-2 px-2 w-8 text-center">NO.</th>
+                        <th className="py-2 px-2 w-20">TANGGAL</th>
+                        <th className="py-2 px-2.5">ITEM</th>
+                        <th className="py-2 px-2 text-center w-16">QTY</th>
+                        <th className="py-2 px-2 text-right w-24">HARGA</th>
+                        <th className="py-2 px-2 text-right w-26">PIUTANG</th>
+                        <th className="py-2 px-2 text-right w-26">TITIP</th>
+                        <th className="py-2 px-2.5 w-44">KETERANGAN</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-300 text-zinc-900 text-[10px]">
+                      {displayedRows.length === 0 ? (
                         <tr>
-                          <th className="py-2.5 px-2.5 w-20">TGL &amp; JAM</th>
-                          <th className="py-2.5 px-2.5 w-24">NO. BUKTI</th>
-                          <th className="py-2.5 px-2.5 w-24">JENIS</th>
-                          <th className="py-2.5 px-2.5">URAIAN / KETERANGAN BARANG</th>
-                          <th className="py-2.5 px-2 text-center w-16">QTY</th>
-                          <th className="py-2.5 px-2 text-right w-24">HRG SATUAN</th>
-                          <th className="py-2.5 px-2 text-right w-22 whitespace-nowrap">KASBON (+)</th>
-                          <th className="py-2.5 px-2 text-right w-22 whitespace-nowrap">BAYAR (-)</th>
-                          <th className="py-2.5 px-2.5 text-right w-26 whitespace-nowrap">SALDO BON</th>
+                          <td colSpan={8} className="py-8 text-center text-zinc-400">
+                            Tidak ada transaksi saldo berjalan pada rekening koran ini
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-200 text-zinc-900 text-[11px]">
-                        {statement.history.length === 0 ? (
-                          <tr>
-                            <td colSpan={9} className="py-8 text-center text-zinc-400">
-                              Belum ada transaksi pada rekening koran ini
-                            </td>
-                          </tr>
-                        ) : (
-                          statement.history.map((row) => (
-                            <tr key={row.id} className="hover:bg-zinc-50/50">
-                              <td className="py-2 px-2.5 text-zinc-500 text-[10px] whitespace-nowrap">
-                                <div>{row.tanggal}</div>
-                                <div className="text-[9px] text-zinc-400">{row.jam}</div>
-                              </td>
-                              <td className="py-2 px-2.5 font-mono font-medium text-zinc-900 text-[10px] whitespace-nowrap">
-                                {row.id}
-                              </td>
-                              <td className="py-2 px-2.5 font-semibold text-[10px] whitespace-nowrap">
-                                {row.jenis.replace(/_/g, ' ')}
-                              </td>
-                              <td className="py-2 px-2.5 text-zinc-700 text-[10px]">
-                                <div>{row.keterangan || '-'}</div>
-                                {row.itemsDetail && row.itemsDetail.length > 1 && (
-                                  <div className="mt-1 space-y-0.5 text-[9px] text-zinc-500 bg-zinc-50 p-1 rounded border border-zinc-200">
-                                    {row.itemsDetail.map((it, idx) => (
-                                      <div key={idx} className="flex justify-between">
-                                        <span>• {it.nama}</span>
-                                        <span className="font-mono">{it.qty} {it.satuan} @ {formatRupiah(it.harga)}</span>
+                      ) : (
+                        displayedRows.map((row, rIdx) => {
+                          const items = row.itemsDetail || [];
+                          const isMulti = items.length > 1;
+                          const single = items.length === 1 ? items[0] : null;
+                          const piutangVal =
+                            ledgerTab === 'SALDO_BERJALAN'
+                              ? row.piutangBerjalan ?? row.sisaPiutangNota ?? row.debet
+                              : row.debet;
+                          const titipVal =
+                            ledgerTab === 'SALDO_BERJALAN'
+                              ? row.titipBerjalan ?? (row.kredit === 0 ? row.nominalMutasiHak || 0 : 0)
+                              : row.kredit > 0
+                              ? row.kredit
+                              : row.nominalMutasiHak || 0;
+                          const ketNote = (row.catatanTransaksi || row.catatanNgunci || '').trim();
+
+                          return (
+                            <tr key={row.id} className="align-top">
+                              <td className="py-2 px-2 text-center font-mono tabular-nums font-bold">{rIdx + 1}</td>
+                              <td className="py-2 px-2 font-mono tabular-nums whitespace-nowrap">{row.tanggal}</td>
+                              <td className="py-2 px-2.5">
+                                {isMulti ? (
+                                  <div className="space-y-0.5">
+                                    <div className="font-bold text-[9px] uppercase text-indigo-950">
+                                      {row.jenis.replace(/_/g, ' ')}
+                                    </div>
+                                    {items.map((it, idx) => (
+                                      <div key={idx} className="flex justify-between gap-2 text-[10px] border-b border-dotted border-zinc-200 last:border-none py-0.5">
+                                        <span className="font-semibold">
+                                          {idx + 1}. {it.nama}
+                                        </span>
+                                        <span className="font-mono tabular-nums text-zinc-700 whitespace-nowrap">
+                                          {it.qty} {it.satuan} × {formatRupiah(it.harga)} = <strong>{formatRupiah(it.subtotal)}</strong>
+                                        </span>
                                       </div>
                                     ))}
                                   </div>
+                                ) : single ? (
+                                  <div className="font-bold text-zinc-900">{single.nama}</div>
+                                ) : (
+                                  <div className="font-semibold">{row.keterangan || row.jenis.replace(/_/g, ' ')}</div>
                                 )}
                               </td>
-                              <td className="py-2 px-2 text-center font-bold text-zinc-800 text-[10px] whitespace-nowrap">
-                                {row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1' : '-')}
+                              <td className="py-2 px-2 text-center font-mono tabular-nums font-bold whitespace-nowrap">
+                                {isMulti ? `${items.length} Item` : single ? `${single.qty} ${single.satuan}` : row.qtyDisplay || '-'}
                               </td>
-                              <td className="py-2 px-2 text-right font-mono text-zinc-700 text-[10px] whitespace-nowrap">
-                                {row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-')}
+                              <td className="py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap">
+                                {isMulti ? 'Rincian' : single ? formatRupiah(single.harga) : row.hargaSatuanDisplay || '-'}
                               </td>
-                              <td className="py-2 px-2 text-right font-mono text-rose-700 whitespace-nowrap text-[10px]">
-                                {row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-'}
+                              <td className="py-2 px-2 text-right font-mono tabular-nums font-bold text-rose-800 whitespace-nowrap">
+                                {piutangVal > 0 ? formatRupiah(piutangVal) : '-'}
                               </td>
-                              <td className="py-2 px-2 text-right font-mono text-emerald-700 whitespace-nowrap text-[10px]">
-                                {row.kredit > 0
-                                  ? `-${formatRupiah(row.kredit)}`
-                                  : row.nominalMutasiHak && row.nominalMutasiHak > 0
-                                  ? formatRupiah(row.nominalMutasiHak)
-                                  : '-'}
+                              <td className="py-2 px-2 text-right font-mono tabular-nums font-bold text-emerald-800 whitespace-nowrap">
+                                {titipVal > 0 ? formatRupiah(titipVal) : '-'}
                               </td>
-                              <td className="py-2 px-2.5 text-right font-mono font-bold text-zinc-900 whitespace-nowrap text-[10px]">
-                                {formatRupiah(row.saldoAkumulasi)}
+                              <td className="py-2 px-2.5 text-zinc-900 font-semibold">
+                                {ketNote || '-'}
                               </td>
                             </tr>
-                          ))
-                        )}
-                      </tbody>
-                      {statement.history.length > 0 && (
-                        <tfoot className="bg-zinc-100 font-bold border-t-2 border-zinc-300">
-                          <tr>
-                            <td colSpan={6} className="py-2.5 px-3 text-right uppercase text-[10px]">
-                              Total Sisa Saldo Bon:
-                            </td>
-                            <td colSpan={3} className="py-2.5 px-3 text-right font-mono text-amber-900 text-sm">
-                              {formatRupiah(statement.totalBonKeseluruhan)}
-                            </td>
-                          </tr>
-                        </tfoot>
+                          );
+                        })
                       )}
-                    </table>
-                  </div>
+                    </tbody>
+                    <tfoot className="bg-zinc-100 font-bold border-t-2 border-zinc-900 text-[10px]">
+                      <tr>
+                        <td colSpan={5} className="py-2.5 px-3 text-right uppercase">
+                          TOTAL SALDO BERJALAN :
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-mono tabular-nums text-rose-900">
+                          {formatRupiah(statement.totalBonKeseluruhan)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-mono tabular-nums text-emerald-900">
+                          {formatRupiah(statement.totalTitip)}
+                        </td>
+                        <td className="py-2.5 px-2.5 font-mono text-zinc-900">
+                          {(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)) > 0
+                            ? `Piutang: ${formatRupiah(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip))}`
+                            : (statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)) > 0
+                            ? `Hutang: ${formatRupiah(statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan))}`
+                            : 'IMPAS (Rp 0)'}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
                 </div>
 
-                {/* 5. KOLOM TANDA TANGAN RESMI PENGESAHAN DOKUMEN */}
-                <div className="pt-6 border-t border-zinc-200 grid grid-cols-2 gap-8 text-xs text-center text-zinc-600">
-                  <div className="space-y-16">
-                    <div>
-                      <p className="font-semibold text-zinc-800">Penanggung Jawab / Keuangan,</p>
-                      <p className="text-[10px] text-zinc-500">{activeProfil.namaPerusahaan}</p>
+                {/* 4. FOOTER KHAS NOTA LAMA: TF REKENING VIA, STEMPEL PT, & TANDA TANGAN */}
+                <div className="pt-3 grid grid-cols-1 sm:grid-cols-12 gap-4 items-center text-xs">
+                  <div className="sm:col-span-5 border border-zinc-400 rounded-lg p-3 bg-zinc-50 space-y-0.5">
+                    <div className="text-[10px] font-black uppercase text-zinc-800">
+                      TF REKENING VIA :
                     </div>
-                    <div>
-                      <div className="w-44 border-b border-zinc-400 mx-auto" />
-                      <p className="text-[11px] font-bold text-zinc-800 mt-1">( {activeProfil.penanggungJawab} )</p>
+                    <div className="font-mono font-bold text-[11px] text-zinc-900 space-y-0.5">
+                      <div>BNI : 035 285 1268</div>
+                      <div>BRI : 8052 0103 2353 539</div>
+                      <div>MANDIRI : 112000 1596 3635</div>
+                    </div>
+                    <div className="text-[10px] font-extrabold text-zinc-800 pt-0.5">
+                      AN FAHLEVI MARTA WIJAYA
                     </div>
                   </div>
 
-                  <div className="space-y-16">
+                  <div className="sm:col-span-3 flex flex-col items-center justify-center text-center">
+                    <img
+                      src={DEFAULT_PT_LOGO_URL}
+                      alt="Stempel PT Wijaya Agro Perkasa"
+                      className="w-14 h-14 object-contain opacity-90 rounded-full border border-zinc-300 p-0.5"
+                    />
+                    <span className="text-[9px] font-bold uppercase text-zinc-500 mt-1">
+                      DOKUMEN RESMI TERVERIFIKASI
+                    </span>
+                  </div>
+
+                  <div className="sm:col-span-4 text-center sm:text-right space-y-6">
                     <div>
-                      <p className="font-semibold text-zinc-800">Mitra / Petani Penerima,</p>
-                      <p className="text-[10px] text-zinc-500">Konfirmasi Saldo &amp; Bon</p>
+                      <div className="text-xs font-black uppercase text-zinc-900">TERIMA KASIH</div>
+                      <div className="text-[10px] font-bold text-zinc-600">{activeProfil.namaPerusahaan}</div>
                     </div>
-                    <div>
-                      <div className="w-44 border-b border-zinc-400 mx-auto" />
-                      <p className="text-[11px] font-bold text-zinc-800 mt-1">( {statement.namaMitra} )</p>
+                    <div className="pt-2">
+                      <div className="w-40 border-b border-zinc-800 sm:ml-auto mx-auto" />
+                      <div className="text-[10px] font-bold text-zinc-900 mt-1 uppercase">
+                        ( KASIR / {activeProfil.penanggungJawab} )
+                      </div>
                     </div>
                   </div>
-                </div>
-
-                <div className="text-[10px] text-center text-zinc-500 pt-2 space-y-0.5">
-                  {activeProfil.catatanHeaderNota && (
-                    <p className="italic font-medium text-zinc-600">&ldquo;{activeProfil.catatanHeaderNota}&rdquo;</p>
-                  )}
-                  <p className="text-zinc-400 italic">
-                    Dokumen rekening koran ini sah diterbitkan oleh Sistem ERP {activeProfil.namaPerusahaan} sebagai bukti mutasi buku besar mitra.
-                  </p>
                 </div>
 
                 {/* Lampiran Bukti Fisik Nota Lalu */}
-                {statement.history.some((h) => !!h.fotoNota) && (
+                {displayedRows.some((h) => !!h.fotoNota) && (
                   <div className="pt-6 border-t-2 border-dashed border-zinc-300 space-y-4 print-page-break print:break-before-page">
                     <div className="flex items-center justify-between border-b border-zinc-200 pb-2">
                       <div className="flex items-center space-x-2">
                         <Camera className="w-4 h-4 text-amber-600" />
                         <h4 className="text-xs font-bold text-zinc-900 uppercase">
-                          Lampiran Fisik Bukti Nota Lalu Terkait
+                          Lampiran Fisik Bukti Nota Terkait
                         </h4>
                       </div>
                       <span className="text-[10px] text-zinc-500 font-mono">
@@ -2267,7 +2523,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {statement.history
+                      {displayedRows
                         .filter((h) => !!h.fotoNota)
                         .flatMap((h) => {
                           const imgs = (h.fotoNota || '').split('|||').map((s) => s.trim()).filter(Boolean);
@@ -2276,8 +2532,8 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             noNotaLalu: h.noNotaLalu,
                             tanggal: h.tanggal,
                             jenis: h.jenis,
-                            keterangan: h.keterangan,
-                            nominal: h.debet > 0 ? h.debet : h.kredit > 0 ? h.kredit : (h.itemsDetail?.[0]?.subtotal || 0),
+                            keterangan: h.catatanTransaksi || h.keterangan,
+                            nominal: h.piutangBerjalan || h.debet || h.titipBerjalan || h.nominalMutasiHak || 0,
                             img,
                             idx: idx + 1,
                             total: imgs.length,
@@ -2300,7 +2556,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               <span className="text-amber-900 font-mono font-bold">{formatRupiah(att.nominal)}</span>
                             </div>
                             {att.keterangan && (
-                              <div className="text-[9px] text-zinc-500 italic line-clamp-2">
+                              <div className="text-[9px] text-zinc-600 italic line-clamp-2">
                                 {att.keterangan}
                               </div>
                             )}
@@ -2634,15 +2890,14 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
         const bonKotor = statement.totalBonKeseluruhan || 0;
         const titipAktif = statement.totalTitip || 0;
         const maksSinkron = Math.min(bonKotor, titipAktif);
-        const sisaFisik = statement.sisaBonBersih ?? Math.max(0, bonKotor - titipAktif);
+        const sisaFisik = bonKotor;
         const canSinkron = bonKotor > 0 && titipAktif > 0 && maksSinkron > 0;
         const targetMaks = quickPayMetode === 'SINKRON' ? maksSinkron : sisaFisik;
         const nomInput = Math.round(Number(quickPayNominalInput) || 0);
         const isOver = targetMaks > 0 && nomInput > targetMaks;
 
         const nomKunciAwal = statement.nominalNotaNgunci || 0;
-        const totalAlokasi =
-          quickPayMetode === 'SINKRON' ? nomInput : maksSinkron + nomInput;
+        const totalAlokasi = nomInput;
         let estPengurangKunci = 0;
         if (nomInput > 0 && nomKunciAwal > 0) {
           if (quickPayModal.idNotaTarget && quickPayModal.isTargetNgunci === false) {
@@ -2908,6 +3163,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
       <ModalKliringSilangMitra
         isOpen={kliringModalOpen && Boolean(statement)}
         onClose={() => setKliringModalOpen(false)}
+        initialMode={kliringInitialMode}
         mitra={
           statement
             ? {
@@ -2925,8 +3181,18 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
         }
         rekeningList={rekeningList}
         onSuccess={(res, receipt) => {
+          const netHutang = Math.max(0, res.saldoTitipanAkhir - res.sisaKasbonAkhir);
+          const netPiutang = Math.max(0, res.sisaKasbonAkhir - res.saldoTitipanAkhir);
+          const posLabel =
+            netHutang > 0
+              ? `Hutang ${formatRupiah(netHutang)}`
+              : netPiutang > 0
+                ? `Piutang ${formatRupiah(netPiutang)}`
+                : 'Impas Rp 0';
           setEditSuccessMsg(
-            `Kliring Silang ${res.namaMitra} berhasil diproses (${formatRupiah(res.nominalPotongSilang)}).`
+            res.nominalPotongSilang > 0
+              ? `Kliring Silang ${res.namaMitra} berhasil (${formatRupiah(res.nominalPotongSilang)}). Yang Harus Dibayar sekarang: ${posLabel}.`
+              : `Pengambilan uang titipan ${res.namaMitra} (${formatRupiah(res.nominalPenyelesaianFisik || 0)}) tanpa potong bon berhasil. Yang Harus Dibayar sekarang: ${posLabel}.`
           );
           loadStatementData(currentMitraId, true);
           window.dispatchEvent(new CustomEvent('erp:data-updated'));
@@ -2934,6 +3200,93 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           if (onSuccessReceipt) onSuccessReceipt(receipt);
         }}
       />
+      {deleteTxTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden border border-zinc-200 shadow-2xl text-xs">
+            <div className="p-4 bg-rose-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <Trash2 className="w-4 h-4 text-rose-200" />
+                <span>Konfirmasi Hapus Transaksi</span>
+              </div>
+              <button
+                type="button"
+                disabled={deletingTx}
+                onClick={() => setDeleteTxTarget(null)}
+                className="text-rose-200 hover:text-white p-1 rounded cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-zinc-700">
+              <p className="leading-relaxed">
+                Anda akan menghapus transaksi berikut dari Rekening Koran{' '}
+                <strong className="text-zinc-950">{statement?.namaMitra}</strong>:
+              </p>
+              <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] text-zinc-500">
+                  <span className="font-mono font-bold text-zinc-900">{deleteTxTarget.idTransaksi}</span>
+                  <span className="font-mono tabular-nums">{deleteTxTarget.tanggal}</span>
+                </div>
+                <div className="font-bold text-zinc-900 text-xs">{deleteTxTarget.uraian}</div>
+                {deleteTxTarget.keterangan && (
+                  <div className="text-[11px] text-zinc-600">{deleteTxTarget.keterangan}</div>
+                )}
+                <div className="pt-1.5 border-t border-zinc-200 flex items-center justify-between">
+                  <span className="text-zinc-500">Nominal Tercatat:</span>
+                  <span className="font-mono tabular-nums font-extrabold text-rose-800 text-sm">
+                    {formatRupiah(deleteTxTarget.nominal)}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[11px] text-zinc-600 leading-relaxed">
+                Saldo piutang/titipan mitra, saldo kas/bank PT, dan stok gudang terkait akan dikembalikan secara otomatis agar pembukuan tetap akurat.
+              </p>
+              {deleteTxError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 font-semibold text-[11px]">
+                  {deleteTxError}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  disabled={deletingTx}
+                  onClick={() => setDeleteTxTarget(null)}
+                  className="px-4 py-2 rounded-lg text-zinc-700 hover:bg-zinc-100 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingTx}
+                  onClick={async () => {
+                    if (!deleteTxTarget) return;
+                    setDeletingTx(true);
+                    setDeleteTxError('');
+                    try {
+                      const res = await api.deleteTransactionUniversal(deleteTxTarget.idTransaksi);
+                      setDeleteTxTarget(null);
+                      setEditSuccessMsg(
+                        `Transaksi ${res.idTransaksi} berhasil dihapus. Saldo mitra & rekening kas/bank telah disinkronkan otomatis.`
+                      );
+                      await loadStatementData(currentMitraId, true);
+                      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+                      onRefreshParent?.();
+                    } catch (err: any) {
+                      setDeleteTxError(err.message || 'Gagal menghapus transaksi');
+                    } finally {
+                      setDeletingTx(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white font-bold disabled:opacity-50 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{deletingTx ? 'Menghapus...' : 'Ya, Hapus Transaksi'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

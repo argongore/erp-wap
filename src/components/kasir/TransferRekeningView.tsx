@@ -148,18 +148,17 @@ export const TransferRekeningView: React.FC<Props> = ({
       <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-xl text-xs text-sky-950 space-y-1">
         <div className="flex items-center space-x-2 font-bold text-sky-900">
           <Info className="w-4 h-4 text-sky-700" />
-          <span>Aturan Ketat Transfer Antar Rekening:</span>
+          <span>Aturan Transfer Antar Rekening &amp; Rekening Anak Perusahaan (DP Parabot):</span>
         </div>
         <ul className="list-disc list-inside space-y-0.5 text-[11px] text-sky-900 pl-1">
           <li>
-            Murni pergerakan uang internal milik perusahaan sendiri. <strong>TIDAK mempengaruhi</strong> omzet penjualan,
-            pembelian hasil bumi, saldo mitra, ataupun bon.
+            Transfer antar Bank/Kas PT murni pergerakan uang internal tanpa mempengaruhi laba rugi.
           </li>
           <li>
-            <strong>DILARANG</strong> melibatkan rekening virtual BON01 dan TIT01.
+            <strong>Rekening Anak Perusahaan (DP Parabot / REK-DPPARABO):</strong> Jika Bank/Kas Perusahaan melakukan transfer ke <strong>DP Parabot</strong> (misal payment barang toko DP Parabot), otomatis tercatat sebagai <strong>Piutang Anak Perusahaan ke Perusahaan</strong> di Rekening Koran DP Parabot.
           </li>
           <li>
-            Rekening sumber dan tujuan tidak boleh sama. Saldo rekening sumber wajib diverifikasi langsung dari server.
+            <strong>DILARANG</strong> melibatkan rekening virtual BON01 dan TIT01 secara langsung.
           </li>
         </ul>
       </div>
@@ -192,7 +191,7 @@ export const TransferRekeningView: React.FC<Props> = ({
               >
                 {validAccounts.map((r) => (
                   <option key={r.kode} value={r.kode}>
-                    {r.nama} ({r.kode}){isAnakPerusahaanAccount(r) ? ' [Anak Perusahaan & Mitra]' : ''} — Saldo: {formatRupiah(r.saldoSaatIni)}
+                    {isAnakPerusahaanAccount(r) ? `[ANAK PERUSAHAAN] ${r.nama} (${r.kode})` : `${r.nama} (${r.kode})`} — Saldo: {formatRupiah(r.saldoSaatIni)}
                   </option>
                 ))}
               </select>
@@ -216,7 +215,7 @@ export const TransferRekeningView: React.FC<Props> = ({
               >
                 {validAccounts.map((r) => (
                   <option key={r.kode} value={r.kode}>
-                    {r.nama} ({r.kode}){isAnakPerusahaanAccount(r) ? ' [Anak Perusahaan & Mitra]' : ''} — Saldo: {formatRupiah(r.saldoSaatIni)}
+                    {isAnakPerusahaanAccount(r) ? `[ANAK PERUSAHAAN] ${r.nama} (${r.kode})` : `${r.nama} (${r.kode})`} — Saldo: {formatRupiah(r.saldoSaatIni)}
                   </option>
                 ))}
               </select>
@@ -228,16 +227,18 @@ export const TransferRekeningView: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Banner Mode 1 Transaksi Terpadu Anak Perusahaan */}
+            {/* Banner Mode Piutang Anak Perusahaan (DP Parabot) */}
             {isTouchAnakPerusahaan && !isSameAccount && (
-              <div className="p-3 bg-teal-50/80 border border-teal-300 rounded-lg text-xs text-teal-950 space-y-1">
-                <div className="font-bold text-teal-900">
-                  Mode 1 Transaksi Terpadu (Rekening &amp; Mitra Anak Perusahaan)
+              <div className="p-3.5 bg-amber-50/90 border border-amber-300 rounded-lg text-xs text-amber-950 space-y-1">
+                <div className="font-bold text-amber-900">
+                  {isDestAnakPerusahaan
+                    ? `Pencatatan Otomatis: Piutang Anak Perusahaan (${destObj?.nama}) ke Perusahaan`
+                    : `Pelunasan Piutang / Dana Masuk dari Anak Perusahaan (${sourceObj?.nama})`}
                 </div>
                 <p className="text-[11px] text-zinc-700 leading-relaxed">
                   {isDestAnakPerusahaan
-                    ? `Menyimpan dana ke ${destObj?.nama} (${destObj?.kode}) otomatis tercatat sebagai 1 transaksi di Master Rekening sekaligus di Rekening Koran Mitra ${destObj?.nama}.`
-                    : `Menarik / memakai dana dari ${sourceObj?.nama} (${sourceObj?.kode}) otomatis tercatat sebagai 1 transaksi di Master Rekening & Buku Mitra. Jika melebihi saldo tersimpan, otomatis diakui sebagai Dana Talangan Anak Perusahaan ke PT.`}
+                    ? `Transfer dari ${sourceObj?.nama} (${sourceObj?.kode}) ke rekening Anak Perusahaan ${destObj?.nama} (${destObj?.kode}) — misalnya untuk payment barang toko DP Parabot — otomatis mengurangi saldo ${sourceObj?.kode} dan dicatat sebagai PIUTANG ANAK PERUSAHAAN KE PERUSAHAAN pada Rekening Koran ${destObj?.nama}.`
+                    : `Transfer dari ${sourceObj?.nama} (${sourceObj?.kode}) ke ${destObj?.nama} (${destObj?.kode}) otomatis mengurangi Piutang Anak Perusahaan ke Perusahaan (atau menjadi saldo Titipan/Talangan Anak Perusahaan jika melebihi piutang berjalan).`}
                 </p>
               </div>
             )}

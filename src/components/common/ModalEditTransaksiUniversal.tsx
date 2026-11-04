@@ -115,6 +115,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
 }) => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saveSuccess, setSaveSuccess] = useState('');
@@ -217,6 +219,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     let cancelled = false;
     const fetchDetail = async () => {
       setLoading(true);
+      setConfirmDeleteOpen(false);
       setLoadError('');
       setSaveError('');
       setSaveSuccess('');
@@ -2809,15 +2812,76 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               </div>
             </div>
 
+            {/* Inline Konfirmasi Hapus Transaksi */}
+            {confirmDeleteOpen && (
+              <div className="px-5 py-3.5 bg-rose-50 border-t border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="space-y-0.5">
+                  <div className="font-bold text-rose-900">
+                    Hapus permanen transaksi <span className="font-mono">{resolvedId || transactionId}</span>?
+                  </div>
+                  <p className="text-[11px] text-rose-800">
+                    Seluruh mutasi saldo kas/bank, stok gudang, serta piutang/titipan mitra terkait akan dikembalikan otomatis.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={deleting || saving}
+                    onClick={() => setConfirmDeleteOpen(false)}
+                    className="px-3.5 py-2 rounded-lg border border-rose-300 bg-white hover:bg-rose-100 text-rose-900 font-semibold text-xs cursor-pointer"
+                  >
+                    Batal Hapus
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleting || saving}
+                    onClick={async () => {
+                      const targetId = resolvedId || transactionId || '';
+                      if (!targetId) return;
+                      setDeleting(true);
+                      setSaveError('');
+                      try {
+                        await api.deleteTransactionUniversal(targetId, jenis || jenisHint);
+                        window.dispatchEvent(new CustomEvent('erp:data-updated'));
+                        onSuccess();
+                        onClose();
+                      } catch (err: any) {
+                        setSaveError(err.message || 'Gagal menghapus transaksi');
+                        setConfirmDeleteOpen(false);
+                      } finally {
+                        setDeleting(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs disabled:opacity-50 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{deleting ? 'Menghapus...' : 'Ya, Hapus Permanen'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Footer */}
-            <div className="px-5 py-3.5 bg-zinc-50 border-t border-zinc-200 flex items-center justify-between gap-3">
-              <span className="text-[11px] text-zinc-500">
-                Perubahan otomatis memperbarui stok gudang, HPP riil, rekening mitra &amp; saldo kas/bank.
-              </span>
-              <div className="flex items-center gap-2 shrink-0">
+            <div className="px-5 py-3.5 bg-zinc-50 border-t border-zinc-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={saving || deleting}
+                  onClick={() => setConfirmDeleteOpen((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white font-bold text-xs transition-colors disabled:opacity-50 cursor-pointer"
+                  title="Hapus transaksi ini dan kembalikan mutasi saldo/stok otomatis"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Hapus Transaksi</span>
+                </button>
+                <span className="hidden md:inline text-[11px] text-zinc-500">
+                  Perubahan/penghapusan otomatis menyinkronkan stok, rekening mitra &amp; saldo kas/bank.
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 ml-auto">
+                <button
+                  type="button"
+                  disabled={saving || deleting}
                   onClick={onClose}
                   className="px-4 py-2 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-700 font-semibold text-xs cursor-pointer"
                 >
@@ -2825,7 +2889,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                 </button>
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || deleting}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs disabled:opacity-50 cursor-pointer"
                 >
                   {saving ? (

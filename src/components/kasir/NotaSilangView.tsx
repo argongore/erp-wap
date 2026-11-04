@@ -1033,21 +1033,48 @@ export const NotaSilangView: React.FC<Props> = ({
                           {isSesama ? 'Mitra Penyedia' : 'Anak Perusahaan PT'}
                         </div>
                       </td>
-                      <td className="py-3 px-3.5 text-zinc-700">
-                        <div className="space-y-0.5">
-                          {ns.items.map((it, i) => (
-                            <div key={i} className="text-[11px]">
-                              • <strong>{it.namaBarang}</strong> (
-                              <span className="font-mono tabular-nums">
-                                {it.qty} {it.satuan || 'PCS'} × {formatRupiah(it.harga)}
-                              </span>
-                              )
-                            </div>
-                          ))}
+                      <td className="py-3 px-3.5 text-zinc-700 min-w-[280px]">
+                        <div className="border border-zinc-200 rounded-lg overflow-hidden bg-white">
+                          <table className="w-full text-[11px] border-collapse">
+                            <thead className="bg-zinc-50 border-b border-zinc-200 text-[9px] font-bold uppercase text-zinc-500">
+                              <tr>
+                                <th className="py-1 px-2 text-left">Item Barang</th>
+                                <th className="py-1 px-2 text-center">Qty</th>
+                                <th className="py-1 px-2 text-right">Harga</th>
+                                <th className="py-1 px-2 text-right">Subtotal</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-zinc-100">
+                              {ns.items.map((it, i) => (
+                                <tr key={i}>
+                                  <td className="py-1 px-2 font-semibold text-zinc-900">
+                                    {i + 1}. {it.namaBarang}
+                                  </td>
+                                  <td className="py-1 px-2 text-center font-mono tabular-nums text-zinc-700 whitespace-nowrap">
+                                    {it.qty} {it.satuan || 'PCS'}
+                                  </td>
+                                  <td className="py-1 px-2 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
+                                    {formatRupiah(it.harga)}
+                                  </td>
+                                  <td className="py-1 px-2 text-right font-mono tabular-nums font-semibold text-zinc-900 whitespace-nowrap">
+                                    {formatRupiah(it.subtotal || it.qty * it.harga)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
+                        {ns.keterangan && (
+                          <div className="mt-1 text-[10px] text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
+                            <strong>Ket:</strong> {ns.keterangan}
+                          </div>
+                        )}
                       </td>
-                      <td className="py-3 px-3.5 text-right font-mono tabular-nums font-bold text-indigo-900 whitespace-nowrap">
-                        {formatRupiah(ns.totalNominal)}
+                      <td className="py-3 px-3.5 text-right font-mono tabular-nums font-bold text-indigo-900 whitespace-nowrap align-top">
+                        <div>{formatRupiah(ns.totalNominal)}</div>
+                        <div className="text-[10px] font-sans font-normal text-zinc-500">
+                          {ns.items.length} item digabung
+                        </div>
                       </td>
                       <td className="py-3 px-3.5 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">

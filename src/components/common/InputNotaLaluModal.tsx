@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   FileText,
   X,
@@ -71,6 +71,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
   const [catatanNgunci, setCatatanNgunci] = useState<string>('');
 
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const submittingRef = useRef<boolean>(false);
   const [submitStep, setSubmitStep] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
 
@@ -129,6 +130,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current || submitting) return;
     setErrorMsg('');
 
     if (nominal <= 0) {
@@ -136,6 +138,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
     setSubmitStep('Memvalidasi rincian pihak & transaksi...');
 
@@ -148,6 +151,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
         const trimmedNama = namaUmumManual.trim();
         if (!trimmedNama) {
           setErrorMsg('Silakan masukkan nama pihak / orang umum terlebih dahulu.');
+          submittingRef.current = false;
           setSubmitting(false);
           return;
         }
@@ -170,6 +174,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
           setErrorMsg(
             `⚠️ BAHAYA DUPLIKASI: Anda mengetik "${trimmedNama}", tetapi di database sudah ada Mitra: "${highRiskMatch.mitra.nama}" (${highRiskMatch.mitra.kode}). Jika orang ini sama, silakan klik tombol "Pakai Akun Resmi" di kotak sugesti agar piutang/titipan tidak terpecah dua! Jika yakin orang berbeda, klik "Bukan, Ini Orang Berbeda" lalu simpan ulang.`
           );
+          submittingRef.current = false;
           setSubmitting(false);
           return;
         } else {
@@ -190,6 +195,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
       } else {
         if (!finalMitraId) {
           setErrorMsg('Pilih mitra terdaftar terlebih dahulu atau gunakan mode Input Umum.');
+          submittingRef.current = false;
           setSubmitting(false);
           return;
         }
@@ -244,6 +250,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal menyimpan transaksi nota lalu');
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
       setSubmitStep('');
     }

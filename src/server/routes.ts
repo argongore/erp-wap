@@ -1646,6 +1646,35 @@ apiRouter.post('/transaksi/pembelian-hasil-bumi/batch', async (req, res) => {
   }
 });
 
+apiRouter.post('/transaksi/pembelian-hasil-bumi/delete', async (req, res) => {
+  try {
+    const noPembelian = req.body?.noPembelian || req.body?.id;
+    const result = await TransactionService.deletePembelianHasilBumi(String(noPembelian || ''));
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/transaksi/pembelian-hasil-bumi/:noPembelian', async (req, res) => {
+  try {
+    const result = await TransactionService.deletePembelianHasilBumi(req.params.noPembelian);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/rekening/reset-saldo-awal-kasir', async (req, res) => {
+  try {
+    const resetOpname = req.body?.resetOpname !== false;
+    const result = await TransactionService.resetSaldoAwalKasirKeNol({ resetOpname });
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 // Pembukuan NOTA SILANG (Mitra Ambil Barang di Anak Perusahaan misal DP Parabot, PT Sebagai Perantara)
 apiRouter.get('/transaksi/nota-silang', (_req, res) => {
   try {
@@ -2273,6 +2302,28 @@ apiRouter.post('/transaksi/edit-detail', async (req, res) => {
 apiRouter.put('/transaksi/edit-detail', async (req, res) => {
   try {
     const result = await TransactionService.editTransactionDetail(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/transaksi/delete-universal', async (req, res) => {
+  try {
+    const idTransaksi = String(req.body?.idTransaksi || req.body?.id || '').trim();
+    const jenis = req.body?.jenis ? String(req.body.jenis).trim() : undefined;
+    const result = await TransactionService.deleteTransactionUniversal({ idTransaksi, jenis });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/transaksi/universal/:id', async (req, res) => {
+  try {
+    const idTransaksi = String(req.params.id || '').trim();
+    const jenis = req.query.jenis ? String(req.query.jenis).trim() : undefined;
+    const result = await TransactionService.deleteTransactionUniversal({ idTransaksi, jenis });
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });

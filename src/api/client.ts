@@ -166,7 +166,15 @@ export async function requestJson<T = any>(url: string, init?: RequestInit): Pro
     ...((init?.headers as Record<string, string>) || {}),
   };
 
-  const isGet = !init?.method || init.method.toUpperCase() === 'GET';
+  const methodUpper = (init?.method || 'GET').toUpperCase();
+  const isGet = methodUpper === 'GET';
+  if (!isGet && methodUpper !== 'HEAD' && !headers['X-Idempotency-Key'] && !headers['x-idempotency-key']) {
+    const randomPart =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    headers['X-Idempotency-Key'] = randomPart;
+  }
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let res: Response;
@@ -733,6 +741,35 @@ export const api = {
     return data.data;
   },
 
+  deletePembelianHasilBumi: async (
+    noPembelian: string
+  ): Promise<{ deleted: TransaksiPembelianHasilBumi; message?: string }> => {
+    const data = await requestJson('/api/transaksi/pembelian-hasil-bumi/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noPembelian }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus transaksi pembelian hasil bumi');
+    return { ...data.data, message: data.message };
+  },
+
+  resetSaldoAwalKasir: async (resetOpname = true): Promise<{
+    kodeKasir: string;
+    saldoSebelum: number;
+    saldoSesudah: number;
+    selisihDikoreksi: number;
+    saldoAwalKasir: number;
+    message?: string;
+  }> => {
+    const data = await requestJson('/api/rekening/reset-saldo-awal-kasir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resetOpname }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyinkronkan saldo awal kasir ke Rp 0');
+    return { ...data.data, message: data.message };
+  },
+
   // Transaksi BRILink (Uang Masuk: Adm Tarik Tunai | Uang Keluar: Adm Tukar Cash Rupiah PT)
   getBrilinkList: async (): Promise<TransaksiBrilink[]> => {
     const data = await requestJson('/api/transaksi/brilink');
@@ -1179,6 +1216,7 @@ export const api = {
     tanggal?: string;
     keterangan?: string;
     idNotaTarget?: string;
+    potongTitipanOtomatis?: boolean;
   }): Promise<TransaksiBayarBon> => {
     const data = await requestJson('/api/transaksi/bayar-bon', {
       method: 'POST',
@@ -1248,6 +1286,7 @@ export const api = {
       kulakanBarang: number;
       pencairanTitipan: number;
       upahGaji: number;
+      setorKeBerangkas?: number;
       jumlahTransaksi: number;
     };
     arusKasBersih: number;
@@ -1739,6 +1778,8 @@ export const api = {
     metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
     keterangan?: string;
     tanggal?: string;
+    potongBonOtomatis?: boolean;
+    nominalPotongBon?: number;
   }): Promise<TransaksiPencairanTitipan> => {
     const data = await requestJson('/api/transaksi/cairkan-titipan', {
       method: 'POST',
@@ -1922,6 +1963,7 @@ export const api = {
     metodeFisik?: 'TUNAI' | 'TRANSFER';
     rekeningFisik?: string;
     keterangan?: string;
+    tanggal?: string;
   }): Promise<HasilKliringSilangResponse> => {
     const data = await requestJson('/api/kontrol-kasir/kliring-silang', {
       method: 'POST',
@@ -2138,6 +2180,24 @@ export const api = {
     });
     if (!data.success) throw new Error(data.message || 'Gagal memulihkan database');
     return { message: data.message };
+  },
+
+  deleteTransactionUniversal: async (
+    idTransaksi: string,
+    jenis?: string
+  ): Promise<{
+    success: boolean;
+    jenis: string;
+    idTransaksi: string;
+    message: string;
+  }> => {
+    const data = await requestJson('/api/transaksi/delete-universal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idTransaksi, jenis }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus transaksi');
+    return data;
   },
 };
 

@@ -925,13 +925,16 @@ export const BrilinkView: React.FC<Props> = ({
                     setMetodeAdmin('TUNAI');
                     setStepVerifikasi(false);
                   }}
-                  className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                  className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer text-left ${
                     metodeAdmin === 'TUNAI'
                       ? 'bg-zinc-900 text-white border-zinc-900'
                       : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
                   }`}
                 >
-                  Dibayar Tunai (KAS01)
+                  <div className="font-bold text-xs">Bayar Cash → Kasir (KAS01)</div>
+                  <div className={`text-[10px] mt-0.5 ${metodeAdmin === 'TUNAI' ? 'text-emerald-300' : 'text-zinc-500'}`}>
+                    {isTarikTunai ? '+Masuk Kasir & Rekap Uang Masuk' : '−Keluar Kasir KAS01'}
+                  </div>
                 </button>
                 <button
                   type="button"
@@ -939,13 +942,16 @@ export const BrilinkView: React.FC<Props> = ({
                     setMetodeAdmin('TRANSFER');
                     setStepVerifikasi(false);
                   }}
-                  className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                  className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer text-left ${
                     metodeAdmin === 'TRANSFER'
                       ? 'bg-zinc-900 text-white border-zinc-900'
                       : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
                   }`}
                 >
-                  Ikut Masuk Rek Bank
+                  <div className="font-bold text-xs">Ikut Transfer → Bank / BRI</div>
+                  <div className={`text-[10px] mt-0.5 ${metodeAdmin === 'TRANSFER' ? 'text-sky-300' : 'text-zinc-500'}`}>
+                    {isTarikTunai ? `+Masuk ${rekeningAdminBank || 'BRI01'} & Rekap Uang Masuk` : `−Keluar ${rekeningAdminBank || 'BRI01'}`}
+                  </div>
                 </button>
               </div>
 
@@ -964,6 +970,20 @@ export const BrilinkView: React.FC<Props> = ({
                     </option>
                   ))}
                 </select>
+              )}
+
+              {isTarikTunai && (
+                <div className="text-[11px] text-emerald-900 bg-white/80 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+                  {metodeAdmin === 'TUNAI' ? (
+                    <span>
+                      ✓ Admin dibayar <strong>Cash</strong>: otomatis menambah saldo <strong>Kasir (KAS01)</strong>, masuk Divisi BRILink, dan tampil di <strong>Rekapan Transaksi Uang Masuk</strong>.
+                    </span>
+                  ) : (
+                    <span>
+                      ✓ Admin <strong>Ikut Transfer</strong>: otomatis menambah saldo <strong>{rekeningAdminBank || 'BRI01'}</strong>, masuk Divisi BRILink, dan tampil di <strong>Rekapan Transaksi Uang Masuk</strong>.
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           </div>

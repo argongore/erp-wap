@@ -231,8 +231,18 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
 
       setLastKliringResult(res);
       setKeteranganKliring('');
+      const netH = Math.max(0, res.saldoTitipanAkhir - res.sisaKasbonAkhir);
+      const netP = Math.max(0, res.sisaKasbonAkhir - res.saldoTitipanAkhir);
+      const posTxt =
+        netH > 0
+          ? `Hutang ${formatRupiah(netH)}`
+          : netP > 0
+            ? `Piutang ${formatRupiah(netP)}`
+            : 'Impas Rp 0';
       setFeedbackMsg(
-        `Kliring kemitraan ${res.namaMitra} berhasil diproses (Potong Silang: ${formatRupiah(res.nominalPotongSilang)}).`
+        res.nominalPotongSilang > 0
+          ? `Kliring kemitraan ${res.namaMitra} berhasil diproses (Potong Silang: ${formatRupiah(res.nominalPotongSilang)} · Yang Harus Dibayar sekarang: ${posTxt}).`
+          : `Pengambilan uang titipan ${res.namaMitra} (${formatRupiah(res.nominalPenyelesaianFisik || 0)}) tanpa potong bon berhasil diproses (Yang Harus Dibayar sekarang: ${posTxt}).`
       );
       await loadOverview();
       onRefreshParent();
@@ -572,7 +582,7 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
                     <th className="py-2.5 px-3.5 text-right font-semibold">Titipan Panen</th>
                     <th className="py-2.5 px-3.5 text-right font-semibold">Total Kasbon</th>
                     <th className="py-2.5 px-3.5 text-right font-semibold">Bisa Dipotong</th>
-                    <th className="py-2.5 px-3.5 text-right font-semibold">Posisi Bersih</th>
+                    <th className="py-2.5 px-3.5 text-right font-semibold">Yang Harus Dibayar</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200">
@@ -629,12 +639,15 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
                             {formatRupiah(item.potensiPotongSilang)}
                           </td>
                           <td className="py-3 px-3.5 text-right font-mono tabular-nums">
-                            <span className={net >= 0 ? 'text-emerald-800 font-semibold' : 'text-rose-800 font-semibold'}>
-                              {net >= 0 ? '+' : '-'}
-                              {formatRupiah(Math.abs(net))}
+                            <span className={net > 0 ? 'text-emerald-800 font-bold' : net < 0 ? 'text-rose-800 font-bold' : 'text-zinc-700 font-semibold'}>
+                              {net > 0
+                                ? `Hutang ${formatRupiahSingkat(net)}`
+                                : net < 0
+                                  ? `Piutang ${formatRupiahSingkat(Math.abs(net))}`
+                                  : 'Impas Rp 0'}
                             </span>
                             <div className="text-[10px] text-zinc-500">
-                              {net > 0 ? 'Hak Mitra' : net < 0 ? 'Sisa Bon' : 'Impas'}
+                              {net > 0 ? 'Hutang PT ke Mitra' : net < 0 ? 'Piutang Mitra' : 'Seimbang'}
                             </div>
                           </td>
                         </tr>
@@ -707,23 +720,89 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
                       </div>
                     </div>
                   </div>
+                  <div className="pt-2 border-t border-zinc-200 flex items-center justify-between text-xs">
+                    <span className="text-zinc-600 font-semibold">Yang Harus Dibayar (Belum Kliring):</span>
+                    <span
+                      className={`font-mono tabular-nums font-bold ${
+                        activeKliringCandidate.saldoTitipan > activeKliringCandidate.totalKasbon
+                          ? 'text-emerald-800'
+                          : activeKliringCandidate.totalKasbon > activeKliringCandidate.saldoTitipan
+                            ? 'text-rose-800'
+                            : 'text-zinc-800'
+                      }`}
+                    >
+                      {activeKliringCandidate.saldoTitipan > activeKliringCandidate.totalKasbon
+                        ? `HUTANG ${formatRupiah(activeKliringCandidate.saldoTitipan - activeKliringCandidate.totalKasbon)}`
+                        : activeKliringCandidate.totalKasbon > activeKliringCandidate.saldoTitipan
+                          ? `PIUTANG ${formatRupiah(activeKliringCandidate.totalKasbon - activeKliringCandidate.saldoTitipan)}`
+                          : 'IMPAS Rp 0'}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Step 1: Nominal Potong Silang */}
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
                     <label className="font-semibold text-zinc-800">
-                      1. Nominal Potong Bon Silang (Non-Tunai)
+                      1. Nominal Potong / Angsur Bon Silang (Non-Tunai)
                     </label>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setNominalPotongInput(String(activeKliringCandidate.potensiPotongSilang))
-                      }
-                      className="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
-                    >
-                      Maks: {formatRupiah(activeKliringCandidate.potensiPotongSilang)}
-                    </button>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {activeKliringCandidate.saldoTitipan > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNominalPotongInput('0');
+                            setAksiSisa('CAIRKAN_SISA_TITIPAN');
+                            const netHutang = Math.max(
+                              0,
+                              activeKliringCandidate.saldoTitipan - activeKliringCandidate.totalKasbon
+                            );
+                            setNominalFisikInput(
+                              String(
+                                netHutang > 0 ? netHutang : activeKliringCandidate.saldoTitipan
+                              )
+                            );
+                          }}
+                          className="px-2 py-0.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold cursor-pointer"
+                          title="Ambil uang titipan dulu tanpa memotong bon (Piutang tetap)"
+                        >
+                          Ambil Uang Dulu (Rp 0 Potong)
+                        </button>
+                      )}
+                      {activeKliringCandidate.saldoTitipan > activeKliringCandidate.totalKasbon &&
+                        activeKliringCandidate.saldoTitipan - activeKliringCandidate.totalKasbon <
+                          activeKliringCandidate.potensiPotongSilang && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNominalPotongInput(
+                                String(
+                                  activeKliringCandidate.saldoTitipan -
+                                    activeKliringCandidate.totalKasbon
+                                )
+                              );
+                              setAksiSisa('HANYA_POTONG_SILANG');
+                              setNominalFisikInput('0');
+                            }}
+                            className="px-2 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-bold cursor-pointer"
+                          >
+                            Angsur Senilai Hutang (
+                            {formatRupiahSingkat(
+                              activeKliringCandidate.saldoTitipan - activeKliringCandidate.totalKasbon
+                            )}
+                            )
+                          </button>
+                        )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setNominalPotongInput(String(activeKliringCandidate.potensiPotongSilang))
+                        }
+                        className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-white text-[10px] font-bold cursor-pointer"
+                      >
+                        Maks: {formatRupiahSingkat(activeKliringCandidate.potensiPotongSilang)}
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="number"
@@ -848,25 +927,45 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
                 </div>
 
                 {/* Pratinjau Saldo Akhir */}
-                <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center justify-between gap-2 text-xs min-w-0 overflow-hidden">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-zinc-500 truncate">Sisa Titipan Akhir</div>
-                    <div
-                      className="font-mono tabular-nums font-bold text-zinc-900 mt-0.5 truncate whitespace-nowrap"
-                      title={formatRupiah(postPotongPreview.sisaTitipAkhir)}
-                    >
-                      {formatRupiahSingkat(postPotongPreview.sisaTitipAkhir)}
+                <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2 text-xs min-w-0 overflow-hidden">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-zinc-500 truncate">Sisa Titipan Akhir</div>
+                      <div
+                        className="font-mono tabular-nums font-bold text-zinc-900 mt-0.5 truncate whitespace-nowrap"
+                        title={formatRupiah(postPotongPreview.sisaTitipAkhir)}
+                      >
+                        {formatRupiahSingkat(postPotongPreview.sisaTitipAkhir)}
+                      </div>
+                    </div>
+                    <ArrowLeftRight className="w-4 h-4 text-zinc-400 shrink-0" />
+                    <div className="text-right min-w-0 flex-1">
+                      <div className="text-zinc-500 truncate">Sisa Kasbon Akhir</div>
+                      <div
+                        className="font-mono tabular-nums font-bold text-zinc-900 mt-0.5 truncate whitespace-nowrap"
+                        title={formatRupiah(postPotongPreview.sisaBonAkhir)}
+                      >
+                        {formatRupiahSingkat(postPotongPreview.sisaBonAkhir)}
+                      </div>
                     </div>
                   </div>
-                  <ArrowLeftRight className="w-4 h-4 text-zinc-400 shrink-0" />
-                  <div className="text-right min-w-0 flex-1">
-                    <div className="text-zinc-500 truncate">Sisa Kasbon Akhir</div>
-                    <div
-                      className="font-mono tabular-nums font-bold text-zinc-900 mt-0.5 truncate whitespace-nowrap"
-                      title={formatRupiah(postPotongPreview.sisaBonAkhir)}
+                  <div className="pt-2 border-t border-zinc-200 flex items-center justify-between">
+                    <span className="text-zinc-600 font-semibold">Yang Harus Dibayar Sesudahnya:</span>
+                    <strong
+                      className={`font-mono tabular-nums ${
+                        postPotongPreview.sisaTitipAkhir > postPotongPreview.sisaBonAkhir
+                          ? 'text-emerald-800'
+                          : postPotongPreview.sisaBonAkhir > postPotongPreview.sisaTitipAkhir
+                            ? 'text-rose-800'
+                            : 'text-zinc-800'
+                      }`}
                     >
-                      {formatRupiahSingkat(postPotongPreview.sisaBonAkhir)}
-                    </div>
+                      {postPotongPreview.sisaTitipAkhir > postPotongPreview.sisaBonAkhir
+                        ? `HUTANG ${formatRupiah(postPotongPreview.sisaTitipAkhir - postPotongPreview.sisaBonAkhir)}`
+                        : postPotongPreview.sisaBonAkhir > postPotongPreview.sisaTitipAkhir
+                          ? `PIUTANG ${formatRupiah(postPotongPreview.sisaBonAkhir - postPotongPreview.sisaTitipAkhir)}`
+                          : 'IMPAS Rp 0'}
+                    </strong>
                   </div>
                 </div>
 

@@ -23,6 +23,7 @@ import {
   SlidersHorizontal,
   X,
   Save,
+  RotateCcw,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import {
@@ -171,6 +172,9 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
 
   // Photo preview modal state
   const [previewItem, setPreviewItem] = useState<ItemDetailArusKasBos | null>(null);
+  const [showResetKasirModal, setShowResetKasirModal] = useState<boolean>(false);
+  const [resettingKasir, setResettingKasir] = useState<boolean>(false);
+  const [kasirResetMsg, setKasirResetMsg] = useState<string>('');
 
   const fetchRekap = useCallback(async (isoDate: string, silent = false) => {
     if (!silent) setLoading(true);
@@ -200,6 +204,23 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
   const handleManualRefresh = async () => {
     await fetchRekap(selectedIsoDate, false);
     if (onRefreshParent) onRefreshParent();
+  };
+
+  const handleConfirmResetKasir = async () => {
+    setResettingKasir(true);
+    setErrorMsg(null);
+    try {
+      const res = await api.resetSaldoAwalKasir(true);
+      setShowResetKasirModal(false);
+      setKasirResetMsg(res.message || 'Saldo Awal Kasir (KAS01) berhasil diset ke Rp 0 & disinkronkan.');
+      setTimeout(() => setKasirResetMsg(''), 6000);
+      await fetchRekap(selectedIsoDate, false);
+      if (onRefreshParent) onRefreshParent();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal mereset Saldo Awal Kasir ke Rp 0');
+    } finally {
+      setResettingKasir(false);
+    }
   };
 
   // Open modal to input/edit Stok Lama & Harga Rata-Rata Lama
@@ -358,23 +379,31 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
       `  - Bank PT: ${formatRupiah(data.totalUangKeluarBank)}`,
       `• Selisih Arus Kas : *${data.arusKasBersih >= 0 ? '+' : ''}${formatRupiah(data.arusKasBersih)}*`,
       ``,
-      `*2. KESIMPULAN SALDO AKHIR KASIR SEBELUM SETOR BERANGKAS*`,
-      `• Saldo Awal Kasir Pagi      : ${formatRupiah(k.saldoAwalKasirPagi)}`,
+      `*2. REKONSILIASI TUTUP KASIR KE BERANGKAS (${data.tanggal})*`,
+      `• Saldo Awal Kasir Pagi (Per Hari) : ${formatRupiah(k.saldoAwalKasirPagi)} (Mandiri per hari)`,
       ...(k.droppingMasukKasirHariIni > 0
-        ? [`• + Dropping Masuk ke Kasir  : ${formatRupiah(k.droppingMasukKasirHariIni)}`]
+        ? [`• + Dropping Masuk ke Kasir        : ${formatRupiah(k.droppingMasukKasirHariIni)}`]
         : []),
-      `• + Uang Masuk Tunai Kasir   : ${formatRupiah(k.uangMasukOperasionalKasirHariIni)}`,
-      `• - Uang Keluar Tunai Kasir  : ${formatRupiah(k.uangKeluarOperasionalKasirHariIni)}`,
+      `• + Uang Masuk Tunai Kasir         : ${formatRupiah(k.uangMasukOperasionalKasirHariIni)}`,
+      `• - Uang Keluar Tunai Kasir        : ${formatRupiah(k.uangKeluarOperasionalKasirHariIni)}`,
       ...(k.mutasiPokokBrilinkKasirHariIni !== 0
         ? [
-            `• Mutasi Pokok Tunai BRILink : ${k.mutasiPokokBrilinkKasirHariIni >= 0 ? '+' : ''}${formatRupiah(k.mutasiPokokBrilinkKasirHariIni)}`,
+            `• Mutasi Pokok Tunai BRILink       : ${k.mutasiPokokBrilinkKasirHariIni >= 0 ? '+' : ''}${formatRupiah(k.mutasiPokokBrilinkKasirHariIni)}`,
           ]
         : []),
-      `• *= SALDO AKHIR KASIR (SEBELUM KE BERANGKAS): ${formatRupiah(k.saldoAkhirKasirSebelumSetorBerangkas)}*`,
-      `• Sudah Disetor ke Berangkas : ${formatRupiah(k.sudahDisetorKeBerangkasHariIni)}`,
-      `• Sisa Kasir Saat Ini        : *${formatRupiah(k.saldoAkhirKasirPadaTanggal)}*`,
-      `• Saldo BERANGKAS Saat Ini   : *${formatRupiah(k.saldoBerangkasSaatIniLive)}*`,
-      `• Estimasi BERANGKAS (Jika Kasir Dikosongkan): *${formatRupiah(k.estimasiSaldoBerangkasSetelahKosongkanKasir)}*`,
+      ...(k.transferKeluarKeBankLainHariIni > 0
+        ? [`• - Setor Tunai ke Bank Lain       : ${formatRupiah(k.transferKeluarKeBankLainHariIni)}`]
+        : []),
+      `• *= SEBELUM KEMBALI KE BERANGKAS  : ${formatRupiah(k.saldoAkhirKasirSebelumSetorBerangkas)}*`,
+      `• - Sudah Dikembalikan ke Berangkas: ${formatRupiah(k.sudahDisetorKeBerangkasHariIni)}`,
+      `• *= SALDO AKHIR / SELISIH KASIR   : ${k.saldoAkhirKasirPadaTanggal > 0 ? '+' : ''}${formatRupiah(k.saldoAkhirKasirPadaTanggal)}* (${
+        k.saldoAkhirKasirPadaTanggal === 0
+          ? 'TUTUP BUKU PAS RP 0'
+          : k.saldoAkhirKasirPadaTanggal > 0
+          ? 'BELUM KEMBALI KE BERANGKAS'
+          : 'SELISIH LEBIH SETOR / KURANG CATAT MASUK'
+      })`,
+      `• Saldo BERANGKAS Saat Ini         : *${formatRupiah(k.saldoBerangkasSaatIniLive)}*`,
       ``,
       `*3. REKAP STOK & MODAL PEMBELIAN HASIL BUMI*`,
     ];
@@ -487,7 +516,8 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
 
   const todayIso = getTodayIsoWib();
   const kesimpulan = data?.kesimpulanKasirBerangkas;
-  const nominalSiapSetorKeBerangkas = Math.max(0, kesimpulan?.saldoAkhirKasirPadaTanggal || 0);
+  const selisihKasirPadaTanggal = kesimpulan?.saldoAkhirKasirPadaTanggal || 0;
+  const nominalSiapSetorKeBerangkas = Math.max(0, selisihKasirPadaTanggal);
 
   return (
     <div className="space-y-6">
@@ -624,10 +654,10 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
               <Vault className="w-5 h-5 text-amber-400 shrink-0" />
               <div>
                 <h3 className="text-sm sm:text-base font-bold">
-                  Kesimpulan Saldo Akhir Kasir Sebelum Ditransfer ke BERANGKAS ({data?.tanggal})
+                  Rekonsiliasi Harian Kasir &amp; Pengembalian ke {kesimpulan.namaBerangkas} ({data?.tanggal})
                 </h3>
                 <p className="text-[11px] text-slate-300">
-                  Rekonsiliasi uang tunai laci kasir ({kesimpulan.kodeKasir} - {kesimpulan.namaKasir}) sebelum disetor/dikosongkan kembali ke {kesimpulan.kodeBerangkas} ({kesimpulan.namaBerangkas})
+                  Saldo awal kasir dimulai dari Rp 0 setiap hari (tidak menarik transaksi hari lain). Setelah dikembalikan ke {kesimpulan.namaBerangkas}, saldo kasir kembali mengejar Rp 0.
                 </p>
               </div>
             </div>
@@ -640,20 +670,43 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
             {/* Kolom Kiri (7 kolom): Rumus Perhitungan Saldo Akhir Kasir */}
             <div className="lg:col-span-7 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
               <div className="text-xs font-bold uppercase tracking-wider text-slate-500 pb-1 border-b border-slate-200">
-                Perhitungan Pergerakan Uang Tunai Laci Kasir ({kesimpulan.kodeKasir})
+                Perhitungan Pergerakan Uang Tunai Kasir Harian ({kesimpulan.kodeKasir} — Tanggal {data?.tanggal})
               </div>
 
-              <div className="flex items-center justify-between text-xs sm:text-sm py-1">
-                <span className="text-slate-600 font-medium">1. Saldo Awal Kasir Pagi</span>
+              <div className="flex items-center justify-between text-xs sm:text-sm py-1 gap-2">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-slate-700 font-semibold">
+                      1. Saldo Awal Kasir Pagi (Per Hari)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowResetKasirModal(true)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 hover:bg-emerald-700 text-white text-[10px] font-bold cursor-pointer transition-colors"
+                      title="Sinkronkan ulang saldo berjalan master KAS01 dari Rp 0"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5 text-emerald-400" />
+                      <span>Sinkronkan Master KAS01</span>
+                    </button>
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Mandiri per tanggal — tidak menarik transaksi hari berikutnya
+                  </div>
+                </div>
                 <span className="font-mono font-bold text-slate-900 tabular-nums">
                   {formatRupiah(kesimpulan.saldoAwalKasirPagi)}
                 </span>
               </div>
+              {kasirResetMsg && (
+                <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-900 font-semibold">
+                  {kasirResetMsg}
+                </div>
+              )}
 
               {kesimpulan.droppingMasukKasirHariIni > 0 && (
                 <div className="flex items-center justify-between text-xs sm:text-sm py-1">
                   <span className="text-sky-700 font-medium">
-                    + Tambahan Modal / Dropping Masuk ke Kasir
+                    + Tambahan Modal / Dropping Masuk ke Kasir ({data?.tanggal})
                   </span>
                   <span className="font-mono font-bold text-sky-700 tabular-nums">
                     +{formatRupiah(kesimpulan.droppingMasukKasirHariIni)}
@@ -663,7 +716,7 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
 
               <div className="flex items-center justify-between text-xs sm:text-sm py-1">
                 <span className="text-emerald-700 font-medium">
-                  + Total Uang Masuk Tunai di Kasir Hari Ini
+                  + Total Uang Masuk Tunai Operasional Kasir ({data?.tanggal})
                 </span>
                 <span className="font-mono font-bold text-emerald-700 tabular-nums">
                   +{formatRupiah(kesimpulan.uangMasukOperasionalKasirHariIni)}
@@ -672,7 +725,7 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
 
               <div className="flex items-center justify-between text-xs sm:text-sm py-1">
                 <span className="text-rose-700 font-medium">
-                  − Total Uang Keluar Tunai di Kasir Hari Ini
+                  − Total Uang Keluar Tunai Operasional Kasir ({data?.tanggal})
                 </span>
                 <span className="font-mono font-bold text-rose-700 tabular-nums">
                   −{formatRupiah(kesimpulan.uangKeluarOperasionalKasirHariIni)}
@@ -702,14 +755,14 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
                 </div>
               )}
 
-              {/* Highlight Utama: Kesimpulan Saldo Akhir Kasir Sebelum Setor Berangkas */}
+              {/* Highlight Utama: Uang Kasir Sebelum Dikembalikan ke Berangkas */}
               <div className="mt-2 pt-3 border-t-2 border-slate-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-50/90 border border-emerald-300 rounded-xl px-4 py-3">
                 <div>
                   <div className="text-xs font-extrabold uppercase tracking-wide text-emerald-950">
-                    Kesimpulan Saldo Akhir Kasir (Sebelum Ditransfer ke Berangkas)
+                    Uang Kasir Sebelum Dikembalikan ke {kesimpulan.namaBerangkas}
                   </div>
                   <div className="text-[11px] text-emerald-800">
-                    Total fisik uang di kasir yang siap disetor ke {kesimpulan.namaBerangkas} untuk mengosongkan kasir
+                    Total uang tunai kasir tanggal {data?.tanggal} yang wajib kembali ke {kesimpulan.namaBerangkas} agar tutup buku Rp 0
                   </div>
                 </div>
                 <div className="font-mono text-xl sm:text-2xl font-extrabold text-emerald-800 tabular-nums">
@@ -718,38 +771,70 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
               </div>
             </div>
 
-            {/* Kolom Kanan (5 kolom): Status Pengosongan ke BERANGKAS */}
+            {/* Kolom Kanan (5 kolom): Status Pengembalian ke BERANGKAS & Selisih Harian (Target Rp 0) */}
             <div className="lg:col-span-5 flex flex-col justify-between bg-amber-50/60 border border-amber-200 rounded-xl p-4 space-y-3">
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-amber-950">
-                    Status Pengosongan ke {kesimpulan.namaBerangkas} ({kesimpulan.kodeBerangkas})
+                    Tutup Buku ke {kesimpulan.namaBerangkas} ({data?.tanggal})
                   </span>
-                  {nominalSiapSetorKeBerangkas <= 0 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[11px] font-bold">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Kasir Sudah Kosong (Rp 0)
+                  {selisihKasirPadaTanggal === 0 ? (
+                    <span className="inline-flex items-center gap-1 text-emerald-800 text-[11px] font-bold">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>Tutup Buku Pas (Rp 0)</span>
+                    </span>
+                  ) : selisihKasirPadaTanggal > 0 ? (
+                    <span className="text-amber-900 text-[11px] font-bold">
+                      Belum Kembali ke Berangkas
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-amber-200/80 text-amber-950 text-[11px] font-bold">
-                      Belum Dikosongkan
+                    <span className="text-rose-800 text-[11px] font-bold">
+                      Ada Selisih Lebih Setor
                     </span>
                   )}
                 </div>
 
                 <div className="bg-white border border-amber-200 rounded-xl p-3 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-600">Sudah Ditransfer ke Berangkas ({data?.tanggal}):</span>
+                    <span className="text-slate-600">
+                      Uang Kasir Sebelum ke {kesimpulan.namaBerangkas}:
+                    </span>
                     <span className="font-mono font-bold text-slate-900 tabular-nums">
-                      {formatRupiah(kesimpulan.sudahDisetorKeBerangkasHariIni)}
+                      {formatRupiah(kesimpulan.saldoAkhirKasirSebelumSetorBerangkas)}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between pt-1.5 border-t border-slate-100">
-                    <span className="font-semibold text-amber-950">
-                      Nominal Harus Ditransfer agar Kasir Rp 0:
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600">
+                      − Sudah Dikembalikan ke {kesimpulan.namaBerangkas} ({data?.tanggal}):
                     </span>
-                    <span className="font-mono text-sm font-extrabold text-amber-800 tabular-nums">
-                      {formatRupiah(nominalSiapSetorKeBerangkas)}
+                    <span className="font-mono font-bold text-emerald-800 tabular-nums">
+                      −{formatRupiah(kesimpulan.sudahDisetorKeBerangkasHariIni)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+                    <div>
+                      <div className="font-bold text-slate-900">
+                        = Saldo Akhir / Selisih Kasir ({data?.tanggal})
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {selisihKasirPadaTanggal === 0
+                          ? 'Sudah kembali ke Berangkas dengan pas (Rp 0)'
+                          : selisihKasirPadaTanggal > 0
+                          ? `Kurang dikembalikan ${formatRupiah(nominalSiapSetorKeBerangkas)} agar Rp 0`
+                          : `Lebih dikembalikan / kurang catat uang masuk ${formatRupiah(Math.abs(selisihKasirPadaTanggal))}`}
+                      </div>
+                    </div>
+                    <span
+                      className={`font-mono text-base font-extrabold tabular-nums ${
+                        selisihKasirPadaTanggal === 0
+                          ? 'text-emerald-700'
+                          : selisihKasirPadaTanggal > 0
+                          ? 'text-amber-800'
+                          : 'text-rose-700'
+                      }`}
+                    >
+                      {selisihKasirPadaTanggal > 0 ? '+' : ''}
+                      {formatRupiah(selisihKasirPadaTanggal)}
                     </span>
                   </div>
                 </div>
@@ -757,25 +842,31 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
 
               <div className="bg-slate-900 text-white rounded-xl p-3.5 space-y-2">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-300">Saldo {kesimpulan.namaBerangkas} Saat Ini:</span>
+                  <span className="text-slate-300">
+                    Saldo {kesimpulan.namaBerangkas} Saat Ini (Live):
+                  </span>
                   <span className="font-mono font-bold text-white tabular-nums">
                     {formatRupiah(kesimpulan.saldoBerangkasSaatIniLive)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-300">Saldo Kasir ({kesimpulan.kodeKasir}) Saat Ini:</span>
+                  <span className="text-slate-300">
+                    Saldo Master {kesimpulan.kodeKasir} Saat Ini (Live):
+                  </span>
                   <span className="font-mono font-bold text-amber-300 tabular-nums">
                     {formatRupiah(kesimpulan.saldoKasirSaatIniLive)}
                   </span>
                 </div>
-                <div className="pt-2 border-t border-slate-700 flex items-center justify-between">
-                  <span className="text-xs font-bold text-emerald-300">
-                    Saldo Berangkas Setelah Kasir Dikosongkan:
-                  </span>
-                  <span className="font-mono text-base font-extrabold text-emerald-400 tabular-nums">
-                    {formatRupiah(kesimpulan.estimasiSaldoBerangkasSetelahKosongkanKasir)}
-                  </span>
-                </div>
+                {kesimpulan.isTanggalHariIni && nominalSiapSetorKeBerangkas > 0 && (
+                  <div className="pt-2 border-t border-slate-700 flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-300">
+                      Estimasi {kesimpulan.namaBerangkas} Setelah Tutup Kasir:
+                    </span>
+                    <span className="font-mono text-base font-extrabold text-emerald-400 tabular-nums">
+                      {formatRupiah(kesimpulan.estimasiSaldoBerangkasSetelahKosongkanKasir)}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1731,6 +1822,50 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
         nominalText={previewItem ? formatRupiah(previewItem.nominalTotal) : undefined}
         keterangan={previewItem?.deskripsi}
       />
+
+      {showResetKasirModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full overflow-hidden border border-slate-200 shadow-2xl text-xs">
+            <div className="p-4 bg-slate-900 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <RotateCcw className="w-4 h-4 text-emerald-400" />
+                <span>Set Saldo Awal Kasir (KAS01) = Rp 0</span>
+              </div>
+              <button
+                type="button"
+                disabled={resettingKasir}
+                onClick={() => setShowResetKasirModal(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-slate-700">
+              <p className="leading-relaxed">
+                Mengatur <strong>Saldo Awal Kasir (KAS01) menjadi Rp 0</strong> dan menyinkronkan ulang saldo kasir berdasarkan seluruh mutasi kasir riil agar tidak ada selisih saldo awal.
+              </p>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  disabled={resettingKasir}
+                  onClick={() => setShowResetKasirModal(false)}
+                  className="px-3.5 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={resettingKasir}
+                  onClick={handleConfirmResetKasir}
+                  className="px-4 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold cursor-pointer"
+                >
+                  {resettingKasir ? 'Menyinkronkan...' : 'Ya, Set Saldo Awal = Rp 0'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

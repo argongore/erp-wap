@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   HandCoins,
   X,
@@ -48,6 +48,8 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
   const [fotoNota, setFotoNota] = useState<string>('');
 
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const submittingRef = useRef<boolean>(false);
+  const wasOpenRef = useRef<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [internalRekening, setInternalRekening] = useState<Rekening[]>(rekeningList);
 
@@ -60,10 +62,20 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
   }, [preselectedMitraId, activeMitras, selectedMitraId]);
 
   useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      submittingRef.current = false;
+      setNoReferensi(`PJM-${Date.now().toString().slice(-4)}`);
+      setKeterangan('');
+      setFotoNota('');
+      setErrorMsg('');
+      setTanggal(dmyToIsoInput());
+    } else if (!isOpen && wasOpenRef.current) {
+      wasOpenRef.current = false;
+      submittingRef.current = false;
+    }
+
     if (isOpen) {
-      if (!noReferensi) {
-        setNoReferensi(`PJM-${Date.now().toString().slice(-4)}`);
-      }
       if (rekeningList.length === 0) {
         api.getRekening().then((res) => {
           if (Array.isArray(res)) {
@@ -78,7 +90,7 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
         }
       }
     }
-  }, [isOpen, rekeningList, noReferensi, selectedRekeningKode]);
+  }, [isOpen, rekeningList, selectedRekeningKode]);
 
   if (!isOpen) return null;
 
@@ -88,6 +100,7 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current || submitting) return;
     setErrorMsg('');
 
     if (!selectedMitraId) {
@@ -105,6 +118,7 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
       return;
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       const fotos = fotoNota ? fotoNota.split('|||').map((s) => s.trim()).filter(Boolean) : [];
@@ -124,6 +138,7 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal mencatat transaksi pinjam uang');
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };

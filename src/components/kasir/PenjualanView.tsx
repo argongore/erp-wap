@@ -277,7 +277,7 @@ export const PenjualanView: React.FC<Props> = ({
     'TUNAI' | 'TRANSFER' | 'KASBON' | 'SINKRON' | 'INTERNAL_PT' | 'PEMAKAIAN_PENGELUARAN'
   >('TUNAI');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(availableBanks[0]?.kode || 'BNI01');
-  const [divisi, setDivisi] = useState<string>('CV Wijaya Agro');
+  const [divisi, setDivisi] = useState<string>('Wijaya Karya');
   const [tanggalInput, setTanggalInput] = useState<string>(dmyToIsoInput());
   const [keterangan, setKeterangan] = useState<string>('');
 
@@ -468,6 +468,23 @@ export const PenjualanView: React.FC<Props> = ({
       }
     }
   }, [cart]);
+
+  // Auto-sync Divisi: Semua Barang Toko -> Wijaya Karya, kecuali Kategori OKUSSA -> Okussa
+  useEffect(() => {
+    if (metode === 'INTERNAL_PT' || metode === 'PEMAKAIAN_PENGELUARAN') return;
+    if (cart.length > 0) {
+      const allOkussa = cart.every((it) => {
+        const p = produkList.find((pr) => pr.kode === it.kodeProduk);
+        return String(p?.kategori || '').toUpperCase().includes('OKUSSA');
+      });
+      const targetDiv = allOkussa ? 'Okussa' : 'Wijaya Karya';
+      if (divisi !== targetDiv) setDivisi(targetDiv);
+    } else if (currentProduct) {
+      const isOkussa = String(currentProduct.kategori || '').toUpperCase().includes('OKUSSA');
+      const targetDiv = isOkussa ? 'Okussa' : 'Wijaya Karya';
+      if (divisi !== targetDiv) setDivisi(targetDiv);
+    }
+  }, [cart, currentProduct?.kode, currentProduct?.kategori, metode]);
 
   const handleResetToSuggestion = () => {
     setHargaNegoInput(currentSugestiPrice);
@@ -2041,6 +2058,15 @@ export const PenjualanView: React.FC<Props> = ({
                   </p>
                 </div>
               )}
+
+              <div className="p-2.5 rounded-lg bg-emerald-950/50 border border-emerald-800/80 text-[11px] text-emerald-200 flex items-center justify-between gap-2">
+                <span>
+                  <strong>Aturan Otomatis Arus Kas Barang Toko:</strong> Semua produk toko masuk ke <strong>Wijaya Karya</strong>, kecuali kategori <strong>OKUSSA</strong> otomatis masuk ke <strong>Okussa</strong>.
+                </span>
+                <span className="px-2 py-0.5 rounded bg-emerald-900 text-emerald-100 font-mono font-bold shrink-0">
+                  {divisi}
+                </span>
+              </div>
 
               <ArusKasDivisiSelectorCard
                 direction="MASUK"

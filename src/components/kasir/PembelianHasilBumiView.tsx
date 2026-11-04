@@ -21,6 +21,7 @@ import {
   Plus,
   ShoppingCart,
   Trash2,
+  RotateCcw,
 } from 'lucide-react';
 import {
   DAFTAR_ROLE_MITRA,
@@ -163,6 +164,11 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   const [showTambahBarangModal, setShowTambahBarangModal] = useState<boolean>(false);
   const [localAddedKomoditas, setLocalAddedKomoditas] = useState<StokHasilBumi[]>([]);
   const [editTxId, setEditTxId] = useState<string | null>(null);
+  const [deleteTargetTx, setDeleteTargetTx] = useState<TransaksiPembelianHasilBumi | null>(null);
+  const [deletingTx, setDeletingTx] = useState<boolean>(false);
+  const [showResetKasirModal, setShowResetKasirModal] = useState<boolean>(false);
+  const [resettingKasir, setResettingKasir] = useState<boolean>(false);
+  const [actionSuccessMsg, setActionSuccessMsg] = useState<string>('');
 
   const mergedHasilBumiList = React.useMemo(() => {
     const map = new Map<string, StokHasilBumi>();
@@ -299,6 +305,40 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       } else {
         setHargaPerKgInput(kom.hargaBeliStandar.toString());
       }
+    }
+  };
+
+  const handleConfirmDeleteTx = async () => {
+    if (!deleteTargetTx) return;
+    setDeletingTx(true);
+    setErrorMsg('');
+    try {
+      const res = await api.deletePembelianHasilBumi(deleteTargetTx.noPembelian);
+      setDeleteTargetTx(null);
+      setActionSuccessMsg(res.message || `Transaksi ${deleteTargetTx.noPembelian} berhasil dihapus & stok/saldo dikembalikan.`);
+      setTimeout(() => setActionSuccessMsg(''), 6000);
+      await loadTransactions(true);
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal menghapus transaksi pembelian hasil bumi');
+    } finally {
+      setDeletingTx(false);
+    }
+  };
+
+  const handleConfirmResetKasir = async () => {
+    setResettingKasir(true);
+    setErrorMsg('');
+    try {
+      const res = await api.resetSaldoAwalKasir(true);
+      setShowResetKasirModal(false);
+      setActionSuccessMsg(res.message || 'Saldo Awal Kasir (KAS01) berhasil diset ke Rp 0 dan disinkronkan.');
+      setTimeout(() => setActionSuccessMsg(''), 6000);
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal mereset Saldo Awal Kasir ke Rp 0');
+    } finally {
+      setResettingKasir(false);
     }
   };
 
@@ -651,8 +691,34 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             <Scale className="w-4 h-4 text-amber-200" />
             <span>Input Rekap Stok Lama &amp; Rata-rata Beli</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setShowResetKasirModal(true)}
+            className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer shrink-0"
+            title="Set Saldo Awal Kasir (KAS01) menjadi Rp 0 dan sinkronkan saldo laci kasir sesuai mutasi riil"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Set Saldo Awal Kasir = Rp 0</span>
+          </button>
         </div>
       </div>
+
+      {actionSuccessMsg && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 flex items-center justify-between gap-2">
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+            <span className="font-semibold">{actionSuccessMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionSuccessMsg('')}
+            className="text-emerald-800 font-bold hover:underline cursor-pointer shrink-0"
+          >
+            Tutup
+          </button>
+        </div>
+      )}
 
       {errorMsg && (
         <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center space-x-2">
@@ -877,33 +943,95 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               )}
             </div>
 
-            <div>
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <label className="block text-[11px] text-zinc-500">
-                  Jenis Barang Hasil Bumi ({mergedHasilBumiList.length} Komoditas)
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="block text-xs font-bold text-zinc-800">
+                  Pilih Jenis Barang / Komoditas Hasil Bumi ({mergedHasilBumiList.length} Komoditas — Klik Kotak Pilihan)
                 </label>
                 <button
                   type="button"
                   onClick={() => setShowTambahBarangModal(true)}
-                  className="text-[11px] flex items-center space-x-1 text-emerald-800 font-bold hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300 transition-colors cursor-pointer"
+                  className="text-[11px] flex items-center space-x-1 text-emerald-800 font-bold hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg border border-emerald-300 transition-colors cursor-pointer shrink-0"
                 >
-                  <Plus className="w-3 h-3" />
-                  <span>+ Tambah Barang Hasil Bumi Baru</span>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Komoditas Baru</span>
                 </button>
               </div>
-              <select
-                value={selectedKomoditasKode}
-                onChange={(e) => handleKomoditasChange(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-amber-600"
-              >
-                {mergedHasilBumiList.map((hb, idx) => (
-                  <option key={hb.kode} value={hb.kode}>
-                    No {idx + 1}. {hb.nama} ({hb.kode}) — Stok: {hb.stok.toLocaleString('id-ID')} {hb.satuan}{' '}
-                    {hb.isBelumPutusHarga || hb.kode === 'HB-08' ? '★ BELUM PUTUS HARGA' : ''}
-                  </option>
-                ))}
-                <option value="__ADD_NEW__">+ Tambah Barang Hasil Bumi Baru...</option>
-              </select>
+
+              {/* Grid Kotak Pilihan Komoditas — Tanpa Dropdown Kecil */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                {mergedHasilBumiList.map((hb, idx) => {
+                  const isSelected = selectedKomoditasKode === hb.kode;
+                  const isTitipType =
+                    Boolean(hb.isBelumPutusHarga) ||
+                    hb.kode === 'HB-08' ||
+                    hb.nama.toUpperCase().includes('TITIP');
+
+                  return (
+                    <button
+                      key={hb.kode}
+                      type="button"
+                      onClick={() => handleKomoditasChange(hb.kode)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between min-h-[88px] ${
+                        isSelected
+                          ? 'bg-amber-50/90 border-amber-600 ring-2 ring-amber-500/25 shadow-xs'
+                          : 'bg-white border-zinc-200 hover:border-amber-400 hover:bg-amber-50/30'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-1.5">
+                        <span
+                          className={`text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+                            isSelected
+                              ? 'bg-amber-700 text-white'
+                              : 'bg-zinc-100 text-zinc-600'
+                          }`}
+                        >
+                          #{idx + 1} · {hb.kode}
+                        </span>
+                        {isSelected ? (
+                          <span className="w-4 h-4 rounded-full bg-amber-600 text-white flex items-center justify-center shrink-0">
+                            <Check className="w-3 h-3" />
+                          </span>
+                        ) : isTitipType ? (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
+                            TITIP
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-2 font-extrabold text-xs sm:text-[13px] leading-snug text-zinc-900 uppercase tracking-tight">
+                        {hb.nama}
+                      </div>
+
+                      <div className="mt-2 pt-1.5 border-t border-zinc-200/80 flex items-center justify-between gap-1 text-[10px] font-mono tabular-nums">
+                        <span className="text-zinc-600 font-semibold">
+                          Stok: <strong className="text-zinc-900">{hb.stok.toLocaleString('id-ID')}</strong> {hb.satuan}
+                        </span>
+                        <span
+                          className={`font-bold ${
+                            isTitipType ? 'text-amber-700' : 'text-emerald-700'
+                          }`}
+                        >
+                          {isTitipType
+                            ? 'Belum Putus'
+                            : hb.hargaBeliStandar > 0
+                            ? `${formatRupiah(hb.hargaBeliStandar)}`
+                            : '-'}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => setShowTambahBarangModal(true)}
+                  className="p-3 rounded-xl border-2 border-dashed border-emerald-300 bg-emerald-50/40 hover:bg-emerald-50 hover:border-emerald-500 text-emerald-900 transition-all cursor-pointer flex flex-col items-center justify-center text-center min-h-[88px] gap-1"
+                >
+                  <Plus className="w-5 h-5 text-emerald-700" />
+                  <span className="text-xs font-bold leading-tight">+ Tambah Komoditas Baru</span>
+                </button>
+              </div>
             </div>
 
             {/* Live Balance & Rekap Lama Status for the Selected Commodity */}
@@ -1491,6 +1619,15 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                           <Pencil className="w-3 h-3" />
                           <span>Edit</span>
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTargetTx(tx)}
+                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1 cursor-pointer"
+                          title="Hapus transaksi hasil bumi ini & kembalikan stok gudang"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Hapus</span>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1581,14 +1718,25 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                       )}
                     </td>
                     <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => setEditTxId(tx.noPembelian)}
-                        className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
-                      >
-                        <Pencil className="w-3 h-3" />
-                        <span>Edit Detail</span>
-                      </button>
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEditTxId(tx.noPembelian)}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTargetTx(tx)}
+                          className="inline-flex items-center space-x-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                          title="Hapus transaksi pembelian hasil bumi ini & kembalikan stok/saldo"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Hapus</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -2055,6 +2203,123 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           loadTransactions();
         }}
       />
+
+      {/* Modal Konfirmasi Hapus Transaksi Pembelian Hasil Bumi */}
+      {deleteTargetTx && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full overflow-hidden border border-zinc-200 shadow-2xl text-xs">
+            <div className="p-4 bg-rose-700 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Trash2 className="w-4 h-4" />
+                <span>Hapus Transaksi {deleteTargetTx.noPembelian}?</span>
+              </div>
+              <button
+                type="button"
+                disabled={deletingTx}
+                onClick={() => setDeleteTargetTx(null)}
+                className="text-rose-200 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-zinc-700">
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Petani / Mitra:</span>
+                  <strong className="text-zinc-900">{deleteTargetTx.namaMitra}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Komoditas &amp; Netto:</span>
+                  <strong className="font-mono text-zinc-900">
+                    {deleteTargetTx.komoditasNama} ({deleteTargetTx.beratBersih.toLocaleString('id-ID')} Kg)
+                  </strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Total Nominal:</span>
+                  <strong className="font-mono text-rose-800">{formatRupiah(deleteTargetTx.totalNominal)}</strong>
+                </div>
+              </div>
+              <p className="leading-relaxed text-zinc-600">
+                Menghapus transaksi ini akan otomatis <strong>mengurangi kembali stok fisik gudang</strong> serta{' '}
+                <strong>mengembalikan saldo Kas/Bank atau saldo Titip Mitra</strong> seperti semula.
+              </p>
+              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-200">
+                <button
+                  type="button"
+                  disabled={deletingTx}
+                  onClick={() => setDeleteTargetTx(null)}
+                  className="px-3.5 py-1.5 rounded-lg text-zinc-600 hover:bg-zinc-100 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingTx}
+                  onClick={handleConfirmDeleteTx}
+                  className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold cursor-pointer"
+                >
+                  {deletingTx ? 'Menghapus...' : 'Ya, Hapus Transaksi'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Set Saldo Awal Kasir = Rp 0 */}
+      {showResetKasirModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full overflow-hidden border border-zinc-200 shadow-2xl text-xs">
+            <div className="p-4 bg-zinc-900 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <RotateCcw className="w-4 h-4 text-emerald-400" />
+                <span>Set Saldo Awal Kasir (KAS01) = Rp 0</span>
+              </div>
+              <button
+                type="button"
+                disabled={resettingKasir}
+                onClick={() => setShowResetKasirModal(false)}
+                className="text-zinc-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3.5 text-zinc-700">
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1 font-mono">
+                <div className="flex justify-between">
+                  <span className="font-sans text-zinc-500">Saldo Awal KAS01 Saat Ini:</span>
+                  <strong className="text-zinc-900">{formatRupiah(kas01?.saldoAwal || 0)}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-sans text-zinc-500">Saldo Aktual KAS01 Saat Ini:</span>
+                  <strong className="text-emerald-800">{formatRupiah(kas01?.saldoSaatIni || 0)}</strong>
+                </div>
+              </div>
+              <p className="leading-relaxed text-zinc-600">
+                Saldo awal laci kasir (<strong>KAS01</strong>) akan diatur ke <strong>Rp 0</strong> dan saldo berjalan kasir otomatis dihitung ulang murni dari seluruh mutasi uang masuk &amp; keluar riil tanpa selisih.
+              </p>
+              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-200">
+                <button
+                  type="button"
+                  disabled={resettingKasir}
+                  onClick={() => setShowResetKasirModal(false)}
+                  className="px-3.5 py-1.5 rounded-lg text-zinc-600 hover:bg-zinc-100 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={resettingKasir}
+                  onClick={handleConfirmResetKasir}
+                  className="px-4 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold cursor-pointer"
+                >
+                  {resettingKasir ? 'Menyinkronkan...' : 'Ya, Set Saldo Awal = Rp 0'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

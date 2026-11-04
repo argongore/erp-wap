@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
 import http from 'http';
@@ -66,16 +67,146 @@ async function startServer() {
     });
   });
 
-  // Ensure backend modules & fresh Cloud Supabase hydration settle before serving /api/* routes
+  interface CachedMutationResponse {
+    status: number;
+    body: any;
+    expiresAt: number;
+  }
+
+  const completedIdempotencyMap = new Map<string, CachedMutationResponse>();
+  const inFlightMutationMap = new Map<string, Promise<{ status: number; body: any }>>();
+  const recentPayloadFingerprintMap = new Map<string, CachedMutationResponse>();
+
+  const pruneIdempotencyStores = () => {
+    const now = Date.now();
+    for (const [k, v] of completedIdempotencyMap.entries()) {
+      if (v.expiresAt <= now) completedIdempotencyMap.delete(k);
+    }
+    for (const [k, v] of recentPayloadFingerprintMap.entries()) {
+      if (v.expiresAt <= now) recentPayloadFingerprintMap.delete(k);
+    }
+  };
+
+  // Ensure backend modules, fresh Cloud Supabase hydration & idempotency guard settle before serving /api/* routes
   app.use('/api', async (req, res, next) => {
     try {
       const { dbManager, supabaseSyncEngine } = await backendReadyPromise;
       const method = String(req.method || 'GET').toUpperCase();
       if (method === 'GET' || method === 'HEAD') {
         await supabaseSyncEngine.ensureFreshCloudState(dbManager, 30000);
-      } else {
-        await supabaseSyncEngine.ensureInitializedOnce(dbManager);
+        if (apiRouterInstance) {
+          return apiRouterInstance(req, res, next);
+        }
+        return next();
       }
+
+      await supabaseSyncEngine.ensureInitializedOnce(dbManager);
+
+      // Exclude stateless read/lookup/auth POST endpoints from mutation deduplication
+      const subPath = String(req.path || '').toLowerCase();
+      const isReadOnlyPost =
+        subPath === '/transaksi/detail' ||
+        subPath === '/access/verify-pin' ||
+        subPath === '/upload-bukti' ||
+        subPath.startsWith('/supabase/');
+
+      if (!isReadOnlyPost && (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE')) {
+        pruneIdempotencyStores();
+
+        const rawIdemHeader = String(req.headers['x-idempotency-key'] || '').trim();
+        const idemKey = rawIdemHeader ? `idem:${method}:${subPath}:${rawIdemHeader}` : '';
+
+        // 4.5-second identical payload fingerprint guard for POST transaction creation endpoints
+        const bodyJson = req.body && typeof req.body === 'object' ? JSON.stringify(req.body) : '';
+        const payloadHash =
+          method === 'POST' && bodyJson.length > 2
+            ? `fp:${method}:${subPath}:${crypto.createHash('sha256').update(bodyJson).digest('hex')}`
+            : '';
+
+        if (idemKey) {
+          const cached = completedIdempotencyMap.get(idemKey);
+          if (cached && cached.expiresAt > Date.now()) {
+            res.setHeader('X-Idempotent-Replay', 'true');
+            return res.status(cached.status).json(cached.body);
+          }
+          const inFlight = inFlightMutationMap.get(idemKey);
+          if (inFlight) {
+            const shared = await inFlight;
+            res.setHeader('X-Idempotent-Replay', 'coalesced');
+            return res.status(shared.status).json(shared.body);
+          }
+        }
+
+        if (payloadHash) {
+          const recentDup = recentPayloadFingerprintMap.get(payloadHash);
+          if (recentDup && recentDup.expiresAt > Date.now()) {
+            res.setHeader('X-Duplicate-Prevented', 'true');
+            return res.status(recentDup.status).json(recentDup.body);
+          }
+          const inFlightDup = inFlightMutationMap.get(payloadHash);
+          if (inFlightDup) {
+            const shared = await inFlightDup;
+            res.setHeader('X-Duplicate-Prevented', 'coalesced');
+            return res.status(shared.status).json(shared.body);
+          }
+        }
+
+        let settleFlight: ((val: { status: number; body: any }) => void) | null = null;
+        let rejectFlight: ((err: any) => void) | null = null;
+        const flightPromise = new Promise<{ status: number; body: any }>((resolve, reject) => {
+          settleFlight = resolve;
+          rejectFlight = reject;
+        });
+        // Prevent unhandled rejection if no duplicate waiter attaches
+        flightPromise.catch(() => {});
+
+        if (idemKey) inFlightMutationMap.set(idemKey, flightPromise);
+        if (payloadHash) inFlightMutationMap.set(payloadHash, flightPromise);
+
+        let settled = false;
+        const cleanupFlight = () => {
+          if (idemKey) inFlightMutationMap.delete(idemKey);
+          if (payloadHash) inFlightMutationMap.delete(payloadHash);
+        };
+
+        const origJson = res.json.bind(res);
+        res.json = ((body: any) => {
+          if (!settled) {
+            settled = true;
+            const status = res.statusCode || 200;
+            const isSuccess = status >= 200 && status < 300 && body?.success !== false;
+            if (isSuccess) {
+              const now = Date.now();
+              if (idemKey) {
+                completedIdempotencyMap.set(idemKey, {
+                  status,
+                  body,
+                  expiresAt: now + 10 * 60 * 1000, // 10 minutes TTL
+                });
+              }
+              if (payloadHash) {
+                recentPayloadFingerprintMap.set(payloadHash, {
+                  status,
+                  body,
+                  expiresAt: now + 4500, // 4.5 seconds rapid double-submit window
+                });
+              }
+            }
+            cleanupFlight();
+            settleFlight?.({ status, body });
+          }
+          return origJson(body);
+        }) as any;
+
+        res.once('close', () => {
+          if (!settled) {
+            settled = true;
+            cleanupFlight();
+            rejectFlight?.(new Error('Koneksi permintaan sebelumnya terputus'));
+          }
+        });
+      }
+
       if (apiRouterInstance) {
         return apiRouterInstance(req, res, next);
       }

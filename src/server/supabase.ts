@@ -320,17 +320,28 @@ class SupabaseSyncEngine {
    * 3. Offloads heavy inline base64 images (>25KB) to Supabase Storage bucket ('erp-bukti-nota') incrementally.
    */
   private async prepareCompactCloudData(data: DatabaseSchema): Promise<void> {
-    if (Array.isArray(data.auditLogs) && data.auditLogs.length > 250) {
-      data.auditLogs = data.auditLogs.slice(0, 250);
+    if (Array.isArray(data.auditLogs) && data.auditLogs.length > 200) {
+      data.auditLogs = data.auditLogs.slice(0, 200);
     }
 
-    let uploadsRemaining = 4;
+    let uploadsRemaining = 1;
+    const uploadWithFastTimeout = async (base64: string, prefix: string): Promise<string | null> => {
+      try {
+        return await Promise.race([
+          this.uploadBuktiImage(base64, prefix),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
+        ]);
+      } catch {
+        return null;
+      }
+    };
+
     const maybeOffloadField = async (obj: any, field: string, prefix: string) => {
       if (!obj || uploadsRemaining <= 0) return;
       const val = obj[field];
       if (typeof val === 'string' && val.startsWith('data:image/') && val.length > 25000) {
         uploadsRemaining--;
-        const uploadedUrl = await this.uploadBuktiImage(val, prefix);
+        const uploadedUrl = await uploadWithFastTimeout(val, prefix);
         if (uploadedUrl) {
           obj[field] = uploadedUrl;
         }
@@ -382,7 +393,7 @@ class SupabaseSyncEngine {
             const v = item[col.listField][idx];
             if (typeof v === 'string' && v.startsWith('data:image/') && v.length > 25000 && uploadsRemaining > 0) {
               uploadsRemaining--;
-              const url = await this.uploadBuktiImage(v, `${col.prefix}_${idx}`);
+              const url = await uploadWithFastTimeout(v, `${col.prefix}_${idx}`);
               if (url) {
                 item[col.listField][idx] = url;
                 if (idx === 0 && (!item[col.field] || item[col.field] === v)) {

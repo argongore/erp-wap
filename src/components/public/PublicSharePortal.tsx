@@ -621,6 +621,34 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* Posisi Yang Harus Dibayar (Selisih Piutang vs Titipan walau belum kliring) */}
+              {(() => {
+                const netPiutang = statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip);
+                const netHutang = statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan);
+                return (
+                  <div className="mt-4 pt-3.5 border-t border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-zinc-600">
+                      Yang Harus Dibayar Saat Ini (Selisih Berjalan):
+                    </div>
+                    <div
+                      className={`text-base font-black font-mono tabular-nums ${
+                        netHutang > 0
+                          ? 'text-emerald-800'
+                          : netPiutang > 0
+                            ? 'text-rose-800'
+                            : 'text-zinc-800'
+                      }`}
+                    >
+                      {netHutang > 0
+                        ? `HUTANG ${formatRupiah(netHutang)}`
+                        : netPiutang > 0
+                          ? `PIUTANG ${formatRupiah(netPiutang)}`
+                          : 'IMPAS / LUNAS (Rp 0)'}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Recharts: Grafik Fluktuasi Saldo Titipan Mitra */}
@@ -739,46 +767,54 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                         </td>
                       </tr>
                     ) : (
-                      statement.history.map((row) => (
-                        <tr key={row.id} className="hover:bg-zinc-50/70">
-                          <td className="py-2.5 px-3 text-zinc-500 text-[10px] whitespace-nowrap">
-                            <div>{row.tanggal}</div>
-                            <div className="text-[9px] text-zinc-400">{row.jam}</div>
-                          </td>
-                          <td className="py-2.5 px-3 font-mono font-bold text-zinc-900 text-[10px]">
-                            {row.id}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="font-semibold text-zinc-900">{row.jenis.replace(/_/g, ' ')}</div>
-                            <div className="text-[10px] text-zinc-500">{row.keterangan || '-'}</div>
-                            {row.itemsDetail && row.itemsDetail.length > 1 && (
-                              <div className="mt-1 space-y-0.5 text-[9px] text-zinc-600 bg-zinc-50 p-1 rounded border border-zinc-200">
-                                {row.itemsDetail.map((it, idx) => (
-                                  <div key={idx} className="flex justify-between">
-                                    <span>• {it.nama}</span>
-                                    <span className="font-mono">{it.qty} {it.satuan} @ {formatRupiah(it.harga)}</span>
-                                  </div>
-                                ))}
+                      statement.history.map((row) => {
+                        const single = row.itemsDetail?.length === 1 ? row.itemsDetail[0] : null;
+                        const displayTxId = row.idTransaksiInduk || row.id;
+                        return (
+                          <tr key={row.id} className="hover:bg-zinc-50/70">
+                            <td className="py-2.5 px-3 text-zinc-500 font-mono tabular-nums text-[10px] whitespace-nowrap">
+                              <div>{row.tanggal}</div>
+                              <div className="text-[9px] text-zinc-400">{row.jam}</div>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono tabular-nums font-bold text-zinc-900 text-[10px]">
+                              {displayTxId}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="font-semibold text-zinc-900">
+                                {row.isNotaSilang && single ? single.nama : row.jenis.replace(/_/g, ' ')}
                               </div>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-2 text-center font-bold text-zinc-800 text-[10px] whitespace-nowrap">
-                            {row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1' : '-')}
-                          </td>
-                          <td className="py-2.5 px-2 text-right font-mono text-zinc-700 text-[10px] whitespace-nowrap">
-                            {row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-')}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-rose-700 font-semibold whitespace-nowrap text-[10px]">
-                            {row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-'}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-emerald-700 font-semibold whitespace-nowrap text-[10px]">
-                            {row.kredit > 0 ? `-${formatRupiah(row.kredit)}` : '-'}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono font-bold text-zinc-900 whitespace-nowrap text-[10px]">
-                            {formatRupiah(row.saldoAkumulasi)}
-                          </td>
-                        </tr>
-                      ))
+                              <div className="text-[10px] text-zinc-600">
+                                {(row.isNotaSilang ? row.catatanTransaksi : row.keterangan) || row.keterangan || '-'}
+                              </div>
+                              {row.itemsDetail && row.itemsDetail.length > 1 && (
+                                <div className="mt-1 space-y-0.5 text-[9px] text-zinc-600 bg-zinc-50 p-1 rounded border border-zinc-200">
+                                  {row.itemsDetail.map((it, idx) => (
+                                    <div key={idx} className="flex justify-between">
+                                      <span>• {it.nama}</span>
+                                      <span className="font-mono tabular-nums">{it.qty} {it.satuan} @ {formatRupiah(it.harga)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-mono tabular-nums font-bold text-zinc-800 text-[10px] whitespace-nowrap">
+                              {row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1' : '-')}
+                            </td>
+                            <td className="py-2.5 px-2 text-right font-mono tabular-nums text-zinc-700 text-[10px] whitespace-nowrap">
+                              {row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-')}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums text-rose-700 font-semibold whitespace-nowrap text-[10px]">
+                              {row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums text-emerald-700 font-semibold whitespace-nowrap text-[10px]">
+                              {row.kredit > 0 ? `-${formatRupiah(row.kredit)}` : '-'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-zinc-900 whitespace-nowrap text-[10px]">
+                              {formatRupiah(row.saldoAkumulasi)}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                   {statement.history.length > 0 && (
@@ -787,7 +823,7 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                         <td colSpan={5} className="py-3 px-3 text-right uppercase text-[10px]">
                           Saldo Akhir Kewajiban Bon:
                         </td>
-                        <td colSpan={3} className="py-3 px-3 text-right font-mono text-amber-950 text-sm">
+                        <td colSpan={3} className="py-3 px-3 text-right font-mono tabular-nums text-amber-950 text-sm">
                           {formatRupiah(statement.totalBonKeseluruhan)}
                         </td>
                       </tr>
@@ -812,26 +848,35 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                       </p>
                     </div>
                   </div>
-                  <span className="text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full font-bold">
+                  <span className="text-[10px] font-bold text-amber-900">
                     Otentik &amp; Sah
                   </span>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                  {statement.history
-                    .filter((h) => !!h.fotoNota)
-                    .flatMap((h) => {
-                      const imgs = (h.fotoNota || '').split('|||').map((s) => s.trim()).filter(Boolean);
-                      return imgs.map((img, idx) => ({
-                        id: `${h.id}-${idx}`,
-                        txId: h.id,
-                        title: `Bukti Nota ${h.id}`,
-                        tanggal: h.tanggal,
-                        keterangan: h.keterangan,
-                        image: img,
-                      }));
-                    })
-                    .map((item) => (
+                  {(() => {
+                    const seenParent = new Set<string>();
+                    return statement.history
+                      .filter((h) => {
+                        if (!h.fotoNota) return false;
+                        const pKey = h.idTransaksiInduk || h.id;
+                        if (seenParent.has(pKey)) return false;
+                        seenParent.add(pKey);
+                        return true;
+                      })
+                      .flatMap((h) => {
+                        const parentId = h.idTransaksiInduk || h.id;
+                        const imgs = (h.fotoNota || '').split('|||').map((s) => s.trim()).filter(Boolean);
+                        return imgs.map((img, idx) => ({
+                          id: `${parentId}-${idx}`,
+                          txId: parentId,
+                          title: `Bukti Nota ${parentId}`,
+                          tanggal: h.tanggal,
+                          keterangan: h.keterangan,
+                          image: img,
+                        }));
+                      });
+                  })().map((item) => (
                       <div
                         key={item.id}
                         onClick={() =>

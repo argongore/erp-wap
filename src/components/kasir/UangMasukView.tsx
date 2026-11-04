@@ -15,6 +15,7 @@ import {
 import {
   Mitra,
   Rekening,
+  TransaksiBrilink,
   TransaksiPenjualanHasilBumi,
   TransaksiUangMasuk,
 } from '../../server/types.ts';
@@ -39,12 +40,18 @@ interface Props {
   mitraList: Mitra[];
   penjualanHasilBumiList: TransaksiPenjualanHasilBumi[];
   uangMasukList: TransaksiUangMasuk[];
+  brilinkList?: TransaksiBrilink[];
   initialNoPenjualanHb?: string;
   onClearInitialNoPenjualanHb?: () => void;
   onSuccess: (receipt: ReceiptData) => void;
   onRefresh: () => void;
   onNavigateToStokHb?: () => void;
 }
+
+type UnifiedUangMasukItem = TransaksiUangMasuk & {
+  isBrilinkAdmin?: boolean;
+  nominalPokokBrilink?: number;
+};
 
 function getTodayIsoDate(): string {
   const now = new Date();
@@ -81,6 +88,7 @@ export const UangMasukView: React.FC<Props> = ({
   mitraList,
   penjualanHasilBumiList,
   uangMasukList,
+  brilinkList = [],
   initialNoPenjualanHb,
   onClearInitialNoPenjualanHb,
   onSuccess,
@@ -117,6 +125,7 @@ export const UangMasukView: React.FC<Props> = ({
   const [noPenjualanHb, setNoPenjualanHb] = useState<string>('');
   const [tandaiLunasHb, setTandaiLunasHb] = useState<boolean>(true);
   const [editTxId, setEditTxId] = useState<string | null>(null);
+  const [editTxJenisHint, setEditTxJenisHint] = useState<string>('UANG_MASUK');
 
   const [tanggal, setTanggal] = useState<string>(getTodayIsoDate());
   const [nominalDisplay, setNominalDisplay] = useState<string>('');
@@ -140,7 +149,7 @@ export const UangMasukView: React.FC<Props> = ({
 
   // History filter & void state
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [filterSumber, setFilterSumber] = useState<'ALL' | 'PENJUALAN_HASIL_BUMI' | 'UMUM'>('ALL');
+  const [filterSumber, setFilterSumber] = useState<'ALL' | 'PENJUALAN_HASIL_BUMI' | 'UMUM' | 'BRILINK'>('ALL');
   const [confirmVoidId, setConfirmVoidId] = useState<string | null>(null);
   const [voidLoading, setVoidLoading] = useState<boolean>(false);
 
@@ -232,16 +241,71 @@ export const UangMasukView: React.FC<Props> = ({
     };
   }, [selectedHb, nominal]);
 
-  // KPI Ringkasan
+  // Gabungkan Uang Masuk murni + Pendapatan Biaya Admin BRILink (Tunai KAS01 maupun Transfer BRI/Bank)
+  const combinedUangMasukList = useMemo<UnifiedUangMasukItem[]>(() => {
+    const brilinkAdminRows: UnifiedUangMasukItem[] = (brilinkList || [])
+      .filter((b) => b.jenisBrilink === 'TARIK_TUNAI' && (Number(b.nominalAdmin) || 0) > 0)
+      .map((b) => {
+        const isCash = b.rekeningAdmin === 'KAS01';
+        const rekTujuan = isCash ? 'KAS01' : b.rekeningAdmin || b.rekeningBank || 'BRI01';
+        const pokokInfo =
+          (Number(b.nominalPokok) || 0) > 0
+            ? `Pokok Tarik Tunai ${formatRupiah(Number(b.nominalPokok) || 0)} · `
+            : '';
+        return {
+          idTransaksi: b.idTransaksi,
+          tanggal: b.tanggal,
+          jam: b.jam,
+          kategori: isCash
+            ? 'Admin BRILink (Bayar Cash -> Kasir KAS01)'
+            : `Admin BRILink (Ikut Transfer -> ${rekTujuan})`,
+          idMitra: b.idMitra,
+          namaPengirim: b.namaPelanggan || 'Pelanggan BRILink',
+          pengirim: b.namaPelanggan || 'Pelanggan BRILink',
+          nominal: Number(b.nominalAdmin) || 0,
+          metode: isCash ? 'TUNAI' : 'TRANSFER',
+          rekeningTujuan: rekTujuan,
+          divisi: b.divisi || 'BRILink',
+          keterangan: `${pokokInfo}${b.keterangan || ''}`.trim(),
+          fotoBukti: b.fotoBukti,
+          status: b.status || 'BERHASIL',
+          createdAt: b.createdAt || '',
+          isBrilinkAdmin: true,
+          nominalPokokBrilink: Number(b.nominalPokok) || 0,
+        };
+      });
+
+    const merged: UnifiedUangMasukItem[] = [...uangMasukList, ...brilinkAdminRows];
+    merged.sort((a, b) => {
+      const parseDmy = (d: string) => {
+        const parts = (d || '').split(/[-/]/);
+        if (parts.length === 3) {
+          if (parts[0].length === 4) return `${parts[0]}${parts[1].padStart(2, '0')}${parts[2].padStart(2, '0')}`;
+          return `${parts[2]}${parts[1].padStart(2, '0')}${parts[0].padStart(2, '0')}`;
+        }
+        return d || '';
+      };
+      const da = parseDmy(a.tanggal);
+      const db = parseDmy(b.tanggal);
+      if (db !== da) return db.localeCompare(da);
+      return (b.jam || '').localeCompare(a.jam || '');
+    });
+    return merged;
+  }, [uangMasukList, brilinkList]);
+
+  // KPI Ringkasan (Termasuk Admin BRILink Cash & Transfer)
   const kpi = useMemo(() => {
     const todayIso = getTodayIsoDate();
     const todayIndo = getTodayIndoDate();
-    const hariIniItems = uangMasukList.filter(
+    const hariIniItems = combinedUangMasukList.filter(
       (u) => u.tanggal === todayIndo || u.tanggal === todayIso
     );
     const totalHariIni = hariIniItems.reduce((s, u) => s + (Number(u.nominal) || 0), 0);
     const totalDariHb = uangMasukList
       .filter((u) => Boolean(u.noPenjualanHasilBumi))
+      .reduce((s, u) => s + (Number(u.nominal) || 0), 0);
+    const totalAdminBrilink = combinedUangMasukList
+      .filter((u) => Boolean(u.isBrilinkAdmin))
       .reduce((s, u) => s + (Number(u.nominal) || 0), 0);
     const nilaiPendingHb = pendingHbSales.reduce(
       (s, j) =>
@@ -254,17 +318,20 @@ export const UangMasukView: React.FC<Props> = ({
       totalHariIni,
       countHariIni: hariIniItems.length,
       totalDariHb,
+      totalAdminBrilink,
       pendingCount: pendingHbSales.length,
       nilaiPendingHb,
     };
-  }, [uangMasukList, pendingHbSales]);
+  }, [combinedUangMasukList, uangMasukList, pendingHbSales]);
 
   const filteredHistory = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return uangMasukList.filter((item) => {
+    return combinedUangMasukList.filter((item) => {
       const isHb = Boolean(item.noPenjualanHasilBumi);
+      const isBri = Boolean(item.isBrilinkAdmin);
       if (filterSumber === 'PENJUALAN_HASIL_BUMI' && !isHb) return false;
-      if (filterSumber === 'UMUM' && isHb) return false;
+      if (filterSumber === 'BRILINK' && !isBri) return false;
+      if (filterSumber === 'UMUM' && (isHb || isBri)) return false;
       if (!q) return true;
       const pengirimLabel = item.namaPengirim || item.pengirim || '';
       return (
@@ -273,10 +340,11 @@ export const UangMasukView: React.FC<Props> = ({
         (item.kategori || '').toLowerCase().includes(q) ||
         (item.noPenjualanHasilBumi || '').toLowerCase().includes(q) ||
         (item.komoditasNama || '').toLowerCase().includes(q) ||
-        (item.keterangan || '').toLowerCase().includes(q)
+        (item.keterangan || '').toLowerCase().includes(q) ||
+        (item.rekeningTujuan || '').toLowerCase().includes(q)
       );
     });
-  }, [uangMasukList, filterSumber, searchQuery]);
+  }, [combinedUangMasukList, filterSumber, searchQuery]);
 
   const pengirimFinalLabel = useMemo(() => {
     if (modePengirim === 'MITRA') {
@@ -414,11 +482,15 @@ export const UangMasukView: React.FC<Props> = ({
     }
   };
 
-  const handleVoid = async (idTransaksi: string) => {
+  const handleVoid = async (item: UnifiedUangMasukItem) => {
     setVoidLoading(true);
     setErrorMsg('');
     try {
-      await api.deleteUangMasuk(idTransaksi);
+      if (item.isBrilinkAdmin) {
+        await api.deleteBrilink(item.idTransaksi);
+      } else {
+        await api.deleteUangMasuk(item.idTransaksi);
+      }
       setConfirmVoidId(null);
       onRefresh();
     } catch (err: any) {
@@ -1075,10 +1147,10 @@ export const UangMasukView: React.FC<Props> = ({
         <div className="px-5 py-4 border-b border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-bold text-zinc-900">
-              Riwayat Transaksi Uang Masuk ({filteredHistory.length})
+              Rekapan Transaksi Uang Masuk ({filteredHistory.length})
             </h2>
             <p className="text-[11px] text-zinc-500">
-              Daftar seluruh pencairan penjualan hasil bumi dan uang masuk umum PT
+              Pencairan penjualan hasil bumi, biaya admin BRILink (Tunai KAS01 &amp; Transfer BRI), serta kas masuk umum PT
             </p>
           </div>
 
@@ -1088,6 +1160,7 @@ export const UangMasukView: React.FC<Props> = ({
                 [
                   { id: 'ALL', label: 'Semua' },
                   { id: 'PENJUALAN_HASIL_BUMI', label: 'Hasil Bumi' },
+                  { id: 'BRILINK', label: 'Admin BRILink' },
                   { id: 'UMUM', label: 'Umum' },
                 ] as const
               ).map((tab) => (
@@ -1185,7 +1258,7 @@ export const UangMasukView: React.FC<Props> = ({
                           <button
                             type="button"
                             disabled={voidLoading}
-                            onClick={() => handleVoid(item.idTransaksi)}
+                            onClick={() => handleVoid(item)}
                             className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-semibold cursor-pointer"
                           >
                             {voidLoading ? '...' : 'Ya, Batal'}
@@ -1203,7 +1276,10 @@ export const UangMasukView: React.FC<Props> = ({
                         <div className="inline-flex items-center space-x-1.5">
                           <button
                             type="button"
-                            onClick={() => setEditTxId(item.idTransaksi)}
+                            onClick={() => {
+                              setEditTxJenisHint(item.isBrilinkAdmin ? 'BRILINK' : 'UANG_MASUK');
+                              setEditTxId(item.idTransaksi);
+                            }}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer transition-colors"
                             title="Edit nama pengirim, kategori, nominal, rekening, atau tanggal"
                           >
@@ -1240,7 +1316,7 @@ export const UangMasukView: React.FC<Props> = ({
       <ModalEditTransaksiUniversal
         isOpen={Boolean(editTxId)}
         transactionId={editTxId}
-        jenisHint="UANG_MASUK"
+        jenisHint={editTxJenisHint}
         onClose={() => setEditTxId(null)}
         onSuccess={() => {
           onRefresh();

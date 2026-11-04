@@ -45,6 +45,7 @@ export const BukuKasHarianBosWidget: React.FC<Props> = ({ onNavigate, onRefreshP
       kulakanBarang: number;
       pencairanTitipan: number;
       upahGaji: number;
+      setorKeBerangkas?: number;
       jumlahTransaksi: number;
     };
     arusKasBersih: number;
@@ -113,7 +114,11 @@ Hari / Tanggal: ${tglTeks}
   • Pencairan Kasbon Uang: ${formatRupiah(data.rincianKeluar.kasbonUang)}
   • Kulakan Barang Toko: ${formatRupiah(data.rincianKeluar.kulakanBarang)}
   • Pencairan Titip Panen: ${formatRupiah(data.rincianKeluar.pencairanTitipan)}
-  • Beban Upah / Gaji: ${formatRupiah(data.rincianKeluar.upahGaji)}
+  • Beban Upah / Gaji: ${formatRupiah(data.rincianKeluar.upahGaji)}${
+      (data.rincianKeluar.setorKeBerangkas || 0) > 0
+        ? `\n  • Pengembalian Kasir ke Berangkas: ${formatRupiah(data.rincianKeluar.setorKeBerangkas || 0)}`
+        : ''
+    }
   _Total: ${data.rincianKeluar.jumlahTransaksi} transaksi keluar_
 
 ⚖️ *ARUS KAS BERSIH (${surplusDefisit}): ${formatRupiah(data.arusKasBersih)}*
@@ -123,8 +128,9 @@ Hari / Tanggal: ${tglTeks}
 ${divLines}
 
 ==============================
-💰 *POSISI SALDO KEUANGAN:*
-  • Kas Fisik (Brankas): ${formatRupiah(data.saldoKasFisik)}
+💰 *POSISI TUTUP KASIR & BANK (${tglTeks}):*
+  • Saldo Awal Kasir Pagi: Rp 0 (Per Hari)
+  • Saldo Akhir / Selisih Kasir (${tglTeks}): ${formatRupiah(data.saldoKasFisik)}
   • Total Rekening Bank: ${formatRupiah(data.saldoTotalBank)}
   • Total Kas & Bank Riil: ${formatRupiah(data.totalSaldoRil)}
 
@@ -273,9 +279,9 @@ _Laporan otomatis terintegrasi dari ERP PT. WIJAYA AGRO PERKASA_`;
               <div className="flex items-center justify-between gap-2 text-xs font-bold text-rose-800 min-w-0">
                 <span className="flex items-center space-x-1.5 min-w-0 truncate">
                   <ArrowDownRight className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span className="truncate">TOTAL UANG KELUAR (KAS OUT)</span>
+                  <span className="truncate">Uang Keluar (Kas Out)</span>
                 </span>
-                <span className="text-[10px] bg-rose-200/80 text-rose-900 px-2 py-0.5 rounded-full font-bold shrink-0">
+                <span className="text-[11px] font-mono tabular-nums text-rose-700 font-semibold shrink-0">
                   {data.rincianKeluar.jumlahTransaksi} Trx
                 </span>
               </div>
@@ -328,6 +334,14 @@ _Laporan otomatis terintegrasi dari ERP PT. WIJAYA AGRO PERKASA_`;
                     </span>
                   </div>
                 )}
+                {(data.rincianKeluar.setorKeBerangkas || 0) > 0 && (
+                  <div className="flex justify-between gap-2 min-w-0">
+                    <span className="truncate">• Kembali ke Berangkas:</span>
+                    <span className="font-semibold font-mono tabular-nums whitespace-nowrap shrink-0" title={formatRupiah(data.rincianKeluar.setorKeBerangkas || 0)}>
+                      {formatRupiahSingkat(data.rincianKeluar.setorKeBerangkas || 0)}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -342,16 +356,18 @@ _Laporan otomatis terintegrasi dari ERP PT. WIJAYA AGRO PERKASA_`;
               <div className="flex items-center justify-between gap-2 text-xs font-bold min-w-0">
                 <span className="flex items-center space-x-1.5 text-zinc-800 min-w-0 truncate">
                   <TrendingUp className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span className="truncate">ARUS KAS BERSIH (NET FLOW)</span>
+                  <span className="truncate">Arus Kas Bersih Harian</span>
                 </span>
                 <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
-                    data.arusKasBersih >= 0
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-rose-100 text-rose-800'
+                  className={`text-[11px] font-bold shrink-0 ${
+                    data.arusKasBersih === 0
+                      ? 'text-emerald-700'
+                      : data.arusKasBersih > 0
+                      ? 'text-indigo-700'
+                      : 'text-amber-800'
                   }`}
                 >
-                  {data.arusKasBersih >= 0 ? 'SURPLUS' : 'DEFISIT'}
+                  {data.arusKasBersih === 0 ? 'PAS RP 0' : data.arusKasBersih > 0 ? 'SURPLUS' : 'SELISIH'}
                 </span>
               </div>
               <div
@@ -360,18 +376,29 @@ _Laporan otomatis terintegrasi dari ERP PT. WIJAYA AGRO PERKASA_`;
                 }`}
                 title={`${data.arusKasBersih >= 0 ? '+' : ''}${formatRupiah(data.arusKasBersih)}`}
               >
-                {data.arusKasBersih >= 0 ? '+' : ''}
+                {data.arusKasBersih > 0 ? '+' : ''}
                 {formatRupiahSingkat(data.arusKasBersih)}
               </div>
               <p className="text-[11px] text-zinc-500 pt-1 border-t border-zinc-200">
-                Selisih kas masuk dikurangi kas keluar pada {formatTanggalIndo(selectedDate)}.
+                Saldo awal kasir Rp 0 per hari · Tidak menarik transaksi hari lain.
               </p>
               <div className="pt-1 flex items-center justify-between gap-2 text-[11px] text-zinc-600 font-medium min-w-0">
-                <span className="truncate">Saldo Kas Fisik Kasir:</span>
+                <span className="truncate">
+                  {data.saldoKasFisik === 0
+                    ? 'Kasir Tutup Buku (Pas Rp 0):'
+                    : 'Selisih / Sisa Kasir Hari Ini:'}
+                </span>
                 <span
-                  className="font-bold text-zinc-900 font-mono tabular-nums whitespace-nowrap shrink-0"
+                  className={`font-bold font-mono tabular-nums whitespace-nowrap shrink-0 ${
+                    data.saldoKasFisik === 0
+                      ? 'text-emerald-700'
+                      : data.saldoKasFisik > 0
+                      ? 'text-amber-800'
+                      : 'text-rose-700'
+                  }`}
                   title={formatRupiah(data.saldoKasFisik)}
                 >
+                  {data.saldoKasFisik > 0 ? '+' : ''}
                   {formatRupiahSingkat(data.saldoKasFisik)}
                 </span>
               </div>

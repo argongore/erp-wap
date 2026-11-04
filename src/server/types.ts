@@ -1281,6 +1281,37 @@ export interface RekeningKoranItemDetail {
   subtotal: number;
 }
 
+export interface RekeningKoranHistoryItem {
+  id: string;
+  tanggal: string;
+  jam: string;
+  jenis: string;
+  keterangan: string;
+  catatanTransaksi?: string;  // Keterangan opsional murni dari inputan kasir/user (misal: "Mama ambil solar 1 drigent yang ngambil supir truck mama")
+  qtyDisplay: string;         // e.g. "10 Sak", "200 Kg", "1 (Uang)"
+  hargaSatuanDisplay: string; // e.g. "Rp 135.000", "Rp 500.000"
+  itemsDetail?: RekeningKoranItemDetail[];
+  debet: number;   // Menambah hutang mitra / bon
+  kredit: number;  // Mengurangi hutang mitra / bon
+  saldoAkumulasi: number;
+  nominalMutasiHak?: number;  // Nominal titipan hasil panen / upah kerja / pencairan gaji
+  kategoriMutasiHak?: 'TITIP_MASUK' | 'TITIP_CAIR' | 'UPAH_TERCATAT' | 'UPAH_SUDAH_CAIR' | 'SLIP_GAJI';
+  fotoNota?: string;
+  isNotaLalu?: boolean;
+  noNotaLalu?: string;
+  isNotaNgunci?: boolean;
+  catatanNgunci?: string;
+  sisaPiutangNota?: number;
+  isSaldoBerjalan?: boolean;  // true = masih berjalan (piutang belum lunas / titipan & upah belum cair), false = sudah lunas/cair (masuk history)
+  piutangBerjalan?: number;   // Sisa nominal piutang berjalan pada baris ini
+  titipBerjalan?: number;     // Sisa nominal titip/hak mitra berjalan pada baris ini
+  isNotaSilang?: boolean;
+  noNotaToko?: string;
+  pihakNotaSilang?: string;
+  idTransaksiInduk?: string;      // ID nota induk asli (misal NSL-... atau NSL-...-DPP) saat Nota Silang dipecah per item
+  sisaPiutangNotaInduk?: number;  // Sisa piutang keseluruhan pada nota induk asli untuk aksi Bayar / Kunci
+}
+
 export interface RekeningKoranMitraSummary {
   idMitra: string;
   kodeMitra: string;
@@ -1304,6 +1335,7 @@ export interface RekeningKoranMitraSummary {
   namaRekeningTerkait?: string;
   saldoAwalRekeningAnakPerusahaan?: number;
   saldoRekeningAnakPerusahaan?: number;
+  piutangTransferAnakPerusahaan?: number;
   totalSimpanKeAnakPerusahaan?: number;
   totalPakaiDariAnakPerusahaan?: number;
   posisiBersihTerpadu?: number;
@@ -1318,7 +1350,7 @@ export interface RekeningKoranMitraSummary {
   totalKasbonUang: number;       // Total outstanding kasbon uang
   totalTitip: number;            // Total hak belum cair ke mitra (Titip Hasil Bumi + Upah Kerja Belum Cair)
   totalPembayaranBon: number;    // Total uang pembayaran bon yang sudah disetor mitra
-  totalBonKeseluruhan: number;   // totalKasbonBarang + totalKasbonUang (kotor sebelum potong titipan)
+  totalBonKeseluruhan: number;   // totalKasbonBarang + totalKasbonUang (+ piutang transfer anak perusahaan)
   sisaBon: number;               // Sama dengan totalBonKeseluruhan saat ini
   potonganTitipanOtomatis?: number; // min(totalBonKeseluruhan, totalTitip)
   sisaBonBersih?: number;           // max(0, totalBonKeseluruhan - totalTitip) -> bon bersih wajib dibayar mitra
@@ -1327,27 +1359,9 @@ export interface RekeningKoranMitraSummary {
   catatanNgunci?: string;
   nominalNotaNgunci?: number;
   nominalPiutangAktif?: number;
-  history: Array<{
-    id: string;
-    tanggal: string;
-    jam: string;
-    jenis: string;
-    keterangan: string;
-    qtyDisplay: string;         // e.g. "10 Sak", "200 Kg", "1 (Uang)"
-    hargaSatuanDisplay: string; // e.g. "Rp 135.000", "Rp 500.000"
-    itemsDetail?: RekeningKoranItemDetail[];
-    debet: number;   // Menambah hutang mitra / bon
-    kredit: number;  // Mengurangi hutang mitra / bon
-    saldoAkumulasi: number;
-    nominalMutasiHak?: number;  // Nominal titipan hasil panen / upah kerja / pencairan gaji
-    kategoriMutasiHak?: 'TITIP_MASUK' | 'TITIP_CAIR' | 'UPAH_TERCATAT' | 'UPAH_SUDAH_CAIR' | 'SLIP_GAJI';
-    fotoNota?: string;
-    isNotaLalu?: boolean;
-    noNotaLalu?: string;
-    isNotaNgunci?: boolean;
-    catatanNgunci?: string;
-    sisaPiutangNota?: number;
-  }>;
+  history: RekeningKoranHistoryItem[];
+  historySaldoBerjalan?: RekeningKoranHistoryItem[];
+  historySelesai?: RekeningKoranHistoryItem[];
 }
 
 // ==========================================
@@ -1720,6 +1734,10 @@ export interface RekapSemuaTransaksiResponse {
     uangKeluarOperasionalKasir: number;
     mutasiMasukKasir: number;
     mutasiKeluarKasir: number;
+    setorKeBerangkasKasir?: number;
+    mutasiKeluarNonBerangkasKasir?: number;
+    saldoSebelumSetorBerangkas?: number;
+    selisihKasirHarian?: number;
     totalMasukKasir: number;
     totalKeluarKasir: number;
     arusBersihKasir: number;

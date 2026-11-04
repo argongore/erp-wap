@@ -1745,7 +1745,18 @@ class DatabaseManager {
       .filter((k) => k.status !== 'LUNAS')
       .reduce((sum, k) => sum + Math.max(0, k.sisaKasbon || 0), 0);
 
-    const totalBon = totalKasbonBarang + totalKasbonUang;
+    // Piutang / Talangan Transfer Rekening Anak Perusahaan (misal DP Parabot / REK-DPPARABO)
+    let piutangTransferAnak = 0;
+    let talanganTransferAnak = 0;
+    for (const r of this.db.rekening || []) {
+      if (r.kategori === 'ANAK_PERUSAHAAN' || r.kode === 'REK-DPPARABO') {
+        const bal = Number(r.saldoSaatIni) || 0;
+        if (bal > 0) piutangTransferAnak += bal;
+        else if (bal < 0) talanganTransferAnak += Math.abs(bal);
+      }
+    }
+
+    const totalBon = totalKasbonBarang + totalKasbonUang + piutangTransferAnak;
 
     // Collect all mitra IDs present in mitra or payable transactions
     const mitraIds = new Set<string>(this.db.mitra.map((m) => m.id));
@@ -1756,7 +1767,7 @@ class DatabaseManager {
       if (pb.idMitra && pb.metodePembayaran === 'HUTANG') mitraIds.add(pb.idMitra);
     }
 
-    let totalTitip = 0;
+    let totalTitip = talanganTransferAnak;
     for (const mId of mitraIds) {
       const titipPanenKotor = (this.db.pembelianHasilBumi || [])
         .filter((p) => p.idMitra === mId && p.metodePembayaran === 'TITIP')
@@ -1885,9 +1896,11 @@ class DatabaseManager {
    */
   public synchronizeDivisiAccounts() {
     const norm = (s?: string) => String(s || '').trim().toLowerCase();
-    const produkMap = new Map((this.db.produk || []).map((p) => [p.kode, p]));
+    const produkMap = new Map((this.db.produk || []).map((p) => [String(p.kode || '').trim().toUpperCase(), p]));
 
-    // Pastikan divisi standar tambahan seperti BRILink dan seluruh divisi yang dipakai di transaksi terdaftar
+    // Pastikan divisi standar tambahan seperti Wijaya Karya, Okussa, BRILink, dan seluruh divisi yang dipakai di transaksi terdaftar
+    this.ensureDivisiRegisteredInMemory('Wijaya Karya');
+    this.ensureDivisiRegisteredInMemory('Okussa');
     this.ensureDivisiRegisteredInMemory('BRILink');
     for (const p of this.db.penjualan || []) {
       if (p.divisi) this.ensureDivisiRegisteredInMemory(p.divisi);
@@ -1917,13 +1930,21 @@ class DatabaseManager {
     const allDivisi = this.getDivisiList();
     const divisiByRekKode = new Map(allDivisi.map((d) => [d.kodeRekening.toUpperCase(), norm(d.nama)]));
 
-    const resolvePenjualanDivNorm = (divisi?: string, metode?: string) => {
-      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
-      return norm(divisi || (metode === 'INTERNAL_PT' ? 'PT Wijaya Agro Perkasa' : 'CV Wijaya Agro'));
-    };
-    const resolvePembelianBarangDivNorm = (divisi?: string) => {
-      if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
-      return norm(divisi || 'CV Wijaya Agro');
+    // ATURAN ARUS KAS BARANG TOKO:
+    // Seluruh transaksi pembelian maupun penjualan barang toko masuk ke 'Wijaya Karya', KECUALI produk dengan kategori 'OKUSSA' masuk ke 'Okussa'.
+    const resolveStoreItemDivNorm = (kodeProduk?: string, fallbackDivisi?: string, metode?: string) => {
+      if (isTanpaDivisi(fallbackDivisi)) return '__tanpa_divisi__';
+      if (metode === 'INTERNAL_PT') return norm(fallbackDivisi || 'PT Wijaya Agro Perkasa');
+      const cleanKode = String(kodeProduk || '').trim().toUpperCase();
+      if (cleanKode && cleanKode !== 'REKAP-NOTA' && cleanKode !== 'NOTA-SILANG') {
+        const prod = produkMap.get(cleanKode);
+        if (String(prod?.kategori || '').trim().toUpperCase() === 'OKUSSA') {
+          return norm('Okussa');
+        }
+        return norm('Wijaya Karya');
+      }
+      if (norm(fallbackDivisi) === 'okussa') return norm('Okussa');
+      return norm('Wijaya Karya');
     };
     const resolveHasilBumiDivNorm = (divisi?: string) => {
       if (isTanpaDivisi(divisi)) return '__tanpa_divisi__';
@@ -1943,32 +1964,56 @@ class DatabaseManager {
       return norm('PT Wijaya Agro Perkasa');
     };
 
-    // Lookup map untuk melacak divisi asal nota & rasio HPP saat pelunasan bon barang secara Tunai/Transfer
-    const penjualanNotaMetaMap = new Map<string, { divisiNorm: string; totalNominal: number; totalHpp: number }>();
+    // Lookup map untuk melacak divisi asal nota & rasio HPP saat pelunasan bon barang secara Tunai/Transfer (mendukung nota campuran Okussa & Wijaya Karya)
+    const penjualanNotaSharesMap = new Map<
+      string,
+      Array<{ divisiNorm: string; ratioNominal: number; totalHppShare: number; totalNominalNota: number }>
+    >();
     for (const p of this.db.penjualan || []) {
       if (p.isNotaSilang || p.metode === 'PEMAKAIAN_PENGELUARAN') continue;
       if (p.noPenjualan) {
-        const notaHpp = (p.items || []).reduce((s, it) => {
-          const prod = produkMap.get(it.kodeProduk);
-          const hppUnit = it.hargaBeli !== undefined ? Number(it.hargaBeli) : Number(prod?.hargaBeli || 0);
-          return s + (Number(it.qty) || 0) * hppUnit;
-        }, 0);
-        penjualanNotaMetaMap.set(p.noPenjualan, {
-          divisiNorm: resolvePenjualanDivNorm(p.divisi, p.metode),
-          totalNominal: Number(p.totalNominal) || 0,
-          totalHpp: notaHpp,
-        });
+        const totalNom = Number(p.totalNominal) || 0;
+        const perDiv = new Map<string, { nom: number; hpp: number }>();
+        if (Array.isArray(p.items) && p.items.length > 0) {
+          for (const it of p.items) {
+            const dNorm = resolveStoreItemDivNorm(it.kodeProduk, p.divisi, p.metode);
+            const prod = produkMap.get(String(it.kodeProduk || '').trim().toUpperCase());
+            const hppUnit = it.hargaBeli !== undefined ? Number(it.hargaBeli) : Number(prod?.hargaBeli || 0);
+            const subNom = Number(it.subtotal) || (Number(it.qty) || 0) * (Number(it.harga) || 0);
+            const subHpp = (Number(it.qty) || 0) * hppUnit;
+            const prev = perDiv.get(dNorm) || { nom: 0, hpp: 0 };
+            prev.nom += subNom;
+            prev.hpp += subHpp;
+            perDiv.set(dNorm, prev);
+          }
+        } else {
+          const dNorm = resolveStoreItemDivNorm(undefined, p.divisi, p.metode);
+          perDiv.set(dNorm, { nom: totalNom, hpp: Number(p.totalModalHpp) || 0 });
+        }
+        const sumSubNom = Array.from(perDiv.values()).reduce((s, x) => s + x.nom, 0) || totalNom || 1;
+        penjualanNotaSharesMap.set(
+          p.noPenjualan,
+          Array.from(perDiv.entries()).map(([divisiNorm, val]) => ({
+            divisiNorm,
+            ratioNominal: val.nom / sumSubNom,
+            totalHppShare: val.hpp,
+            totalNominalNota: totalNom,
+          }))
+        );
       }
     }
     for (const j of this.db.penjualanHasilBumi || []) {
       if (j.noPenjualan) {
         const notaHpp =
           Number(j.totalModalHpp) || (Number(j.beratBersih) || 0) * (Number(j.modalRataRataPerKg) || 0);
-        penjualanNotaMetaMap.set(j.noPenjualan, {
-          divisiNorm: resolveHasilBumiDivNorm(j.divisi),
-          totalNominal: Number(j.totalNominal) || 0,
-          totalHpp: notaHpp,
-        });
+        penjualanNotaSharesMap.set(j.noPenjualan, [
+          {
+            divisiNorm: resolveHasilBumiDivNorm(j.divisi),
+            ratioNominal: 1,
+            totalHppShare: notaHpp,
+            totalNominalNota: Number(j.totalNominal) || 0,
+          },
+        ]);
       }
     }
 
@@ -1978,24 +2023,25 @@ class DatabaseManager {
       if (!rek) continue;
 
       // 1. ARUS PENJUALAN & DROPPING MASUK DIVISI (+)
-      const penjualanTokoTunai = (this.db.penjualan || []).filter(
-        (p) =>
-          resolvePenjualanDivNorm(p.divisi, p.metode) === targetNorm &&
-          (p.metode === 'TUNAI' || p.metode === 'TRANSFER') &&
-          (p.totalNominal || 0) > 0
-      );
-      const masukPenjualanToko = penjualanTokoTunai.reduce(
-        (sum, p) => sum + (Number(p.totalNominal) || 0),
-        0
-      );
-      let hppTerjualKas = penjualanTokoTunai.reduce((sum, p) => {
-        const hppNota = (p.items || []).reduce((s, it) => {
-          const prod = produkMap.get(it.kodeProduk);
-          const hppUnit = it.hargaBeli !== undefined ? Number(it.hargaBeli) : Number(prod?.hargaBeli || 0);
-          return s + (Number(it.qty) || 0) * hppUnit;
-        }, 0);
-        return sum + hppNota;
-      }, 0);
+      let masukPenjualanToko = 0;
+      let hppTerjualKas = 0;
+      for (const p of this.db.penjualan || []) {
+        if (p.isNotaSilang || p.metode === 'PEMAKAIAN_PENGELUARAN') continue;
+        if ((p.metode !== 'TUNAI' && p.metode !== 'TRANSFER') || (Number(p.totalNominal) || 0) <= 0) continue;
+        if (Array.isArray(p.items) && p.items.length > 0) {
+          for (const it of p.items) {
+            if (resolveStoreItemDivNorm(it.kodeProduk, p.divisi, p.metode) === targetNorm) {
+              const prod = produkMap.get(String(it.kodeProduk || '').trim().toUpperCase());
+              const hppUnit = it.hargaBeli !== undefined ? Number(it.hargaBeli) : Number(prod?.hargaBeli || 0);
+              masukPenjualanToko += Number(it.subtotal) || (Number(it.qty) || 0) * (Number(it.harga) || 0);
+              hppTerjualKas += (Number(it.qty) || 0) * hppUnit;
+            }
+          }
+        } else if (resolveStoreItemDivNorm(undefined, p.divisi, p.metode) === targetNorm) {
+          masukPenjualanToko += Number(p.totalNominal) || 0;
+          hppTerjualKas += Number(p.totalModalHpp) || 0;
+        }
+      }
 
       const penjualanHbTunai = (this.db.penjualanHasilBumi || []).filter(
         (j) =>
@@ -2028,12 +2074,15 @@ class DatabaseManager {
         if (b.isKompensasiTitipan || b.isPotongGaji) continue;
         for (const alok of b.alokasi || []) {
           if (alok.jenis === 'KASBON_BARANG' && (alok.nominalDibayar || 0) > 0) {
-            const meta = penjualanNotaMetaMap.get(alok.refId);
-            if (meta && meta.divisiNorm === targetNorm) {
-              const dibayar = Number(alok.nominalDibayar) || 0;
-              masukPelunasanPiutangDivisi += dibayar;
-              if (meta.totalNominal > 0 && meta.totalHpp > 0) {
-                hppTerjualKas += (dibayar / meta.totalNominal) * meta.totalHpp;
+            const shares = penjualanNotaSharesMap.get(alok.refId) || [];
+            const dibayar = Number(alok.nominalDibayar) || 0;
+            for (const sh of shares) {
+              if (sh.divisiNorm === targetNorm) {
+                const dibayarDiv = Math.round(dibayar * sh.ratioNominal);
+                masukPelunasanPiutangDivisi += dibayarDiv;
+                if (sh.totalNominalNota > 0 && sh.totalHppShare > 0) {
+                  hppTerjualKas += (dibayar / sh.totalNominalNota) * sh.totalHppShare;
+                }
               }
             }
           }
@@ -2073,14 +2122,21 @@ class DatabaseManager {
 
       // 2. MODAL PEMBELIAN DIVISI (Barang Dagang + Hasil Bumi Putus Harga Tunai/Transfer)
       // Hitungannya MODAL (berpotensi balik uang & untung), bukan beban pengeluaran hangus
-      const keluarPembelianBarang = (this.db.pembelianBarang || [])
-        .filter(
-          (pb) =>
-            resolvePembelianBarangDivNorm(pb.divisi) === targetNorm &&
-            (pb.metodePembayaran === 'TUNAI' || pb.metodePembayaran === 'TRANSFER') &&
-            (pb.totalNominal || 0) > 0
-        )
-        .reduce((sum, pb) => sum + (Number(pb.totalNominal) || 0), 0);
+      let keluarPembelianBarang = 0;
+      for (const pb of this.db.pembelianBarang || []) {
+        if ((pb.metodePembayaran !== 'TUNAI' && pb.metodePembayaran !== 'TRANSFER') || (Number(pb.totalNominal) || 0) <= 0) {
+          continue;
+        }
+        if (Array.isArray(pb.items) && pb.items.length > 0) {
+          for (const it of pb.items) {
+            if (resolveStoreItemDivNorm(it.kodeProduk, pb.divisi) === targetNorm) {
+              keluarPembelianBarang += Number(it.subtotal) || (Number(it.qty) || 0) * (Number(it.hargaBeliSatuan) || 0);
+            }
+          }
+        } else if (resolveStoreItemDivNorm(undefined, pb.divisi) === targetNorm) {
+          keluarPembelianBarang += Number(pb.totalNominal) || 0;
+        }
+      }
 
       const keluarPembelianHasilBumi = (this.db.pembelianHasilBumi || [])
         .filter(
@@ -2160,6 +2216,16 @@ class DatabaseManager {
     const bon01Saldo = this.db.rekening.find((r) => r.kode === 'BON01')?.saldoSaatIni || 0;
     const tit01Saldo = this.db.rekening.find((r) => r.kode === 'TIT01')?.saldoSaatIni || 0;
 
+    let piutangAnakIntegrity = 0;
+    let talanganAnakIntegrity = 0;
+    for (const r of this.db.rekening || []) {
+      if (r.kategori === 'ANAK_PERUSAHAAN' || r.kode === 'REK-DPPARABO') {
+        const bal = Number(r.saldoSaatIni) || 0;
+        if (bal > 0) piutangAnakIntegrity += bal;
+        else if (bal < 0) talanganAnakIntegrity += Math.abs(bal);
+      }
+    }
+
     const calcBon =
       (this.db.penjualan || [])
         .filter((p) => p.metode === 'KASBON' && p.statusPembayaran === 'BELUM_BAYAR')
@@ -2169,11 +2235,12 @@ class DatabaseManager {
         .reduce((s, j) => s + Math.max(0, j.sisaPiutang || 0), 0) +
       (this.db.kasbonUang || [])
         .filter((k) => k.status !== 'LUNAS')
-        .reduce((s, k) => s + Math.max(0, k.sisaKasbon || 0), 0);
+        .reduce((s, k) => s + Math.max(0, k.sisaKasbon || 0), 0) +
+      piutangAnakIntegrity;
 
     const bon01Reconciled = Math.abs(bon01Saldo - calcBon) < 1;
 
-    let calcTitip = 0;
+    let calcTitip = talanganAnakIntegrity;
     for (const m of this.db.mitra || []) {
       const tk = (this.db.pembelianHasilBumi || [])
         .filter((p) => p.idMitra === m.id && p.metodePembayaran === 'TITIP')
@@ -2493,18 +2560,25 @@ class DatabaseManager {
       await new Promise((res) => setTimeout(res, 5));
     }
     this.isWriting = true;
+    let result!: T;
     try {
-      const result = action(this.db);
+      result = action(this.db);
       this.reconcileRelationalIntegrity();
       this.synchronizeVirtualAccounts();
       this.saveDirect(this.db);
       supabaseSyncEngine.markLocalMutation(this.db);
-      const syncWaitMs = process.env.VERCEL || process.env.NETLIFY ? 8000 : 4500;
-      await supabaseSyncEngine.flushSync(this.db, syncWaitMs);
-      return result;
     } finally {
       this.isWriting = false;
     }
+    // Sinkronisasi ke Supabase dijalankan di luar mutex tulis dengan batas tunggu cepat (maks 1.5 detik)
+    // agar transaksi selalu cepat (<1-2 detik), tidak memblokir kasir lain, dan jika jaringan lambat tetap tersimpan otomatis via antrean retry latar belakang.
+    const syncWaitMs = process.env.VERCEL || process.env.NETLIFY ? 3500 : 1500;
+    try {
+      await supabaseSyncEngine.flushSync(this.db, syncWaitMs);
+    } catch {
+      // Background retry queue in supabaseSyncEngine handles eventual delivery
+    }
+    return result;
   }
 }
 

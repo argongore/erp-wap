@@ -108,7 +108,7 @@ export const PembelianBarangView: React.FC<Props> = ({
   const [rekeningSumber, setRekeningSumber] = useState<string>(
     availableBanks[0]?.kode || 'BNI01'
   );
-  const [divisi, setDivisi] = useState<string>('CV Wijaya Agro');
+  const [divisi, setDivisi] = useState<string>('Wijaya Karya');
   const [keterangan, setKeterangan] = useState<string>('');
   const [fotoNota, setFotoNota] = useState<string>('');
 
@@ -211,6 +211,29 @@ export const PembelianBarangView: React.FC<Props> = ({
       setSelectedSupplierId(supplierList[0].id);
     }
   }, [mitraList]);
+
+  // Auto-sync Divisi: Semua Pembelian Barang Toko -> Wijaya Karya, kecuali Kategori OKUSSA -> Okussa
+  React.useEffect(() => {
+    if (entryMode === 'RINCIAN') {
+      if (cart.length > 0) {
+        const allOkussa = cart.every((it) => {
+          const p = produkList.find((pr) => pr.kode === it.kodeProduk);
+          return String(p?.kategori || '').toUpperCase().includes('OKUSSA');
+        });
+        const targetDiv = allOkussa ? 'Okussa' : 'Wijaya Karya';
+        if (divisi !== targetDiv) setDivisi(targetDiv);
+      } else if (selectedProductCode) {
+        const p = produkList.find((pr) => pr.kode === selectedProductCode);
+        if (p) {
+          const isOkussa = String(p.kategori || '').toUpperCase().includes('OKUSSA');
+          const targetDiv = isOkussa ? 'Okussa' : 'Wijaya Karya';
+          if (divisi !== targetDiv) setDivisi(targetDiv);
+        }
+      }
+    } else if (divisi === 'CV Wijaya Agro') {
+      setDivisi('Wijaya Karya');
+    }
+  }, [cart, selectedProductCode, entryMode, produkList]);
 
   // Quick Add Supplier Handler
   const handleQuickAddSupplier = async (e: React.FormEvent) => {
@@ -1070,7 +1093,16 @@ export const PembelianBarangView: React.FC<Props> = ({
                 </div>
               )}
 
-              <div className="mt-3">
+              <div className="mt-3 space-y-2.5">
+                <div className="p-2.5 rounded-lg bg-amber-950/50 border border-amber-800/80 text-[11px] text-amber-200 flex items-center justify-between gap-2">
+                  <span>
+                    <strong>Aturan Otomatis Arus Kas Barang Toko:</strong> Semua pembelian barang toko masuk ke <strong>Wijaya Karya</strong>, kecuali kategori <strong>OKUSSA</strong> otomatis masuk ke <strong>Okussa</strong>.
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-amber-900 text-amber-100 font-mono font-bold shrink-0">
+                    {divisi}
+                  </span>
+                </div>
+
                 <ArusKasDivisiSelectorCard
                   direction="KELUAR"
                   transactionKind="MODAL_PEMBELIAN"
