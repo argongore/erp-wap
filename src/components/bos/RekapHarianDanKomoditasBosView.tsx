@@ -677,7 +677,7 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-slate-700 font-semibold">
-                      1. Saldo Awal Kasir Pagi (Per Hari)
+                      1. Saldo Kasir Berjalan Pada Hari Itu ({kesimpulan.kodeKasir})
                     </span>
                     <button
                       type="button"
@@ -690,11 +690,12 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
                     </button>
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    Mandiri per tanggal — tidak menarik transaksi hari berikutnya
+                    Update otomatis pergerakan uang kasir utama pada tanggal {data?.tanggal}
+                    {kesimpulan.isTanggalHariIni ? ` · Live Master KAS01: ${formatRupiah(kesimpulan.saldoKasirSaatIniLive)}` : ''}
                   </div>
                 </div>
                 <span className="font-mono font-bold text-slate-900 tabular-nums">
-                  {formatRupiah(kesimpulan.saldoAwalKasirPagi)}
+                  {formatRupiah(kesimpulan.saldoAkhirKasirPadaTanggal)}
                 </span>
               </div>
               {kasirResetMsg && (
@@ -754,21 +755,6 @@ export const RekapHarianDanKomoditasBosView: React.FC<RekapHarianDanKomoditasBos
                   </span>
                 </div>
               )}
-
-              {/* Highlight Utama: Uang Kasir Sebelum Dikembalikan ke Berangkas */}
-              <div className="mt-2 pt-3 border-t-2 border-slate-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-50/90 border border-emerald-300 rounded-xl px-4 py-3">
-                <div>
-                  <div className="text-xs font-extrabold uppercase tracking-wide text-emerald-950">
-                    Uang Kasir Sebelum Dikembalikan ke {kesimpulan.namaBerangkas}
-                  </div>
-                  <div className="text-[11px] text-emerald-800">
-                    Total uang tunai kasir tanggal {data?.tanggal} yang wajib kembali ke {kesimpulan.namaBerangkas} agar tutup buku Rp 0
-                  </div>
-                </div>
-                <div className="font-mono text-xl sm:text-2xl font-extrabold text-emerald-800 tabular-nums">
-                  {formatRupiah(kesimpulan.saldoAkhirKasirSebelumSetorBerangkas)}
-                </div>
-              </div>
             </div>
 
             {/* Kolom Kanan (5 kolom): Status Pengembalian ke BERANGKAS & Selisih Harian (Target Rp 0) */}

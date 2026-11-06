@@ -2482,16 +2482,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  <div className="sm:col-span-3 flex flex-col items-center justify-center text-center">
-                    <img
-                      src={DEFAULT_PT_LOGO_URL}
-                      alt="Stempel PT Wijaya Agro Perkasa"
-                      className="w-14 h-14 object-contain opacity-90 rounded-full border border-zinc-300 p-0.5"
-                    />
-                    <span className="text-[9px] font-bold uppercase text-zinc-500 mt-1">
-                      DOKUMEN RESMI TERVERIFIKASI
-                    </span>
-                  </div>
+                  <div className="sm:col-span-3 hidden sm:block" />
 
                   <div className="sm:col-span-4 text-center sm:text-right space-y-6">
                     <div>

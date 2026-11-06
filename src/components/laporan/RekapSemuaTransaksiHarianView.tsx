@@ -183,16 +183,27 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
     return parts.length > 0 ? parts.join(' | ') : 'Seluruh Arus Uang, Kategori & Pihak Terkait';
   }, [filterArusUang, filterJenis, filterNama, searchQueryNama, searchTransaksi]);
 
+  const [kas01SaldoLive, setKas01SaldoLive] = useState<number | null>(null);
+
   // Load Transactions from API
   const loadData = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
       setErrorMsg(null);
-      const res = await api.getSemuaTransaksi({
-        tanggal: activeTanggalParam,
-        hanyaKasir: fokusMode === 'KASIR_ONLY',
-      });
+      const [res, rekList] = await Promise.all([
+        api.getSemuaTransaksi({
+          tanggal: activeTanggalParam,
+          hanyaKasir: fokusMode === 'KASIR_ONLY',
+        }),
+        api.getRekening().catch(() => []),
+      ]);
       setRekapData(res);
+      if (Array.isArray(rekList) && rekList.length > 0) {
+        const kas01 = rekList.find((r) => r.kode === 'KAS01');
+        if (kas01) {
+          setKas01SaldoLive(Math.round(Number(kas01.saldoSaatIni) || 0));
+        }
+      }
     } catch (err: any) {
       console.error('Error loading all transactions:', err);
       if (!silent) setErrorMsg(err.message || 'Gagal memuat rekapan transaksi');
@@ -707,13 +718,17 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
       </div>
 
       {/* 2. Top Summary KPI Cards for Active Date */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {/* Card 1: Saldo Awal Kasir (Per Hari = Rp 0) / Total Transaksi */}
+      <div
+        className={`grid grid-cols-2 ${
+          fokusMode === 'KASIR_ONLY' ? 'lg:grid-cols-4' : 'lg:grid-cols-5'
+        } gap-3`}
+      >
+        {/* Card 1: Uang di Laci (KAS01) / Total Transaksi */}
         <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
           <div className="flex items-center justify-between gap-2 text-zinc-500 text-xs min-w-0">
             <span className="font-semibold truncate">
               {fokusMode === 'KASIR_ONLY'
-                ? 'Saldo Awal Kasir (Per Hari)'
+                ? 'Uang di Laci (KAS01)'
                 : 'Total Transaksi'}
             </span>
             <Receipt className="w-4 h-4 text-zinc-400 shrink-0" />
@@ -723,12 +738,12 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               <>
                 <div
                   className="text-lg sm:text-xl font-black text-zinc-900 font-mono tabular-nums truncate whitespace-nowrap"
-                  title="Saldo Awal Kasir selalu Rp 0 setiap hari (tidak menarik hari lain)"
+                  title="Saldo riil uang di laci kasir (KAS01) saat ini"
                 >
-                  {formatRupiah(activeKasirSummary.saldoAwalKasir)}
+                  {formatRupiah(kas01SaldoLive ?? 0)}
                 </div>
                 <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
-                  Mulai Rp 0/hari · {computedSummary.totalTransaksi} mutasi ({activePeriodDisplay})
+                  {computedSummary.totalTransaksi} mutasi ({activePeriodDisplay})
                 </div>
               </>
             ) : (
@@ -804,29 +819,8 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Card 4: Sebelum Kembali ke Berangkas (when KASIR_ONLY) or Net Cashflow */}
-        {fokusMode === 'KASIR_ONLY' ? (
-          <div className="bg-white p-4 rounded-xl border border-blue-200 bg-gradient-to-b from-white to-blue-50/30 shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden">
-            <div className="flex items-center justify-between gap-1.5 text-blue-900 text-xs min-w-0">
-              <span className="font-semibold truncate">Sebelum Kembali Berangkas</span>
-              <ArrowLeftRight className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-            </div>
-            <div className="mt-2 min-w-0">
-              <div
-                className="text-lg sm:text-xl font-black text-blue-800 font-mono tabular-nums truncate whitespace-nowrap"
-                title={formatRupiah(activeKasirSummary.saldoSebelumSetorBerangkas)}
-              >
-                {formatRupiahSingkat(activeKasirSummary.saldoSebelumSetorBerangkas)}
-              </div>
-              <div
-                className="text-[10px] text-zinc-600 mt-0.5 truncate font-mono tabular-nums"
-                title={`Sudah dikembalikan ke Berangkas: ${formatRupiah(activeKasirSummary.setorKeBerangkasKasir)}`}
-              >
-                Kembali Berangkas: -{formatRupiahSingkat(activeKasirSummary.setorKeBerangkasKasir)}
-              </div>
-            </div>
-          </div>
-        ) : (
+        {/* Card 4: Net Cashflow (only in SEMUA_REKENING mode; in KASIR_ONLY mode Card 4 is Selisih below) */}
+        {fokusMode !== 'KASIR_ONLY' && (
           <div
             className={`bg-white p-4 rounded-xl border shadow-2xs flex flex-col justify-between min-w-0 overflow-hidden ${
               computedSummary.netCashflow >= 0

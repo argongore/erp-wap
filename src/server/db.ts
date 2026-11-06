@@ -1103,6 +1103,62 @@ class DatabaseManager {
       sinkronAcc.status = 'AKTIF';
     }
 
+    // Jika KAS01 sudah melakukan closing (transfer KAS01 -> Berangkas) dan belum ada transaksi KAS01 setelahnya, pastikan saldo KAS01 = 0
+    const kas01Acc = this.db.rekening.find((r) => r.kode === 'KAS01');
+    if (kas01Acc && Number(kas01Acc.saldoSaatIni) !== 0) {
+      const berangkasCodes = new Set(
+        (this.db.rekening || [])
+          .filter((r) => r.kode === 'BRK01' || /\b(berangkas|brankas)\b/i.test(r.nama || ''))
+          .map((r) => r.kode)
+      );
+      let latestClosingTs = 0;
+      for (const t of this.db.transferRekening || []) {
+        if (t.rekeningSumber === 'KAS01' && berangkasCodes.has(t.rekeningTujuan)) {
+          const ts = Date.parse(t.createdAt || '') || 0;
+          if (ts > latestClosingTs) latestClosingTs = ts;
+        }
+      }
+      if (latestClosingTs > 0) {
+        let latestOtherKas01Ts = 0;
+        const checkTs = (createdAt?: string) => {
+          const ts = Date.parse(createdAt || '') || 0;
+          if (ts > latestOtherKas01Ts) latestOtherKas01Ts = ts;
+        };
+        for (const t of this.db.transferRekening || []) {
+          if (
+            (t.rekeningSumber === 'KAS01' && !berangkasCodes.has(t.rekeningTujuan)) ||
+            t.rekeningTujuan === 'KAS01'
+          ) {
+            checkTs(t.createdAt);
+          }
+        }
+        for (const p of this.db.penjualan || []) {
+          if (p.rekeningTujuan === 'KAS01') checkTs(p.createdAt);
+        }
+        for (const p of this.db.penjualanHasilBumi || []) {
+          if (p.rekeningTujuan === 'KAS01') checkTs(p.createdAt);
+        }
+        for (const b of this.db.pembelianBarang || []) {
+          if (b.rekeningSumber === 'KAS01') checkTs(b.createdAt);
+        }
+        for (const b of this.db.pembelianHasilBumi || []) {
+          if (b.rekeningSumber === 'KAS01') checkTs(b.createdAt);
+        }
+        for (const e of this.db.pengeluaran || []) {
+          if (e.rekeningSumber === 'KAS01') checkTs(e.createdAt);
+        }
+        for (const g of this.db.penggajian || []) {
+          if (g.rekeningSumber === 'KAS01') checkTs((g as any).createdAt);
+        }
+        for (const br of this.db.brilink || []) {
+          if (br.rekeningKasTunai === 'KAS01') checkTs(br.createdAt);
+        }
+        if (latestClosingTs >= latestOtherKas01Ts) {
+          kas01Acc.saldoSaatIni = 0;
+        }
+      }
+    }
+
     // Pastikan DP Parabot maupun TANPA_DIVISI bukan Divisi dan tidak memiliki akun OPERASIONAL_DIVISI
     this.db.divisi = (this.db.divisi || []).filter(
       (d) =>

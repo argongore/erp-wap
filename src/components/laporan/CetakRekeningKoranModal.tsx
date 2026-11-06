@@ -570,20 +570,6 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
       doc.setTextColor(30, 41, 59);
       doc.text('AN FAHLEVI MARTA WIJAYA', 17, footY + 21.8);
 
-      // Center: Stamp / Emblem
-      if (logoDataUrl) {
-        try {
-          const fmt = logoDataUrl.includes('png') ? 'PNG' : 'JPEG';
-          doc.addImage(logoDataUrl, fmt, 108, footY + 2, 15, 15, undefined, 'FAST');
-        } catch {
-          // ignore logo stamp failure
-        }
-      }
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6.5);
-      doc.setTextColor(100, 116, 139);
-      doc.text('DOKUMEN RESMI TERVERIFIKASI', 115.5, footY + 21, { align: 'center' });
-
       // Right: TERIMA KASIH — PT WIJAYA AGRO PERKASA / KASIR
       const signRightX = pageWidth - 14;
       doc.setFont('helvetica', 'bold');
@@ -1262,16 +1248,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                   )}
                 </div>
 
-                <div className="sm:col-span-3 flex flex-col items-center justify-center text-center">
-                  <img
-                    src={activeProfil.logoUrl || DEFAULT_PT_LOGO_URL}
-                    alt="Stempel PT Wijaya Agro Perkasa"
-                    className="w-14 h-14 object-contain opacity-90 rounded-lg border border-zinc-300 p-0.5"
-                  />
-                  <span className="text-[9px] font-bold uppercase text-zinc-500 mt-1">
-                    DOKUMEN RESMI TERVERIFIKASI
-                  </span>
-                </div>
+                <div className="sm:col-span-3 hidden sm:block" />
 
                 <div className="sm:col-span-4 text-center sm:text-right space-y-6">
                   <div>

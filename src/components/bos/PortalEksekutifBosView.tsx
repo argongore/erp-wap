@@ -42,6 +42,8 @@ import {
   RekapMasterKaryawanSummary,
   RekapPayrollBulananSummary,
   TransaksiPenggajian,
+  isKategoriAlatNonStok,
+  Produk,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { CetakRekeningKoranModal } from '../laporan/CetakRekeningKoranModal.tsx';
@@ -193,6 +195,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   const [selectedStatement, setSelectedStatement] = useState<RekeningKoranMitraSummary | null>(null);
   const [loadingStatementId, setLoadingStatementId] = useState<string | null>(null);
 
+  // Valuasi stok barang penjualan & modal hasil bumi untuk Kas & Saldo PT
+  const [produkList, setProdukList] = useState<Produk[]>([]);
+  const [ringkasanHbKas, setRingkasanHbKas] = useState<Awaited<
+    ReturnType<typeof api.getRingkasanHasilBumiBulanan>
+  > | null>(null);
+
 
   const availableYears = useMemo(() => {
     const cy = nowInit.getFullYear();
@@ -249,14 +257,25 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     }
   }, []);
 
+  const loadKasValuasi = useCallback(async () => {
+    const [prodRes, hbRes] = await Promise.all([
+      api.getProduk().catch(() => [] as Produk[]),
+      api.getRingkasanHasilBumiBulanan().catch(() => null),
+    ]);
+    setProdukList(Array.isArray(prodRes) ? prodRes : []);
+    if (hbRes) setRingkasanHbKas(hbRes);
+  }, []);
+
   // Lazy-fetch tab data only when the user actually opens that tab
   useEffect(() => {
-    if (activeTab === 'divisi' && !loadedTabsRef.current.divisi) {
+    if (activeTab === 'kas') {
+      void loadKasValuasi();
+    } else if (activeTab === 'divisi' && !loadedTabsRef.current.divisi) {
       void loadDivisiTab(false);
     } else if (activeTab === 'mitra' && !loadedTabsRef.current.mitra) {
       void loadMitraTab(false);
     }
-  }, [activeTab, loadDivisiTab, loadMitraTab]);
+  }, [activeTab, loadKasValuasi, loadDivisiTab, loadMitraTab]);
 
   // Load or reload employee payroll recap whenever Karyawan tab is active or period/divisi filter changes
   useEffect(() => {
@@ -269,7 +288,9 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   useEffect(() => {
     const onUpdated = () => {
       loadedTabsRef.current = { divisi: false, karyawan: false, mitra: false };
-      if (activeTab === 'divisi') {
+      if (activeTab === 'kas') {
+        void loadKasValuasi();
+      } else if (activeTab === 'divisi') {
         void loadDivisiTab(true);
       } else if (activeTab === 'karyawan') {
         void loadKaryawanTab(true);
@@ -376,9 +397,52 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     (sum, r) => sum + (Number(r.saldoSaatIni) || 0),
     0
   );
-  const totalLikuiditasRiil = totalKasTunai + totalBerangkas + totalBankPerusahaan;
   const totalPiutangBon = Number(bon01?.saldoSaatIni) || 0;
   const totalTitipanMitra = Number(tit01?.saldoSaatIni) || 0;
+
+  // Akumulasi nilai stok barang penjualan (stok ready * harga beli/modal)
+  const totalNilaiStokBarang = useMemo(() => {
+    const produkMap = new Map<string, Produk>();
+    for (const p of produkList) {
+      produkMap.set(p.kode, p);
+    }
+    let total = 0;
+    for (const sb of stokBarangList || []) {
+      const nonStok = sb.tanpaStok === true || isKategoriAlatNonStok(sb.kategori);
+      const qty = Number(sb.stok) || 0;
+      if (!nonStok && qty > 0) {
+        const hargaModal = Number(produkMap.get(sb.kode)?.hargaBeli) || 0;
+        total += Math.round(qty * hargaModal);
+      }
+    }
+    return total;
+  }, [stokBarangList, produkList]);
+
+  // Akumulasi nilai modal pembelian hasil bumi (seluruh komoditas ready)
+  const totalNilaiModalHb = useMemo(() => {
+    if (ringkasanHbKas && Number(ringkasanHbKas.totalNilaiModalReadyGudang) > 0) {
+      return Math.round(Number(ringkasanHbKas.totalNilaiModalReadyGudang));
+    }
+    let total = 0;
+    for (const hb of stokHasilBumiList || []) {
+      if (hb.kode === 'HB-01B' || hb.nama?.trim().toUpperCase() === 'KOPI JALAN') continue;
+      const readyKg = Math.max(0, Number(hb.stok) || 0);
+      const rataModal = Number(hb.hargaBeliStandar || hb.rataRataModalAwal || 0);
+      total += Math.round(readyKg * rataModal);
+    }
+    return total;
+  }, [stokHasilBumiList, ringkasanHbKas]);
+
+  // Rumus Kas & Saldo PT:
+  // Kas Utama Kasir + Saldo Berangkas + Total Rekening Bank PT + Piutang Bon Mitra + Nilai Stok Barang Penjualan + Nilai Modal Hasil Bumi - Hutang/Titipan Hasil Bumi
+  const totalKasDanSaldoPt =
+    totalKasTunai +
+    totalBerangkas +
+    totalBankPerusahaan +
+    totalPiutangBon +
+    totalNilaiStokBarang +
+    totalNilaiModalHb -
+    totalTitipanMitra;
 
   // Map idKaryawan -> idMitraTerkait so Boss can open Rekening Koran Bon for any employee
   const karyawanMitraMap = useMemo(() => {
@@ -698,10 +762,10 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
               <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-5 border-b border-slate-100">
                 <div>
                   <p className="text-xs font-medium text-slate-500">
-                    Total Uang Riil Perusahaan Saat Ini (Kas Fisik + Seluruh Bank PT)
+                    Total Kas &amp; Saldo PT (Kasir + Berangkas + Bank PT + Piutang Bon + Stok Barang + Modal HB - Titipan HB)
                   </p>
                   <div className="mt-1 font-mono text-2xl sm:text-4xl font-bold tracking-tight text-slate-900 tabular-nums">
-                    {formatRupiah(totalLikuiditasRiil)}
+                    {formatRupiah(totalKasDanSaldoPt)}
                   </div>
                 </div>
                 <div className="text-xs text-slate-500">
@@ -709,10 +773,10 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4 pt-5">
                 <div className="space-y-1">
-                  <div className="text-xs text-slate-500">Kas Utama Kasir (KAS01)</div>
-                  <div className="font-mono text-lg font-bold text-emerald-700 tabular-nums">
+                  <div className="text-xs text-slate-500">+ Kas Utama Kasir (KAS01)</div>
+                  <div className="font-mono text-base sm:text-lg font-bold text-emerald-700 tabular-nums">
                     {formatRupiah(totalKasTunai)}
                   </div>
                   <div className="text-[11px] text-slate-400">Uang tunai berjalan di kasir</div>
@@ -720,38 +784,54 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
 
                 <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
                   <div className="text-xs text-slate-500">
-                    Saldo {berangkasRek?.nama || 'BERANGKAS'} ({berangkasRek?.kode || 'BRK01'})
+                    + Saldo {berangkasRek?.nama || 'BERANGKAS'} ({berangkasRek?.kode || 'BRK01'})
                   </div>
-                  <div className="font-mono text-lg font-bold text-amber-800 tabular-nums">
+                  <div className="font-mono text-base sm:text-lg font-bold text-amber-800 tabular-nums">
                     {formatRupiah(totalBerangkas)}
                   </div>
-                  <div className="text-[11px] text-slate-400">Simpanan tunai berangkas kantor</div>
+                  <div className="text-[11px] text-slate-400">Simpanan tunai berangkas</div>
                 </div>
 
                 <div className="space-y-1 lg:border-l lg:border-slate-100 lg:pl-4">
-                  <div className="text-xs text-slate-500">Total Rekening Bank PT</div>
-                  <div className="font-mono text-lg font-bold text-slate-900 tabular-nums">
+                  <div className="text-xs text-slate-500">+ Total Rekening Bank PT</div>
+                  <div className="font-mono text-base sm:text-lg font-bold text-slate-900 tabular-nums">
                     {formatRupiah(totalBankPerusahaan)}
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    Akumulasi {bankPerusahaanList.length} rekening bank aktif
+                    {bankPerusahaanList.length} rekening bank aktif
                   </div>
                 </div>
 
                 <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
-                  <div className="text-xs text-slate-500">Total Piutang Bon Mitra (BON01)</div>
-                  <div className="font-mono text-lg font-bold text-amber-700 tabular-nums">
+                  <div className="text-xs text-slate-500">+ Piutang Bon Mitra (BON01)</div>
+                  <div className="font-mono text-base sm:text-lg font-bold text-amber-700 tabular-nums">
                     {formatRupiah(totalPiutangBon)}
                   </div>
-                  <div className="text-[11px] text-slate-400">Uang PT di luar (belum ditagih)</div>
+                  <div className="text-[11px] text-slate-400">Uang PT di luar</div>
+                </div>
+
+                <div className="space-y-1 xl:border-l xl:border-slate-100 xl:pl-4">
+                  <div className="text-xs text-slate-500">+ Nilai Stok Barang Penjualan</div>
+                  <div className="font-mono text-base sm:text-lg font-bold text-sky-700 tabular-nums">
+                    {formatRupiah(totalNilaiStokBarang)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">Modal stok barang ready</div>
+                </div>
+
+                <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
+                  <div className="text-xs text-slate-500">+ Nilai Modal Hasil Bumi</div>
+                  <div className="font-mono text-base sm:text-lg font-bold text-indigo-700 tabular-nums">
+                    {formatRupiah(totalNilaiModalHb)}
+                  </div>
+                  <div className="text-[11px] text-slate-400">Modal pembelian HB ready</div>
                 </div>
 
                 <div className="space-y-1 lg:border-l lg:border-slate-100 lg:pl-4">
-                  <div className="text-xs text-slate-500">Titipan Hasil Bumi Mitra (TIT01)</div>
-                  <div className="font-mono text-lg font-bold text-rose-700 tabular-nums">
+                  <div className="text-xs text-slate-500">- Hutang / Titipan HB (TIT01)</div>
+                  <div className="font-mono text-base sm:text-lg font-bold text-rose-700 tabular-nums">
                     {formatRupiah(totalTitipanMitra)}
                   </div>
-                  <div className="text-[11px] text-slate-400">Kewajiban panen belum dicairkan</div>
+                  <div className="text-[11px] text-slate-400">Kewajiban belum dicairkan</div>
                 </div>
               </div>
             </section>

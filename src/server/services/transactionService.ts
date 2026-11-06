@@ -4693,6 +4693,13 @@ export class TransactionService {
 
       db.transferRekening.unshift(transferRecord);
 
+      if (
+        sumberAcc.kode === 'KAS01' &&
+        (tujuanAcc.kode === 'BRK01' || /\b(berangkas|brankas)\b/i.test(tujuanAcc.nama || ''))
+      ) {
+        sumberAcc.saldoSaatIni = 0;
+      }
+
       this.addAuditLog(
         db,
         'TRANSFER',

@@ -101,6 +101,8 @@ class SupabaseSyncEngine {
   private lastLocalMutationAt = 0;
   private lastMirrorFingerprint = '';
   private retryTimer: NodeJS.Timeout | null = null;
+  private consecutiveFailures = 0;
+  private activeDrainPromise: Promise<void> | null = null;
 
   constructor() {
     this.loadConfig();
@@ -301,7 +303,7 @@ class SupabaseSyncEngine {
       this.hasUnsyncedLocalChanges ||
       this.isSyncing ||
       this.queuedData !== null ||
-      Date.now() - this.lastLocalMutationAt < 15000
+      Date.now() - this.lastLocalMutationAt < 60000
     );
   }
 
@@ -616,6 +618,7 @@ class SupabaseSyncEngine {
         }
       }
 
+      this.consecutiveFailures = 0;
       this.config.lastSyncTime = now.iso;
       this.config.lastSyncStatus = 'SUCCESS';
       this.config.lastSyncMessage = `Tersinkron ke Supabase (${produkCount} produk, ${mitraCount} mitra, ${karyawanCount} karyawan, ${txCount} transaksi)`;
@@ -626,15 +629,17 @@ class SupabaseSyncEngine {
         message: this.config.lastSyncMessage,
       };
     } catch (err: any) {
+      this.consecutiveFailures += 1;
       this.hasUnsyncedLocalChanges = true;
       if (!this.queuedData) {
         this.queuedData = data;
       }
       if (!this.retryTimer && !IS_SERVERLESS) {
+        const backoffMs = Math.min(30000, 1500 * Math.pow(2, Math.min(this.consecutiveFailures - 1, 5))) + Math.floor(Math.random() * 400);
         this.retryTimer = setTimeout(() => {
           this.retryTimer = null;
           void this.drainQueue();
-        }, 4000);
+        }, backoffMs);
       }
       this.config.lastSyncStatus = 'ERROR';
       this.config.lastSyncMessage = err.message || 'Gagal sinkron ke Supabase';
@@ -696,19 +701,44 @@ class SupabaseSyncEngine {
   }
 
   private async drainQueue(): Promise<void> {
-    if (this.isSyncing) return;
-    this.isSyncing = true;
-    try {
-      while (this.queuedData) {
-        const snapshot = this.queuedData;
-        this.queuedData = null;
-        await this.pushToSupabase(snapshot);
-      }
-    } catch (e) {
-      console.warn('[SupabaseSyncEngine] Auto-sync queue error:', e);
-    } finally {
-      this.isSyncing = false;
+    if (this.activeDrainPromise) {
+      await this.activeDrainPromise;
+      return;
     }
+    this.isSyncing = true;
+    this.activeDrainPromise = (async () => {
+      try {
+        while (this.queuedData) {
+          const snapshot = this.queuedData;
+          this.queuedData = null;
+          let pushed = false;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const res = await this.pushToSupabase(snapshot);
+            if (res.success) {
+              pushed = true;
+              break;
+            }
+            if (attempt < 2) {
+              const delayMs = 400 * Math.pow(2, attempt) + Math.floor(Math.random() * 150);
+              await new Promise((r) => setTimeout(r, delayMs));
+            }
+          }
+          if (!pushed) {
+            // Keep latest snapshot queued for background exponential backoff retry
+            if (!this.queuedData) {
+              this.queuedData = snapshot;
+            }
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn('[SupabaseSyncEngine] Auto-sync queue error:', e);
+      } finally {
+        this.isSyncing = false;
+        this.activeDrainPromise = null;
+      }
+    })();
+    await this.activeDrainPromise;
   }
 
   /**

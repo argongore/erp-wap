@@ -158,8 +158,12 @@ export function readCloudReconnectPayload(): {
  * HTML responses (502/503/504 or <!doctype html>), and guarantees clean Indonesian error messages.
  */
 export async function requestJson<T = any>(url: string, init?: RequestInit): Promise<T> {
-  const maxAttempts = 4;
-  const retryDelays = [650, 1300, 2200];
+  const maxAttempts = 5;
+  const getBackoffDelayMs = (attempt: number) => {
+    const exp = Math.min(8000, 500 * Math.pow(2, attempt));
+    const jitter = Math.floor(Math.random() * 250);
+    return exp + jitter;
+  };
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -188,7 +192,7 @@ export async function requestJson<T = any>(url: string, init?: RequestInit): Pro
     } catch (netErr: any) {
       if (attempt < maxAttempts - 1) {
         await waitForBrowserOnline(1500);
-        await new Promise((r) => setTimeout(r, retryDelays[attempt] || 1500));
+        await new Promise((r) => setTimeout(r, getBackoffDelayMs(attempt)));
         continue;
       }
       throw new Error('Tidak dapat terhubung ke server aplikasi. Periksa koneksi internet Anda lalu coba lagi.');
@@ -201,7 +205,14 @@ export async function requestJson<T = any>(url: string, init?: RequestInit): Pro
       trimmed.toLowerCase().startsWith('<html') ||
       (res.headers.get('content-type') || '').toLowerCase().includes('text/html');
 
-    if (looksLikeHtml || res.status === 502 || res.status === 503 || res.status === 504) {
+    if (
+      looksLikeHtml ||
+      res.status === 408 ||
+      res.status === 429 ||
+      res.status === 502 ||
+      res.status === 503 ||
+      res.status === 504
+    ) {
       // Do not retry auth/forbidden HTML pages; guide user to refresh session immediately
       if (res.status === 401 || res.status === 403) {
         throw new Error(
@@ -210,7 +221,7 @@ export async function requestJson<T = any>(url: string, init?: RequestInit): Pro
       }
 
       if (attempt < maxAttempts - 1) {
-        await new Promise((r) => setTimeout(r, retryDelays[attempt] || 1500));
+        await new Promise((r) => setTimeout(r, getBackoffDelayMs(attempt)));
         continue;
       }
 
