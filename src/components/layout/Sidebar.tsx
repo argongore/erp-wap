@@ -61,6 +61,7 @@ export type ActiveTab =
   | 'menu-divisi'
   | 'stok-barang'
   | 'stok-hasil-bumi'
+  | 'invoice-surat-jalan'
   | 'laba-rugi-produk'
   | 'rekening-koran-mitra'
   | 'laporan-transaksi'
@@ -95,6 +96,7 @@ export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   'menu-divisi': 'Divisi & Kas Operasional',
   'stok-barang': 'Stok Barang Toko',
   'stok-hasil-bumi': 'Stok & Rekap Hasil Bumi',
+  'invoice-surat-jalan': 'Invoice Surat Jalan Penjualan',
   'laba-rugi-produk': 'Laba & Rugi Per Divisi',
   'rekening-koran-mitra': 'Rekening Koran Mitra',
   'laporan-transaksi': 'Rekap Arus Kas Kasir Harian',
@@ -128,6 +130,7 @@ export const ACTIVE_TAB_CASH_FLOW: Record<ActiveTab, CashFlowDirection> = {
   'menu-divisi': null,
   'stok-barang': null,
   'stok-hasil-bumi': null,
+  'invoice-surat-jalan': null,
   'laba-rugi-produk': null,
   'rekening-koran-mitra': null,
   'laporan-transaksi': null,
@@ -408,6 +411,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             keywords: 'stok hasil bumi gudang bulanan terjual ready tonase uang masuk',
             icon: Wheat,
             tab: 'stok-hasil-bumi',
+          },
+          {
+            id: 'invoice-surat-jalan',
+            label: 'Invoice Surat Jalan',
+            sublabel: 'Jual mitra & arus BNI DIRECT',
+            keywords: 'invoice surat jalan sj titip jual barang mitra roni anggara basis buyer pt komisi kasbon pending order bni direct',
+            icon: FileSpreadsheet,
+            tab: 'invoice-surat-jalan',
           },
         ],
       },

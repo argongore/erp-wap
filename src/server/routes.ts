@@ -1779,6 +1779,47 @@ apiRouter.delete('/transaksi/uang-masuk/:id', async (req, res) => {
   }
 });
 
+// Surat Jalan & Invoice Titip Jual Mitra
+apiRouter.get('/surat-jalan', async (_req, res) => {
+  try {
+    const list = await TransactionService.getInvoiceSuratJalanList();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/surat-jalan', async (req, res) => {
+  try {
+    const record = await TransactionService.createInvoiceSuratJalan(req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/surat-jalan/cairkan', async (req, res) => {
+  try {
+    const { idInvoice, rekeningSumber, tanggal } = req.body;
+    const record = await TransactionService.cairkanInvoiceSuratJalan(idInvoice, {
+      rekeningSumber,
+      tanggal,
+    });
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.delete('/surat-jalan/:id', async (req, res) => {
+  try {
+    const result = await TransactionService.deleteInvoiceSuratJalan(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 // Penjualan / Pengiriman Hasil Bumi Keluar Gudang & Ringkasan Bulanan
 apiRouter.get('/transaksi/penjualan-hasil-bumi', (_req, res) => {
   try {

@@ -51,6 +51,7 @@ import {
   KelompokItemPengeluaran,
   NotaSilangItemInput,
   NotaSilangRecordSummary,
+  InvoiceSuratJalanRecord,
 } from '../server/types.ts';
 
 export interface KaryawanWithBon extends Karyawan {
@@ -1241,6 +1242,70 @@ export const api = {
   getBayarBon: async (): Promise<TransaksiBayarBon[]> => {
     const data = await requestJson('/api/transaksi/bayar-bon');
     if (!data.success) throw new Error(data.message);
+    return data.data;
+  },
+
+  // Surat Jalan & Invoice Titip Jual Mitra
+  getInvoiceSuratJalan: async (): Promise<InvoiceSuratJalanRecord[]> => {
+    const data = await requestJson('/api/surat-jalan');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat invoice surat jalan');
+    return data.data;
+  },
+
+  createInvoiceSuratJalan: async (payload: {
+    noInvoice: string;
+    tanggal?: string;
+    idMitra: string;
+    namaMitra: string;
+    komoditasNama: string;
+    kategoriKode?: string;
+    platTruk?: string;
+    tonaseAwalKg: number;
+    tonaseAkhirKg: number;
+    basisMitra: number;
+    basisBuyer: number;
+    rendemen: number;
+    hargaPerKgMitra?: number;
+    hargaPerKgBuyer?: number;
+    pajakNominal?: number;
+    komisiNominal?: number;
+    kasbonNominal?: number;
+    potongPiutang?: boolean;
+    potonganLainLabel?: string;
+    potonganLainNominal?: number;
+    tambahanLabel?: string;
+    tambahanNominal?: number;
+    rekeningPtKode?: string;
+    statusPembayaranMitra?: 'PENDING' | 'LUNAS';
+  }): Promise<InvoiceSuratJalanRecord> => {
+    const data = await requestJson('/api/surat-jalan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal membuat invoice surat jalan');
+    return data.data;
+  },
+
+  cairkanInvoiceSuratJalan: async (payload: {
+    idInvoice: string;
+    rekeningSumber?: string;
+    tanggal?: string;
+  }): Promise<InvoiceSuratJalanRecord> => {
+    const data = await requestJson('/api/surat-jalan/cairkan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mencairkan hak mitra surat jalan');
+    return data.data;
+  },
+
+  deleteInvoiceSuratJalan: async (id: string): Promise<any> => {
+    const data = await requestJson(`/api/surat-jalan/${id}`, {
+      method: 'DELETE',
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus invoice surat jalan');
     return data.data;
   },
 

@@ -2034,6 +2034,44 @@ export interface RekapHarianBosLengkapResponse {
   barangTokoMasukHariIni: ItemBarangTokoMasukBos[];
   totalRpBarangTokoHariIni: number;
 }
-
-
-
+export interface InvoiceSuratJalanRecord {
+  id: string;
+  noInvoice: string;
+  tanggal: string; // DD/MM/YYYY
+  jam?: string;
+  idMitra: string;
+  namaMitra: string;
+  komoditasNama: string;
+  kategoriKode?: string;
+  platTruk?: string;
+  tonaseAwalKg: number;
+  tonaseAkhirKg: number;
+  susutKg: number;
+  basisMitra: number;
+  basisBuyer: number;
+  rendemen: number;
+  hargaPerKgMitra: number;
+  hargaPerKgBuyer: number;
+  totalPenjualanMitra: number; // Tonase Akhir * hargaPerKgMitra
+  totalPenjualanBuyer: number; // Tonase Akhir * hargaPerKgBuyer
+  marginHargaPt: number; // totalPenjualanBuyer - totalPenjualanMitra
+  pajakNominal: number; // 0.25% * totalPenjualanMitra
+  komisiNominal: number; // Komisi jasa jual PT WAP
+  kasbonNominal: number; // Potongan kasbon / piutang mitra
+  potongPiutang: boolean;
+  potonganLainLabel?: string;
+  potonganLainNominal?: number;
+  tambahanLabel?: string;
+  tambahanNominal?: number;
+  totalKeuntunganPt: number; // marginHargaPt + komisiNominal
+  totalPotongan: number;
+  jumlahPembayaranMitra: number; // Hak bersih mitra
+  rekeningPtKode: string; // e.g. BNI01
+  statusPembayaranMitra: 'PENDING' | 'LUNAS'; // Pending Order vs Langsung Bayar
+  tanggalBayarMitra?: string;
+  idUangMasukBuyer?: string;
+  idUangMasukKomisi?: string;
+  idPengeluaranBayarMitra?: string;
+  idBayarBonMitra?: string;
+  createdAt: string;
+}

@@ -48,6 +48,7 @@ interface Props {
   onRefresh: () => void;
   onPrintReceipt?: (receipt: ReceiptData) => void;
   onInputUangMasuk?: (noPenjualan: string) => void;
+  onNavigateToSuratJalan?: () => void;
 }
 
 const NAMA_BULAN = [
@@ -170,6 +171,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
   onRefresh,
   onPrintReceipt,
   onInputUangMasuk,
+  onNavigateToSuratJalan,
 }) => {
   const activeStokList = useMemo(
     () =>
@@ -792,11 +794,17 @@ export const StokHasilBumiView: React.FC<Props> = ({
 
           <button
             type="button"
-            onClick={() => setShowInvoiceSjModal(true)}
-            className="px-4 py-2 bg-sky-800 hover:bg-sky-900 text-white font-semibold text-xs rounded-lg transition-colors flex items-center space-x-1.5 cursor-pointer"
+            onClick={() => {
+              if (onNavigateToSuratJalan) {
+                onNavigateToSuratJalan();
+              } else {
+                setShowInvoiceSjModal(true);
+              }
+            }}
+            className="px-4 py-2 bg-sky-800 hover:bg-sky-900 text-white font-semibold text-xs rounded-lg transition-colors flex items-center space-x-1.5 cursor-pointer shadow-xs"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Invoice Surat Jalan</span>
+            <span>Menu Invoice Surat Jalan</span>
           </button>
 
           <button

@@ -81,6 +81,7 @@ import type {
   KolomKomoditasMasukBos,
   ItemBarangTokoMasukBos,
   RekapHarianBosLengkapResponse,
+  InvoiceSuratJalanRecord,
 } from '../types.ts';
 
 // Helper to generate unique sequential transaction IDs
@@ -17206,6 +17207,357 @@ export class TransactionService {
       totalRpBarangTokoHariIni,
     };
   }
+
+  // =========================================================================
+  // SURAT JALAN & INVOICE TITIP JUAL MITRA
+  // =========================================================================
+  public static async getInvoiceSuratJalanList(): Promise<InvoiceSuratJalanRecord[]> {
+    const db = dbManager.get();
+    return Array.isArray(db.suratJalan) ? db.suratJalan : [];
+  }
+
+  public static async createInvoiceSuratJalan(params: {
+    noInvoice: string;
+    tanggal?: string;
+    idMitra: string;
+    namaMitra: string;
+    komoditasNama: string;
+    kategoriKode?: string;
+    platTruk?: string;
+    tonaseAwalKg: number;
+    tonaseAkhirKg: number;
+    basisMitra: number;
+    basisBuyer: number;
+    rendemen: number;
+    hargaPerKgMitra?: number;
+    hargaPerKgBuyer?: number;
+    pajakNominal?: number;
+    komisiNominal?: number;
+    kasbonNominal?: number;
+    potongPiutang?: boolean;
+    potonganLainLabel?: string;
+    potonganLainNominal?: number;
+    tambahanLabel?: string;
+    tambahanNominal?: number;
+    rekeningPtKode?: string;
+    statusPembayaranMitra?: 'PENDING' | 'LUNAS';
+  }): Promise<InvoiceSuratJalanRecord> {
+    return await dbManager.executeTransaction((db) => {
+      const { tanggal: todayWib, jam, iso } = getWIBDateTime();
+      if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
+      if (!Array.isArray(db.uangMasuk)) db.uangMasuk = [];
+      if (!Array.isArray(db.pengeluaran)) db.pengeluaran = [];
+      if (!Array.isArray(db.bayarBon)) db.bayarBon = [];
+
+      const finalTanggal = normalizeDateToDmy(params.tanggal, todayWib);
+      const idRecord = generateId('SJ');
+      const noInvoice = (params.noInvoice || '').trim() || idRecord;
+
+      const tonaseAwalKg = Number(params.tonaseAwalKg) || 0;
+      const tonaseAkhirKg = Number(params.tonaseAkhirKg) || 0;
+      if (tonaseAkhirKg <= 0) {
+        throw new Error('Tonase Akhir Invoice (Kg) wajib lebih dari 0');
+      }
+
+      const rendemen = Number(params.rendemen) || 0;
+      const basisMitra = Number(params.basisMitra) || 0;
+      const basisBuyer = Number(params.basisBuyer) || basisMitra;
+
+      const hargaPerKgMitra =
+        params.hargaPerKgMitra !== undefined && params.hargaPerKgMitra > 0
+          ? Number(params.hargaPerKgMitra)
+          : Math.round(basisMitra * (rendemen / 100) * 100) / 100;
+
+      const hargaPerKgBuyer =
+        params.hargaPerKgBuyer !== undefined && params.hargaPerKgBuyer > 0
+          ? Number(params.hargaPerKgBuyer)
+          : Math.round(basisBuyer * (rendemen / 100) * 100) / 100;
+
+      const totalPenjualanMitra = Math.round(tonaseAkhirKg * hargaPerKgMitra);
+      const totalPenjualanBuyer = Math.round(tonaseAkhirKg * hargaPerKgBuyer);
+      const marginHargaPt = Math.max(0, totalPenjualanBuyer - totalPenjualanMitra);
+
+      const pajakNominal = Math.round(totalPenjualanMitra * 0.0025);
+      const komisiNominal = Math.round(Number(params.komisiNominal) || 0);
+      const potongPiutang = Boolean(params.potongPiutang);
+      const kasbonNominal = potongPiutang ? Math.round(Number(params.kasbonNominal) || 0) : 0;
+      const potonganLainNominal = Math.round(Number(params.potonganLainNominal) || 0);
+      const tambahanNominal = Math.round(Number(params.tambahanNominal) || 0);
+
+      const totalKeuntunganPt = marginHargaPt + komisiNominal;
+      const totalPotongan = pajakNominal + komisiNominal + kasbonNominal + potonganLainNominal;
+      const jumlahPembayaranMitra = Math.max(0, totalPenjualanMitra - totalPotongan + tambahanNominal);
+
+      const susutKg =
+        tonaseAwalKg > 0 && tonaseAkhirKg > 0
+          ? Math.round((tonaseAwalKg - tonaseAkhirKg) * 10) / 10
+          : 0;
+
+      // Rekening PT Penampung (default BNI DIRECT)
+      const targetRekKode = (params.rekeningPtKode || 'BNI01').trim();
+      const bankAcc =
+        db.rekening.find((r) => r.kode === targetRekKode) ||
+        db.rekening.find((r) => /bni\s*direct/i.test(r.nama || '')) ||
+        db.rekening.find((r) => !r.isVirtual && r.status === 'AKTIF');
+
+      if (!bankAcc) {
+        throw new Error('Rekening penampung transaksi (BNI DIRECT) tidak ditemukan');
+      }
+
+      // 1. Catat UANG MASUK dari BUYER ke BNI DIRECT (sebesar Total Penjualan Buyer)
+      const nominalBuyerMasuk = Math.max(totalPenjualanBuyer, totalPenjualanMitra);
+      const idUangMasukBuyer = generateId('UMS');
+      bankAcc.saldoSaatIni += nominalBuyerMasuk;
+
+      db.uangMasuk.unshift({
+        idTransaksi: idUangMasukBuyer,
+        tanggal: finalTanggal,
+        jam,
+        divisi: 'PT Wijaya Agro Perkasa',
+        kategori: 'PENJUALAN_SURAT_JALAN',
+        keterangan: `Penerimaan Uang Hasil Penjualan Buyer Surat Jalan ${noInvoice} a.n. ${params.namaMitra} (${tonaseAkhirKg} Kg ${params.komoditasNama})`,
+        nominal: nominalBuyerMasuk,
+        metode: 'TRANSFER',
+        rekeningTujuan: bankAcc.kode,
+        idMitra: params.idMitra,
+        namaPengirim: `Buyer PT (${params.namaMitra})`,
+        createdAt: iso,
+      });
+
+      // 2. Catat KOMISI PT sebagai Uang Masuk ke Divisi PT WAP (SINKRON agar tidak double kas fisik)
+      let idUangMasukKomisi: string | undefined = undefined;
+      if (komisiNominal > 0) {
+        idUangMasukKomisi = generateId('UMS');
+        db.uangMasuk.unshift({
+          idTransaksi: idUangMasukKomisi,
+          tanggal: finalTanggal,
+          jam,
+          divisi: 'PT Wijaya Agro Perkasa',
+          kategori: 'KOMISI_SURAT_JALAN',
+          keterangan: `Komisi Jasa Jual Surat Jalan ${noInvoice} (${params.namaMitra})`,
+          nominal: komisiNominal,
+          metode: 'SINKRON',
+          rekeningTujuan: 'SINKRON',
+          idMitra: params.idMitra,
+          namaPengirim: params.namaMitra,
+          createdAt: iso,
+        });
+      }
+
+      // 3. Potong Kasbon / Piutang Mitra jika ada
+      let idBayarBonMitra: string | undefined = undefined;
+      if (potongPiutang && kasbonNominal > 0) {
+        idBayarBonMitra = generateId('BYB');
+        db.bayarBon.unshift({
+          idTransaksi: idBayarBonMitra,
+          idMitra: params.idMitra,
+          namaMitra: params.namaMitra,
+          tanggal: finalTanggal,
+          jam,
+          totalBonSebelum: kasbonNominal,
+          nominalBayar: kasbonNominal,
+          sisaBonSetelah: 0,
+          alokasi: [],
+          metode: 'SINKRON',
+          rekeningTujuan: 'SINKRON',
+          keterangan: `Potong Piutang dari Invoice Surat Jalan ${noInvoice} (${params.namaMitra})`,
+          createdAt: iso,
+        });
+      }
+
+      // 4. Pembayaran Hak Supplier (Langsung Bayar vs Pending Order)
+      const isLunas = params.statusPembayaranMitra === 'LUNAS';
+      let idPengeluaranBayarMitra: string | undefined = undefined;
+
+      if (isLunas && jumlahPembayaranMitra > 0) {
+        idPengeluaranBayarMitra = generateId('PGL');
+        bankAcc.saldoSaatIni -= jumlahPembayaranMitra;
+
+        db.pengeluaran.unshift({
+          idTransaksi: idPengeluaranBayarMitra,
+          tanggal: finalTanggal,
+          jam,
+          divisi: 'PT Wijaya Agro Perkasa',
+          kategori: 'PEMBAYARAN_SUPPLIER_SJ',
+          keterangan: `Pembayaran Hak Supplier Surat Jalan ${noInvoice} a.n. ${params.namaMitra} (${params.komoditasNama} ${tonaseAkhirKg} Kg)`,
+          nominal: jumlahPembayaranMitra,
+          rekeningSumber: bankAcc.kode,
+          penerima: params.namaMitra,
+          createdAt: iso,
+        });
+      }
+
+      const newRecord: InvoiceSuratJalanRecord = {
+        id: idRecord,
+        noInvoice,
+        tanggal: finalTanggal,
+        jam,
+        idMitra: params.idMitra,
+        namaMitra: params.namaMitra,
+        komoditasNama: params.komoditasNama || 'KOPI',
+        kategoriKode: params.kategoriKode || 'SKA',
+        platTruk: params.platTruk || '',
+        tonaseAwalKg,
+        tonaseAkhirKg,
+        susutKg,
+        basisMitra,
+        basisBuyer,
+        rendemen,
+        hargaPerKgMitra,
+        hargaPerKgBuyer,
+        totalPenjualanMitra,
+        totalPenjualanBuyer,
+        marginHargaPt,
+        pajakNominal,
+        komisiNominal,
+        kasbonNominal,
+        potongPiutang,
+        potonganLainLabel: params.potonganLainLabel || '',
+        potonganLainNominal,
+        tambahanLabel: params.tambahanLabel || '',
+        tambahanNominal,
+        totalKeuntunganPt,
+        totalPotongan,
+        jumlahPembayaranMitra,
+        rekeningPtKode: bankAcc.kode,
+        statusPembayaranMitra: isLunas ? 'LUNAS' : 'PENDING',
+        tanggalBayarMitra: isLunas ? finalTanggal : undefined,
+        idUangMasukBuyer,
+        idUangMasukKomisi,
+        idPengeluaranBayarMitra,
+        idBayarBonMitra,
+        createdAt: iso,
+      };
+
+      db.suratJalan.unshift(newRecord);
+      dbManager.synchronizeVirtualAccounts();
+
+      this.addAuditLog(
+        db,
+        'CREATE',
+        idRecord,
+        `Invoice Surat Jalan ${noInvoice} [${params.namaMitra} · ${tonaseAkhirKg} Kg] Total Inv Rp ${totalPenjualanMitra.toLocaleString(
+          'id-ID'
+        )} · Status: ${newRecord.statusPembayaranMitra}`,
+        totalPenjualanBuyer,
+        bankAcc.kode
+      );
+
+      return newRecord;
+    });
+  }
+
+  public static async cairkanInvoiceSuratJalan(
+    idInvoice: string,
+    params?: { rekeningSumber?: string; tanggal?: string }
+  ): Promise<InvoiceSuratJalanRecord> {
+    return await dbManager.executeTransaction((db) => {
+      const { tanggal: todayWib, jam, iso } = getWIBDateTime();
+      if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
+      if (!Array.isArray(db.pengeluaran)) db.pengeluaran = [];
+
+      const record = db.suratJalan.find((s) => s.id === idInvoice || s.noInvoice === idInvoice);
+      if (!record) {
+        throw new Error(`Invoice Surat Jalan ${idInvoice} tidak ditemukan`);
+      }
+      if (record.statusPembayaranMitra === 'LUNAS') {
+        throw new Error(`Invoice ${record.noInvoice} sudah lunas dicairkan ke mitra.`);
+      }
+
+      const finalTanggal = normalizeDateToDmy(params?.tanggal, todayWib);
+      const targetRek = (params?.rekeningSumber || record.rekeningPtKode || 'BNI01').trim();
+      const bankAcc =
+        db.rekening.find((r) => r.kode === targetRek) ||
+        db.rekening.find((r) => r.kode === record.rekeningPtKode) ||
+        db.rekening.find((r) => /bni\s*direct/i.test(r.nama || ''));
+
+      if (!bankAcc) {
+        throw new Error(`Rekening pembayaran ${targetRek} tidak ditemukan`);
+      }
+
+      if (record.jumlahPembayaranMitra > 0) {
+        const idPengeluaran = generateId('PGL');
+        bankAcc.saldoSaatIni -= record.jumlahPembayaranMitra;
+
+        db.pengeluaran.unshift({
+          idTransaksi: idPengeluaran,
+          tanggal: finalTanggal,
+          jam,
+          divisi: 'PT Wijaya Agro Perkasa',
+          kategori: 'PEMBAYARAN_SUPPLIER_SJ',
+          keterangan: `Pencairan Pending Order Surat Jalan ${record.noInvoice} a.n. ${record.namaMitra} (${record.komoditasNama} ${record.tonaseAkhirKg} Kg)`,
+          nominal: record.jumlahPembayaranMitra,
+          rekeningSumber: bankAcc.kode,
+          penerima: record.namaMitra,
+          createdAt: iso,
+        });
+        record.idPengeluaranBayarMitra = idPengeluaran;
+      }
+
+      record.statusPembayaranMitra = 'LUNAS';
+      record.tanggalBayarMitra = finalTanggal;
+
+      dbManager.synchronizeVirtualAccounts();
+
+      this.addAuditLog(
+        db,
+        'UPDATE',
+        record.id,
+        `Pencairan Hak Supplier Surat Jalan ${record.noInvoice} a.n. ${record.namaMitra} Rp ${record.jumlahPembayaranMitra.toLocaleString(
+          'id-ID'
+        )} dari ${bankAcc.kode}`,
+        record.jumlahPembayaranMitra,
+        bankAcc.kode
+      );
+
+      return record;
+    });
+  }
+
+  public static async deleteInvoiceSuratJalan(
+    idInvoice: string
+  ): Promise<{ deleted: InvoiceSuratJalanRecord }> {
+    return await dbManager.executeTransaction((db) => {
+      if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
+      const idx = db.suratJalan.findIndex((s) => s.id === idInvoice || s.noInvoice === idInvoice);
+      if (idx === -1) throw new Error(`Invoice Surat Jalan ${idInvoice} tidak ditemukan`);
+
+      const target = db.suratJalan[idx];
+      // Revert bank balance & delete related transactions
+      if (target.idUangMasukBuyer && Array.isArray(db.uangMasuk)) {
+        const uIdx = db.uangMasuk.findIndex((u) => u.idTransaksi === target.idUangMasukBuyer);
+        if (uIdx !== -1) {
+          const uRecord = db.uangMasuk[uIdx];
+          const acc = db.rekening.find((r) => r.kode === uRecord.rekeningTujuan);
+          if (acc) acc.saldoSaatIni -= uRecord.nominal;
+          db.uangMasuk.splice(uIdx, 1);
+        }
+      }
+      if (target.idUangMasukKomisi && Array.isArray(db.uangMasuk)) {
+        const uIdx = db.uangMasuk.findIndex((u) => u.idTransaksi === target.idUangMasukKomisi);
+        if (uIdx !== -1) db.uangMasuk.splice(uIdx, 1);
+      }
+      if (target.idBayarBonMitra && Array.isArray(db.bayarBon)) {
+        const bIdx = db.bayarBon.findIndex((b) => b.idTransaksi === target.idBayarBonMitra);
+        if (bIdx !== -1) db.bayarBon.splice(bIdx, 1);
+      }
+      if (target.idPengeluaranBayarMitra && Array.isArray(db.pengeluaran)) {
+        const pIdx = db.pengeluaran.findIndex((p) => p.idTransaksi === target.idPengeluaranBayarMitra);
+        if (pIdx !== -1) {
+          const pRecord = db.pengeluaran[pIdx];
+          const acc = db.rekening.find((r) => r.kode === pRecord.rekeningSumber);
+          if (acc) acc.saldoSaatIni += pRecord.nominal;
+          db.pengeluaran.splice(pIdx, 1);
+        }
+      }
+
+      db.suratJalan.splice(idx, 1);
+      dbManager.synchronizeVirtualAccounts();
+
+      return { deleted: target };
+    });
+  }
 }
+
 
 

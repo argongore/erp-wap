@@ -42,6 +42,7 @@ import type {
   DatabaseIntegrityStatus,
   ItemInventaris,
   MasterItemPengeluaran,
+  InvoiceSuratJalanRecord,
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
 
@@ -72,6 +73,7 @@ export interface DatabaseSchema {
   cashOpnameLogs?: CatatanCashOpname[];
   inventaris?: ItemInventaris[];
   masterItemPengeluaran?: MasterItemPengeluaran[];
+  suratJalan?: InvoiceSuratJalanRecord[];
   deletedHasilBumiKodes?: string[];
   deletedMasterPengeluaranNames?: string[];
 }
@@ -533,6 +535,7 @@ export function getDefaultDatabase(): DatabaseSchema {
     uangMasuk: [],
     inventaris: [],
     masterItemPengeluaran: [],
+    suratJalan: [],
     auditLogs: [
       {
         id: 'LOG-INIT',
@@ -601,6 +604,7 @@ class DatabaseManager {
           cashOpnameLogs: Array.isArray(parsed.cashOpnameLogs) ? parsed.cashOpnameLogs : [],
           inventaris: Array.isArray(parsed.inventaris) ? parsed.inventaris : [],
           masterItemPengeluaran: Array.isArray(parsed.masterItemPengeluaran) ? parsed.masterItemPengeluaran : [],
+          suratJalan: Array.isArray(parsed.suratJalan) ? parsed.suratJalan : [],
           deletedHasilBumiKodes: Array.isArray(parsed.deletedHasilBumiKodes) ? parsed.deletedHasilBumiKodes : [],
           deletedMasterPengeluaranNames: Array.isArray(parsed.deletedMasterPengeluaranNames)
             ? parsed.deletedMasterPengeluaranNames
@@ -829,6 +833,9 @@ class DatabaseManager {
     this.db.masterItemPengeluaran = Array.isArray(incoming.masterItemPengeluaran)
       ? incoming.masterItemPengeluaran
       : (this.db.masterItemPengeluaran || []);
+    this.db.suratJalan = Array.isArray(incoming.suratJalan)
+      ? incoming.suratJalan
+      : (this.db.suratJalan || []);
     this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes)
       ? incoming.deletedHasilBumiKodes
       : (this.db.deletedHasilBumiKodes || []);

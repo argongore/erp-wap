@@ -21,6 +21,7 @@ import { MasterKaryawanView } from './components/karyawan/MasterKaryawanView.tsx
 import { DivisiKeuanganView } from './components/karyawan/DivisiKeuanganView.tsx';
 import { StokBarangView } from './components/stok/StokBarangView.tsx';
 import { StokHasilBumiView } from './components/stok/StokHasilBumiView.tsx';
+import { InvoiceSuratJalanView } from './components/stok/InvoiceSuratJalanView.tsx';
 import { LabaRugiProdukView } from './components/laporan/LabaRugiProdukView.tsx';
 import { RekeningKoranMitraView } from './components/laporan/RekeningKoranMitraView.tsx';
 import { RekapTransaksiView } from './components/laporan/RekapTransaksiView.tsx';
@@ -1367,6 +1368,16 @@ export default function App() {
                     setSelectedNoPenjualanHbForUangMasuk(noPenjualan);
                     setActiveTab('kasir-uang-masuk');
                   }}
+                  onNavigateToSuratJalan={() => setActiveTab('invoice-surat-jalan')}
+                />
+              )}
+
+              {activeTab === 'invoice-surat-jalan' && (
+                <InvoiceSuratJalanView
+                  rekeningList={rekeningList}
+                  mitraList={mitraList}
+                  stokHasilBumiList={stokHasilBumiList}
+                  onRefreshParent={loadAllData}
                 />
               )}
 
