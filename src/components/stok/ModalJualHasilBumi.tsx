@@ -121,8 +121,11 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
+  const wasOpenRef = React.useRef(false);
+
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
+      wasOpenRef.current = true;
       const defaultKom =
         (initialKomoditasKode &&
           activeKomoditas.find((k) => k.kode === initialKomoditasKode)?.kode) ||
@@ -151,6 +154,8 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
       setStepVerifikasi(false);
       setVerifiedDoubleCheck(false);
       setErrorMsg('');
+    } else if (!isOpen) {
+      wasOpenRef.current = false;
     }
   }, [isOpen, initialKomoditasKode, activeKomoditas, activeMitra, bankAccounts]);
 
@@ -195,8 +200,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   }, [komoditasKode, modalRataRataHitungOtomatis]);
 
   const isBelumPutusHarga = metodePembayaran === 'BELUM_PUTUS_HARGA';
-  const hargaRataPengurangStokPerKg =
-    parseRupiahInput(hargaRataManualDisplay) || modalRataRataHitungOtomatis;
+  const hargaRataPengurangStokPerKg = modalRataRataHitungOtomatis;
 
   const readyGudangKg = Math.max(0, Number(selectedKomoditas?.stok) || 0);
   const beratKotor = Math.max(0, parseFloat(beratKotorStr) || 0);
@@ -206,9 +210,8 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
       ? Math.round((beratKotor - tonaseAkhir) * 100) / 100
       : 0;
   const potonganRafaksi = Math.min(99.9, Math.max(0, parseFloat(potonganRafaksiStr) || 0));
-  const basisTonase = tonaseAkhir > 0 ? tonaseAkhir : beratKotor;
   const beratBersih = Math.round(beratKotor * (1 - potonganRafaksi / 100) * 100) / 100;
-  const beratPenentuHarga = Math.round(basisTonase * (1 - potonganRafaksi / 100) * 100) / 100;
+  const beratPenentuHarga = Math.round(tonaseAkhir * (1 - potonganRafaksi / 100) * 100) / 100;
   const hargaJualPerKg = isBelumPutusHarga
     ? hargaRataPengurangStokPerKg
     : parseRupiahInput(hargaJualDisplay);
@@ -762,20 +765,21 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
-                Tonase Akhir (Kg)
+              <label className="block text-[11px] font-semibold text-sky-900 mb-1">
+                Tonase Akhir (Kg) *
               </label>
               <input
                 type="number"
                 step="any"
                 min="0"
-                placeholder="Opsional"
+                placeholder="3050"
+                required
                 value={tonaseAkhirStr}
                 onChange={(e) => {
                   setTonaseAkhirStr(e.target.value);
                   setStepVerifikasi(false);
                 }}
-                className="w-full px-2.5 py-2 rounded-lg border border-sky-300 bg-sky-50/40 font-mono tabular-nums font-bold text-sky-900 focus:outline-none focus:border-sky-600"
+                className="w-full px-2.5 py-2 rounded-lg border border-sky-400 bg-sky-50/50 font-mono tabular-nums font-bold text-sky-900 focus:outline-none focus:border-sky-600"
               />
               {susutPerjalananKg !== 0 && (
                 <div className="text-[10px] font-semibold text-amber-700 mt-0.5">
@@ -804,29 +808,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             </div>
 
             <div className="sm:col-span-2">
-              {isBelumPutusHarga ? (
-                <>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-[11px] font-semibold text-sky-900 truncate" title="Harga Rata-Rata Pembelian Pengurang Stok">
-                      Rata2 Beli/Kg
-                    </label>
-                  </div>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="52.542"
-                    value={hargaRataManualDisplay}
-                    onChange={(e) => {
-                      const num = parseRupiahInput(e.target.value);
-                      setHargaRataManualDisplay(num > 0 ? num.toLocaleString('id-ID') : '');
-                      setStepVerifikasi(false);
-                    }}
-                    className="w-full px-2.5 py-2 rounded-lg border border-sky-400 bg-sky-50/50 font-mono tabular-nums font-bold text-zinc-900 focus:outline-none focus:border-sky-600"
-                    title="Otomatis dari rata-rata pembelian komoditas untuk mengurangi nilai stok"
-                  />
-                </>
-              ) : (
-                <>
+              <>
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-[11px] font-semibold text-zinc-700 truncate">
                       Harga Deal/Kg
@@ -856,7 +838,6 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                     className="w-full px-2.5 py-2 rounded-lg border border-zinc-300 font-mono tabular-nums font-bold text-zinc-900 focus:outline-none focus:border-emerald-600"
                   />
                 </>
-              )}
             </div>
           </div>
 
@@ -939,14 +920,10 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                       {formatKgSpreadsheet(beratBersih)}
                     </td>
                     <td className="py-2 px-3 text-right border-r border-zinc-700">
-                      {!isBelumPutusHarga && hargaJualPerKg > 0
-                        ? formatRupiah(hargaJualPerKg)
-                        : ''}
+                      {formatRupiah(hargaRataPengurangStokPerKg)}
                     </td>
                     <td className="py-2 px-3 text-right font-extrabold">
-                      {formatRupiah(
-                        isBelumPutusHarga ? nilaiPengurangStokMuatRp : totalOmzetPutus
-                      )}
+                      {formatRupiah(nilaiPengurangStokMuatRp)}
                     </td>
                   </tr>
 
@@ -979,6 +956,34 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* Rekapan Penjualan Buyer (Terpisah dari Mutasi Stok Gudang) */}
+          <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-900">
+                Rekapan Penjualan Buyer (Tonase Akhir × Harga Buyer)
+              </span>
+              <span className="text-[11px] font-mono font-bold text-emerald-800">
+                Modal Gudang: {formatRupiah(nilaiPengurangStokMuatRp)}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-xs font-mono tabular-nums">
+              <div className="bg-white p-2 rounded-lg border border-emerald-200">
+                <div className="text-[10px] font-sans text-zinc-500">Tonase Akhir</div>
+                <div className="font-bold text-zinc-900">{formatKgSpreadsheet(beratPenentuHarga)} Kg</div>
+              </div>
+              <div className="bg-white p-2 rounded-lg border border-emerald-200">
+                <div className="text-[10px] font-sans text-zinc-500">Harga Buyer / Kg</div>
+                <div className="font-bold text-zinc-900">{formatRupiah(parseRupiahInput(hargaJualDisplay))}</div>
+              </div>
+              <div className="bg-emerald-900 text-white p-2 rounded-lg">
+                <div className="text-[10px] font-sans text-emerald-200">Total Uang Buyer</div>
+                <div className="font-extrabold">
+                  {formatRupiah(Math.round(beratPenentuHarga * parseRupiahInput(hargaJualDisplay)))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1311,7 +1316,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting || blokirKarenaStok || beratBersih <= 0}
+                  disabled={submitting || blokirKarenaStok || beratBersih <= 0 || tonaseAkhir <= 0}
                   className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:bg-zinc-300 text-white font-semibold flex items-center space-x-2 cursor-pointer transition-colors"
                 >
                   <CheckCircle2 className="w-4 h-4" />
