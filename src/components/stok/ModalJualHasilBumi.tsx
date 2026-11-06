@@ -93,6 +93,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
 
   const [komoditasKode, setKomoditasKode] = useState<string>('');
   const [beratKotorStr, setBeratKotorStr] = useState<string>('');
+  const [tonaseAkhirStr, setTonaseAkhirStr] = useState<string>('');
   const [potonganRafaksiStr, setPotonganRafaksiStr] = useState<string>('0');
   const [hargaJualDisplay, setHargaJualDisplay] = useState<string>('');
   const [hargaRataManualDisplay, setHargaRataManualDisplay] = useState<string>('');
@@ -130,6 +131,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
         '';
       setKomoditasKode(defaultKom);
       setBeratKotorStr('');
+      setTonaseAkhirStr('');
       setPotonganRafaksiStr('0');
       setHargaJualDisplay('');
       setHargaRataManualDisplay('');
@@ -198,8 +200,14 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
 
   const readyGudangKg = Math.max(0, Number(selectedKomoditas?.stok) || 0);
   const beratKotor = Math.max(0, parseFloat(beratKotorStr) || 0);
+  const tonaseAkhir = Math.max(0, parseFloat(tonaseAkhirStr) || 0);
+  const susutPerjalananKg =
+    tonaseAkhir > 0 && beratKotor > 0
+      ? Math.round((beratKotor - tonaseAkhir) * 100) / 100
+      : 0;
   const potonganRafaksi = Math.min(99.9, Math.max(0, parseFloat(potonganRafaksiStr) || 0));
-  const beratBersih = Math.round(beratKotor * (1 - potonganRafaksi / 100) * 100) / 100;
+  const basisTonase = tonaseAkhir > 0 ? tonaseAkhir : beratKotor;
+  const beratBersih = Math.round(basisTonase * (1 - potonganRafaksi / 100) * 100) / 100;
   const hargaJualPerKg = isBelumPutusHarga
     ? hargaRataPengurangStokPerKg
     : parseRupiahInput(hargaJualDisplay);
@@ -318,7 +326,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             ? namaPembeliManual.trim() || 'Pabrik / Pembeli Umum'
             : undefined,
         komoditasKode: selectedKomoditas.kode,
-        beratKotor,
+        beratKotor: basisTonase,
         potonganRafaksi,
         hargaJualPerKg: isBelumPutusHarga ? hargaRataPengurangStokPerKg : hargaJualPerKg,
         divisi,
@@ -326,7 +334,15 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
         rekeningTujuan: metodePembayaran === 'TRANSFER' ? rekeningTujuan : undefined,
         noSuratJalan: noSuratJalan.trim() || undefined,
         tanggal: tanggalInput,
-        keterangan: keterangan.trim() || undefined,
+        keterangan:
+          [
+            keterangan.trim(),
+            susutPerjalananKg !== 0
+              ? `Muat Awal: ${beratKotor} Kg, Tonase Akhir: ${tonaseAkhir} Kg, Susut: ${susutPerjalananKg} Kg`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' | ') || undefined,
         allowOverStockMuat: isBelumPutusHarga || allowOverStockPutus,
         isHabisMuatSusut: isHabisMuatSusut || melebihiStok,
       });
@@ -704,9 +720,9 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
               )}
             </div>
 
-            <div className="sm:col-span-3">
+            <div className="sm:col-span-2">
               <div className="flex items-center justify-between mb-1">
-                <label className="text-[11px] font-semibold text-zinc-700">Berat Muat (Kg)</label>
+                <label className="text-[11px] font-semibold text-zinc-700">Tonase Awal (Kg)</label>
                 {readyGudangKg > 0 && (
                   <button
                     type="button"
@@ -732,12 +748,35 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                     setBeratKotorStr(e.target.value);
                     setStepVerifikasi(false);
                   }}
-                  className="w-full pl-8 pr-2.5 py-2 rounded-lg border border-zinc-300 font-mono tabular-nums font-bold text-zinc-900 focus:outline-none focus:border-emerald-600"
+                  className="w-full pl-8 pr-2 py-2 rounded-lg border border-zinc-300 font-mono tabular-nums font-bold text-zinc-900 focus:outline-none focus:border-emerald-600"
                 />
               </div>
             </div>
 
             <div className="sm:col-span-2">
+              <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                Tonase Akhir (Kg)
+              </label>
+              <input
+                type="number"
+                step="any"
+                min="0"
+                placeholder="Opsional"
+                value={tonaseAkhirStr}
+                onChange={(e) => {
+                  setTonaseAkhirStr(e.target.value);
+                  setStepVerifikasi(false);
+                }}
+                className="w-full px-2.5 py-2 rounded-lg border border-sky-300 bg-sky-50/40 font-mono tabular-nums font-bold text-sky-900 focus:outline-none focus:border-sky-600"
+              />
+              {susutPerjalananKg !== 0 && (
+                <div className="text-[10px] font-semibold text-amber-700 mt-0.5">
+                  Susut: {susutPerjalananKg} Kg
+                </div>
+              )}
+            </div>
+
+            <div className="sm:col-span-1">
               <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
                 Rafaksi (%)
               </label>

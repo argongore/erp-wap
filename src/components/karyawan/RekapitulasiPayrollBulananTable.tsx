@@ -722,9 +722,9 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                           {item.totalUangMakanLembur > 0 ? `+${formatRupiah(item.totalUangMakanLembur)}` : '-'}
                         </td>
 
-                        {/* 6. Total Gaji Kotor */}
+                        {/* 6. Hak Upah Belum Cair */}
                         <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
-                          {formatRupiah(item.totalGajiKotor)}
+                          {formatRupiah(Number((item as any).hakPending ?? item.totalGajiKotor))}
                         </td>
 
                         {/* 7. Kasbon Uang */}
