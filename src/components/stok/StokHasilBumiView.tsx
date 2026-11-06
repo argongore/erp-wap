@@ -1942,8 +1942,21 @@ export const StokHasilBumiView: React.FC<Props> = ({
                           {isBelumPutus ? `MUAT ${j.namaMitra.toUpperCase()}` : j.namaMitra}
                         </td>
                         <td className="py-3 px-4 font-bold text-zinc-900">{j.komoditasNama}</td>
-                        <td className="py-3 px-4 text-right font-mono tabular-nums font-bold text-sky-800">
-                          -{j.beratBersih.toLocaleString('id-ID')} Kg
+                        <td className="py-3 px-4 text-right font-mono tabular-nums">
+                          <div className="font-bold text-sky-800">
+                            Awal: -{j.beratBersih.toLocaleString('id-ID')} Kg
+                          </div>
+                          {Number((j as any).tonaseAkhir) > 0 && (
+                            <div className="text-[10px] text-emerald-800 font-semibold">
+                              Akhir: {Number((j as any).tonaseAkhir).toLocaleString('id-ID')} Kg
+                            </div>
+                          )}
+                          {Number((j as any).susutPerjalananKg) !== 0 &&
+                            !Number.isNaN(Number((j as any).susutPerjalananKg)) && (
+                              <div className="text-[10px] text-amber-700 font-semibold">
+                                Susut: {Number((j as any).susutPerjalananKg).toLocaleString('id-ID')} Kg
+                              </div>
+                            )}
                         </td>
                         <td
                           className="py-3 px-4 text-right font-mono tabular-nums text-zinc-600"

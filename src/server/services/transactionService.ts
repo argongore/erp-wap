@@ -3081,7 +3081,14 @@ export class TransactionService {
       const hargaJualPerKg = isBelumPutusHarga ? modalRataRataPerKg : rawHargaJualInput;
       const totalModalHpp = Math.round(beratBersih * modalRataRataPerKg);
       const nilaiModalPengurangStok = totalModalHpp;
-      const totalNominal = isBelumPutusHarga ? 0 : Math.round(beratBersih * hargaJualPerKg);
+      const tonaseAkhirParam = Math.max(0, Number((params as any).tonaseAkhir) || 0);
+      const beratPenentuHarga =
+        tonaseAkhirParam > 0
+          ? Math.round(tonaseAkhirParam * (1 - potonganRafaksi / 100) * 100) / 100
+          : beratBersih;
+      const totalNominal = isBelumPutusHarga
+        ? 0
+        : Math.round(beratPenentuHarga * hargaJualPerKg);
       const labaKotor = isBelumPutusHarga ? 0 : totalNominal - totalModalHpp;
 
       // Update Rekening Penerima / Piutang / Menunggu Uang Masuk
@@ -3168,6 +3175,12 @@ export class TransactionService {
         beratKotor,
         potonganRafaksi,
         beratBersih,
+        ...(tonaseAkhirParam > 0
+          ? {
+              tonaseAkhir: tonaseAkhirParam,
+              susutPerjalananKg: Math.round((beratKotor - tonaseAkhirParam) * 100) / 100,
+            }
+          : {}),
         modalRataRataPerKg,
         totalModalHpp,
         nilaiModalPengurangStok,
@@ -5998,7 +6011,7 @@ export class TransactionService {
         status: k.status,
       }));
 
-      const saldoBersih = hakPending - sisaBonKaryawan;
+      const saldoBersih = hakPending + saldoTitipHasilPanenMitra - sisaBonKaryawan;
       let posisiStatus: 'PERUSAHAAN_BERHUTANG_UPAH' | 'KARYAWAN_BERHUTANG_BON' | 'LUNAS_IMPAS' = 'LUNAS_IMPAS';
       if (saldoBersih > 0) {
         posisiStatus = 'PERUSAHAAN_BERHUTANG_UPAH';

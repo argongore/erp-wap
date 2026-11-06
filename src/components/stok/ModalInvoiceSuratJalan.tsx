@@ -36,7 +36,8 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     return `${d}/${m}/${y}`;
   });
   const [kategoriKode, setKategoriKode] = useState<string>('SKA');
-  const [basis1, setBasis1] = useState<number>(61500);
+  const [basis1, setBasis1] = useState<number>(61500); // Basis WAP ke Mitra
+  const [basisBuyer, setBasisBuyer] = useState<number>(61500); // Basis WAP ke Buyer
   const [rendemen1, setRendemen1] = useState<number>(90.05);
   const [komoditasNama, setKomoditasNama] = useState<string>('KOPI');
   const [platTruk, setPlatTruk] = useState<string>('');
@@ -105,9 +106,29 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     return Math.round(basis1 * (rendemen1 / 100) * 100) / 100;
   }, [basis1, rendemen1, hargaPerKgManual]);
 
+  const hargaBuyerPerKg = useMemo(
+    () => Math.round(basisBuyer * (rendemen1 / 100) * 100) / 100,
+    [basisBuyer, rendemen1]
+  );
+
   const totalPenjualan = useMemo(
     () => Math.round(tonaseAkhirKg * hargaPerKg),
     [tonaseAkhirKg, hargaPerKg]
+  );
+
+  const totalPenjualanBuyer = useMemo(
+    () => Math.round(tonaseAkhirKg * hargaBuyerPerKg),
+    [tonaseAkhirKg, hargaBuyerPerKg]
+  );
+
+  const marginHargaPt = useMemo(
+    () => Math.max(0, totalPenjualanBuyer - totalPenjualan),
+    [totalPenjualanBuyer, totalPenjualan]
+  );
+
+  const totalKeuntunganPt = useMemo(
+    () => marginHargaPt + Math.round(Number(komisiNominal) || 0),
+    [marginHargaPt, komisiNominal]
   );
 
   const totalPotongan = useMemo(
@@ -292,17 +313,17 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     setErrorMsg(null);
     try {
       if (prosesArusKas) {
-        // 1. Catat Komisi PT masuk ke rekening PT (misal BNI DIRECT)
-        if (komisiNominal > 0) {
+        // 1. Catat Keuntungan PT (Margin Harga + Komisi Jasa Jual) masuk ke rekening PT (misal BNI DIRECT)
+        if (totalKeuntunganPt > 0) {
           await api.processUangMasuk({
             tanggal,
             divisi: 'PT Wijaya Agro Perkasa',
             kategori: 'KOMISI_SURAT_JALAN',
             metode: 'TRANSFER',
-            nominal: komisiNominal,
+            nominal: totalKeuntunganPt,
             rekeningTujuan: rekeningPtKode,
             namaPengirimManual: selectedMitra.nama,
-            keterangan: `Komisi Invoice Surat Jalan ${noInvoice} (${selectedMitra.nama} · ${komoditasNama} ${tonaseAkhirKg} Kg)`,
+            keterangan: `Keuntungan & Komisi Jasa Jual ${noInvoice} (${selectedMitra.nama} · Margin ${formatRupiah(marginHargaPt)} + Komisi ${formatRupiah(komisiNominal)})`,
           });
         }
 
@@ -448,7 +469,7 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 mb-1">Basis 1 (Rp)</label>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">Basis WAP → Mitra (Rp)</label>
               <input
                 type="number"
                 value={basis1}
@@ -457,6 +478,15 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
                   setHargaPerKgManual(null);
                 }}
                 className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs font-mono bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1">Basis WAP → Buyer (Rp)</label>
+              <input
+                type="number"
+                value={basisBuyer}
+                onChange={(e) => setBasisBuyer(Number(e.target.value) || 0)}
+                className="w-full px-2.5 py-1.5 rounded-lg border border-emerald-300 text-xs font-mono bg-white"
               />
             </div>
             <div>
@@ -521,10 +551,21 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
             </div>
           </div>
 
-          {/* Total Penjualan */}
-          <div className="bg-sky-900 text-white px-4 py-2.5 rounded-xl flex items-center justify-between">
-            <span className="text-xs font-bold">TOTAL PENJUALAN ({tonaseAkhirKg} Kg × Rp {hargaPerKg.toLocaleString('id-ID')})</span>
-            <span className="font-mono text-base font-extrabold">{formatRupiah(totalPenjualan)}</span>
+          {/* Total Penjualan & Keuntungan PT */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="bg-sky-900 text-white px-4 py-2.5 rounded-xl flex items-center justify-between">
+              <span className="text-xs font-bold">TOTAL INV MITRA ({tonaseAkhirKg} Kg)</span>
+              <span className="font-mono text-base font-extrabold">{formatRupiah(totalPenjualan)}</span>
+            </div>
+            <div className="bg-indigo-900 text-white px-4 py-2.5 rounded-xl flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold">TOTAL KEUNTUNGAN PT WAP</div>
+                <div className="text-[10px] text-indigo-200">
+                  Margin {formatRupiah(marginHargaPt)} + Komisi {formatRupiah(komisiNominal)}
+                </div>
+              </div>
+              <span className="font-mono text-base font-extrabold">{formatRupiah(totalKeuntunganPt)}</span>
+            </div>
           </div>
 
           {/* Potongan (-) */}
@@ -552,15 +593,45 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-semibold text-amber-800 mb-1">
-                  3. Potong Kasbon / Piutang (Rp)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-amber-800">
+                    3. Potong Kasbon (Rp)
+                  </label>
+                  {selectedMitra && (
+                    <span className="text-[10px] font-mono font-bold text-amber-900">
+                      Bon: {formatRupiah(piutangMap.get(selectedMitra.id) || 0)}
+                    </span>
+                  )}
+                </div>
                 <input
                   type="number"
                   value={kasbonNominal || ''}
                   onChange={(e) => setKasbonNominal(Number(e.target.value) || 0)}
                   className="w-full px-3 py-1.5 rounded-lg border border-amber-300 text-xs font-mono font-bold text-amber-900"
                 />
+                {selectedMitra && (piutangMap.get(selectedMitra.id) || 0) > 0 && (
+                  <div className="flex items-center gap-1 mt-1">
+                    {[100, 50, 25, 0].map((pct) => {
+                      const totalBon = piutangMap.get(selectedMitra.id) || 0;
+                      const val = Math.round((totalBon * pct) / 100);
+                      const isActive = kasbonNominal === val;
+                      return (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => setKasbonNominal(val)}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                            isActive
+                              ? 'bg-amber-700 text-white'
+                              : 'bg-amber-100 text-amber-900 hover:bg-amber-200'
+                          }`}
+                        >
+                          {pct === 100 ? '100% Full' : `${pct}%`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           </div>

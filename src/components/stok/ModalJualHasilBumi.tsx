@@ -112,7 +112,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const [pakaiPtKomisi, setPakaiPtKomisi] = useState<boolean>(false);
   const [komisiPtNominal, setKomisiPtNominal] = useState<number>(0);
   const [rekeningKomisiPt, setRekeningKomisiPt] = useState<string>('BNI01');
-  const [divisi, setDivisi] = useState<string>('PT Wijaya Agro Perkasa');
+  const [divisi, setDivisi] = useState<string>('Gudang Wijaya Agro');
   const [noSuratJalan, setNoSuratJalan] = useState<string>('');
   const [tanggalInput, setTanggalInput] = useState<string>(getTodayIsoDate());
   const [keterangan, setKeterangan] = useState<string>('');
@@ -144,7 +144,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
       setConfirmDeleteHb(false);
       setDeleteSuccessMsg('');
       setRekeningTujuan(bankAccounts[0]?.kode || '');
-      setDivisi('PT Wijaya Agro Perkasa');
+      setDivisi('Gudang Wijaya Agro');
       setNoSuratJalan('');
       setTanggalInput(getTodayIsoDate());
       setKeterangan('');
@@ -207,7 +207,8 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
       : 0;
   const potonganRafaksi = Math.min(99.9, Math.max(0, parseFloat(potonganRafaksiStr) || 0));
   const basisTonase = tonaseAkhir > 0 ? tonaseAkhir : beratKotor;
-  const beratBersih = Math.round(basisTonase * (1 - potonganRafaksi / 100) * 100) / 100;
+  const beratBersih = Math.round(beratKotor * (1 - potonganRafaksi / 100) * 100) / 100;
+  const beratPenentuHarga = Math.round(basisTonase * (1 - potonganRafaksi / 100) * 100) / 100;
   const hargaJualPerKg = isBelumPutusHarga
     ? hargaRataPengurangStokPerKg
     : parseRupiahInput(hargaJualDisplay);
@@ -226,7 +227,9 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const nilaiPengurangStokMuatRp = Math.round(beratBersih * hargaRataPengurangStokPerKg);
   const nilaiBarisSisaRp = Math.abs(nilaiStokReadyRp - nilaiPengurangStokMuatRp);
 
-  const totalOmzetPutus = isBelumPutusHarga ? 0 : Math.round(beratBersih * hargaJualPerKg);
+  const totalOmzetPutus = isBelumPutusHarga
+    ? 0
+    : Math.round(beratPenentuHarga * hargaJualPerKg);
   const totalModalHpp = nilaiPengurangStokMuatRp;
   const estimasiLaba = isBelumPutusHarga ? 0 : totalOmzetPutus - totalModalHpp;
 
@@ -326,9 +329,14 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             ? namaPembeliManual.trim() || 'Pabrik / Pembeli Umum'
             : undefined,
         komoditasKode: selectedKomoditas.kode,
-        beratKotor: basisTonase,
+        beratKotor,
+        ...(tonaseAkhir > 0 ? { tonaseAkhir } : {}),
         potonganRafaksi,
-        hargaJualPerKg: isBelumPutusHarga ? hargaRataPengurangStokPerKg : hargaJualPerKg,
+        hargaJualPerKg: isBelumPutusHarga
+          ? hargaRataPengurangStokPerKg
+          : pakaiPtKomisi && komisiPtNominal > 0 && beratPenentuHarga > 0
+            ? Math.max(0, (totalOmzetPutus - komisiPtNominal) / beratPenentuHarga)
+            : hargaJualPerKg,
         divisi,
         metodePembayaran,
         rekeningTujuan: metodePembayaran === 'TRANSFER' ? rekeningTujuan : undefined,

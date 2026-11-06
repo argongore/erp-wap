@@ -1,14 +1,57 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Printer, Copy, Check, Download, X, Wallet, Building2, User, CheckCircle2 } from 'lucide-react';
-import { TransaksiPenggajian } from '../../server/types.ts';
+import { TransaksiPenggajian, CatatanUpahHarian } from '../../server/types.ts';
+import { api } from '../../api/client.ts';
 
 interface SlipGajiModalProps {
   slip: TransaksiPenggajian | null;
   onClose: () => void;
 }
 
+const HARI_INDO = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+function getNamaHariIndo(dmy?: string): string {
+  if (!dmy) return '-';
+  const parts = dmy.split('/');
+  if (parts.length !== 3) return '-';
+  const d = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+  if (Number.isNaN(d.getTime())) return '-';
+  return HARI_INDO[d.getDay()] || '-';
+}
+
 export const SlipGajiModal: React.FC<SlipGajiModalProps> = ({ slip, onClose }) => {
   const [copied, setCopied] = useState(false);
+  const [rincianKerja, setRincianKerja] = useState<CatatanUpahHarian[]>([]);
+
+  useEffect(() => {
+    if (!slip) {
+      setRincianKerja([]);
+      return;
+    }
+    api
+      .getUpahHarian()
+      .then((list) => {
+        if (!Array.isArray(list)) return;
+        const idSet = new Set(slip.daftarUpahHarianIds || []);
+        let matched = list.filter(
+          (u) =>
+            u.idKaryawan === slip.idKaryawan &&
+            (idSet.has(u.id) || u.idPayrollSettlement === slip.id)
+        );
+        if (matched.length === 0 && slip.tanggal) {
+          const slipParts = slip.tanggal.split('/');
+          if (slipParts.length === 3) {
+            const [, sm, sy] = slipParts;
+            matched = list.filter((u) => {
+              if (u.idKaryawan !== slip.idKaryawan) return false;
+              const uParts = (u.tanggalKerja || '').split('/');
+              return uParts.length === 3 && uParts[1] === sm && uParts[2] === sy;
+            });
+          }
+        }
+        setRincianKerja(matched);
+      })
+      .catch(() => setRincianKerja([]));
+  }, [slip]);
 
   if (!slip) return null;
 
@@ -220,6 +263,47 @@ _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
                 </div>
               </div>
             </div>
+
+            {/* 3. Rincian Kerja Harian */}
+            {rincianKerja.length > 0 && (
+              <div className="border border-zinc-200 rounded-lg overflow-hidden mb-4">
+                <div className="bg-zinc-100 px-3 py-1.5 font-bold text-zinc-800 text-[11px] flex justify-between">
+                  <span>3. RINCIAN KERJA HARIAN ({rincianKerja.length} Hari)</span>
+                  <span>UPAH</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px] text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-zinc-200 bg-zinc-50 text-zinc-500">
+                        <th className="py-1.5 px-2.5">Tanggal &amp; Hari</th>
+                        <th className="py-1.5 px-2.5">Jenis Kerjaan</th>
+                        <th className="py-1.5 px-2.5">Detail / Keterangan</th>
+                        <th className="py-1.5 px-2.5 text-right">Gaji</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {rincianKerja.map((u) => (
+                        <tr key={u.id}>
+                          <td className="py-1.5 px-2.5 font-mono whitespace-nowrap">
+                            {u.tanggalKerja} ({getNamaHariIndo(u.tanggalKerja)})
+                            {(u as any).jam ? ` · ${(u as any).jam}` : ''}
+                          </td>
+                          <td className="py-1.5 px-2.5 font-semibold text-zinc-800">
+                            {(u as any).pekerjaan || u.divisi}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-zinc-600">
+                            {u.keterangan || '-'}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right font-mono font-bold text-emerald-800">
+                            {formatRupiah(u.totalUpahHarian)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Total Take Home Pay */}
             <div className="bg-emerald-900 text-white p-3.5 rounded-lg flex items-center justify-between mb-4 shadow-xs">
