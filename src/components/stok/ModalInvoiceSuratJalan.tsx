@@ -73,10 +73,12 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
       if (Array.isArray(mRes)) setMitraList(mRes);
       const map = new Map<string, number>();
       for (const it of rekapRes?.items || []) {
-        const piutang = Math.max(
-          0,
-          Math.round(Number((it as any).saldoPiutang || (it as any).saldoAkhir || 0))
-        );
+        const rawPiutang =
+          (it as any).totalPiutang ??
+          (it as any).saldoPiutang ??
+          (it as any).sisaPiutang ??
+          (Number((it as any).saldoAkhir) < 0 ? Math.abs(Number((it as any).saldoAkhir)) : 0);
+        const piutang = Math.max(0, Math.round(Number(rawPiutang) || 0));
         if (piutang > 0) map.set(it.id, piutang);
       }
       setPiutangMap(map);
@@ -115,6 +117,10 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     () => Math.round(tonaseAkhirKg * hargaPerKg),
     [tonaseAkhirKg, hargaPerKg]
   );
+
+  useEffect(() => {
+    setPajakNominal(Math.round(totalPenjualan * 0.0025));
+  }, [totalPenjualan]);
 
   const totalPenjualanBuyer = useMemo(
     () => Math.round(tonaseAkhirKg * hargaBuyerPerKg),
