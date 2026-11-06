@@ -228,7 +228,11 @@ export const NotaSilangView: React.FC<Props> = ({
 
   const handleUpdateCartRow = (
     id: string,
-    patch: Partial<Pick<CartSilangRow, 'namaBarang' | 'qty' | 'harga' | 'satuan'>>
+    patch: Partial<
+      Pick<CartSilangRow, 'namaBarang' | 'qty' | 'harga' | 'satuan'> & {
+        markupPerSatuan?: number;
+      }
+    >
   ) => {
     setCart((prev) =>
       prev.map((row) => {
@@ -250,9 +254,25 @@ export const NotaSilangView: React.FC<Props> = ({
     setCart((prev) => prev.filter((r) => r.id !== id));
   };
 
+  const [pakaiHargaMusiman, setPakaiHargaMusiman] = useState<boolean>(false);
+
   const grandTotal = useMemo(
     () => cart.reduce((sum, r) => sum + r.subtotal, 0),
     [cart]
+  );
+
+  const totalMarkupMusiman = useMemo(
+    () =>
+      cart.reduce(
+        (sum, r) => sum + Math.round(r.qty * Math.max(0, Number((r as any).markupPerSatuan || 0))),
+        0
+      ),
+    [cart]
+  );
+
+  const totalPiutangMitra = useMemo(
+    () => grandTotal + (pakaiHargaMusiman ? totalMarkupMusiman : 0),
+    [grandTotal, pakaiHargaMusiman, totalMarkupMusiman]
   );
 
   const handleSubmitNotaSilang = async () => {
@@ -304,7 +324,10 @@ export const NotaSilangView: React.FC<Props> = ({
           satuan: it.satuan,
           harga: it.harga,
         })),
-      });
+        ...(pakaiHargaMusiman && totalMarkupMusiman > 0
+          ? { tambahanHargaMusiman: totalMarkupMusiman }
+          : {}),
+      } as any);
 
       setCart([]);
       setNamaBarangInput('');
@@ -313,6 +336,7 @@ export const NotaSilangView: React.FC<Props> = ({
       setNoNotaToko('');
       setKeterangan('');
       setFotoNota('');
+      setPakaiHargaMusiman(false);
       setSuccessMsg(
         `Nota Silang ${res.noNotaSilang} (${
           isModeSesamaMitra ? 'Sesama Mitra' : 'Mitra ⇄ Anak Perusahaan'
@@ -839,6 +863,30 @@ export const NotaSilangView: React.FC<Props> = ({
                       </div>
                       <span className="font-bold text-indigo-800">{formatRupiah(row.subtotal)}</span>
                     </div>
+                    {pakaiHargaMusiman && (
+                      <div className="flex items-center justify-between gap-2 bg-amber-50/80 px-2 py-1.5 rounded-lg border border-amber-200 text-[11px]">
+                        <span className="text-amber-900 font-semibold">
+                          +Markup Musiman / {row.satuan || 'PCS'}:
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="0"
+                            value={(row as any).markupPerSatuan || ''}
+                            onChange={(e) =>
+                              handleUpdateCartRow(row.id, {
+                                markupPerSatuan: Number(e.target.value) || 0,
+                              })
+                            }
+                            placeholder="0"
+                            className="w-24 px-2 py-0.5 rounded border border-amber-300 bg-white font-mono text-right text-amber-900 font-bold"
+                          />
+                          <span className="font-mono text-amber-800">
+                            (+{formatRupiah(Math.round(row.qty * Number((row as any).markupPerSatuan || 0)))})
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))
               )}
@@ -850,6 +898,22 @@ export const NotaSilangView: React.FC<Props> = ({
                 <span className="font-mono tabular-nums text-indigo-800">
                   {formatRupiah(grandTotal)}
                 </span>
+              </div>
+
+              {/* Opsi Harga Musiman (Piutang Mitra Per Item) */}
+              <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/60 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs font-bold text-amber-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pakaiHargaMusiman}
+                    onChange={(e) => setPakaiHargaMusiman(e.target.checked)}
+                    className="rounded border-amber-400"
+                  />
+                  <span>Gunakan Harga Musiman (Markup Per Item di Keranjang)</span>
+                </label>
+                <p className="text-[11px] text-amber-800">
+                  Piutang ke <strong>DP Parabot</strong> tetap sesuai <strong>Harga Struk ({formatRupiah(grandTotal)})</strong>. Jika dicentang, isi <strong>+Markup Musiman</strong> pada masing-masing barang di keranjang di atas (Total Markup: <strong>+{formatRupiah(totalMarkupMusiman)}</strong>).
+                </p>
               </div>
 
               {/* Simulasi Efek Pembukuan */}
@@ -867,7 +931,7 @@ export const NotaSilangView: React.FC<Props> = ({
                 <div className="flex justify-between gap-2">
                   <span>1. Buku {selectedMitraObj?.nama || 'Mitra Pengambil'}:</span>
                   <strong className="font-mono tabular-nums text-amber-800">
-                    +Bon ke PT {formatRupiah(grandTotal)}
+                    +Bon ke PT {formatRupiah(totalPiutangMitra)}
                   </strong>
                 </div>
                 <div className="flex justify-between gap-2">

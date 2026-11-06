@@ -2647,6 +2647,12 @@ export class TransactionService {
           ? `Nota Silang Sesama Mitra (${anakPerusahaan.nama})`
           : `Nota Silang ${anakPerusahaan.nama}`;
 
+      const tambahanMusiman = Math.max(
+        0,
+        Math.round(Number((params as any).tambahanHargaMusiman) || 0)
+      );
+      const totalNominalMitra = totalNominal + tambahanMusiman;
+
       const mitraBonRecord: TransaksiPenjualan = {
         noPenjualan: noNotaSilang,
         tanggal: finalTanggal,
@@ -2659,10 +2665,10 @@ export class TransactionService {
         rekeningTujuan: 'BON01',
         items: penjualanItems,
         totalModalHpp: totalNominal,
-        totalNominal,
-        totalLabaKotor: 0,
+        totalNominal: totalNominalMitra,
+        totalLabaKotor: tambahanMusiman,
         statusPembayaran: 'BELUM_BAYAR',
-        sisaPiutang: totalNominal,
+        sisaPiutang: totalNominalMitra,
         isNotaNgunci: false,
         isNotaSilang: true,
         modeNotaSilang,

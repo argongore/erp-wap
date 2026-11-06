@@ -108,6 +108,9 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const [deletingHb, setDeletingHb] = useState<boolean>(false);
   const [deleteSuccessMsg, setDeleteSuccessMsg] = useState<string>('');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>('');
+  const [pakaiPtKomisi, setPakaiPtKomisi] = useState<boolean>(false);
+  const [komisiPtNominal, setKomisiPtNominal] = useState<number>(0);
+  const [rekeningKomisiPt, setRekeningKomisiPt] = useState<string>('BNI01');
   const [divisi, setDivisi] = useState<string>('PT Wijaya Agro Perkasa');
   const [noSuratJalan, setNoSuratJalan] = useState<string>('');
   const [tanggalInput, setTanggalInput] = useState<string>(getTodayIsoDate());
@@ -327,6 +330,22 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
         allowOverStockMuat: isBelumPutusHarga || allowOverStockPutus,
         isHabisMuatSusut: isHabisMuatSusut || melebihiStok,
       });
+
+      if (pakaiPtKomisi && komisiPtNominal > 0) {
+        await api.processUangMasuk({
+          tanggal: tanggalInput,
+          divisi: 'PT Wijaya Agro Perkasa',
+          kategori: 'JASA_PENJUALAN_PT',
+          metode: 'TRANSFER',
+          nominal: komisiPtNominal,
+          rekeningTujuan: rekeningKomisiPt,
+          namaPengirimManual:
+            modePembeli === 'MITRA'
+              ? activeMitra.find((m) => m.id === idMitra)?.nama || 'Eksportir'
+              : namaPembeliManual.trim() || 'Eksportir',
+          keterangan: `Komisi Jasa Penjualan PT (${selectedKomoditas.nama} · ${record.noPenjualan})`,
+        });
+      }
 
       const isRecordBelumPutus =
         record.isBelumPutusHargaJual || record.metodePembayaran === 'BELUM_PUTUS_HARGA';
@@ -1010,6 +1029,54 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             rekeningList={rekeningList}
             theme="light"
           />
+
+          {/* Opsi Penjualan Menggunakan PT (Komisi Jasa Penjualan) */}
+          <div className="p-3 rounded-xl border border-sky-200 bg-sky-50/60 space-y-2.5">
+            <label className="flex items-center gap-2 text-xs font-bold text-sky-900 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={pakaiPtKomisi}
+                onChange={(e) => setPakaiPtKomisi(e.target.checked)}
+                className="rounded border-sky-400"
+              />
+              <span>Penjualan Menggunakan PT (Ada Komisi Jasa Penjualan PT)</span>
+            </label>
+            <p className="text-[11px] text-sky-800">
+              Jika dicentang, <strong>Komisi PT</strong> masuk ke arus kas <strong>PT Wijaya Agro Perkasa</strong>, sedangkan hasil penjualan tetap masuk arus kas <strong>GWA</strong>. Jika tidak dicentang, seluruh arus kas fokus di <strong>GWA</strong>.
+            </p>
+            {pakaiPtKomisi && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-[11px] font-semibold text-sky-900 mb-1">
+                    Nominal Komisi PT (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    value={komisiPtNominal || ''}
+                    onChange={(e) => setKomisiPtNominal(Number(e.target.value) || 0)}
+                    placeholder="Contoh: 400000"
+                    className="w-full px-3 py-1.5 rounded-lg border border-sky-300 text-xs font-mono font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-sky-900 mb-1">
+                    Rekening Tujuan Komisi PT
+                  </label>
+                  <select
+                    value={rekeningKomisiPt}
+                    onChange={(e) => setRekeningKomisiPt(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg border border-sky-300 text-xs font-semibold bg-white"
+                  >
+                    {bankAccounts.map((r) => (
+                      <option key={r.kode} value={r.kode}>
+                        {r.kode} - {r.nama}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* No Surat Jalan & Catatan */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

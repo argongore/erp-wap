@@ -16,6 +16,7 @@ import {
   Plus,
   CheckCircle2,
   X,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   Mitra,
@@ -33,6 +34,7 @@ import {
 } from '../../utils/format.ts';
 import { ModalInputStokAwalHasilBumi } from './ModalInputStokAwalHasilBumi.tsx';
 import { ModalJualHasilBumi } from './ModalJualHasilBumi.tsx';
+import { ModalInvoiceSuratJalan } from './ModalInvoiceSuratJalan.tsx';
 import { ModalTambahHasilBumi } from './ModalTambahHasilBumi.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
@@ -202,6 +204,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
   const [successBanner, setSuccessBanner] = useState<string>('');
 
   const [showJualModal, setShowJualModal] = useState<boolean>(false);
+  const [showInvoiceSjModal, setShowInvoiceSjModal] = useState<boolean>(false);
   const [jualInitialKode, setJualInitialKode] = useState<string | undefined>(undefined);
 
   const [selectedCardKode, setSelectedCardKode] = useState<string>('');
@@ -785,6 +788,15 @@ export const StokHasilBumiView: React.FC<Props> = ({
           >
             <Pencil className="w-3.5 h-3.5 text-amber-700" />
             <span>Input / Edit Stok Awal Gudang</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowInvoiceSjModal(true)}
+            className="px-4 py-2 bg-sky-800 hover:bg-sky-900 text-white font-semibold text-xs rounded-lg transition-colors flex items-center space-x-1.5 cursor-pointer"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Invoice Surat Jalan</span>
           </button>
 
           <button
@@ -2246,6 +2258,19 @@ export const StokHasilBumiView: React.FC<Props> = ({
           }
         }}
         onDeleted={() => {
+          onRefresh();
+          loadRingkasan();
+        }}
+      />
+
+      {/* Modal Invoice Surat Jalan Penjualan (Titip Jual Supplier) */}
+      <ModalInvoiceSuratJalan
+        open={showInvoiceSjModal}
+        onClose={() => setShowInvoiceSjModal(false)}
+        stokHasilBumiList={stokList}
+        rekeningList={rekeningList}
+        onSuccess={() => {
+          setSuccessBanner('Invoice Surat Jalan berhasil disimpan & arus kas diperbarui.');
           onRefresh();
           loadRingkasan();
         }}
