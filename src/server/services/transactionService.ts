@@ -13,6 +13,7 @@ import {
   resolveKelompokItemPengeluaran,
 } from '../types.ts';
 import { normalizeDateToDmy } from '../../utils/format.ts';
+import { calculateHbMovingAverage } from '../../utils/hasilBumiMovingAverage.ts';
 import type {
   AlokasiPembayaranBon,
   AuditLog,
@@ -3055,30 +3056,17 @@ export class TransactionService {
         throw new Error('Metode PIUTANG (Tempo) hanya berlaku untuk Mitra / Pabrik yang terdaftar di Master Mitra');
       }
 
-      // Hitung Modal Rata-rata Gudang murni dari akumulasi modal pembelian riil (tanpa angka karangan)
-      const stokAwalKg = Number(komoditas.stokAwal) || 0;
-      const modalAwalUang =
-        Number(komoditas.modalAwalTotal) || stokAwalKg * (Number(komoditas.rataRataModalAwal) || 0);
-
-      const physicalPurchases = db.pembelianHasilBumi.filter(
-        (p) =>
-          this.isPhysicalPembelianHasilBumi(p) &&
-          (p.komoditasKode === komoditas.kode ||
-            p.komoditasNama.toUpperCase().trim() === komoditas.nama.toUpperCase().trim())
+      // Hitung Modal Rata-rata Gudang murni dari siklus berjalan (Sisa Stok Muat Terakhir + Pembelian Baru Berjalan)
+      const movingAvg = calculateHbMovingAverage(
+        komoditas,
+        db.pembelianHasilBumi,
+        db.penjualanHasilBumi
       );
 
-      const totalUangBeli =
-        modalAwalUang + physicalPurchases.reduce((sum, p) => sum + (Number(p.totalNominal) || 0), 0);
-      const totalKgBeli =
-        stokAwalKg + physicalPurchases.reduce((sum, p) => sum + (Number(p.beratBersih) || 0), 0);
-
-      const computedAvgModal =
-        totalKgBeli > 0 && totalUangBeli > 0
-          ? Math.round(totalUangBeli / totalKgBeli)
-          : Math.max(0, Number(komoditas.rataRataModalAwal) || 0);
-
       const modalRataRataPerKg =
-        computedAvgModal > 0 ? computedAvgModal : Math.max(0, Math.round(rawHargaJualInput));
+        movingAvg.rataRataModalTerkini > 0
+          ? movingAvg.rataRataModalTerkini
+          : Math.max(0, Math.round(rawHargaJualInput));
 
       const hargaJualPerKg = isBelumPutusHarga ? modalRataRataPerKg : rawHargaJualInput;
       const totalModalHpp = Math.round(beratBersih * modalRataRataPerKg);
@@ -3155,6 +3143,9 @@ export class TransactionService {
         ? 0
         : Math.max(0, Math.round((stokTersedia - beratBersih) * 100) / 100);
       komoditas.stok = stokGudangSetelah;
+      if (modalRataRataPerKg > 0) {
+        komoditas.hargaBeliStandar = modalRataRataPerKg;
+      }
       komoditas.updateTerakhir = iso;
 
       const finalTanggal = normalizeDateToDmy(params.tanggal, todayWib);
@@ -3442,23 +3433,10 @@ export class TransactionService {
         Math.round((stokAwalBulanKg + masukBulanIniKg - terjualBulanIniKg) * 100) / 100
       );
 
-      // Posisi aktual Ready di Gudang saat ini
-      const readyGudangSaatIniKg = Math.max(0, Math.round((Number(hb.stok) || 0) * 100) / 100);
-      const totalMasukKumulatifKg =
-        Math.round(
-          (stokAwalManual + hbPurchases.reduce((s, p) => s + (Number(p.beratBersih) || 0), 0)) * 100
-        ) / 100;
-      const totalUangBeliKumulatif =
-        modalAwalManual + hbPurchases.reduce((s, p) => s + (Number(p.totalNominal) || 0), 0);
-      const totalTerjualKumulatifKg =
-        Math.round(hbSales.reduce((s, j) => s + (Number(j.beratBersih) || 0), 0) * 100) / 100;
-
-      const rataRataModalGudangPerKg =
-        totalMasukKumulatifKg > 0 && totalUangBeliKumulatif > 0
-          ? Math.round(totalUangBeliKumulatif / totalMasukKumulatifKg)
-          : Math.max(0, Number(hb.rataRataModalAwal) || 0);
-
-      const nilaiModalReadyGudang = Math.round(readyGudangSaatIniKg * rataRataModalGudangPerKg);
+      const moving = calculateHbMovingAverage(hb, physicalPembelian, allPenjualanHb);
+      const readyGudangSaatIniKg = moving.stokReadyKg;
+      const rataRataModalGudangPerKg = moving.rataRataModalTerkini;
+      const nilaiModalReadyGudang = moving.totalNilaiModalTerkini;
 
       return {
         kode: hb.kode,
@@ -12905,22 +12883,12 @@ export class TransactionService {
       };
 
       const computeKomoditasModalPerKg = (komoditas: StokHasilBumi): number => {
-        const stokAwalKg = Number(komoditas.stokAwal) || 0;
-        const modalAwalUang =
-          Number(komoditas.modalAwalTotal) || stokAwalKg * (Number(komoditas.rataRataModalAwal) || 0);
-        const physicalPurchases = (db.pembelianHasilBumi || []).filter(
-          (p) =>
-            this.isPhysicalPembelianHasilBumi(p) &&
-            (p.komoditasKode === komoditas.kode ||
-              p.komoditasNama.toUpperCase().trim() === komoditas.nama.toUpperCase().trim())
+        const moving = calculateHbMovingAverage(
+          komoditas,
+          db.pembelianHasilBumi,
+          db.penjualanHasilBumi
         );
-        const totalUangBeli =
-          modalAwalUang + physicalPurchases.reduce((sum, p) => sum + (Number(p.totalNominal) || 0), 0);
-        const totalKgBeli =
-          stokAwalKg + physicalPurchases.reduce((sum, p) => sum + (Number(p.beratBersih) || 0), 0);
-        return totalKgBeli > 0 && totalUangBeli > 0
-          ? Math.round(totalUangBeli / totalKgBeli)
-          : Math.max(0, Number(komoditas.rataRataModalAwal) || 0);
+        return moving.rataRataModalTerkini;
       };
 
       let auditSummary = '';

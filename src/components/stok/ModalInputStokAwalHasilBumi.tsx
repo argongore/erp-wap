@@ -93,7 +93,7 @@ export const ModalInputStokAwalHasilBumi: React.FC<Props> = ({
               : '0',
           keterangan:
             h.keteranganStokAwal || 'Rekap stok manual gudang sebelum aplikasi',
-          tanggalStokAwal: dmyToIsoInput(h.updateTerakhir),
+          tanggalStokAwal: dmyToIsoInput(h.tanggalInputStokAwal || h.updateTerakhir),
         };
       });
       setFormData(initial);

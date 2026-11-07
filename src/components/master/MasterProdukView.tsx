@@ -56,14 +56,17 @@ function formatKategoriLabel(raw: string | undefined | null): string {
 
 const DEFAULT_DESCRIPTIONS: Record<string, string> = {
   ALAT: KATEGORI_ALAT_DEFAULT_DESC,
+  MATERIAL: 'Material konstruksi, bangunan, pasir, koral, batu, bata, dan kayu',
+  BERAS: 'Beras kemasan dan hasil olahan pangan',
   PUPUK: 'Pupuk kimia, organik, dan nutrisi tanaman',
+  BBM: 'Bahan Bakar Minyak operasional armada dan mesin (Solar, Dexlite)',
+  OKUSSA: 'Produk Okussa Coffee & Olahan Kopi',
   PESTISIDA: 'Obat pertanian, insektisida, fungisida, dan herbisida',
   BENIH: 'Bibit dan benih tanaman',
   ALAT_PERTANIAN: 'Peralatan, perlengkapan kerja, dan material',
   'ALAT PERTANIAN': 'Peralatan, perlengkapan kerja, dan material',
-  BERAS: 'Beras kemasan dan hasil olahan pangan',
   SEMBAKO: 'Bahan pokok dan kebutuhan operasional',
-  LAINNYA: 'Kategori umum lainnya',
+  LAINNYA: 'Kategori umum lainnya & karung',
 };
 
 export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], onRefresh }) => {

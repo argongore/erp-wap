@@ -147,6 +147,7 @@ type BukuMutasiRow =
       label: string;
       tanggalDisplay: string;
       beratKg: number;
+      rataHargaPerKg?: number;
       jumlahRp: number;
       txSale: TransaksiPenjualanHasilBumi;
     }
@@ -154,6 +155,7 @@ type BukuMutasiRow =
       kind: 'SISA';
       key: string;
       beratKg: number;
+      rataHargaPerKg?: number;
       jumlahRp: number;
     }
   | {
@@ -499,11 +501,21 @@ export const StokHasilBumiView: React.FC<Props> = ({
     let hasClosedAtLeastOneBatch = false;
 
     const stokAwalKg = Number(selectedCardHb.stokAwal) || 0;
-    const rataModalAwal = Number(selectedCardHb.rataRataModalAwal) || 0;
-    const modalAwalRp =
-      Number(selectedCardHb.modalAwalTotal) || Math.round(stokAwalKg * rataModalAwal);
+    let rataModalAwal = Number(selectedCardHb.rataRataModalAwal) || 0;
+    let modalAwalRp = Number(selectedCardHb.modalAwalTotal) || 0;
 
     if (stokAwalKg > 0) {
+      if (rataModalAwal > 0 && (modalAwalRp <= 0 || Math.abs(modalAwalRp - Math.round(stokAwalKg * rataModalAwal)) > stokAwalKg * 100)) {
+        modalAwalRp = Math.round(stokAwalKg * rataModalAwal);
+      } else if (modalAwalRp > 0 && rataModalAwal <= 0) {
+        rataModalAwal = Math.round(modalAwalRp / stokAwalKg);
+      } else if (rataModalAwal <= 0 && modalAwalRp <= 0 && Number(selectedCardHb.hargaBeliStandar) > 0) {
+        rataModalAwal = Number(selectedCardHb.hargaBeliStandar);
+        modalAwalRp = Math.round(stokAwalKg * rataModalAwal);
+      }
+    }
+
+    if (stokAwalKg > 0 && modalAwalRp > 0) {
       rows.push({
         kind: 'PURCHASE',
         key: `STOK-AWAL-${selectedCardHb.kode}`,
@@ -511,7 +523,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
         tanggalDisplay: formatTanggalIndo(selectedCardHb.updateTerakhir),
         tanggalAsli: formatTanggalIndo(selectedCardHb.updateTerakhir),
         beratKg: stokAwalKg,
-        hargaPerKg: rataModalAwal,
+        hargaPerKg: rataModalAwal > 0 ? rataModalAwal : Math.round(modalAwalRp / stokAwalKg),
         jumlahRp: modalAwalRp,
         showRpPrefix: false,
         isStokAwal: true,
@@ -618,6 +630,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
           label: muatLabel,
           tanggalDisplay: j.tanggal || '-',
           beratKg: muatKg,
+          rataHargaPerKg,
           jumlahRp: muatRp,
           txSale: j,
         });
@@ -625,6 +638,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
           kind: 'SISA',
           key: `SISA-${j.noPenjualan}`,
           beratKg: diffKg,
+          rataHargaPerKg,
           jumlahRp: diffRp,
         });
         rows.push({
@@ -644,13 +658,16 @@ export const StokHasilBumiView: React.FC<Props> = ({
       }
     }
 
-    if (batchKg > 0) {
+    const lastEvent = events.length > 0 ? events[events.length - 1] : null;
+    const hasUnclosedBuysAfterLastSale = lastEvent ? lastEvent.type === 'BUY' : false;
+
+    if (batchKg > 0 && (hasUnclosedBuysAfterLastSale || events.length === 0)) {
       const avgOpen = batchKg > 0 && batchRp > 0 ? Math.round(batchRp / batchKg) : 0;
       rows.push({ kind: 'SPACER', key: 'SPC-OPEN-END' });
       rows.push({
         kind: 'JUMLAH',
         key: 'JML-OPEN-END',
-        label: 'JUMLAH (STOK READY)',
+        label: 'SISA READY GUDANG SAAT INI',
         beratKg: batchKg,
         rataHargaPerKg: avgOpen,
         jumlahRp: Math.round(batchRp),
@@ -1773,7 +1790,12 @@ export const StokHasilBumiView: React.FC<Props> = ({
                           <td className="py-1.5 px-3 text-right border-r border-zinc-700">
                             {formatKgBukuMutasi(row.beratKg)}
                           </td>
-                          <td className="py-1.5 px-3 border-r border-zinc-700" />
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-700 whitespace-nowrap">
+                            <div className="flex items-center justify-between gap-1">
+                              <span>Rp</span>
+                              <span>{formatAngkaBukuMutasi(row.rataHargaPerKg || 0)}</span>
+                            </div>
+                          </td>
                           <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
                             <div className="flex items-center justify-between gap-2">
                               <span>Rp</span>
@@ -1857,13 +1879,18 @@ export const StokHasilBumiView: React.FC<Props> = ({
                           className="bg-[#00B0F0] text-zinc-950 font-bold border-b border-zinc-700"
                         >
                           <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
-                            SISA
+                            SISA STOK
                           </td>
                           <td className="py-1.5 px-3 border-r border-zinc-700" />
                           <td className="py-1.5 px-3 text-right border-r border-zinc-700">
                             {formatKgBukuMutasi(row.beratKg)}
                           </td>
-                          <td className="py-1.5 px-3 border-r border-zinc-700" />
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-700 whitespace-nowrap">
+                            <div className="flex items-center justify-between gap-1">
+                              <span>Rp</span>
+                              <span>{formatAngkaBukuMutasi(row.rataHargaPerKg || 0)}</span>
+                            </div>
+                          </td>
                           <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
                             <div className="flex items-center justify-between gap-2">
                               <span>Rp</span>
@@ -2268,6 +2295,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
         onClose={() => setShowJualModal(false)}
         stokList={stokList}
         pembelianList={physicalPembelianList}
+        penjualanList={penjualanHasilBumiList}
         mitraList={mitraList}
         rekeningList={rekeningList}
         initialKomoditasKode={jualInitialKode}

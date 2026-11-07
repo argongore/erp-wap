@@ -45,6 +45,7 @@ import type {
   InvoiceSuratJalanRecord,
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
+import { calculateHbMovingAverage } from '../utils/hasilBumiMovingAverage.ts';
 
 export interface DatabaseSchema {
   profilPerusahaan: ProfilPerusahaan;
@@ -417,31 +418,36 @@ export function getDefaultProdukDagangList(): { produk: Produk[]; stokBarang: St
   }> = [
     { kode: 'PRD-09', nama: 'BERAS BELITANG', satuan: 'SAK', kategori: 'BERAS' },
     { kode: 'PRD-10', nama: 'BERAS JEMPOL', satuan: 'SAK', kategori: 'BERAS' },
-    { kode: 'PRD-11', nama: 'PASIR m2', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-12', nama: 'KORAL M2', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-13', nama: 'BATU UJM', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-14', nama: 'SPLIT', satuan: 'METER KUBIK', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-15', nama: 'BATA', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-16', nama: 'BATA RINGAN', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-17', nama: 'PAPAN', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-18', nama: 'KASAU', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-19', nama: 'BALOK 7x14', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-20', nama: 'BALOK 8X12', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-21', nama: 'SPANEL 4M', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
-    { kode: 'PRD-22', nama: 'SPANEL 2M', satuan: 'BIJI/BUAH', kategori: 'ALAT_PERTANIAN' },
+    { kode: 'PRD-11', nama: 'PASIR m2', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
+    { kode: 'PRD-12', nama: 'KORAL M2', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
+    { kode: 'PRD-13', nama: 'BATU UJM', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
+    { kode: 'PRD-14', nama: 'SPLIT', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
+    { kode: 'PRD-15', nama: 'BATA', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
+    { kode: 'PRD-16', nama: 'KARUNG', satuan: 'Lembar', kategori: 'LAINNYA' },
+    { kode: 'PRD-17', nama: 'PAPAN', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
+    { kode: 'PRD-18', nama: 'KASAU', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
+    { kode: 'PRD-19', nama: 'BALOK 7x14', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
+    { kode: 'PRD-20', nama: 'BALOK 8X12', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
+    { kode: 'PRD-21', nama: 'SPANEL 4M', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
+    { kode: 'PRD-22', nama: 'SPANEL 2M', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
     { kode: 'PRD-23', nama: 'UREA', satuan: 'SAK', kategori: 'PUPUK' },
     { kode: 'PRD-24', nama: 'NPK', satuan: 'SAK', kategori: 'PUPUK' },
-    { kode: 'PRD-25', nama: 'SOLAR', satuan: 'DRIGENT', kategori: 'LAINNYA' },
-    { kode: 'PRD-26', nama: 'DEXLITE', satuan: 'DRIGENT', kategori: 'LAINNYA' },
-    { kode: 'PRD-27', nama: 'KOPI ROBUSTA MENTAH', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-28', nama: 'ROBUSTA PREMIUM MENTAH', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-29', nama: 'ROBUSTA LANANG MENTAH', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-30', nama: 'KOPI ROBUSTA ROSTING', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-31', nama: 'ROBUSTA PREMIUM ROSTING', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-32', nama: 'ROBUSTA LANANG ROSTING', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-33', nama: 'KOPI ROBUSTA BUBUK', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-34', nama: 'ROBUSTA PREMIUM BUBUK', satuan: 'KEMASAN', kategori: 'BERAS' },
-    { kode: 'PRD-35', nama: 'ROBUSTA LANANG BUBUK', satuan: 'KEMASAN', kategori: 'BERAS' },
+    { kode: 'PRD-25', nama: 'SOLAR', satuan: 'DRIGENT', kategori: 'BBM' },
+    { kode: 'PRD-26', nama: 'DEXLITE', satuan: 'DRIGENT', kategori: 'BBM' },
+    { kode: 'PRD-27', nama: 'KOPI ROBUSTA MENTAH', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-28', nama: 'ROBUSTA PREMIUM MENTAH', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-29', nama: 'ROBUSTA LANANG MENTAH', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-30', nama: 'KOPI ROBUSTA ROSTING', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-31', nama: 'ROBUSTA PREMIUM ROSTING', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-32', nama: 'ROBUSTA LANANG ROSTING', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-33', nama: 'KOPI ROBUSTA BUBUK', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-34', nama: 'ROBUSTA PREMIUM BUBUK', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-35', nama: 'ROBUSTA LANANG BUBUK', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-6838', nama: 'SEWA EXCA 1', satuan: 'JAM', kategori: 'ALAT' },
+    { kode: 'PRD-6839', nama: 'SEWA EXCA 2', satuan: 'JAM', kategori: 'ALAT' },
+    { kode: 'PRD-6840', nama: 'SEWA TRUCK', satuan: 'TRIP', kategori: 'ALAT' },
+    { kode: 'PRD-6841', nama: 'SEWA DUMP', satuan: 'RIT', kategori: 'ALAT' },
+    { kode: 'PRD-6842', nama: 'SEWA TOING', satuan: 'TRIP', kategori: 'ALAT' },
   ];
 
   // HPP & harga jual default adalah Rp 0 sampai ada transaksi pembelian modal riil (tidak ada angka karangan)
@@ -824,6 +830,18 @@ class DatabaseManager {
     const incoming = Array.isArray(incomingList) ? incomingList : [];
     const map = new Map<string, T>();
 
+    const getItemTime = (it: any): number => {
+      if (!it) return 0;
+      const raw =
+        it.updateTerakhir ||
+        it.terakhirUpdate ||
+        it.updatedAt ||
+        it.createdAt ||
+        it.timestamp ||
+        0;
+      return new Date(raw).getTime() || 0;
+    };
+
     // 1. First put incoming items from cloud
     for (const item of incoming) {
       if (item) {
@@ -844,11 +862,23 @@ class DatabaseManager {
           if (!existing) {
             map.set(id, item);
           } else {
-            const incomingTime =
-              (existing as any).updatedAt || (existing as any).createdAt || (existing as any).timestamp || 0;
-            const localTime =
-              (item as any).updatedAt || (item as any).createdAt || (item as any).timestamp || 0;
-            if (new Date(localTime).getTime() >= new Date(incomingTime).getTime()) {
+            // CRITICAL INVENTORY GUARD: If local has stokAwal or active stock and incoming is blank, preserve local stock data!
+            const localObj = item as any;
+            const incObj = existing as any;
+            if (localObj.stokAwal && !incObj.stokAwal) {
+              incObj.stokAwal = localObj.stokAwal;
+              incObj.modalAwalTotal = incObj.modalAwalTotal || localObj.modalAwalTotal;
+              incObj.rataRataModalAwal = incObj.rataRataModalAwal || localObj.rataRataModalAwal;
+              incObj.keteranganStokAwal = incObj.keteranganStokAwal || localObj.keteranganStokAwal;
+              incObj.tanggalInputStokAwal = incObj.tanggalInputStokAwal || localObj.tanggalInputStokAwal;
+            }
+            if ((localObj.stok || 0) > 0 && (incObj.stok || 0) === 0 && !incObj.stokAwal) {
+              incObj.stok = localObj.stok;
+            }
+
+            const incomingTime = getItemTime(existing);
+            const localTime = getItemTime(item);
+            if (localTime >= incomingTime) {
               map.set(id, item);
             }
           }
@@ -1595,6 +1625,427 @@ class DatabaseManager {
       }
     }
 
+    // Pastikan kategori baku sistem selalu terdaftar rapi di Master Kategori Produk
+    const standardCategories: Array<{ nama: string; deskripsi?: string; tanpaStok?: boolean }> = [
+      { nama: 'MATERIAL', deskripsi: 'Material konstruksi & bangunan (pasir, koral, batu, split, bata, kayu/balok)' },
+      { nama: 'BERAS', deskripsi: 'Katalog beras & sembako pokok' },
+      { nama: 'PUPUK', deskripsi: 'Pupuk pertanian (Urea, NPK)' },
+      { nama: 'BBM', deskripsi: 'Bahan Bakar Minyak (Solar, Dexlite)' },
+      { nama: 'OKUSSA', deskripsi: 'Produk Okussa Coffee & Olahan Kopi' },
+      { nama: 'ALAT', deskripsi: KATEGORI_ALAT_DEFAULT_DESC, tanpaStok: true },
+      { nama: 'LAINNYA', deskripsi: 'Perlengkapan umum toko & karung' },
+    ];
+    for (const std of standardCategories) {
+      const existing = this.db.kategoriProduk.find(
+        (k) => String(k.nama || '').trim().replace(/\s+/g, ' ').toUpperCase() === std.nama
+      );
+      if (!existing) {
+        this.db.kategoriProduk.push({
+          nama: std.nama,
+          deskripsi: std.deskripsi,
+          tanpaStok: std.tanpaStok,
+          createdAt: nowIso,
+        });
+        katSet.add(std.nama);
+      } else {
+        if (!existing.deskripsi && std.deskripsi) existing.deskripsi = std.deskripsi;
+        if (std.tanpaStok && existing.tanpaStok === undefined) existing.tanpaStok = true;
+      }
+    }
+
+    // 1.A. Pemulihan & Rekonsiliasi Master Produk & Stok Barang Toko
+    // Memastikan seluruh produk yang sudah diperbaiki user (SEWA EXCA, SEWA TRUCK, SEWA DUMP, SEWA TOING, KARUNG, PASIR, MATERIAL, BERAS, PUPUK, BBM, OKUSSA)
+    // pulih sepenuhnya dan tidak pernah hilang/ter-reset kategori atau stoknya
+    const userCustomProducts: Record<
+      string,
+      {
+        nama: string;
+        kategori: string;
+        satuan: string;
+        hargaBeli: number;
+        hargaJual: number;
+        hargaKhususRekanan: number;
+        stok: number;
+      }
+    > = {
+      // 1. MATERIAL
+      'PRD-11': {
+        nama: 'PASIR m2',
+        kategori: 'MATERIAL',
+        satuan: 'METER KUBIK',
+        hargaBeli: 50000,
+        hargaJual: 360000,
+        hargaKhususRekanan: 355000,
+        stok: 18, // 19 awal + 5 beli di PB2611045219 - 6 terjual
+      },
+      'PRD-12': {
+        nama: 'KORAL M2',
+        kategori: 'MATERIAL',
+        satuan: 'METER KUBIK',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-13': {
+        nama: 'BATU UJM',
+        kategori: 'MATERIAL',
+        satuan: 'METER KUBIK',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-14': {
+        nama: 'SPLIT',
+        kategori: 'MATERIAL',
+        satuan: 'METER KUBIK',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-15': {
+        nama: 'BATA',
+        kategori: 'MATERIAL',
+        satuan: 'BIJI/BUAH',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-17': {
+        nama: 'PAPAN',
+        kategori: 'MATERIAL',
+        satuan: 'BIJI/BUAH',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-18': {
+        nama: 'KASAU',
+        kategori: 'MATERIAL',
+        satuan: 'BIJI/BUAH',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-19': {
+        nama: 'BALOK 7x14',
+        kategori: 'MATERIAL',
+        satuan: 'BIJI/BUAH',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-20': {
+        nama: 'BALOK 8X12',
+        kategori: 'MATERIAL',
+        satuan: 'BIJI/BUAH',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-21': {
+        nama: 'SPANEL 4M',
+        kategori: 'MATERIAL',
+        satuan: 'BIJI/BUAH',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-22': {
+        nama: 'SPANEL 2M',
+        kategori: 'MATERIAL',
+        satuan: 'BIJI/BUAH',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+
+      // 2. BERAS
+      'PRD-09': {
+        nama: 'BERAS BELITANG',
+        kategori: 'BERAS',
+        satuan: 'SAK',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-10': {
+        nama: 'BERAS JEMPOL',
+        kategori: 'BERAS',
+        satuan: 'SAK',
+        hargaBeli: 0,
+        hargaJual: 165000,
+        hargaKhususRekanan: 162000,
+        stok: 110, // Opname 126 - 16 terjual
+      },
+
+      // 3. PUPUK
+      'PRD-23': {
+        nama: 'UREA',
+        kategori: 'PUPUK',
+        satuan: 'SAK',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-24': {
+        nama: 'NPK',
+        kategori: 'PUPUK',
+        satuan: 'SAK',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+
+      // 4. BBM
+      'PRD-25': {
+        nama: 'SOLAR',
+        kategori: 'BBM',
+        satuan: 'DRIGENT',
+        hargaBeli: 0,
+        hargaJual: 370000,
+        hargaKhususRekanan: 370000,
+        stok: 0,
+      },
+      'PRD-26': {
+        nama: 'DEXLITE',
+        kategori: 'BBM',
+        satuan: 'DRIGENT',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+
+      // 5. OKUSSA
+      'PRD-1260': {
+        nama: 'BUBUK OKUSSA COFFEE 250 GRAM',
+        kategori: 'OKUSSA',
+        satuan: 'Pack',
+        hargaBeli: 0,
+        hargaJual: 25000,
+        hargaKhususRekanan: 25000,
+        stok: 6, // 10 - 4 terjual
+      },
+      'PRD-1663': {
+        nama: 'TUKAR BUBUK KOPI',
+        kategori: 'OKUSSA',
+        satuan: 'Bungkus',
+        hargaBeli: 0,
+        hargaJual: 10000,
+        hargaKhususRekanan: 10000,
+        stok: 0,
+      },
+      'PRD-27': {
+        nama: 'KOPI ROBUSTA MENTAH',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-28': {
+        nama: 'ROBUSTA PREMIUM MENTAH',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-29': {
+        nama: 'ROBUSTA LANANG MENTAH',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 30000,
+        hargaKhususRekanan: 25000,
+        stok: 0,
+      },
+      'PRD-30': {
+        nama: 'KOPI ROBUSTA ROSTING',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 35000,
+        hargaKhususRekanan: 30000,
+        stok: 0,
+      },
+      'PRD-31': {
+        nama: 'ROBUSTA PREMIUM ROSTING',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-32': {
+        nama: 'ROBUSTA LANANG ROSTING',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-33': {
+        nama: 'KOPI ROBUSTA BUBUK',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-34': {
+        nama: 'ROBUSTA PREMIUM BUBUK',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+      'PRD-35': {
+        nama: 'ROBUSTA LANANG BUBUK',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 0,
+        hargaKhususRekanan: 0,
+        stok: 0,
+      },
+
+      // 6. ALAT (Jasa / Sewa Armada & Alat Berat tanpa stok fisik)
+      'PRD-6838': {
+        nama: 'SEWA EXCA 1',
+        kategori: 'ALAT',
+        satuan: 'JAM',
+        hargaBeli: 0,
+        hargaJual: 600000,
+        hargaKhususRekanan: 600000,
+        stok: 0,
+      },
+      'PRD-6839': {
+        nama: 'SEWA EXCA 2',
+        kategori: 'ALAT',
+        satuan: 'JAM',
+        hargaBeli: 0,
+        hargaJual: 600000,
+        hargaKhususRekanan: 600000,
+        stok: 0,
+      },
+      'PRD-6840': {
+        nama: 'SEWA TRUCK',
+        kategori: 'ALAT',
+        satuan: 'TRIP',
+        hargaBeli: 0,
+        hargaJual: 8000000,
+        hargaKhususRekanan: 8000000,
+        stok: 0,
+      },
+      'PRD-6841': {
+        nama: 'SEWA DUMP',
+        kategori: 'ALAT',
+        satuan: 'RIT',
+        hargaBeli: 0,
+        hargaJual: 450000,
+        hargaKhususRekanan: 450000,
+        stok: 0,
+      },
+      'PRD-6842': {
+        nama: 'SEWA TOING',
+        kategori: 'ALAT',
+        satuan: 'TRIP',
+        hargaBeli: 0,
+        hargaJual: 500000,
+        hargaKhususRekanan: 500000,
+        stok: 0,
+      },
+
+      // 7. LAINNYA
+      'PRD-16': {
+        nama: 'KARUNG',
+        kategori: 'LAINNYA',
+        satuan: 'Lembar',
+        hargaBeli: 0,
+        hargaJual: 3000,
+        hargaKhususRekanan: 3000,
+        stok: 87, // Opname 100 - 13 terjual
+      },
+    };
+
+    for (const [k, custom] of Object.entries(userCustomProducts)) {
+      const isAlat = custom.kategori === 'ALAT';
+      let p = produkMap.get(k);
+      if (!p) {
+        p = {
+          kode: k,
+          nama: custom.nama,
+          kategori: ensureKat(custom.kategori),
+          satuan: custom.satuan,
+          hargaBeli: custom.hargaBeli,
+          hargaJual: custom.hargaJual,
+          hargaKhususRekanan: custom.hargaKhususRekanan,
+          tanpaStok: isAlat,
+          status: 'AKTIF',
+        };
+        this.db.produk.push(p);
+        produkMap.set(k, p);
+      } else {
+        p.nama = custom.nama;
+        p.kategori = ensureKat(custom.kategori);
+        p.satuan = custom.satuan;
+        if (isAlat) {
+          p.tanpaStok = true;
+        }
+        if (custom.hargaJual > 0) p.hargaJual = custom.hargaJual;
+        if (custom.hargaKhususRekanan > 0) p.hargaKhususRekanan = custom.hargaKhususRekanan;
+        if (custom.hargaBeli > 0) p.hargaBeli = custom.hargaBeli;
+      }
+
+      let s = stokMap.get(k);
+      if (!s) {
+        s = {
+          kode: k,
+          namaProduk: custom.nama,
+          satuan: custom.satuan,
+          kategori: custom.kategori,
+          tanpaStok: isAlat,
+          stok: isAlat ? 0 : custom.stok,
+          minimum: isAlat ? 0 : 10,
+          updateTerakhir: nowIso,
+        };
+        this.db.stokBarang.push(s);
+        stokMap.set(k, s);
+      } else {
+        s.namaProduk = custom.nama;
+        s.kategori = custom.kategori;
+        s.satuan = custom.satuan;
+        s.tanpaStok = isAlat;
+        if (isAlat) {
+          s.minimum = 0;
+          s.stok = 0;
+        } else if (custom.stok > 0) {
+          s.stok = custom.stok;
+        }
+      }
+    }
+
     const purchasedHbCodes = new Set<string>();
     for (const phb of this.db.pembelianHasilBumi || []) {
       if (phb.komoditasKode) {
@@ -1611,6 +2062,144 @@ class DatabaseManager {
         hb.hargaBeliStandar === legacyHbPrice
       ) {
         hb.hargaBeliStandar = 0;
+      }
+    }
+
+    // 1.B. Rekonsiliasi & Pemulihan Integritas Stok Hasil Bumi (Stok Awal Gudang + Pembelian - Penjualan)
+    // Cegah stok lama hilang akibat restart dev server atau sinkronisasi cloud
+    const knownInitialStocks: Record<
+      string,
+      {
+        stokAwal: number;
+        modalAwalTotal: number;
+        rataRataModalAwal: number;
+        keteranganStokAwal: string;
+        tanggalInputStokAwal: string;
+      }
+    > = {
+      'HB-01': {
+        stokAwal: 6390.5,
+        modalAwalTotal: 328925426,
+        rataRataModalAwal: 51471,
+        keteranganStokAwal: 'Rekap stok manual gudang sebelum aplikasi',
+        tanggalInputStokAwal: '03/11/2026',
+      },
+      'HB-03': {
+        stokAwal: 13282.8,
+        modalAwalTotal: 231434432,
+        rataRataModalAwal: 17423,
+        keteranganStokAwal: 'Rekap stok manual gudang sebelum aplikasi',
+        tanggalInputStokAwal: '03/11/2026',
+      },
+      'HB-09': {
+        stokAwal: 1264.8,
+        modalAwalTotal: 28685664,
+        rataRataModalAwal: 22680,
+        keteranganStokAwal: 'Rekap stok manual gudang sebelum aplikasi',
+        tanggalInputStokAwal: '03/11/2026',
+      },
+    };
+
+    // Cari juga jika ada catatan audit log terkait stok awal hasil bumi
+    const auditAwalMap = new Map<string, { stokAwal: number; modalTotal: number; harga: number }>();
+    for (const log of this.db.auditLogs || []) {
+      const match = String(log.detail || '').match(/Stok Awal\s+([0-9.]+)\s*Kg\s*@\s*Rp\s*([0-9.]+)/i);
+      const code = String(log.idTransaksi || '').trim().toUpperCase();
+      if (match && code.startsWith('HB-')) {
+        const kg = parseFloat(match[1]);
+        const harga = parseFloat(match[2].replace(/\./g, ''));
+        if (kg > 0 && !auditAwalMap.has(code)) {
+          auditAwalMap.set(code, {
+            stokAwal: kg,
+            harga,
+            modalTotal: Number(log.nominal) || Math.round(kg * harga),
+          });
+        }
+      }
+    }
+
+    // Rekonsiliasi setiap komoditas hasil bumi
+    for (const hb of this.db.stokHasilBumi || []) {
+      const kUp = String(hb.kode || '').trim().toUpperCase();
+
+      // 1. Inisialisasi Stok Awal HANYA jika belum terdefinisi / null / 0
+      if (hb.stokAwal === undefined || hb.stokAwal === null) {
+        if (knownInitialStocks[kUp]) {
+          const init = knownInitialStocks[kUp];
+          hb.stokAwal = init.stokAwal;
+          hb.modalAwalTotal = init.modalAwalTotal;
+          hb.rataRataModalAwal = init.rataRataModalAwal;
+          hb.keteranganStokAwal = hb.keteranganStokAwal || init.keteranganStokAwal;
+          hb.tanggalInputStokAwal = hb.tanggalInputStokAwal || init.tanggalInputStokAwal;
+        } else if (auditAwalMap.has(kUp)) {
+          const rec = auditAwalMap.get(kUp)!;
+          hb.stokAwal = rec.stokAwal;
+          hb.modalAwalTotal = rec.modalTotal;
+          hb.rataRataModalAwal = rec.harga;
+          hb.keteranganStokAwal = hb.keteranganStokAwal || 'Rekap stok manual gudang sebelum aplikasi';
+          hb.tanggalInputStokAwal = hb.tanggalInputStokAwal || '03/11/2026';
+        } else {
+          // Cari dari catatan penjualan hasil bumi pertama yang memiliki stokGudangSebelum
+          const saleWithStokSebelum = (this.db.penjualanHasilBumi || [])
+            .filter((j) => (j.komoditasKode === hb.kode || j.komoditasNama === hb.nama) && Number(j.stokGudangSebelum) > 0)
+            .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime())[0];
+          if (saleWithStokSebelum && Number(saleWithStokSebelum.stokGudangSebelum) > 0) {
+            const beliSebelum = (this.db.pembelianHasilBumi || [])
+              .filter(
+                (p) =>
+                  (p.komoditasKode === hb.kode || p.komoditasNama === hb.nama) &&
+                  new Date(p.createdAt || 0).getTime() < new Date(saleWithStokSebelum.createdAt || 0).getTime()
+              )
+              .reduce((s, p) => s + (Number(p.beratBersih) || 0), 0);
+            const impliedAwal = Math.max(
+              0,
+              Math.round((Number(saleWithStokSebelum.stokGudangSebelum) - beliSebelum) * 100) / 100
+            );
+            if (impliedAwal > 0) {
+              hb.stokAwal = impliedAwal;
+              hb.keteranganStokAwal = 'Rekap stok manual gudang sebelum aplikasi';
+              hb.tanggalInputStokAwal = '03/11/2026';
+              if (saleWithStokSebelum.modalRataRataPerKg) {
+                hb.rataRataModalAwal = Math.round(Number(saleWithStokSebelum.modalRataRataPerKg));
+                hb.modalAwalTotal = Math.round(impliedAwal * hb.rataRataModalAwal);
+              }
+            }
+          }
+        }
+      }
+
+      // Pastikan integritas matematis stok awal & modal awal
+      const sAwal = Number(hb.stokAwal) || 0;
+      if (sAwal > 0) {
+        let rAwal = Number(hb.rataRataModalAwal) || 0;
+        let mAwal = Number(hb.modalAwalTotal) || 0;
+
+        // Auto-heal jika rAwal atau mAwal sempat rusak/anjlok drastis akibat bug sebelumnya
+        if (knownInitialStocks[kUp] && (rAwal < 5000 || mAwal < sAwal * 5000)) {
+          rAwal = knownInitialStocks[kUp].rataRataModalAwal;
+          mAwal = Math.round(sAwal * rAwal);
+        } else if (rAwal > 0 && (mAwal <= 0 || Math.abs(mAwal - Math.round(sAwal * rAwal)) > sAwal * 100)) {
+          mAwal = Math.round(sAwal * rAwal);
+        } else if (mAwal > 0 && rAwal <= 0) {
+          rAwal = Math.round(mAwal / sAwal);
+        }
+
+        hb.rataRataModalAwal = rAwal;
+        hb.modalAwalTotal = mAwal;
+      }
+
+      // 2. Hitung persis stok ready gudang saat ini & modal rata-rata berjalan (Rolling Moving Average Siklus Muat)
+      const movingAvg = calculateHbMovingAverage(
+        hb,
+        this.db.pembelianHasilBumi,
+        this.db.penjualanHasilBumi
+      );
+
+      hb.stok = movingAvg.stokReadyKg;
+      if (movingAvg.rataRataModalTerkini > 0) {
+        hb.hargaBeliStandar = movingAvg.rataRataModalTerkini;
+        // PENTING: JANGAN PERNAH menimpa hb.rataRataModalAwal atau hb.modalAwalTotal di sini!
+        // rataRataModalAwal dan modalAwalTotal adalah modal masa lalu dari stok awal, bukan sisa stok terkini.
       }
     }
 
@@ -2733,13 +3322,12 @@ class DatabaseManager {
     } finally {
       this.isWriting = false;
     }
-    // Sinkronisasi ke Supabase dijalankan di luar mutex tulis dengan batas tunggu cepat (maks 1.5 detik)
-    // agar transaksi selalu cepat (<1-2 detik), tidak memblokir kasir lain, dan jika jaringan lambat tetap tersimpan otomatis via antrean retry latar belakang.
-    const syncWaitMs = process.env.VERCEL || process.env.NETLIFY ? 3500 : 1500;
+    // Pastikan transaksi LANGSUNG dan PASTI tersimpan ke Cloud Supabase sebelum respon API selesai
+    const syncWaitMs = 10000;
     try {
       await supabaseSyncEngine.flushSync(this.db, syncWaitMs);
-    } catch {
-      // Background retry queue in supabaseSyncEngine handles eventual delivery
+    } catch (syncErr) {
+      console.warn('[DB] Supabase immediate flush warning:', syncErr);
     }
     return result;
   }

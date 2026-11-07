@@ -14,6 +14,7 @@ import {
 import { supabaseSyncEngine } from './supabase.ts';
 import { generateFullBackupXlsxBuffer } from '../utils/fullBackupSpreadsheet.ts';
 import { normalizeDateToDmy } from '../utils/format.ts';
+import { calculateHbMovingAverage } from '../utils/hasilBumiMovingAverage.ts';
 
 export const apiRouter = Router();
 
@@ -1513,8 +1514,12 @@ apiRouter.post('/stok-hasil-bumi/saldo-awal', async (req, res) => {
         hb.keteranganStokAwal = item.keterangan?.trim() || 'Rekap stok manual lama sebelum aplikasi';
         hb.tanggalInputStokAwal = resolvedTglStokAwal;
 
-        // Stok fisik Ready Gudang = Stok Awal Lama + Pembelian Baru - Penjualan Keluar
-        hb.stok = Math.max(0, Math.round((validStokAwal + pembelianBerjalanKg - penjualanBerjalanKg) * 100) / 100);
+        // Hitung stok ready & rata-rata modal berjalan menggunakan siklus muat moving average
+        const movingAvg = calculateHbMovingAverage(hb, db.pembelianHasilBumi, db.penjualanHasilBumi);
+        hb.stok = movingAvg.stokReadyKg;
+        if (movingAvg.rataRataModalTerkini > 0) {
+          hb.hargaBeliStandar = movingAvg.rataRataModalTerkini;
+        }
         hb.updateTerakhir = iso;
 
         db.auditLogs.unshift({

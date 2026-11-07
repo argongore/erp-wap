@@ -26,12 +26,14 @@ import {
   isRealTransferBankAccount,
   useDivisiOptions,
 } from '../common/DoubleCheckVerifikasiPanel.tsx';
+import { calculateHbMovingAverage } from '../../utils/hasilBumiMovingAverage.ts';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   stokList: StokHasilBumi[];
   pembelianList: TransaksiPembelianHasilBumi[];
+  penjualanList?: TransaksiPenjualanHasilBumi[];
   mitraList: Mitra[];
   rekeningList: Rekening[];
   initialKomoditasKode?: string;
@@ -66,6 +68,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   onClose,
   stokList,
   pembelianList,
+  penjualanList = [],
   mitraList,
   rekeningList,
   initialKomoditasKode,
@@ -164,31 +167,14 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
     [activeKomoditas, komoditasKode]
   );
 
-  // Hitung modal rata-rata pembelian gudang secara riil
-  const modalRataRataHitungOtomatis = useMemo(() => {
-    if (!selectedKomoditas) return 0;
-    const stokAwalKg = Number(selectedKomoditas.stokAwal) || 0;
-    const modalAwalUang =
-      Number(selectedKomoditas.modalAwalTotal) ||
-      stokAwalKg * (Number(selectedKomoditas.rataRataModalAwal) || 0);
+  // Hitung modal rata-rata gudang murni dari siklus berjalan (Sisa Stok Muat Terakhir + Pembelian Baru Berjalan)
+  const movingAvg = useMemo(() => {
+    if (!selectedKomoditas) return null;
+    return calculateHbMovingAverage(selectedKomoditas, pembelianList, penjualanList);
+  }, [selectedKomoditas, pembelianList, penjualanList]);
 
-    const purchases = pembelianList.filter(
-      (p) =>
-        isPhysicalPurchase(p) &&
-        (p.komoditasKode === selectedKomoditas.kode ||
-          p.komoditasNama.toUpperCase().trim() === selectedKomoditas.nama.toUpperCase().trim())
-    );
-
-    const totalUang =
-      modalAwalUang + purchases.reduce((s, p) => s + (Number(p.totalNominal) || 0), 0);
-    const totalKg =
-      stokAwalKg + purchases.reduce((s, p) => s + (Number(p.beratBersih) || 0), 0);
-
-    if (totalKg > 0 && totalUang > 0) {
-      return Math.round(totalUang / totalKg);
-    }
-    return Math.max(0, Number(selectedKomoditas.rataRataModalAwal) || 0);
-  }, [selectedKomoditas, pembelianList]);
+  const modalRataRataHitungOtomatis =
+    movingAvg?.rataRataModalTerkini || Math.max(0, Number(selectedKomoditas?.rataRataModalAwal) || 0);
 
   // Sinkronkan acuan harga rata-rata beli saat komoditas berganti
   useEffect(() => {
@@ -202,7 +188,8 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const isBelumPutusHarga = metodePembayaran === 'BELUM_PUTUS_HARGA';
   const hargaRataPengurangStokPerKg = modalRataRataHitungOtomatis;
 
-  const readyGudangKg = Math.max(0, Number(selectedKomoditas?.stok) || 0);
+  const readyGudangKg =
+    movingAvg?.stokReadyKg ?? Math.max(0, Number(selectedKomoditas?.stok) || 0);
   const beratKotor = Math.max(0, parseFloat(beratKotorStr) || 0);
   const tonaseAkhir = Math.max(0, parseFloat(tonaseAkhirStr) || 0);
   const susutPerjalananKg =
@@ -859,6 +846,31 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                 dicatat sebagai <strong>SUSUT</strong> &amp; stok gudang menjadi 0 Kg)
               </span>
             </label>
+          )}
+
+          {/* Informasi Siklus Muat Berjalan (Moving Average) */}
+          {movingAvg?.adaPenjualanSebelumnya && (
+            <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-sky-950 text-xs flex flex-col gap-1.5 shadow-sm">
+              <div className="font-bold flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-sky-600"></span>
+                  Siklus Stok Berjalan (Moving Average Gudang Real)
+                </span>
+                <span className="text-[11px] text-sky-700">Muat Terakhir: {movingAvg.tanggalMuatTerakhir || '-'}</span>
+              </div>
+              <div className="text-[11px] text-zinc-700 leading-relaxed font-mono">
+                Basis Sisa Muat Terakhir:{' '}
+                <strong className="text-zinc-900">{formatKgSpreadsheet(movingAvg.sisaStokMuatTerakhirKg)} Kg</strong> @{' '}
+                <strong className="text-zinc-900">{formatRupiah(movingAvg.rataRataMuatTerakhir)}</strong>
+                {' + '}
+                Pembelian Baru:{' '}
+                <strong className="text-zinc-900">{formatKgSpreadsheet(movingAvg.pembelianBaruSetelahMuatKg)} Kg</strong> ({movingAvg.pembelianBaruSetelahMuatCount} nota = {formatRupiah(movingAvg.pembelianBaruSetelahMuatRp)})
+                {' → '}
+                Ready Gudang Saat Ini:{' '}
+                <strong className="text-sky-800 font-bold">{formatKgSpreadsheet(movingAvg.stokReadyKg)} Kg</strong> @{' '}
+                <strong className="text-sky-800 font-bold">{formatRupiah(movingAvg.rataRataModalTerkini)}</strong>
+              </div>
+            </div>
           )}
 
           {/* ===================================================================== */}
