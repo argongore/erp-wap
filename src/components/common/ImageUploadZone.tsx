@@ -9,6 +9,9 @@ import {
   AlertCircle,
   RefreshCw,
   Plus,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUpDown,
 } from 'lucide-react';
 import { api } from '../../api/client';
 
@@ -181,6 +184,17 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
     }
   };
 
+  const handleMove = (index: number, direction: 'LEFT' | 'RIGHT') => {
+    const targetIndex = direction === 'LEFT' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= currentImages.length) return;
+    const next = [...currentImages];
+    const temp = next[index];
+    next[index] = next[targetIndex];
+    next[targetIndex] = temp;
+    if (onValuesChange) onValuesChange(next);
+    if (onChange) onChange(next.join('|||'));
+  };
+
   const handleRemoveSingle = (indexToRemove: number) => {
     const updated = currentImages.filter((_, idx) => idx !== indexToRemove);
     if (onValuesChange) onValuesChange(updated);
@@ -204,7 +218,7 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
           <span className="text-[10px] text-emerald-700 font-bold flex items-center space-x-1">
             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
             <span>
-              {currentImages.length} Foto Siap {multiple ? 'Disimpan' : ''}
+              {currentImages.length} Lembar Capture Siap {multiple ? 'Disimpan (Terurut)' : ''}
             </span>
           </span>
         )}
@@ -263,7 +277,7 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
               </div>
               <div>
                 <p className="text-xs font-bold text-zinc-800">
-                  Ambil Foto Nota Fisik {multiple ? '(Bisa Lebih Dari 1)' : ''}
+                  Ambil Foto Nota Fisik {multiple ? '(Bisa Multi-Capture: Lembar 1 s/d 8+)' : ''}
                 </p>
                 <p className="text-[11px] text-zinc-500 mt-0.5">{sublabel}</p>
               </div>
@@ -275,7 +289,7 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
                   className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
                 >
                   <Camera className="w-3.5 h-3.5" />
-                  <span>Kamera HP</span>
+                  <span>Kamera HP (Capture 1)</span>
                 </button>
                 <button
                   type="button"
@@ -283,16 +297,28 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
                   className="flex items-center space-x-1.5 px-3 py-1.5 bg-zinc-200 hover:bg-zinc-300 text-zinc-800 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
                 >
                   <UploadCloud className="w-3.5 h-3.5 text-zinc-600" />
-                  <span>Galeri / File</span>
+                  <span>Pilih File Galeri</span>
                 </button>
               </div>
             </div>
           )}
         </div>
       ) : (
-        /* Attached Images View (Multi or Single) */
+        /* Attached Images View (Multi or Single with Sorting Controls) */
         <div className="space-y-2">
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+          {multiple && (
+            <div className="flex items-center justify-between bg-amber-50/80 px-2.5 py-1.5 rounded-lg border border-amber-200 text-[11px] text-amber-950">
+              <span className="font-semibold flex items-center gap-1">
+                <ArrowUpDown className="w-3.5 h-3.5 text-amber-700" />
+                Urutan Lembar: Gunakan panah ◄ ► pada setiap foto untuk menyusun halaman 1, 2, dst.
+              </span>
+              <span className="font-bold font-mono bg-amber-200/80 px-1.5 py-0.5 rounded text-[10px]">
+                {currentImages.length} Lembar
+              </span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
             {currentImages.map((img, idx) => (
               <div
                 key={idx}
@@ -300,24 +326,50 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
               >
                 <div
                   onClick={() => setPreviewModalImg(img)}
-                  className="relative w-full h-20 rounded-lg overflow-hidden border border-zinc-200 cursor-pointer bg-zinc-950"
+                  className="relative w-full h-24 rounded-lg overflow-hidden border border-zinc-200 cursor-pointer bg-zinc-950"
                 >
-                  <img src={img} alt={`Nota ${idx + 1}`} className="w-full h-full object-cover" />
+                  <img src={img} alt={`Nota Lembar ${idx + 1}`} className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <Eye className="w-4 h-4 text-white" />
                   </div>
-                  <span className="absolute top-1 left-1 bg-black/70 text-[9px] font-bold text-white px-1.5 py-0.2 rounded">
-                    #{idx + 1}
+                  <span className="absolute top-1 left-1 bg-amber-600 text-[9px] font-black text-white px-1.5 py-0.5 rounded shadow-xs">
+                    Hal {idx + 1}
                   </span>
                 </div>
 
-                <div className="w-full flex items-center justify-between pt-1 px-1 text-[10px] text-zinc-500">
-                  <span className="truncate">Lembar {idx + 1}</span>
+                <div className="w-full flex items-center justify-between pt-1.5 px-0.5 text-[10px] text-zinc-600">
+                  <div className="flex items-center space-x-0.5">
+                    {multiple && currentImages.length > 1 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleMove(idx, 'LEFT')}
+                          disabled={idx === 0}
+                          className="p-1 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-700 disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
+                          title="Geser halaman ke kiri"
+                        >
+                          <ChevronLeft className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMove(idx, 'RIGHT')}
+                          disabled={idx === currentImages.length - 1}
+                          className="p-1 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-700 disabled:opacity-20 cursor-pointer disabled:cursor-not-allowed"
+                          title="Geser halaman ke kanan"
+                        >
+                          <ChevronRight className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
+                    <span className="font-bold text-zinc-800 text-[10px] ml-1">
+                      Lembar {idx + 1}
+                    </span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => handleRemoveSingle(idx)}
-                    className="text-zinc-400 hover:text-rose-600 p-0.5 rounded cursor-pointer"
-                    title="Hapus foto ini"
+                    className="text-zinc-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 cursor-pointer"
+                    title="Hapus foto lembar ini"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -327,34 +379,39 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
 
             {/* Add More Button if multiple */}
             {multiple && (
-              <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 hover:bg-zinc-100 flex flex-col items-center justify-center p-3 text-center gap-1.5 transition-colors">
-                <span className="text-[10px] font-bold text-zinc-600">+ Tambah Foto</span>
-                <div className="flex gap-1">
+              <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50/50 hover:bg-amber-100/70 flex flex-col items-center justify-center p-3 text-center gap-1.5 transition-colors min-h-[120px]">
+                <span className="text-[11px] font-black text-amber-900">
+                  + Capture Lembar {currentImages.length + 1}
+                </span>
+                <span className="text-[9px] text-zinc-500">Ambil lembar selanjutnya</span>
+                <div className="flex gap-1.5 mt-1">
                   <button
                     type="button"
                     onClick={() => cameraInputRef.current?.click()}
-                    className="p-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-md cursor-pointer"
-                    title="Kamera HP"
+                    className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-[10px] font-bold flex items-center gap-1 shadow-2xs cursor-pointer"
+                    title="Buka Kamera HP untuk foto lembar berikutnya"
                   >
-                    <Camera className="w-3.5 h-3.5" />
+                    <Camera className="w-3 h-3" />
+                    <span>Kamera</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="p-1.5 bg-zinc-200 hover:bg-zinc-300 text-zinc-700 rounded-md cursor-pointer"
-                    title="Pilih File"
+                    className="px-2 py-1 bg-zinc-200 hover:bg-zinc-300 text-zinc-800 rounded-md text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                    title="Pilih file dari galeri"
                   >
-                    <UploadCloud className="w-3.5 h-3.5" />
+                    <UploadCloud className="w-3 h-3" />
+                    <span>Galeri</span>
                   </button>
                 </div>
               </div>
             )}
           </div>
 
-          <div className="flex justify-between items-center text-[10px] text-zinc-500 px-0.5">
+          <div className="flex justify-between items-center text-[10px] text-zinc-500 px-0.5 pt-1">
             <span>
-              {currentImages.length} bukti nota terlampir.{' '}
-              {multiple ? 'Klik thumbnail untuk pratinjau penuh.' : ''}
+              {currentImages.length} lembar bukti nota tersusun rapi.{' '}
+              {multiple ? 'Klik thumbnail untuk pratinjau zoom.' : ''}
             </span>
             <button
               type="button"

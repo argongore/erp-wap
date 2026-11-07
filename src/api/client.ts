@@ -958,6 +958,7 @@ export const api = {
     noNotaLalu?: string;
     rincianBarang?: string;
     fotoNota?: string;
+    fotoNotaList?: string[];
     driveFileUrl?: string;
     driveFileId?: string;
     driveFolderPath?: string;

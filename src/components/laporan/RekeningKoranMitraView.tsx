@@ -596,21 +596,31 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     return statement?.rekeningUtamaDetail;
   }, [rekeningList, activeProfil.rekeningUtama, statement?.rekeningUtamaDetail]);
 
+  const parseDateMs = (tgl?: string, jam?: string) => {
+    const [dd, mm, yyyy] = String(tgl || '').split('/').map(Number);
+    const [hh, min, ss] = String(jam || '00:00:00').split(':').map(Number);
+    if (yyyy && mm && dd) {
+      return new Date(yyyy, mm - 1, dd, hh || 0, min || 0, ss || 0).getTime();
+    }
+    return 0;
+  };
+
   // Pisahkan Saldo Sedang Berjalan (Piutang & Titip belum cair/lunas) vs History Transaksi Selesai (Lunas & Cair)
+  // Urutkan secara kronologis berdasarkan tanggal transaksi (DD/MM/YYYY) dan jam
   const historyBerjalanList = useMemo<RekeningKoranHistoryItem[]>(() => {
     if (!statement) return [];
-    if (Array.isArray(statement.historySaldoBerjalan)) {
-      return statement.historySaldoBerjalan;
-    }
-    return (statement.history || []).filter((h) => h.isSaldoBerjalan !== false);
+    const raw = Array.isArray(statement.historySaldoBerjalan)
+      ? statement.historySaldoBerjalan
+      : (statement.history || []).filter((h) => h.isSaldoBerjalan !== false);
+    return [...raw].sort((a, b) => parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam));
   }, [statement]);
 
   const historySelesaiList = useMemo<RekeningKoranHistoryItem[]>(() => {
     if (!statement) return [];
-    if (Array.isArray(statement.historySelesai)) {
-      return statement.historySelesai;
-    }
-    return (statement.history || []).filter((h) => h.isSaldoBerjalan === false);
+    const raw = Array.isArray(statement.historySelesai)
+      ? statement.historySelesai
+      : (statement.history || []).filter((h) => h.isSaldoBerjalan === false);
+    return [...raw].sort((a, b) => parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam));
   }, [statement]);
 
   const displayedRows = ledgerTab === 'SALDO_BERJALAN' ? historyBerjalanList : historySelesaiList;
@@ -2533,30 +2543,45 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                         .map((att, i) => (
                           <div
                             key={i}
-                            className="p-3 bg-zinc-50 rounded-xl border border-zinc-200 space-y-2 text-left print-avoid-break print:break-inside-avoid print:bg-white print:border-zinc-300"
+                            onClick={() =>
+                              setPreviewPhoto({
+                                imageUrl: att.img,
+                                title: `Lampiran Fisik: ${att.noNotaLalu ? `Nota ${att.noNotaLalu}` : att.txId} · Lembar ${att.idx} dari ${att.total}`,
+                                nomorBukti: att.noNotaLalu || att.txId,
+                                namaMitra: statement?.namaMitra,
+                                tanggal: att.tanggal,
+                                nominalText: formatRupiah(att.nominal),
+                                keterangan: att.keterangan,
+                              })
+                            }
+                            className="p-3 bg-zinc-50 hover:bg-amber-50/50 rounded-xl border border-zinc-200 hover:border-amber-400 space-y-2 text-left transition-all cursor-pointer group shadow-2xs print-avoid-break print:break-inside-avoid print:bg-white print:border-zinc-300"
+                            title="Klik untuk memperbesar lembar nota ini"
                           >
                             <div className="flex items-center justify-between text-[10px]">
-                              <span className="font-mono font-bold text-zinc-800 bg-white px-1.5 py-0.5 rounded border border-zinc-200">
+                              <span className="font-mono font-black text-amber-950 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-300">
                                 {att.noNotaLalu ? `No. Nota: ${att.noNotaLalu}` : att.txId}
-                                {att.total > 1 ? ` (${att.idx}/${att.total})` : ''}
+                                {att.total > 1 ? ` (Hal ${att.idx}/${att.total})` : ''}
                               </span>
-                              <span className="text-zinc-500">{att.tanggal}</span>
+                              <span className="text-zinc-500 font-semibold">{att.tanggal}</span>
                             </div>
-                            <div className="text-[10px] font-semibold text-zinc-800 flex justify-between">
-                              <span>{att.jenis.replace(/_/g, ' ')}</span>
-                              <span className="text-amber-900 font-mono font-bold">{formatRupiah(att.nominal)}</span>
+                            <div className="text-[10px] font-bold text-zinc-900 flex justify-between items-center">
+                              <span className="truncate">{att.jenis.replace(/_/g, ' ')}</span>
+                              <span className="text-amber-900 font-mono font-black shrink-0">{formatRupiah(att.nominal)}</span>
                             </div>
                             {att.keterangan && (
                               <div className="text-[9px] text-zinc-600 italic line-clamp-2">
                                 {att.keterangan}
                               </div>
                             )}
-                            <div className="rounded border border-zinc-200 bg-white overflow-hidden p-1 flex justify-center">
+                            <div className="relative rounded-lg border border-zinc-200 bg-zinc-950 overflow-hidden p-1 flex justify-center group-hover:border-amber-500 transition-colors">
                               <img
                                 src={att.img}
-                                alt={`Bukti Nota ${att.txId}`}
-                                className="max-h-48 w-auto object-contain rounded"
+                                alt={`Bukti Nota ${att.txId} Lembar ${att.idx}`}
+                                className="max-h-52 w-auto object-contain rounded"
                               />
+                              <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[11px] font-bold transition-opacity">
+                                <span>🔍 Klik Perbesar (Hal {att.idx}/{att.total})</span>
+                              </div>
                             </div>
                           </div>
                         ))}

@@ -764,6 +764,17 @@ class DatabaseManager {
       fs.writeFileSync(tempFile, jsonStr, 'utf-8');
       fs.renameSync(tempFile, DB_FILE);
 
+      // Persist to workspace root data/wijaya_agro_erp.json as durable local backup
+      try {
+        const legacyDir = path.dirname(LEGACY_DB_FILE);
+        if (!fs.existsSync(legacyDir)) {
+          fs.mkdirSync(legacyDir, { recursive: true });
+        }
+        fs.writeFileSync(LEGACY_DB_FILE, jsonStr, 'utf-8');
+      } catch (legacyWriteErr) {
+        // Non-blocking
+      }
+
       // Automatic rolling backup in OS temp directory (outside workspace bundle, max 5 files)
       const nowTime = Date.now();
       if (nowTime - this.lastBackupTime > 15 * 60 * 1000) {
@@ -804,38 +815,123 @@ class DatabaseManager {
     return this.db;
   }
 
+  private mergeListById<T>(
+    localList: T[] | undefined,
+    incomingList: T[] | undefined,
+    getId: (item: T) => string
+  ): T[] {
+    const local = Array.isArray(localList) ? localList : [];
+    const incoming = Array.isArray(incomingList) ? incomingList : [];
+    const map = new Map<string, T>();
+
+    // 1. First put incoming items from cloud
+    for (const item of incoming) {
+      if (item) {
+        const id = getId(item);
+        if (id) {
+          map.set(id, item);
+        }
+      }
+    }
+
+    // 2. Put local items: if an item exists locally but not in incoming, PRESERVE IT!
+    // If it exists in both, prefer local if local has newer or equal mutation
+    for (const item of local) {
+      if (item) {
+        const id = getId(item);
+        if (id) {
+          const existing = map.get(id);
+          if (!existing) {
+            map.set(id, item);
+          } else {
+            const incomingTime =
+              (existing as any).updatedAt || (existing as any).createdAt || (existing as any).timestamp || 0;
+            const localTime =
+              (item as any).updatedAt || (item as any).createdAt || (item as any).timestamp || 0;
+            if (new Date(localTime).getTime() >= new Date(incomingTime).getTime()) {
+              map.set(id, item);
+            }
+          }
+        }
+      }
+    }
+
+    return Array.from(map.values());
+  }
+
   private applyIncomingSnapshot(incoming: DatabaseSchema) {
     this.db.profilPerusahaan = incoming.profilPerusahaan || this.db.profilPerusahaan;
-    this.db.rekening = Array.isArray(incoming.rekening) && incoming.rekening.length > 0 ? incoming.rekening : this.db.rekening;
-    this.db.mitra = Array.isArray(incoming.mitra) ? incoming.mitra : [];
-    this.db.karyawan = Array.isArray(incoming.karyawan) ? incoming.karyawan : [];
-    this.db.upahHarian = Array.isArray(incoming.upahHarian) ? incoming.upahHarian : [];
-    this.db.penggajian = Array.isArray(incoming.penggajian) ? incoming.penggajian : [];
-    this.db.produk = Array.isArray(incoming.produk) ? incoming.produk : this.db.produk;
-    this.db.kategoriProduk = Array.isArray(incoming.kategoriProduk) ? incoming.kategoriProduk : [];
-    this.db.stokBarang = Array.isArray(incoming.stokBarang) ? incoming.stokBarang : this.db.stokBarang;
-    this.db.stokHasilBumi = Array.isArray(incoming.stokHasilBumi) ? incoming.stokHasilBumi : this.db.stokHasilBumi;
-    this.db.penjualan = Array.isArray(incoming.penjualan) ? incoming.penjualan : [];
-    this.db.pembelianBarang = Array.isArray(incoming.pembelianBarang) ? incoming.pembelianBarang : [];
-    this.db.pembelianHasilBumi = Array.isArray(incoming.pembelianHasilBumi) ? incoming.pembelianHasilBumi : [];
-    this.db.penjualanHasilBumi = Array.isArray(incoming.penjualanHasilBumi) ? incoming.penjualanHasilBumi : [];
-    this.db.kasbonUang = Array.isArray(incoming.kasbonUang) ? incoming.kasbonUang : [];
-    this.db.bayarBon = Array.isArray(incoming.bayarBon) ? incoming.bayarBon : [];
-    this.db.transferRekening = Array.isArray(incoming.transferRekening) ? incoming.transferRekening : [];
-    this.db.pengeluaran = Array.isArray(incoming.pengeluaran) ? incoming.pengeluaran : [];
-    this.db.pencairanTitipan = Array.isArray(incoming.pencairanTitipan) ? incoming.pencairanTitipan : [];
-    this.db.brilink = Array.isArray(incoming.brilink) ? incoming.brilink : [];
-    this.db.uangMasuk = Array.isArray(incoming.uangMasuk) ? incoming.uangMasuk : [];
-    this.db.auditLogs = Array.isArray(incoming.auditLogs) ? incoming.auditLogs : this.db.auditLogs;
-    this.db.divisi = Array.isArray(incoming.divisi) ? incoming.divisi : [];
-    this.db.cashOpnameLogs = Array.isArray(incoming.cashOpnameLogs) ? incoming.cashOpnameLogs : [];
-    this.db.inventaris = Array.isArray(incoming.inventaris) ? incoming.inventaris : (this.db.inventaris || []);
-    this.db.masterItemPengeluaran = Array.isArray(incoming.masterItemPengeluaran)
-      ? incoming.masterItemPengeluaran
-      : (this.db.masterItemPengeluaran || []);
-    this.db.suratJalan = Array.isArray(incoming.suratJalan)
-      ? incoming.suratJalan
-      : (this.db.suratJalan || []);
+    this.db.rekening =
+      Array.isArray(incoming.rekening) && incoming.rekening.length > 0 ? incoming.rekening : this.db.rekening;
+
+    this.db.mitra = this.mergeListById(this.db.mitra, incoming.mitra, (m) => m.kode || m.id);
+    this.db.karyawan = this.mergeListById(this.db.karyawan, incoming.karyawan, (k) => k.nik || k.id);
+    this.db.upahHarian = this.mergeListById(this.db.upahHarian, incoming.upahHarian, (u) => u.id);
+    this.db.penggajian = this.mergeListById(this.db.penggajian, incoming.penggajian, (p) => p.id);
+    this.db.produk = this.mergeListById(this.db.produk, incoming.produk, (pr) => pr.kode);
+    this.db.kategoriProduk = this.mergeListById(
+      this.db.kategoriProduk,
+      incoming.kategoriProduk,
+      (kp) => (kp as any).kode || (kp as any).id || kp.nama
+    );
+    this.db.stokBarang = this.mergeListById(this.db.stokBarang, incoming.stokBarang, (sb) => sb.kode);
+    this.db.stokHasilBumi = this.mergeListById(
+      this.db.stokHasilBumi,
+      incoming.stokHasilBumi,
+      (sh) => sh.kode
+    );
+
+    this.db.penjualan = this.mergeListById(this.db.penjualan, incoming.penjualan, (p) => p.noPenjualan || (p as any).id);
+    this.db.pembelianBarang = this.mergeListById(
+      this.db.pembelianBarang,
+      incoming.pembelianBarang,
+      (pb) => pb.noPembelian || (pb as any).id
+    );
+    this.db.pembelianHasilBumi = this.mergeListById(
+      this.db.pembelianHasilBumi,
+      incoming.pembelianHasilBumi,
+      (ph) => ph.noPembelian || (ph as any).id
+    );
+    this.db.penjualanHasilBumi = this.mergeListById(
+      this.db.penjualanHasilBumi,
+      incoming.penjualanHasilBumi,
+      (pjh) => pjh.noPenjualan || (pjh as any).id
+    );
+    this.db.kasbonUang = this.mergeListById(this.db.kasbonUang, incoming.kasbonUang, (kb) => kb.idTransaksi || (kb as any).id);
+    this.db.bayarBon = this.mergeListById(this.db.bayarBon, incoming.bayarBon, (bb) => bb.idTransaksi || (bb as any).id);
+    this.db.transferRekening = this.mergeListById(
+      this.db.transferRekening,
+      incoming.transferRekening,
+      (tr) => tr.noTransfer || (tr as any).id
+    );
+    this.db.pengeluaran = this.mergeListById(this.db.pengeluaran, incoming.pengeluaran, (pe) => pe.idTransaksi || (pe as any).id);
+    this.db.pencairanTitipan = this.mergeListById(
+      this.db.pencairanTitipan,
+      incoming.pencairanTitipan,
+      (pt) => pt.idPencairan || (pt as any).id
+    );
+    this.db.brilink = this.mergeListById(this.db.brilink, incoming.brilink, (br) => br.idTransaksi || (br as any).id);
+    this.db.uangMasuk = this.mergeListById(this.db.uangMasuk, incoming.uangMasuk, (um) => um.idTransaksi || (um as any).id);
+    this.db.auditLogs = this.mergeListById(this.db.auditLogs, incoming.auditLogs, (al) => al.id);
+    this.db.divisi = this.mergeListById(this.db.divisi, incoming.divisi, (d) => (d as any).kode || d.id || d.nama);
+    this.db.cashOpnameLogs = this.mergeListById(this.db.cashOpnameLogs, incoming.cashOpnameLogs, (co) => co.id);
+    this.db.inventaris = this.mergeListById(this.db.inventaris, incoming.inventaris, (inv) => inv.id || inv.kode);
+    this.db.masterItemPengeluaran = this.mergeListById(
+      this.db.masterItemPengeluaran,
+      incoming.masterItemPengeluaran,
+      (mi) => mi.id || mi.nama
+    );
+
+    this.db.suratJalan = this.mergeListById(
+      this.db.suratJalan,
+      incoming.suratJalan,
+      (sj) => sj.noInvoice || sj.id
+    ).sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime();
+      const timeB = new Date(b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
+
     this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes)
       ? incoming.deletedHasilBumiKodes
       : (this.db.deletedHasilBumiKodes || []);
@@ -1110,61 +1206,6 @@ class DatabaseManager {
       sinkronAcc.status = 'AKTIF';
     }
 
-    // Jika KAS01 sudah melakukan closing (transfer KAS01 -> Berangkas) dan belum ada transaksi KAS01 setelahnya, pastikan saldo KAS01 = 0
-    const kas01Acc = this.db.rekening.find((r) => r.kode === 'KAS01');
-    if (kas01Acc && Number(kas01Acc.saldoSaatIni) !== 0) {
-      const berangkasCodes = new Set(
-        (this.db.rekening || [])
-          .filter((r) => r.kode === 'BRK01' || /\b(berangkas|brankas)\b/i.test(r.nama || ''))
-          .map((r) => r.kode)
-      );
-      let latestClosingTs = 0;
-      for (const t of this.db.transferRekening || []) {
-        if (t.rekeningSumber === 'KAS01' && berangkasCodes.has(t.rekeningTujuan)) {
-          const ts = Date.parse(t.createdAt || '') || 0;
-          if (ts > latestClosingTs) latestClosingTs = ts;
-        }
-      }
-      if (latestClosingTs > 0) {
-        let latestOtherKas01Ts = 0;
-        const checkTs = (createdAt?: string) => {
-          const ts = Date.parse(createdAt || '') || 0;
-          if (ts > latestOtherKas01Ts) latestOtherKas01Ts = ts;
-        };
-        for (const t of this.db.transferRekening || []) {
-          if (
-            (t.rekeningSumber === 'KAS01' && !berangkasCodes.has(t.rekeningTujuan)) ||
-            t.rekeningTujuan === 'KAS01'
-          ) {
-            checkTs(t.createdAt);
-          }
-        }
-        for (const p of this.db.penjualan || []) {
-          if (p.rekeningTujuan === 'KAS01') checkTs(p.createdAt);
-        }
-        for (const p of this.db.penjualanHasilBumi || []) {
-          if (p.rekeningTujuan === 'KAS01') checkTs(p.createdAt);
-        }
-        for (const b of this.db.pembelianBarang || []) {
-          if (b.rekeningSumber === 'KAS01') checkTs(b.createdAt);
-        }
-        for (const b of this.db.pembelianHasilBumi || []) {
-          if (b.rekeningSumber === 'KAS01') checkTs(b.createdAt);
-        }
-        for (const e of this.db.pengeluaran || []) {
-          if (e.rekeningSumber === 'KAS01') checkTs(e.createdAt);
-        }
-        for (const g of this.db.penggajian || []) {
-          if (g.rekeningSumber === 'KAS01') checkTs((g as any).createdAt);
-        }
-        for (const br of this.db.brilink || []) {
-          if (br.rekeningKasTunai === 'KAS01') checkTs(br.createdAt);
-        }
-        if (latestClosingTs >= latestOtherKas01Ts) {
-          kas01Acc.saldoSaatIni = 0;
-        }
-      }
-    }
 
     // Pastikan DP Parabot maupun TANPA_DIVISI bukan Divisi dan tidak memiliki akun OPERASIONAL_DIVISI
     this.db.divisi = (this.db.divisi || []).filter(
@@ -1788,6 +1829,65 @@ class DatabaseManager {
     for (const u of this.db.upahHarian || []) {
       if (u.tanggalKerja) u.tanggalKerja = toDmyIfIso(u.tanggalKerja) || u.tanggalKerja;
       if (u.tanggalDibayar) u.tanggalDibayar = toDmyIfIso(u.tanggalDibayar) || u.tanggalDibayar;
+    }
+
+    // Auto-heal & pelihara rekonsiliasi Surat Jalan agar tidak pernah hilang / mental
+    if (!Array.isArray(this.db.suratJalan)) {
+      this.db.suratJalan = [];
+    }
+    const existingSjInvoices = new Set(this.db.suratJalan.map((s) => s.noInvoice).filter(Boolean));
+
+    // Pulihkan WAP20261106-351 jika belum ada di tabel suratJalan
+    if (!existingSjInvoices.has('WAP20261106-351')) {
+      const umsBuyer = (this.db.uangMasuk || []).find(
+        (u) => u.keterangan?.includes('WAP20261106-351') && u.kategori === 'PENJUALAN_SURAT_JALAN'
+      );
+      const umsKomisi = (this.db.uangMasuk || []).find(
+        (u) => u.keterangan?.includes('WAP20261106-351') && u.kategori === 'KOMISI_SURAT_JALAN'
+      );
+      const bybBon = (this.db.bayarBon || []).find((b) => b.keterangan?.includes('WAP20261106-351'));
+      if (umsBuyer) {
+        this.db.suratJalan.push({
+          id: 'SJ2611069895',
+          noInvoice: 'WAP20261106-351',
+          tanggal: umsBuyer.tanggal || '04/11/2026',
+          jam: umsBuyer.jam || '21:54:55',
+          idMitra: 'MTR-2790',
+          namaMitra: 'RONI ANGGARA',
+          komoditasNama: 'KOPI',
+          kategoriKode: 'SKA',
+          platTruk: 'BE 8206 AMN',
+          tonaseAwalKg: 1423,
+          tonaseAkhirKg: 1416,
+          susutKg: 7,
+          basisMitra: 61500,
+          basisBuyer: 62000,
+          rendemen: 90.05,
+          hargaPerKgMitra: 55380.75,
+          hargaPerKgBuyer: 55831,
+          totalPenjualanMitra: 78419142,
+          totalPenjualanBuyer: 79056696,
+          marginHargaPt: 637554,
+          pajakNominal: 196048,
+          komisiNominal: 400000,
+          kasbonNominal: 950500,
+          potongPiutang: true,
+          tambahanLabel: '',
+          tambahanNominal: 0,
+          potonganLainLabel: '',
+          potonganLainNominal: 0,
+          totalKeuntunganPt: 1037554,
+          totalPotongan: 1546548,
+          jumlahPembayaranMitra: 76872594,
+          rekeningPtKode: 'BNI01',
+          statusPembayaranMitra: 'PENDING',
+          idUangMasukBuyer: umsBuyer.idTransaksi,
+          idUangMasukKomisi: umsKomisi?.idTransaksi,
+          idBayarBonMitra: bybBon?.idTransaksi,
+          createdAt: umsBuyer.createdAt || '2026-11-06T14:54:55.193Z',
+        });
+        existingSjInvoices.add('WAP20261106-351');
+      }
     }
   }
 

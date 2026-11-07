@@ -277,9 +277,7 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     jumlahPembayaranMitra: number;
     statusPembayaranMitra?: string;
   }) => {
-    const win = window.open('', '_blank', 'width=900,height=700');
-    if (!win) return;
-    win.document.write(`
+    const htmlContent = `
       <!DOCTYPE html>
       <html>
       <head>
@@ -409,11 +407,32 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
             <strong>Fahlevi Martawijaya</strong>
           </div>
         </div>
-        <script>window.print();</script>
       </body>
       </html>
-    `);
-    win.document.close();
+    `;
+
+    let iframe = document.getElementById('print-invoice-frame') as HTMLIFrameElement;
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'print-invoice-frame';
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
+    }
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      }, 300);
+    }
   };
 
   const handlePrintCurrentInvoice = () => {

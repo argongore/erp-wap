@@ -558,28 +558,26 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] border-b border-zinc-800">
               <tr>
-                <th className="py-2.5 px-3">Nama Karyawan</th>
-                <th className="py-2.5 px-3">Divisi Utama</th>
-                <th className="py-2.5 px-2 text-center">Kehadiran (Masuk / Tidak Masuk)</th>
-                <th className="py-2.5 px-3 text-right">Upah Pokok</th>
-                <th className="py-2.5 px-3 text-right">Lembur/Makan</th>
-                <th className="py-2.5 px-3 text-right" title="Total akumulasi seluruh input gaji harian bulan ini">
-                  Total Gaji Kotor (Harian)
-                </th>
+                <th className="py-2.5 px-3 min-w-[200px]">Nama Karyawan &amp; Divisi</th>
                 <th className="py-2.5 px-3 text-right">Bon Uang</th>
                 <th className="py-2.5 px-3 text-right">Bon Barang</th>
                 <th className="py-2.5 px-3 text-right">Total Bon Aktif</th>
-                <th className="py-2.5 px-3 text-right" title="Hak Upah Belum Dicairkan (Total Gaji Kotor dikurangi Total Bon - Bersifat Kondisional)">
-                  Hak Upah (Gaji - Bon)
+                <th className="py-2.5 px-3 text-right" title="Uang Titipan Panen / Dana Mitra jika ada">
+                  Titip Uang
                 </th>
-                <th className="py-2.5 px-3 text-center">Status Neraca</th>
-                <th className="py-2.5 px-3 text-center">Aksi</th>
+                <th className="py-2.5 px-3 text-right" title="Diambil murni dari inputan akumulasi gaji harian bulan berjalan">
+                  Hak Upah (Gaji Berjalan)
+                </th>
+                <th className="py-2.5 px-3 text-center min-w-[170px]" title="Jika Gaji + Titip > Bon = HUTANG PT; Jika Gaji + Titip < Bon = PIUTANG">
+                  Keterangan (Posisi Neraca)
+                </th>
+                <th className="py-2.5 px-3 text-center w-28">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60 font-sans text-xs">
               {loading ? (
                 <tr>
-                  <td colSpan={12} className="py-8 text-center text-zinc-400">
+                  <td colSpan={8} className="py-8 text-center text-zinc-400">
                     <div className="flex items-center justify-center space-x-2">
                       <span className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></span>
                       <span>Memuat daftar karyawan &amp; rekap bulanan...</span>
@@ -588,7 +586,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                 </tr>
               ) : filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="py-8 text-center text-zinc-500 font-sans">
+                  <td colSpan={8} className="py-8 text-center text-zinc-500 font-sans">
                     Tidak ada catatan upah atau karyawan pada periode {rekapData?.periodeBulan} dengan filter yang dipilih.
                   </td>
                 </tr>
@@ -598,8 +596,19 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                   const currentSubTab = activeSubTabs[item.idKaryawan] || 'HARIAN';
                   const badgeClass = DIVISI_BADGES[item.divisiUtama] || 'bg-zinc-800 text-zinc-300 border-zinc-700';
 
+                  const hakUpahMurni = item.rincianHarian?.length > 0
+                    ? item.rincianHarian.reduce((acc, l) => acc + (l.totalUpah || l.jumlah || 0), 0)
+                    : (item.totalGajiKotor || 0);
+                  const titipUangVal = Number(item.saldoTitipHasilPanenMitra || 0);
+                  const bonUangVal = Number(item.sisaKasbonUang || 0);
+                  const bonBarangVal = Number(item.sisaKasbonBarang || 0);
+                  const totalBonAktifVal = Number(item.totalSisaBonKaryawan || (bonUangVal + bonBarangVal));
+
                   const rincianBonBarang = item.rincianBonBarang || [];
                   const rincianBonUang = item.rincianBonUang || [];
+
+                  // Rumus Posisi: (Hak Upah Gaji Berjalan + Titip Uang) - Total Bon Aktif
+                  const netBalance = (hakUpahMurni + titipUangVal) - totalBonAktifVal;
 
                   return (
                     <React.Fragment key={item.idKaryawan}>
@@ -609,7 +618,7 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                         }`}
                         onClick={() => handleToggleExpand(item.idKaryawan)}
                       >
-                        {/* 1. Karyawan */}
+                        {/* 1. Nama Karyawan & Divisi */}
                         <td className="py-3 px-3">
                           <div className="flex items-center space-x-2.5">
                             <button className="text-zinc-500 hover:text-zinc-300 shrink-0">
@@ -646,135 +655,92 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                   {item.nik}
                                 </span>
                               </div>
-                              <span className="text-[10px] text-zinc-400 block">
-                                {item.jabatan} · {item.divisiAktifSaatIni || item.departemen}
-                              </span>
-                              {(item.saldoTitipHasilPanenMitra || 0) > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (onOpenStatement && item.idMitraTerkait) {
-                                      onOpenStatement(item.idMitraTerkait);
-                                    }
-                                  }}
-                                  className="mt-1 text-[10px] font-mono tabular-nums text-amber-300 hover:text-amber-200 underline underline-offset-2 text-left block cursor-pointer"
-                                  title="Karyawan ini juga memiliki Saldo Titip Hasil Panen di Rekening Mitra"
-                                >
-                                  Titip Panen Mitra: {formatRupiah(item.saldoTitipHasilPanenMitra || 0)} →
-                                </button>
-                              )}
+                              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                <span className={`text-[9px] px-1.5 py-0.2 rounded border font-semibold ${badgeClass}`}>
+                                  {item.divisiAktifSaatIni || item.divisiUtama}
+                                </span>
+                                <span className="text-[10px] text-zinc-400">
+                                  {item.rincianHarian?.length || 0} Hari Kerja
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </td>
 
-                        {/* 2. Divisi & Riwayat Upgrade */}
-                        <td className="py-3 px-3">
-                          <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${badgeClass}`}>
-                            {item.divisiUtama}
+                        {/* 2. Bon Uang */}
+                        <td className="py-3 px-3 text-right font-mono">
+                          <span className={bonUangVal > 0 ? 'text-amber-400 font-semibold' : 'text-zinc-500'}>
+                            {bonUangVal > 0 ? formatRupiah(bonUangVal) : 'Rp 0'}
                           </span>
-                          {item.divisiAktifSaatIni && item.divisiAktifSaatIni !== item.divisiUtama && (
-                            <span className="text-[10px] text-emerald-300 font-semibold block mt-1">
-                              Aktif Kini: {item.divisiAktifSaatIni}
-                            </span>
-                          )}
-                          {item.riwayatDivisi && item.riwayatDivisi.length > 0 && (
+                        </td>
+
+                        {/* 3. Bon Barang */}
+                        <td className="py-3 px-3 text-right font-mono">
+                          <span className={bonBarangVal > 0 ? 'text-rose-400 font-semibold' : 'text-zinc-500'}>
+                            {bonBarangVal > 0 ? formatRupiah(bonBarangVal) : 'Rp 0'}
+                          </span>
+                        </td>
+
+                        {/* 4. Total Bon Aktif */}
+                        <td className="py-3 px-3 text-right font-mono">
+                          <span className={`font-bold ${totalBonAktifVal > 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                            {formatRupiah(totalBonAktifVal)}
+                          </span>
+                        </td>
+
+                        {/* 5. Titip Uang */}
+                        <td className="py-3 px-3 text-right font-mono">
+                          {titipUangVal > 0 ? (
                             <span
-                              className="text-[9px] text-amber-300/90 block mt-0.5"
-                              title={`Riwayat mutasi/upgrade: ${
-                                item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiSebelumnya
-                              } → ${item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiBaru}`}
+                              className="font-bold text-purple-300 hover:text-purple-200 cursor-pointer underline underline-offset-2"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onOpenStatement && item.idMitraTerkait) {
+                                  onOpenStatement(item.idMitraTerkait);
+                                }
+                              }}
+                              title="Klik untuk membuka Rekening Koran Titip Panen / Dana"
                             >
-                              Upgrade: {item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiSebelumnya} →{' '}
-                              {item.riwayatDivisi[item.riwayatDivisi.length - 1].divisiBaru}
+                              {formatRupiah(titipUangVal)}
                             </span>
-                          )}
-                          {item.daftarDivisiBekerja.length > 1 && (
-                            <span className="text-[9px] text-zinc-400 block mt-0.5">
-                              +{item.daftarDivisiBekerja.length - 1} divisi lain
-                            </span>
+                          ) : (
+                            <span className="text-zinc-500">Rp 0</span>
                           )}
                         </td>
 
-                        {/* 3. Total Hari Kerja & Tidak Masuk */}
-                        <td className="py-3 px-2 text-center font-mono tabular-nums">
-                          <div className="font-bold text-cyan-300">
-                            {item.totalHariKerja} Hari Masuk
-                          </div>
-                          <div className="text-[10px] text-zinc-400 mt-0.5">
-                            {item.totalHariTidakMasuk ??
-                              Math.max(
-                                0,
-                                new Date(selectedTahun, selectedBulan, 0).getDate() -
-                                  item.totalHariKerja
-                              )}{' '}
-                            Tidak Masuk
-                          </div>
-                        </td>
-
-                        {/* 4. Upah Pokok */}
-                        <td className="py-3 px-3 text-right font-mono text-zinc-300">
-                          {formatRupiah(item.totalUpahPokok)}
-                        </td>
-
-                        {/* 5. Lembur & Makan */}
-                        <td className="py-3 px-3 text-right font-mono text-zinc-400">
-                          {item.totalUangMakanLembur > 0 ? `+${formatRupiah(item.totalUangMakanLembur)}` : '-'}
-                        </td>
-
-                        {/* 6. Hak Upah Belum Cair */}
+                        {/* 6. Hak Upah (Gaji Harian Berjalan) */}
                         <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
-                          {formatRupiah(Number((item as any).hakPending ?? item.totalGajiKotor))}
+                          {formatRupiah(hakUpahMurni)}
                         </td>
 
-                        {/* 7. Kasbon Uang */}
-                        <td className="py-3 px-3 text-right font-mono">
-                          <span className={item.sisaKasbonUang > 0 ? 'text-amber-400 font-semibold' : 'text-zinc-500'}>
-                            {item.sisaKasbonUang > 0 ? formatRupiah(item.sisaKasbonUang) : '-'}
-                          </span>
-                        </td>
-
-                        {/* 8. Kasbon Barang Toko */}
-                        <td className="py-3 px-3 text-right font-mono">
-                          <span className={item.sisaKasbonBarang > 0 ? 'text-rose-400 font-semibold' : 'text-zinc-500'}>
-                            {item.sisaKasbonBarang > 0 ? formatRupiah(item.sisaKasbonBarang) : '-'}
-                          </span>
-                        </td>
-
-                        {/* 9. Total Sisa Bon Aktif */}
-                        <td className="py-3 px-3 text-right font-mono">
-                          <span className={`font-bold ${item.totalSisaBonKaryawan > 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
-                            {formatRupiah(item.totalSisaBonKaryawan)}
-                          </span>
-                        </td>
-
-                        {/* 10. Estimasi Gaji Bersih */}
-                        <td className="py-3 px-3 text-right font-mono font-bold">
-                          {item.saldoBersih >= 0 ? (
-                            <span className="text-emerald-400">{formatRupiah(item.saldoBersih)}</span>
-                          ) : (
-                            <span className="text-rose-400">-{formatRupiah(Math.abs(item.saldoBersih))}</span>
-                          )}
-                        </td>
-
-                        {/* 11. Posisi Neraca */}
+                        {/* 7. Keterangan (Hutang / Piutang) */}
                         <td className="py-3 px-3 text-center whitespace-nowrap">
-                          {item.posisiStatus === 'PERUSAHAAN_BERHUTANG_UPAH' ? (
-                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
-                              HAK BERSIH +{formatRupiah(item.saldoBersih)}
-                            </span>
-                          ) : item.posisiStatus === 'KARYAWAN_BERHUTANG_BON' ? (
-                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-800">
-                              HUTANG BON {formatRupiah(Math.abs(item.saldoBersih))}
-                            </span>
+                          {netBalance > 0 ? (
+                            <div className="inline-flex flex-col items-center">
+                              <span className="text-[10px] font-black px-2.5 py-1 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-700 shadow-2xs">
+                                HUTANG: {formatRupiah(netBalance)}
+                              </span>
+                              <span className="text-[9px] text-emerald-400/80 mt-0.5">
+                                PT Berhutang ke Karyawan
+                              </span>
+                            </div>
+                          ) : netBalance < 0 ? (
+                            <div className="inline-flex flex-col items-center">
+                              <span className="text-[10px] font-black px-2.5 py-1 rounded-md bg-amber-950 text-amber-300 border border-amber-700 shadow-2xs">
+                                PIUTANG: {formatRupiah(Math.abs(netBalance))}
+                              </span>
+                              <span className="text-[9px] text-amber-400/80 mt-0.5">
+                                Karyawan Berhutang ke PT
+                              </span>
+                            </div>
                           ) : (
-                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700">
-                              LUNAS / IMPAS
+                            <span className="text-[10px] font-bold px-2.5 py-1 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700">
+                              LUNAS / IMBANG (Rp 0)
                             </span>
                           )}
                         </td>
 
-                        {/* 12. Aksi */}
+                        {/* 8. Aksi */}
                         <td className="py-3 px-3 text-center" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-center space-x-1.5">
                             <button
@@ -803,13 +769,9 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                               onClick={() => {
                                 if (onOpenBayarGaji) {
                                   const isPrevMonthSelected =
-                                    selectedTahun < currentYear ||
-                                    (selectedTahun === currentYear && selectedBulan < currentMonth);
+                                    selectedBulan !== currentMonth || selectedTahun !== currentYear;
                                   onOpenBayarGaji(item.idKaryawan, {
-                                    mode:
-                                      isPrevMonthSelected && item.totalHakUpahPending <= 0
-                                        ? 'BULAN_SEBELUMNYA_LANGSUNG'
-                                        : 'AKUMULASI_HARIAN',
+                                    mode: isPrevMonthSelected ? 'BULAN_SEBELUMNYA_LANGSUNG' : 'AKUMULASI_HARIAN',
                                     bulan: selectedBulan,
                                     tahun: selectedTahun,
                                   });
@@ -817,10 +779,10 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                   setSettleKaryawan(item);
                                 }
                               }}
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-bold transition-colors cursor-pointer shadow-xs whitespace-nowrap"
-                              title="Bayar gaji bulanan penuh / bulan sebelumnya / cairkan akumulasi upah kerja & potong kasbon"
+                              className="p-1.5 bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 rounded transition-colors cursor-pointer"
+                              title="Proses Pencairan Gaji / Settlement Neraca"
                             >
-                              Bayar Gaji
+                              <DollarSign className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </td>
@@ -923,19 +885,39 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                   <div className="flex flex-wrap items-center gap-4 text-xs">
                                     <div>
                                       <span className="text-zinc-400 block text-[10px]">TOTAL HARI KERJA</span>
-                                      <strong className="text-zinc-100 font-mono text-sm">{item.totalHariKerja} Hari</strong>
+                                      <strong className="text-zinc-100 font-mono text-sm">
+                                        {item.rincianHarian.length} Catatan ({item.totalHariKerja} Hari)
+                                      </strong>
                                     </div>
                                     <div className="border-l border-zinc-800 pl-4">
                                       <span className="text-zinc-400 block text-[10px]">TOTAL UPAH POKOK</span>
-                                      <strong className="text-zinc-100 font-mono text-sm">{formatRupiah(item.totalUpahPokok)}</strong>
+                                      <strong className="text-zinc-100 font-mono text-sm">
+                                        {formatRupiah(
+                                          item.rincianHarian.reduce(
+                                            (sum, l) => sum + (l.upahHarian !== undefined ? l.upahHarian : (l.harga || 0)),
+                                            0
+                                          )
+                                        )}
+                                      </strong>
                                     </div>
                                     <div className="border-l border-zinc-800 pl-4">
                                       <span className="text-zinc-400 block text-[10px]">LEMBUR &amp; MAKAN</span>
-                                      <strong className="text-amber-400 font-mono text-sm">{formatRupiah(item.totalUangMakanLembur)}</strong>
+                                      <strong className="text-amber-400 font-mono text-sm">
+                                        {formatRupiah(
+                                          item.rincianHarian.reduce((sum, l) => sum + (l.uangMakanLembur || 0), 0)
+                                        )}
+                                      </strong>
                                     </div>
                                     <div className="border-l border-zinc-800 pl-4">
                                       <span className="text-zinc-400 block text-[10px]">TOTAL JUMLAH GAJI</span>
-                                      <strong className="text-emerald-400 font-mono text-sm">{formatRupiah(item.totalGajiKotor)}</strong>
+                                      <strong className="text-emerald-400 font-mono text-sm">
+                                        {formatRupiah(
+                                          item.rincianHarian.reduce(
+                                            (sum, l) => sum + (l.totalUpah !== undefined ? l.totalUpah : (l.jumlah || 0)),
+                                            0
+                                          )
+                                        )}
+                                      </strong>
                                     </div>
                                   </div>
 
@@ -1016,7 +998,12 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                             Total Akumulasi Gaji Harian {item.rincianHarian.length} Hari Kerja:
                                           </td>
                                           <td className="py-2 px-3 text-right font-mono text-emerald-400 text-sm">
-                                            {formatRupiah(item.totalGajiKotor)}
+                                            {formatRupiah(
+                                              item.rincianHarian.reduce(
+                                                (acc, l) => acc + (l.totalUpah !== undefined ? l.totalUpah : (l.jumlah || 0)),
+                                                0
+                                              )
+                                            )}
                                           </td>
                                           <td colSpan={2}></td>
                                         </tr>

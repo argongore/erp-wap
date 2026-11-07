@@ -1,4 +1,5 @@
 import { dbManager, getWIBDateTime } from '../db.ts';
+import { supabaseSyncEngine } from '../supabase.ts';
 import {
   DAFTAR_DIVISI,
   DAFTAR_24_ITEM_PENGELUARAN,
@@ -5791,7 +5792,7 @@ export class TransactionService {
     const db = dbManager.get();
     const { tanggal } = getWIBDateTime();
     const [, currentMonthStr, currentYearStr] = tanggal.split('/');
-    const targetBulan = Number(params?.bulan) || Number(currentMonthStr) || 9;
+    const targetBulan = Number(params?.bulan) || Number(currentMonthStr) || 11;
     const targetTahun = Number(params?.tahun) || Number(currentYearStr) || 2026;
     const filterDivisi = params?.divisi && params.divisi !== 'ALL' ? params.divisi : undefined;
 
@@ -5850,7 +5851,7 @@ export class TransactionService {
       const uangMakanLemburHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.uangMakanLembur || 0), 0);
       const gajiKotorHarian = allUpahBulanIni.reduce((sum, u) => sum + (u.totalUpahHarian || 0), 0);
 
-      // Sertakan slip gaji bulanan/manual di bulan ini yang tidak berasal dari pencairan catatan harian (agar tidak dobel hitung)
+      // Sertakan slip gaji bulanan/manual di bulan ini HANYA jika tidak ada catatan upah harian sama sekali (misal slip gaji manual)
       const settledSlipIdsFromLogs = new Set(
         (db.upahHarian || [])
           .filter((u) => u.idKaryawan === kry.id && u.idPayrollSettlement)
@@ -5866,9 +5867,10 @@ export class TransactionService {
       );
       const gajiKotorStandalone = standaloneSlipsBulanIni.reduce((sum, g) => sum + (g.totalGajiKotor || 0), 0);
 
-      const totalUpahPokok = upahPokokHarian + gajiPokokStandalone;
-      const totalUangMakanLembur = uangMakanLemburHarian + bonusTunjanganStandalone;
-      const gajiKotor = gajiKotorHarian + gajiKotorStandalone;
+      // Hak Upah diambil murni dari inputan gaji per hari bulan berjalan
+      const totalUpahPokok = allUpahBulanIni.length > 0 ? upahPokokHarian : (gajiPokokStandalone || upahPokokHarian);
+      const totalUangMakanLembur = allUpahBulanIni.length > 0 ? uangMakanLemburHarian : (bonusTunjanganStandalone || uangMakanLemburHarian);
+      const gajiKotor = allUpahBulanIni.length > 0 ? gajiKotorHarian : (gajiKotorStandalone || gajiKotorHarian);
 
       const hakPending = allUpahBulanIni
         .filter((u) => u.status === 'TERCATAT')
@@ -7813,19 +7815,20 @@ export class TransactionService {
     }
 
     const parseTimelineSortMs = (createdAt?: string, tgl?: string, jm?: string) => {
-      if (createdAt && createdAt.includes('T')) {
-        const ms = new Date(createdAt).getTime();
-        if (!Number.isNaN(ms)) return ms;
-      }
+      // Prioritaskan tanggal transaksi bisnis (DD/MM/YYYY) dan jam agar urut kronologis buku kas/bank
       const [dd, mm, yyyy] = String(tgl || '').split('/').map(Number);
       const [hh, min, ss] = String(jm || '00:00:00').split(':').map(Number);
       if (yyyy && mm && dd) {
         return new Date(yyyy, mm - 1, dd, hh || 0, min || 0, ss || 0).getTime();
       }
+      if (createdAt && createdAt.includes('T')) {
+        const ms = new Date(createdAt).getTime();
+        if (!Number.isNaN(ms)) return ms;
+      }
       return 0;
     };
 
-    // Sort chronologically ascending to calculate running balance & FIFO unsettled status accurately
+    // Urutkan transaksi secara kronologis naik (tanggal terlama ke terbaru) agar saldo berjalan & status lunas/cair terhitung akurat
     timeline.sort(
       (a, b) =>
         parseTimelineSortMs(a.createdAt, a.tanggal, a.jam) -
@@ -17242,7 +17245,7 @@ export class TransactionService {
     rekeningPtKode?: string;
     statusPembayaranMitra?: 'PENDING' | 'LUNAS';
   }): Promise<InvoiceSuratJalanRecord> {
-    return await dbManager.executeTransaction((db) => {
+    const createdRecord = await dbManager.executeTransaction((db) => {
       const { tanggal: todayWib, jam, iso } = getWIBDateTime();
       if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
       if (!Array.isArray(db.uangMasuk)) db.uangMasuk = [];
@@ -17445,13 +17448,21 @@ export class TransactionService {
 
       return newRecord;
     });
+
+    try {
+      await supabaseSyncEngine.pushToSupabase(dbManager.get(), { allowOverwrite: true });
+    } catch (syncErr) {
+      console.warn('[SuratJalan] Immediate Supabase push warning:', syncErr);
+    }
+
+    return createdRecord;
   }
 
   public static async cairkanInvoiceSuratJalan(
     idInvoice: string,
     params?: { rekeningSumber?: string; tanggal?: string }
   ): Promise<InvoiceSuratJalanRecord> {
-    return await dbManager.executeTransaction((db) => {
+    const updated = await dbManager.executeTransaction((db) => {
       const { tanggal: todayWib, jam, iso } = getWIBDateTime();
       if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
       if (!Array.isArray(db.pengeluaran)) db.pengeluaran = [];
@@ -17512,12 +17523,20 @@ export class TransactionService {
 
       return record;
     });
+
+    try {
+      await supabaseSyncEngine.pushToSupabase(dbManager.get(), { allowOverwrite: true });
+    } catch (syncErr) {
+      console.warn('[SuratJalan] Immediate Supabase push warning:', syncErr);
+    }
+
+    return updated;
   }
 
   public static async deleteInvoiceSuratJalan(
     idInvoice: string
   ): Promise<{ deleted: InvoiceSuratJalanRecord }> {
-    return await dbManager.executeTransaction((db) => {
+    const res = await dbManager.executeTransaction((db) => {
       if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
       const idx = db.suratJalan.findIndex((s) => s.id === idInvoice || s.noInvoice === idInvoice);
       if (idx === -1) throw new Error(`Invoice Surat Jalan ${idInvoice} tidak ditemukan`);
@@ -17556,6 +17575,14 @@ export class TransactionService {
 
       return { deleted: target };
     });
+
+    try {
+      await supabaseSyncEngine.pushToSupabase(dbManager.get(), { allowOverwrite: true });
+    } catch (syncErr) {
+      console.warn('[SuratJalan] Immediate Supabase push warning:', syncErr);
+    }
+
+    return res;
   }
 }
 

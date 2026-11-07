@@ -212,6 +212,10 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
           ? `Nota Lalu (Piutang Bon Barang)${isNotaNgunci ? ' [NOTA NGUNCI]' : ''}: ${rincianBarang ? rincianBarang.trim() : 'Bon Barang Bertahun-Tahun Lalu'}`
           : `Nota Lalu (Titipan Uang / Hasil Panen): ${rincianBarang ? rincianBarang.trim() : 'Saldo Titip Panen Belum Diambil'}`;
 
+      const photosArray = fotoNota
+        ? fotoNota.split('|||').map((s) => s.trim()).filter(Boolean)
+        : [];
+
       const result = await api.processInputNotaLalu({
         idMitra: finalMitraId,
         tipe,
@@ -220,6 +224,7 @@ export const InputNotaLaluModal: React.FC<InputNotaLaluModalProps> = ({
         noNotaLalu: noNotaLalu.trim() || undefined,
         rincianBarang: rincianBarang.trim() || undefined,
         fotoNota: fotoNota || undefined,
+        fotoNotaList: photosArray.length > 0 ? photosArray : undefined,
         driveFileUrl: driveFileUrl || undefined,
         driveFileId: driveFileId || undefined,
         driveFolderPath,

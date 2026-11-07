@@ -76,7 +76,8 @@ function countAllTransactions(data: Partial<DatabaseSchema> | undefined | null):
     (data.transferRekening?.length || 0) +
     (data.brilink?.length || 0) +
     (data.penggajian?.length || 0) +
-    (data.upahHarian?.length || 0)
+    (data.upahHarian?.length || 0) +
+    (data.suratJalan?.length || 0)
   );
 }
 
@@ -811,9 +812,21 @@ class SupabaseSyncEngine {
       }
 
       await dbManager.hydrateFromSupabase(cloud);
+
+      // Pastikan jika ada rekonsiliasi data lokal (seperti Surat Jalan), Cloud langsung diperbarui
+      const mergedLocal = dbManager.get();
+      if (
+        (mergedLocal.suratJalan?.length || 0) > (cloud.suratJalan?.length || 0) ||
+        countAllTransactions(mergedLocal) > countAllTransactions(cloud)
+      ) {
+        void this.pushToSupabase(mergedLocal, { allowOverwrite: true }).catch((err) =>
+          console.warn('[SupabaseSyncEngine] Push merged state warning:', err)
+        );
+      }
+
       return {
         direction: 'PULLED_FROM_SUPABASE',
-        message: `Data utama berhasil dimuat dari Cloud Supabase (${cloud.produk?.length || 0} produk, ${cloud.mitra?.length || 0} mitra, ${cloud.karyawan?.length || 0} karyawan, ${countAllTransactions(cloud)} transaksi).`,
+        message: `Data utama berhasil dimuat dari Cloud Supabase (${cloud.produk?.length || 0} produk, ${cloud.mitra?.length || 0} mitra, ${cloud.karyawan?.length || 0} karyawan, ${countAllTransactions(mergedLocal)} transaksi).`,
       };
     }
 
