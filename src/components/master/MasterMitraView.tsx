@@ -24,6 +24,7 @@ import {
   Lock,
   Unlock,
   LayoutList,
+  FileDown,
 } from 'lucide-react';
 import {
   CanonicalRoleMitra,
@@ -57,6 +58,7 @@ import {
   KhususNotaNgunciSection,
   ModalToggleNotaNgunci,
 } from './RekapKhususMitraNgunciSection.tsx';
+import { exportRekeningKoranToPdf } from '../../utils/exportRekeningKoranPdf.ts';
 
 interface Props {
   mitraList: Mitra[];
@@ -155,6 +157,32 @@ export const MasterMitraView: React.FC<Props> = ({
   const isCurrentAddWarningDismissed =
     dismissedAddWarning.length > 0 &&
     dismissedAddWarning.toLowerCase() === formNama.trim().toLowerCase();
+
+  // Pintasan Download PDF Rekening Koran Langsung
+  const [downloadingPdfMitraId, setDownloadingPdfMitraId] = useState<string | null>(null);
+
+  const handleDirectDownloadPdf = async (mitraId: string, mitraNama: string) => {
+    setDownloadingPdfMitraId(mitraId);
+    setErrorMsg('');
+    try {
+      const statement = await api.getRekeningKoranMitra(mitraId);
+      if (!statement) {
+        throw new Error('Data rekening koran mitra tidak ditemukan');
+      }
+      await exportRekeningKoranToPdf(
+        statement,
+        fullErpData?.profilPerusahaan || null,
+        undefined,
+        { printScope: 'SALDO_BERJALAN', includeNotaProofs: true }
+      );
+      setSuccessMsg(`PDF Rekening Koran untuk ${mitraNama} berhasil diunduh.`);
+    } catch (err: any) {
+      console.error('Failed to download rekening koran PDF:', err);
+      setErrorMsg(`Gagal mengunduh PDF ${mitraNama}: ${err.message || err}`);
+    } finally {
+      setDownloadingPdfMitraId(null);
+    }
+  };
 
   const handleSyncToSupabase = async () => {
     setIsSyncingSupabase(true);
@@ -1408,10 +1436,21 @@ export const MasterMitraView: React.FC<Props> = ({
                           <button
                             onClick={() => onOpenStatement(m.id)}
                             className="flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors shadow-2xs cursor-pointer"
-                            title="Buka Rekening Koran & Download PDF"
+                            title="Buka Rekening Koran Lengkap Mitra Ini"
                           >
                             <FileText className="w-3.5 h-3.5 text-indigo-600" />
                             <span>Rekening Koran</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDirectDownloadPdf(m.id, m.nama)}
+                            disabled={downloadingPdfMitraId === m.id}
+                            className="flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-bold text-white bg-rose-700 hover:bg-rose-800 disabled:opacity-50 rounded-lg shadow-2xs transition-colors cursor-pointer"
+                            title={`Pintasan Download PDF Rekening Koran ${m.nama} (Tanpa buka rekening koran)`}
+                          >
+                            <FileDown className={`w-3.5 h-3.5 ${downloadingPdfMitraId === m.id ? 'animate-bounce' : ''}`} />
+                            <span>{downloadingPdfMitraId === m.id ? 'Mengunduh...' : 'Unduh PDF'}</span>
                           </button>
 
                           <button

@@ -323,6 +323,7 @@ export const NotaSilangView: React.FC<Props> = ({
           qty: it.qty,
           satuan: it.satuan,
           harga: it.harga,
+          markup: pakaiHargaMusiman ? Math.max(0, Number((it as any).markupPerSatuan || 0)) : 0,
         })),
         ...(pakaiHargaMusiman && totalMarkupMusiman > 0
           ? { tambahanHargaMusiman: totalMarkupMusiman }
@@ -337,12 +338,18 @@ export const NotaSilangView: React.FC<Props> = ({
       setKeterangan('');
       setFotoNota('');
       setPakaiHargaMusiman(false);
+      const totalHppDP = Number(res.bukuAnakPerusahaan?.totalNominal) || grandTotal;
+      const totalJualMitra = Number(res.totalNominal) || Number(res.penjualanMitra?.totalNominal) || totalPiutangMitra;
+      const labaSelisih = Math.max(0, totalJualMitra - totalHppDP);
+
       setSuccessMsg(
         `Nota Silang ${res.noNotaSilang} (${
           isModeSesamaMitra ? 'Sesama Mitra' : 'Mitra ⇄ Anak Perusahaan'
-        }) berhasil dibukukan! Piutang ${res.mitraPengambilNama} ke PT bertambah +${formatRupiah(
-          res.totalNominal
-        )} dan Buku ${res.anakPerusahaanNama} tercatat JML UANG +${formatRupiah(res.totalNominal)}.`
+        }) berhasil dibukukan! Piutang ${res.mitraPengambilNama} tercatat ${formatRupiah(
+          totalJualMitra
+        )} & Hutang ke ${res.anakPerusahaanNama} tercatat ${formatRupiah(totalHppDP)}${
+          labaSelisih > 0 ? ` [Selisih Markup Toko: +${formatRupiah(labaSelisih)}]` : ''
+        }.`
       );
       loadHistory();
       onRefresh();
@@ -363,13 +370,17 @@ export const NotaSilangView: React.FC<Props> = ({
           : 'NOTA SILANG UTAMA (PIUTANG MITRA → PT → ANAK PERUSAHAAN)',
         kategori: 'NOTA_SILANG',
         fotoNota: res.penjualanMitra.fotoNota,
-        items: itemsToSubmit.map((it) => ({
-          nama: it.namaBarang,
-          qty: it.qty,
-          satuan: it.satuan || 'PCS',
-          harga: it.harga,
-          subtotal: it.subtotal,
-        })),
+        items: itemsToSubmit.map((it) => {
+          const mk = pakaiHargaMusiman ? Math.max(0, Number((it as any).markupPerSatuan || 0)) : 0;
+          const hJual = it.harga + mk;
+          return {
+            nama: mk > 0 ? `${it.namaBarang} (+Markup ${formatRupiah(mk)})` : it.namaBarang,
+            qty: it.qty,
+            satuan: it.satuan || 'PCS',
+            harga: hJual,
+            subtotal: Math.round(it.qty * hJual),
+          };
+        }),
         detailRows: [
           { label: 'Mitra Pengambil Barang', value: res.mitraPengambilNama },
           {
@@ -378,17 +389,20 @@ export const NotaSilangView: React.FC<Props> = ({
           },
           { label: 'No. Nota Referensi', value: noNotaToko.trim() || '-' },
           {
-            label: `Efek Buku ${res.mitraPengambilNama}`,
-            value: `+Piutang / Bon ke PT (${formatRupiah(res.totalNominal)})`,
+            label: `Nota Piutang ${res.mitraPengambilNama} ke PT`,
+            value: `${formatRupiah(totalJualMitra)} (Harga Jual ke Mitra)`,
             highlight: true,
           },
           {
-            label: `Efek Buku ${res.anakPerusahaanNama}`,
-            value: `+JML UANG / Hak atas nama ${res.mitraPengambilNama}`,
+            label: `Nota Hutang ke ${res.anakPerusahaanNama}`,
+            value: `${formatRupiah(totalHppDP)} (Harga Pokok Struk Toko)`,
           },
+          ...(labaSelisih > 0
+            ? [{ label: 'Laba / Markup Toko', value: `+${formatRupiah(labaSelisih)}` }]
+            : []),
           {
-            label: 'Total Nilai Nota Silang',
-            value: res.totalNominal,
+            label: 'Total Tagihan Piutang Mitra',
+            value: totalJualMitra,
             isTotal: true,
           },
         ],

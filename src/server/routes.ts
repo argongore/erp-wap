@@ -1222,6 +1222,66 @@ apiRouter.put('/produk/:kode', async (req, res) => {
   }
 });
 
+// Hapus Master Produk & Stok Toko
+const handleDeleteProduk = async (req: any, res: any) => {
+  try {
+    const rawKode = req.params?.kode || req.body?.kode;
+    const cleanKode = String(rawKode || '').trim().toUpperCase();
+    if (!cleanKode) {
+      return res.status(400).json({ success: false, message: 'Kode produk wajib diisi' });
+    }
+
+    const result = await dbManager.executeTransaction((db) => {
+      const idxP = (db.produk || []).findIndex((p) => String(p.kode || '').trim().toUpperCase() === cleanKode);
+      if (idxP === -1) {
+        throw new Error(`Produk dengan kode "${cleanKode}" tidak ditemukan`);
+      }
+      const prod = db.produk[idxP];
+      const prodNama = prod.nama;
+
+      // Hapus dari daftar produk dan stok
+      db.produk.splice(idxP, 1);
+      const idxS = (db.stokBarang || []).findIndex((s) => String(s.kode || '').trim().toUpperCase() === cleanKode);
+      if (idxS !== -1) {
+        db.stokBarang.splice(idxS, 1);
+      }
+
+      // Catat ke deletedProdukKodes agar tidak pernah dibangkitkan ulang saat restart
+      if (!Array.isArray(db.deletedProdukKodes)) {
+        db.deletedProdukKodes = [];
+      }
+      if (!db.deletedProdukKodes.includes(cleanKode)) {
+        db.deletedProdukKodes.push(cleanKode);
+      }
+      if (!db.deletedProdukKodes.includes(prodNama.trim().toUpperCase())) {
+        db.deletedProdukKodes.push(prodNama.trim().toUpperCase());
+      }
+
+      const wib = getWIBDateTime();
+      db.auditLogs.unshift({
+        id: `LOG-PRD-DEL-${Date.now()}`,
+        timestamp: wib.iso,
+        tanggal: wib.tanggal,
+        jam: wib.jam,
+        user: 'KasirWap',
+        jenisTransaksi: 'VOID',
+        idTransaksi: `PRD-${cleanKode}`,
+        detail: `Menghapus master produk & stok: "${prodNama}" (${cleanKode})`,
+        nominal: 0,
+      });
+
+      return { kode: cleanKode, nama: prodNama };
+    });
+
+    res.json({ success: true, message: `Produk "${result.nama}" (${result.kode}) berhasil dihapus`, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+apiRouter.delete('/produk/:kode', handleDeleteProduk);
+apiRouter.post('/produk/delete', handleDeleteProduk);
+
 apiRouter.get('/stok', (_req, res) => {
   try {
     const db = dbManager.get();

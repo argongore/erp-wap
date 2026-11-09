@@ -64,6 +64,9 @@ interface EditableLineItem {
   satuan: string;
   qty: string;
   hargaSatuan: string;
+  hargaBeli?: string;
+  markup?: string;
+  hargaJual?: string;
 }
 
 function dmyToIsoDate(dmy: string): string {
@@ -269,13 +272,21 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           setNoNotaToko(r.noNotaToko || '');
           setNominalInput(String(Number(r.totalNominal) || 0));
           setLineItems(
-            (r.items || []).map((it: any) => ({
-              kodeProduk: 'NOTA-SILANG',
-              namaProduk: it.namaBarang || it.namaProduk || '',
-              satuan: it.satuan || 'PCS',
-              qty: String(Number(it.qty) || 1),
-              hargaSatuan: String(Number(it.harga) || 0),
-            }))
+            (r.items || []).map((it: any) => {
+              const hBeli = it.hargaBeli !== undefined ? Number(it.hargaBeli) : Number(it.harga) || 0;
+              const hJual = it.hargaJual !== undefined ? Number(it.hargaJual) : Number(it.harga) || 0;
+              const mk = it.markup !== undefined ? Number(it.markup) : Math.max(0, hJual - hBeli);
+              return {
+                kodeProduk: 'NOTA-SILANG',
+                namaProduk: it.namaBarang || it.namaProduk || '',
+                satuan: it.satuan || 'PCS',
+                qty: String(Number(it.qty) || 1),
+                hargaSatuan: String(hJual),
+                hargaBeli: String(hBeli),
+                markup: String(mk),
+                hargaJual: String(hJual),
+              };
+            })
           );
         } else if (j === 'PEMBELIAN_HASIL_BUMI') {
           setDivisi(r.divisi || 'Gudang Wijaya Agro');
@@ -802,13 +813,22 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         payload.modeNotaSilang = modeNotaSilang;
         payload.idMitraAnakPerusahaan = idMitraAnakPerusahaan;
         payload.noNotaToko = noNotaToko.trim();
-        payload.items = lineItems.map((it) => ({
-          kodeProduk: 'NOTA-SILANG',
-          namaProduk: it.namaProduk.trim(),
-          satuan: (it.satuan || 'PCS').trim().toUpperCase(),
-          qty: Number(it.qty) || 0,
-          harga: Math.round(Number(it.hargaSatuan) || 0),
-        }));
+        payload.items = lineItems.map((it) => {
+          const qty = Number(it.qty) || 0;
+          const hargaBeli = it.hargaBeli !== undefined ? Math.round(Number(it.hargaBeli)) : Math.round(Number(it.hargaSatuan) || 0);
+          const markup = it.markup !== undefined ? Math.round(Number(it.markup)) : 0;
+          const hargaJual = it.hargaJual !== undefined ? Math.round(Number(it.hargaJual)) : (hargaBeli + markup);
+          return {
+            kodeProduk: 'NOTA-SILANG',
+            namaProduk: it.namaProduk.trim(),
+            satuan: (it.satuan || 'PCS').trim().toUpperCase(),
+            qty,
+            hargaBeli,
+            markup,
+            hargaJual,
+            harga: hargaJual,
+          };
+        });
       } else if (jenis === 'PEMBELIAN_HASIL_BUMI') {
         payload.divisi = divisi;
         if (isNonPhysicalHasilBumi) {
@@ -892,7 +912,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         const isNotaLaluRecord = Boolean(record.isNotaLalu || record.rekeningSumber === 'BON01');
         if (!isNotaLaluRecord) {
           payload.metode = metode;
-          payload.rekeningSumber = metode === 'TUNAI' ? 'KAS01' : rekeningSumber;
+          payload.rekeningSumber =
+            metode === 'TUNAI' ? 'KAS01' : metode === 'SINKRON' ? 'SINKRON' : rekeningSumber;
         } else {
           payload.noNotaLalu = noNotaLalu;
           payload.rincianBarangNotaLalu = rincianBarangNotaLalu;
@@ -1423,105 +1444,232 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                     </button>
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {lineItems.map((it, idx) => {
-                      const rowSub = Math.round(
-                        (Number(it.qty) || 0) * (Number(it.hargaSatuan) || 0)
-                      );
+                      const q = Number(it.qty) || 0;
+                      const hBeli = Number(it.hargaBeli !== undefined ? it.hargaBeli : it.hargaSatuan) || 0;
+                      const mk = Number(it.markup) || 0;
+                      const hJual = Number(it.hargaJual !== undefined ? it.hargaJual : (hBeli + mk)) || (hBeli + mk);
+                      const subBeli = Math.round(q * hBeli);
+                      const subJual = Math.round(q * hJual);
+                      const subMargin = Math.max(0, subJual - subBeli);
+
                       return (
                         <div
                           key={`nsl-row-${idx}`}
-                          className="p-2.5 rounded-xl bg-white border border-zinc-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                          className="p-3 rounded-xl bg-white border border-zinc-200 space-y-2.5 shadow-xs"
                         >
-                          <div className="sm:col-span-5">
-                            <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
-                              Nama Barang
-                            </label>
-                            <input
-                              type="text"
-                              value={it.namaProduk}
-                              onChange={(e) =>
-                                setLineItems((prev) =>
-                                  prev.map((r, rIdx) =>
-                                    rIdx === idx ? { ...r, namaProduk: e.target.value } : r
-                                  )
-                                )
-                              }
-                              placeholder="Contoh: TV Politron 24in Set"
-                              className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg font-medium"
-                            />
-                          </div>
-                          <div className="sm:col-span-2">
-                            <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
-                              Qty &amp; Satuan
-                            </label>
-                            <div className="flex gap-1">
-                              <input
-                                type="number"
-                                step="any"
-                                min="0.01"
-                                value={it.qty}
-                                onChange={(e) =>
-                                  setLineItems((prev) =>
-                                    prev.map((r, rIdx) =>
-                                      rIdx === idx ? { ...r, qty: e.target.value } : r
-                                    )
-                                  )
-                                }
-                                className="w-1/2 px-2 py-1.5 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-right"
-                              />
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                            <div className="sm:col-span-5">
+                              <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                                Nama Barang
+                              </label>
                               <input
                                 type="text"
-                                value={it.satuan}
+                                value={it.namaProduk}
                                 onChange={(e) =>
                                   setLineItems((prev) =>
                                     prev.map((r, rIdx) =>
-                                      rIdx === idx ? { ...r, satuan: e.target.value } : r
+                                      rIdx === idx ? { ...r, namaProduk: e.target.value } : r
                                     )
                                   )
                                 }
-                                className="w-1/2 px-1.5 py-1.5 border border-zinc-300 rounded-lg font-mono text-[11px] uppercase"
+                                placeholder="Contoh: PRIMAKUAT 1 LITER"
+                                className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg font-medium text-xs"
                               />
                             </div>
+                            <div className="sm:col-span-3">
+                              <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
+                                Qty &amp; Satuan
+                              </label>
+                              <div className="flex gap-1">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0.01"
+                                  value={it.qty}
+                                  onChange={(e) =>
+                                    setLineItems((prev) =>
+                                      prev.map((r, rIdx) =>
+                                        rIdx === idx ? { ...r, qty: e.target.value } : r
+                                      )
+                                    )
+                                  }
+                                  className="w-1/2 px-2 py-1.5 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-right text-xs"
+                                />
+                                <input
+                                  type="text"
+                                  value={it.satuan}
+                                  onChange={(e) =>
+                                    setLineItems((prev) =>
+                                      prev.map((r, rIdx) =>
+                                        rIdx === idx ? { ...r, satuan: e.target.value } : r
+                                      )
+                                    )
+                                  }
+                                  className="w-1/2 px-1.5 py-1.5 border border-zinc-300 rounded-lg font-mono text-[11px] uppercase text-xs"
+                                />
+                              </div>
+                            </div>
+                            <div className="sm:col-span-4 flex items-center justify-end gap-2">
+                              {lineItems.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveLineItem(idx)}
+                                  className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                                  title="Hapus baris"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          <div className="sm:col-span-3">
-                            <label className="block text-[10px] font-semibold text-zinc-500 mb-1">
-                              Harga Satuan (Rp)
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              value={it.hargaSatuan}
-                              onChange={(e) =>
-                                setLineItems((prev) =>
-                                  prev.map((r, rIdx) =>
-                                    rIdx === idx ? { ...r, hargaSatuan: e.target.value } : r
-                                  )
-                                )
-                              }
-                              className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-right"
-                            />
-                          </div>
-                          <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2">
-                            <div className="text-right min-w-0">
-                              <span className="block text-[10px] text-zinc-400">Subtotal</span>
-                              <span className="font-mono tabular-nums font-bold text-zinc-900 text-[11px] truncate block">
-                                {formatRupiahSingkat(rowSub)}
+
+                          {/* Dual pricing: Harga Asli DP Parabot vs Markup vs Tagihan Mitra */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-zinc-100 bg-zinc-50/70 p-2 rounded-lg">
+                            <div>
+                              <label className="block text-[10px] font-bold text-zinc-600 mb-0.5">
+                                1. Harga Asli Toko/DPP (Rp)
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={it.hargaBeli !== undefined ? it.hargaBeli : it.hargaSatuan}
+                                onChange={(e) => {
+                                  const newHBeli = Number(e.target.value) || 0;
+                                  const currentMk = Number(it.markup) || 0;
+                                  const newHJual = newHBeli + currentMk;
+                                  setLineItems((prev) =>
+                                    prev.map((r, rIdx) =>
+                                      rIdx === idx
+                                        ? {
+                                            ...r,
+                                            hargaBeli: e.target.value,
+                                            hargaJual: String(newHJual),
+                                            hargaSatuan: String(newHJual),
+                                          }
+                                        : r
+                                    )
+                                  );
+                                }}
+                                className="w-full px-2 py-1 border border-zinc-300 rounded bg-white font-mono font-bold text-zinc-800 text-xs text-right"
+                              />
+                              <span className="block text-[9px] text-zinc-500 mt-0.5">
+                                Hutang PT: {formatRupiahSingkat(subBeli)}
                               </span>
                             </div>
-                            {lineItems.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveLineItem(idx)}
-                                className="p-1.5 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
+
+                            <div>
+                              <label className="block text-[10px] font-bold text-emerald-700 mb-0.5">
+                                2. +Markup Margin PT (Rp)
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={it.markup !== undefined ? it.markup : '0'}
+                                onChange={(e) => {
+                                  const newMk = Number(e.target.value) || 0;
+                                  const baseHBeli = Number(it.hargaBeli !== undefined ? it.hargaBeli : it.hargaSatuan) || 0;
+                                  const newHJual = baseHBeli + newMk;
+                                  setLineItems((prev) =>
+                                    prev.map((r, rIdx) =>
+                                      rIdx === idx
+                                        ? {
+                                            ...r,
+                                            markup: e.target.value,
+                                            hargaJual: String(newHJual),
+                                            hargaSatuan: String(newHJual),
+                                          }
+                                        : r
+                                    )
+                                  );
+                                }}
+                                className="w-full px-2 py-1 border border-emerald-300 rounded bg-emerald-50/50 font-mono font-bold text-emerald-800 text-xs text-right"
+                              />
+                              <span className="block text-[9px] text-emerald-600 mt-0.5 font-semibold">
+                                Laba PT: +{formatRupiahSingkat(subMargin)}
+                              </span>
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-bold text-blue-700 mb-0.5">
+                                3. =Harga Tagihan Mitra (Rp)
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={it.hargaJual !== undefined ? it.hargaJual : it.hargaSatuan}
+                                onChange={(e) => {
+                                  const newHJual = Number(e.target.value) || 0;
+                                  const baseHBeli = Number(it.hargaBeli !== undefined ? it.hargaBeli : it.hargaSatuan) || 0;
+                                  const newMk = Math.max(0, newHJual - baseHBeli);
+                                  setLineItems((prev) =>
+                                    prev.map((r, rIdx) =>
+                                      rIdx === idx
+                                        ? {
+                                            ...r,
+                                            hargaJual: e.target.value,
+                                            hargaSatuan: e.target.value,
+                                            markup: String(newMk),
+                                          }
+                                        : r
+                                    )
+                                  );
+                                }}
+                                className="w-full px-2 py-1 border border-blue-300 rounded bg-blue-50/50 font-mono font-bold text-blue-900 text-xs text-right"
+                              />
+                              <span className="block text-[9px] text-blue-700 mt-0.5 font-semibold">
+                                Piutang Mitra: {formatRupiahSingkat(subJual)}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       );
                     })}
+                  </div>
+
+                  {/* Ringkasan Akuntansi Nota Silang */}
+                  <div className="p-2.5 rounded-lg bg-zinc-900 text-white flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div>
+                      <span className="text-zinc-400 block text-[10px]">Total Hutang ke Toko/DPP:</span>
+                      <span className="font-mono font-bold text-amber-300">
+                        {formatRupiah(
+                          lineItems.reduce((acc, it) => {
+                            const q = Number(it.qty) || 0;
+                            const h = Number(it.hargaBeli !== undefined ? it.hargaBeli : it.hargaSatuan) || 0;
+                            return acc + Math.round(q * h);
+                          }, 0)
+                        )}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-400 block text-[10px]">Total Laba Margin PT:</span>
+                      <span className="font-mono font-bold text-emerald-400">
+                        +{formatRupiah(
+                          lineItems.reduce((acc, it) => {
+                            const q = Number(it.qty) || 0;
+                            const hBeli = Number(it.hargaBeli !== undefined ? it.hargaBeli : it.hargaSatuan) || 0;
+                            const mk = Number(it.markup) || 0;
+                            const hJual = Number(it.hargaJual !== undefined ? it.hargaJual : (hBeli + mk)) || (hBeli + mk);
+                            return acc + Math.max(0, Math.round(q * (hJual - hBeli)));
+                          }, 0)
+                        )}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-400 block text-[10px]">Total Tagihan Mitra (Piutang):</span>
+                      <span className="font-mono font-bold text-white text-sm">
+                        {formatRupiah(
+                          lineItems.reduce((acc, it) => {
+                            const q = Number(it.qty) || 0;
+                            const hBeli = Number(it.hargaBeli !== undefined ? it.hargaBeli : it.hargaSatuan) || 0;
+                            const mk = Number(it.markup) || 0;
+                            const hJual = Number(it.hargaJual !== undefined ? it.hargaJual : (hBeli + mk)) || (hBeli + mk);
+                            return acc + Math.round(q * hJual);
+                          }, 0)
+                        )}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2660,7 +2808,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block font-semibold text-zinc-700 mb-1">Metode</label>
+                      <label className="block font-semibold text-zinc-700 mb-1">Metode Bayar / Pembukuan</label>
                       <select
                         value={metode}
                         onChange={(e) => setMetode(e.target.value)}
@@ -2668,6 +2816,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                       >
                         <option value="TUNAI">TUNAI (Kas Tunai KAS01)</option>
                         <option value="TRANSFER">TRANSFER BANK</option>
+                        <option value="SINKRON">SINKRON (Buku Seimbang Non-Kas / Potong Saldo Internal)</option>
                         {jenis === 'PEMBELIAN_HASIL_BUMI' && (
                           <option value="TITIP">TITIP DANA PETANI (TIT01)</option>
                         )}
@@ -2683,13 +2832,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         {jenis === 'PENJUALAN' && (
                           <>
                             <option value="KASBON">KASBON MITRA (BON01)</option>
-                            <option value="SINKRON">SINKRON (Lunas Non-Kas)</option>
                             <option value="PEMAKAIAN_PENGELUARAN">LARI KE PENGELUARAN (Misal Solar)</option>
                             <option value="INTERNAL_PT">KEBUTUHAN INTERNAL PT (Rp 0)</option>
                           </>
-                        )}
-                        {(jenis === 'BAYAR_BON' || jenis === 'PENCAIRAN_TITIPAN') && (
-                          <option value="SINKRON">SINKRON (Tanpa Uang Masuk/Keluar Kas)</option>
                         )}
                       </select>
                     </div>

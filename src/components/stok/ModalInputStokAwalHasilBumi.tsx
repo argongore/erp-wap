@@ -69,45 +69,48 @@ export const ModalInputStokAwalHasilBumi: React.FC<Props> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [viewMode, setViewMode] = useState<'SINGLE' | 'TABLE'>('SINGLE');
 
-  // Initialize form data cleanly whenever modal opens
-  useEffect(() => {
-    if (!isOpen) return;
-    if (activeStokList.length > 0) {
-      const initial: Record<
-        string,
-        {
-          stokAwal: string;
-          rataRataModalAwal: string;
-          keterangan: string;
-          tanggalStokAwal: string;
-        }
-      > = {};
-      activeStokList.forEach((h) => {
-        initial[h.kode] = {
-          stokAwal: h.stokAwal !== undefined ? String(h.stokAwal) : '0',
-          rataRataModalAwal:
-            h.rataRataModalAwal !== undefined && h.rataRataModalAwal > 0
-              ? String(h.rataRataModalAwal)
-              : h.hargaBeliStandar
-              ? String(h.hargaBeliStandar)
-              : '0',
-          keterangan:
-            h.keteranganStokAwal || 'Rekap stok manual gudang sebelum aplikasi',
-          tanggalStokAwal: dmyToIsoInput(h.tanggalInputStokAwal || h.updateTerakhir),
-        };
-      });
-      setFormData(initial);
-    }
-    setSuccessMsg('');
-    setErrorMsg('');
-  }, [isOpen, stokList]);
+  const prevIsOpenRef = React.useRef(false);
 
+  // Initialize form data ONCE when modal transitions from closed to open
   useEffect(() => {
-    if (isOpen && initialSelectedKode) {
-      setSelectedKode(initialSelectedKode);
+    if (isOpen && !prevIsOpenRef.current) {
+      if (activeStokList.length > 0) {
+        const initial: Record<
+          string,
+          {
+            stokAwal: string;
+            rataRataModalAwal: string;
+            keterangan: string;
+            tanggalStokAwal: string;
+          }
+        > = {};
+        activeStokList.forEach((h) => {
+          initial[h.kode] = {
+            stokAwal: h.stokAwal !== undefined && h.stokAwal !== null ? String(h.stokAwal) : '0',
+            rataRataModalAwal:
+              h.rataRataModalAwal !== undefined && h.rataRataModalAwal > 0
+                ? String(h.rataRataModalAwal)
+                : h.hargaBeliStandar
+                ? String(h.hargaBeliStandar)
+                : '0',
+            keterangan:
+              h.keteranganStokAwal || 'Rekap stok manual gudang sebelum aplikasi',
+            tanggalStokAwal: dmyToIsoInput(h.tanggalInputStokAwal || h.updateTerakhir),
+          };
+        });
+        setFormData(initial);
+      }
+      if (initialSelectedKode) {
+        setSelectedKode(initialSelectedKode);
+      } else if (activeStokList.length > 0) {
+        setSelectedKode(activeStokList[0].kode);
+      }
       setViewMode('SINGLE');
+      setSuccessMsg('');
+      setErrorMsg('');
     }
-  }, [isOpen, initialSelectedKode]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

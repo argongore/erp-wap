@@ -738,12 +738,18 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               <>
                 <div
                   className="text-lg sm:text-xl font-black text-zinc-900 font-mono tabular-nums truncate whitespace-nowrap"
-                  title="Saldo riil uang di laci kasir (KAS01) saat ini"
+                  title="Sisa uang fisik riil di laci kasir (KAS01) yang sedang berjalan"
                 >
-                  {formatRupiah(kas01SaldoLive ?? 0)}
+                  {formatRupiah(
+                    activeTanggalParam !== 'ALL'
+                      ? activeKasirSummary.selisihKasirHarian
+                      : (kas01SaldoLive ?? activeKasirSummary.saldoAkhirKasir)
+                  )}
                 </div>
                 <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
-                  {computedSummary.totalTransaksi} mutasi ({activePeriodDisplay})
+                  {activeKasirSummary.setorKeBerangkasKasir > 0
+                    ? `Sisa laci (setor ${formatRupiahSingkat(activeKasirSummary.setorKeBerangkasKasir)} ke Berangkas)`
+                    : `Uang fisik berjalan di laci (${computedSummary.totalTransaksi} mutasi ${activePeriodDisplay})`}
                 </div>
               </>
             ) : (
@@ -869,18 +875,26 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               activeKasirSummary.selisihKasirHarian === 0
                 ? 'bg-emerald-900 text-white border-emerald-800'
                 : activeKasirSummary.selisihKasirHarian > 0
-                ? 'bg-amber-900 text-white border-amber-800'
-                : 'bg-rose-900 text-white border-rose-800'
+                ? 'bg-teal-950 text-white border-teal-800'
+                : 'bg-rose-950 text-white border-rose-800'
             }`}
           >
             <div className="flex items-center justify-between gap-1.5 text-xs min-w-0">
               <span className="font-bold truncate text-white/90">
-                Saldo Akhir / Selisih Kasir
+                Sisa Kas Berjalan di Laci
               </span>
-              <span className="text-[10px] font-mono font-bold text-white/80 shrink-0">
+              <span className={`text-[10px] font-mono font-bold shrink-0 px-1.5 py-0.5 rounded ${
+                activeKasirSummary.selisihKasirHarian === 0
+                  ? 'bg-emerald-800 text-emerald-100'
+                  : activeKasirSummary.selisihKasirHarian > 0
+                  ? 'bg-teal-800 text-teal-100'
+                  : 'bg-rose-800 text-rose-100'
+              }`}>
                 {activeKasirSummary.selisihKasirHarian === 0
                   ? 'PAS RP 0'
-                  : 'TARGET RP 0'}
+                  : activeKasirSummary.selisihKasirHarian > 0
+                  ? 'BERJALAN DI KASIR'
+                  : 'SELISIH KURANG'}
               </span>
             </div>
             <div className="mt-2 min-w-0">
@@ -893,10 +907,10 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               </div>
               <div className="text-[10px] text-white/85 mt-0.5 truncate">
                 {activeKasirSummary.selisihKasirHarian === 0
-                  ? 'Tutup buku pas Rp 0 · Sudah kembali ke Berangkas'
+                  ? 'Tutup buku pas Rp 0 · Seluruhnya telah disetor ke Berangkas'
                   : activeKasirSummary.selisihKasirHarian > 0
-                  ? 'Selisih sisa di kasir (belum kembali ke Berangkas)'
-                  : 'Selisih lebih setor / kurang catat uang masuk'}
+                  ? 'Uang fisik tersimpan di laci kasir (belum disetor ke Berangkas)'
+                  : 'Selisih lebih setor / pengeluaran melebihi uang masuk'}
               </div>
             </div>
           </div>

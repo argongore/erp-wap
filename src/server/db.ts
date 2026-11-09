@@ -77,6 +77,7 @@ export interface DatabaseSchema {
   suratJalan?: InvoiceSuratJalanRecord[];
   deletedHasilBumiKodes?: string[];
   deletedMasterPengeluaranNames?: string[];
+  deletedProdukKodes?: string[];
 }
 
 const RUNTIME_CACHE_DIR = path.join(os.tmpdir(), 'wijaya_agro_erp_runtime');
@@ -434,15 +435,13 @@ export function getDefaultProdukDagangList(): { produk: Produk[]; stokBarang: St
     { kode: 'PRD-24', nama: 'NPK', satuan: 'SAK', kategori: 'PUPUK' },
     { kode: 'PRD-25', nama: 'SOLAR', satuan: 'DRIGENT', kategori: 'BBM' },
     { kode: 'PRD-26', nama: 'DEXLITE', satuan: 'DRIGENT', kategori: 'BBM' },
-    { kode: 'PRD-27', nama: 'KOPI ROBUSTA MENTAH', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-28', nama: 'ROBUSTA PREMIUM MENTAH', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-29', nama: 'ROBUSTA LANANG MENTAH', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-30', nama: 'KOPI ROBUSTA ROSTING', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-31', nama: 'ROBUSTA PREMIUM ROSTING', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-32', nama: 'ROBUSTA LANANG ROSTING', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-33', nama: 'KOPI ROBUSTA BUBUK', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-34', nama: 'ROBUSTA PREMIUM BUBUK', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-35', nama: 'ROBUSTA LANANG BUBUK', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-29', nama: 'ROBUSTA PREMIUM OKUSSA 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-30', nama: 'ROBUSTA PREMIUM OKUSSA 200 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-31', nama: 'ROBUSTA LANANG OKUSSA 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-32', nama: 'ROBUSTA LANANG OKUSSA 200 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-33', nama: 'BUBUK OKUSSA COFFEE 100 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-34', nama: 'BUBUK OKUSSA COFFEE 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
+    { kode: 'PRD-35', nama: 'BUBUK OKUSSA COFFEE 1000 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
     { kode: 'PRD-6838', nama: 'SEWA EXCA 1', satuan: 'JAM', kategori: 'ALAT' },
     { kode: 'PRD-6839', nama: 'SEWA EXCA 2', satuan: 'JAM', kategori: 'ALAT' },
     { kode: 'PRD-6840', nama: 'SEWA TRUCK', satuan: 'TRIP', kategori: 'ALAT' },
@@ -615,6 +614,9 @@ class DatabaseManager {
           deletedMasterPengeluaranNames: Array.isArray(parsed.deletedMasterPengeluaranNames)
             ? parsed.deletedMasterPengeluaranNames
             : [],
+          deletedProdukKodes: Array.isArray(parsed.deletedProdukKodes)
+            ? parsed.deletedProdukKodes
+            : [],
         };
 
         if (!Array.isArray(merged.karyawan)) {
@@ -687,13 +689,22 @@ class DatabaseManager {
           }
         }
 
-        // Ensure all 9 to 35 Produk Dagang exist as foundational system master
+        // Ensure all 9 to 35 Produk Dagang exist as foundational system master unless deleted by user
+        const deletedProdSet = new Set(
+          (merged.deletedProdukKodes || []).map((x) => String(x || '').trim().toUpperCase()).filter(Boolean)
+        );
         for (const defPr of defaultProdukData.produk) {
+          if (deletedProdSet.has(defPr.kode.toUpperCase()) || deletedProdSet.has(defPr.nama.trim().toUpperCase())) {
+            continue;
+          }
           if (!merged.produk.some((p) => p.kode === defPr.kode || p.nama.toUpperCase() === defPr.nama.toUpperCase())) {
             merged.produk.push({ ...defPr });
           }
         }
         for (const defSt of defaultProdukData.stokBarang) {
+          if (deletedProdSet.has(defSt.kode.toUpperCase()) || deletedProdSet.has(defSt.namaProduk.trim().toUpperCase())) {
+            continue;
+          }
           if (!merged.stokBarang.some((s) => s.kode === defSt.kode || s.namaProduk.toUpperCase() === defSt.namaProduk.toUpperCase())) {
             merged.stokBarang.push({ ...defSt });
           }
@@ -1786,7 +1797,7 @@ class DatabaseManager {
         hargaBeli: 0,
         hargaJual: 165000,
         hargaKhususRekanan: 162000,
-        stok: 110, // Opname 126 - 16 terjual
+        stok: 90, // Opname disesuaikan menjadi 90 sesuai audit log ADJ-PRD-10
       },
 
       // 3. PUPUK
@@ -1803,10 +1814,10 @@ class DatabaseManager {
         nama: 'NPK',
         kategori: 'PUPUK',
         satuan: 'SAK',
-        hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
-        stok: 0,
+        hargaBeli: 90000,
+        hargaJual: 150000,
+        hargaKhususRekanan: 150000,
+        stok: 10, // Sesuai penyesuaian opname ADJ-PRD-24
       },
 
       // 4. BBM
@@ -1837,7 +1848,7 @@ class DatabaseManager {
         hargaBeli: 0,
         hargaJual: 25000,
         hargaKhususRekanan: 25000,
-        stok: 6, // 10 - 4 terjual
+        stok: 1, // Sesuai penyesuaian opname ADJ-PRD-1260
       },
       'PRD-1663': {
         nama: 'TUKAR BUBUK KOPI',
@@ -1848,86 +1859,68 @@ class DatabaseManager {
         hargaKhususRekanan: 10000,
         stok: 0,
       },
-      'PRD-27': {
-        nama: 'KOPI ROBUSTA MENTAH',
-        kategori: 'OKUSSA',
-        satuan: 'KEMASAN',
-        hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
-        stok: 0,
-      },
-      'PRD-28': {
-        nama: 'ROBUSTA PREMIUM MENTAH',
-        kategori: 'OKUSSA',
-        satuan: 'KEMASAN',
-        hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
-        stok: 0,
-      },
       'PRD-29': {
-        nama: 'ROBUSTA LANANG MENTAH',
+        nama: 'ROBUSTA PREMIUM OKUSSA 500 GRAM',
+        kategori: 'OKUSSA',
+        satuan: 'KEMASAN',
+        hargaBeli: 0,
+        hargaJual: 65000,
+        hargaKhususRekanan: 65000,
+        stok: 8, // Sesuai penyesuaian opname ADJ-PRD-29
+      },
+      'PRD-30': {
+        nama: 'ROBUSTA PREMIUM OKUSSA 200 GRAM',
         kategori: 'OKUSSA',
         satuan: 'KEMASAN',
         hargaBeli: 0,
         hargaJual: 30000,
-        hargaKhususRekanan: 25000,
-        stok: 0,
-      },
-      'PRD-30': {
-        nama: 'KOPI ROBUSTA ROSTING',
-        kategori: 'OKUSSA',
-        satuan: 'KEMASAN',
-        hargaBeli: 0,
-        hargaJual: 35000,
         hargaKhususRekanan: 30000,
-        stok: 0,
+        stok: 26, // Sesuai penyesuaian opname ADJ-PRD-30
       },
       'PRD-31': {
-        nama: 'ROBUSTA PREMIUM ROSTING',
+        nama: 'ROBUSTA LANANG OKUSSA 500 GRAM',
         kategori: 'OKUSSA',
         satuan: 'KEMASAN',
         hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
+        hargaJual: 75000,
+        hargaKhususRekanan: 75000,
         stok: 0,
       },
       'PRD-32': {
-        nama: 'ROBUSTA LANANG ROSTING',
+        nama: 'ROBUSTA LANANG OKUSSA 200 GRAM',
         kategori: 'OKUSSA',
         satuan: 'KEMASAN',
         hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
-        stok: 0,
+        hargaJual: 40000,
+        hargaKhususRekanan: 40000,
+        stok: 6, // Sesuai penyesuaian opname ADJ-PRD-32
       },
       'PRD-33': {
-        nama: 'KOPI ROBUSTA BUBUK',
+        nama: 'BUBUK OKUSSA COFFEE 100 GRAM',
         kategori: 'OKUSSA',
         satuan: 'KEMASAN',
         hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
-        stok: 0,
+        hargaJual: 10000,
+        hargaKhususRekanan: 10000,
+        stok: 9, // Sesuai penyesuaian opname ADJ-PRD-33
       },
       'PRD-34': {
-        nama: 'ROBUSTA PREMIUM BUBUK',
+        nama: 'BUBUK OKUSSA COFFEE 500 GRAM',
         kategori: 'OKUSSA',
         satuan: 'KEMASAN',
         hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
-        stok: 0,
+        hargaJual: 50000,
+        hargaKhususRekanan: 50000,
+        stok: 2, // Sesuai penyesuaian opname ADJ-PRD-34
       },
       'PRD-35': {
-        nama: 'ROBUSTA LANANG BUBUK',
+        nama: 'BUBUK OKUSSA COFFEE 1000 GRAM',
         kategori: 'OKUSSA',
         satuan: 'KEMASAN',
         hargaBeli: 0,
-        hargaJual: 0,
-        hargaKhususRekanan: 0,
-        stok: 0,
+        hargaJual: 90000,
+        hargaKhususRekanan: 90000,
+        stok: 1, // Sesuai penyesuaian opname ADJ-PRD-35
       },
 
       // 6. ALAT (Jasa / Sewa Armada & Alat Berat tanpa stok fisik)
@@ -1989,7 +1982,16 @@ class DatabaseManager {
       },
     };
 
+    const deletedProdSet = new Set(
+      (this.db.deletedProdukKodes || []).map((x) => String(x || '').trim().toUpperCase()).filter(Boolean)
+    );
+
     for (const [k, custom] of Object.entries(userCustomProducts)) {
+      const cleanK = String(k || '').trim().toUpperCase();
+      if (deletedProdSet.has(cleanK) || deletedProdSet.has(custom.nama.trim().toUpperCase())) {
+        continue;
+      }
+
       const isAlat = custom.kategori === 'ALAT';
       let p = produkMap.get(k);
       if (!p) {
@@ -2007,24 +2009,51 @@ class DatabaseManager {
         this.db.produk.push(p);
         produkMap.set(k, p);
       } else {
-        p.nama = custom.nama;
-        p.kategori = ensureKat(custom.kategori);
-        p.satuan = custom.satuan;
+        const isLegacyCoffeeDummy =
+          p.nama &&
+          (p.nama.includes('ROBUSTA LANANG MENTAH') ||
+            p.nama.includes('KOPI ROBUSTA ROSTING') ||
+            p.nama.includes('ROBUSTA PREMIUM ROSTING') ||
+            p.nama.includes('ROBUSTA LANANG ROSTING') ||
+            p.nama.includes('KOPI ROBUSTA BUBUK') ||
+            p.nama.includes('ROBUSTA PREMIUM BUBUK') ||
+            p.nama.includes('ROBUSTA LANANG BUBUK') ||
+            p.nama.includes('KOPI ROBUSTA MENTAH') ||
+            p.nama.includes('ROBUSTA PREMIUM MENTAH'));
+
+        if (isLegacyCoffeeDummy) {
+          p.nama = custom.nama;
+          p.kategori = ensureKat(custom.kategori);
+          p.satuan = custom.satuan;
+          p.hargaBeli = custom.hargaBeli;
+          p.hargaJual = custom.hargaJual;
+          p.hargaKhususRekanan = custom.hargaKhususRekanan;
+        }
+
+        // Sinkronisasi dua arah: Jika stokBarang memiliki namaProduk yang sudah diperbaiki user di gudang, pastikan p.nama ikut terupdate
+        const existingStok = stokMap.get(k);
+        if (
+          existingStok &&
+          existingStok.namaProduk &&
+          existingStok.namaProduk !== p.nama &&
+          !existingStok.namaProduk.includes('ROBUSTA LANANG MENTAH') &&
+          !existingStok.namaProduk.includes('KOPI ROBUSTA ROSTING')
+        ) {
+          p.nama = existingStok.namaProduk;
+        }
+
         if (isAlat) {
           p.tanpaStok = true;
         }
-        if (custom.hargaJual > 0) p.hargaJual = custom.hargaJual;
-        if (custom.hargaKhususRekanan > 0) p.hargaKhususRekanan = custom.hargaKhususRekanan;
-        if (custom.hargaBeli > 0) p.hargaBeli = custom.hargaBeli;
       }
 
       let s = stokMap.get(k);
       if (!s) {
         s = {
           kode: k,
-          namaProduk: custom.nama,
-          satuan: custom.satuan,
-          kategori: custom.kategori,
+          namaProduk: p.nama,
+          satuan: p.satuan,
+          kategori: p.kategori,
           tanpaStok: isAlat,
           stok: isAlat ? 0 : custom.stok,
           minimum: isAlat ? 0 : 10,
@@ -2033,14 +2062,15 @@ class DatabaseManager {
         this.db.stokBarang.push(s);
         stokMap.set(k, s);
       } else {
-        s.namaProduk = custom.nama;
-        s.kategori = custom.kategori;
-        s.satuan = custom.satuan;
-        s.tanpaStok = isAlat;
+        // Sinkronkan nama dan satuan dari p (data produk riil user), JANGAN dari dictionary statis
+        s.namaProduk = p.nama;
+        s.kategori = p.kategori;
+        s.satuan = p.satuan;
+        s.tanpaStok = isAlat || p.tanpaStok;
         if (isAlat) {
           s.minimum = 0;
           s.stok = 0;
-        } else if (custom.stok > 0) {
+        } else if (s.stok === undefined || s.stok === null) {
           s.stok = custom.stok;
         }
       }
@@ -2588,6 +2618,80 @@ class DatabaseManager {
     const sinkronRek = this.db.rekening.find((r) => r.kode === 'SINKRON');
     if (sinkronRek) {
       sinkronRek.saldoSaatIni = totalSinkronVolume;
+    }
+
+    // Sinkronkan Kas Utama Kasir (KAS01) sesuai mutasi ledger riil agar saldo kas di sistem selalu sama dengan aset sesungguhnya
+    const kas01 = this.db.rekening.find((r) => r.kode === 'KAS01');
+    if (kas01) {
+      let netKasir = 0;
+      for (const p of this.db.penjualan || []) {
+        if (p.metode === 'KASBON' || p.metode === 'SINKRON' || p.metode === 'INTERNAL_PT' || p.metode === 'PEMAKAIAN_PENGELUARAN' || p.isNotaSilang) continue;
+        if (p.rekeningTujuan === 'KAS01' || p.metode === 'TUNAI') netKasir += Math.round(Number(p.totalNominal) || 0);
+      }
+      for (const j of this.db.penjualanHasilBumi || []) {
+        if (j.metodePembayaran === 'PIUTANG' || j.metodePembayaran === 'BELUM_PUTUS_HARGA' || j.metodePembayaran === 'SINKRON') continue;
+        if (j.rekeningTujuan === 'KAS01' || j.metodePembayaran === 'TUNAI') netKasir += Math.round(Number(j.totalNominal) || 0);
+      }
+      for (const um of this.db.uangMasuk || []) {
+        if (um.metode === 'SINKRON' || um.rekeningTujuan === 'SINKRON') continue;
+        if (um.rekeningTujuan === 'KAS01' || (!um.rekeningTujuan && um.metode === 'TUNAI')) netKasir += Math.round(Number(um.nominal) || 0);
+      }
+      for (const b of this.db.bayarBon || []) {
+        if (b.metode === 'SINKRON' || b.metode === 'KOMPENSASI_TITIP' || b.metode === 'POTONG_GAJI' || b.isKompensasiTitipan || b.isPotongGaji) continue;
+        if (b.rekeningTujuan === 'KAS01' || (!b.rekeningTujuan && b.metode === 'TUNAI')) netKasir += Math.round(Number(b.nominalBayar) || 0);
+      }
+      for (const b of this.db.pembelianHasilBumi || []) {
+        const isPinjamanDana = b.komoditasKode === 'PINJAMAN_DANA' || Boolean(b.komoditasNama?.includes('Pinjaman Uang'));
+        if (isPinjamanDana && b.rekeningSumber === 'KAS01') {
+          netKasir += Math.round(Number(b.totalNominal) || 0);
+          continue;
+        }
+        if (b.metodePembayaran === 'TITIP' || b.metodePembayaran === 'SINKRON' || b.isNotaSilang || b.komoditasKode === 'NOTA_SILANG' || isPinjamanDana) continue;
+        if (b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(b.totalNominal) || 0);
+      }
+      for (const br of this.db.brilink || []) {
+        const nomAdmin = Math.round(Number(br.nominalAdmin) || 0);
+        const nomPokok = Math.round(Number(br.nominalPokok) || 0);
+        const rekAdm = br.rekeningAdmin || 'KAS01';
+        const kasPokokKode = br.rekeningKasTunai || 'KAS01';
+        if (br.jenisBrilink === 'TARIK_TUNAI') {
+          if (rekAdm === 'KAS01') netKasir += nomAdmin;
+          if (kasPokokKode === 'KAS01') netKasir -= nomPokok;
+        } else {
+          if (rekAdm === 'KAS01') netKasir -= nomAdmin;
+          if (kasPokokKode === 'KAS01') netKasir += nomPokok;
+        }
+      }
+      for (const p of this.db.pengeluaran || []) {
+        if (p.isNonKas || p.rekeningSumber === 'SINKRON' || p.rekeningSumber === 'STOK_INTERNAL') continue;
+        if (p.rekeningSumber === 'KAS01' || !p.rekeningSumber) netKasir -= Math.round(Number(p.nominal) || 0);
+      }
+      for (const k of this.db.kasbonUang || []) {
+        if (k.isNotaLalu || k.rekeningSumber === 'BON01' || k.rekeningSumber === 'SINKRON' || k.metode === 'SINKRON') continue;
+        if (k.rekeningSumber === 'KAS01' || (!k.rekeningSumber && k.metode === 'TUNAI')) netKasir -= Math.round(Number(k.nominal) || 0);
+      }
+      for (const b of this.db.pembelianBarang || []) {
+        if (b.metodePembayaran === 'HUTANG' || b.metodePembayaran === 'SINKRON') continue;
+        if (b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(b.totalNominal) || 0);
+      }
+      for (const pt of this.db.pencairanTitipan || []) {
+        if (pt.metodePembayaran === 'SINKRON' || pt.metodePembayaran === 'KOMPENSASI_BON' || pt.isKompensasiBon) continue;
+        if (pt.rekeningSumber === 'KAS01' || (!pt.rekeningSumber && pt.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(pt.nominalPencairan) || 0);
+      }
+      for (const g of this.db.penggajian || []) {
+        if (g.metodePembayaran === 'SINKRON') continue;
+        if (g.rekeningSumber === 'KAS01' || (!g.rekeningSumber && g.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(g.gajiBersihDibayar) || 0);
+      }
+      for (const t of this.db.transferRekening || []) {
+        if (t.status && t.status !== 'BERHASIL') continue;
+        const nom = Math.round(Number(t.nominal) || 0);
+        if (t.rekeningTujuan === 'KAS01') netKasir += nom;
+        if (t.rekeningSumber === 'KAS01') netKasir -= nom;
+      }
+      for (const op of this.db.cashOpnameLogs || []) {
+        if (op.sesuaikanSaldoSistem && op.selisih) netKasir += Math.round(Number(op.selisih) || 0);
+      }
+      kas01.saldoSaatIni = Math.round(Number(kas01.saldoAwal || 0) + netKasir);
     }
 
     // Sinkronkan seluruh Buku Arus Kas Operasional Divisi (REK-GWA, REK-CVA, REK-WAP, REK-OKU, REK-WK, REK-WT, REK-BRILINK, dll.)

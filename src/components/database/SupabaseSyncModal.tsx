@@ -188,6 +188,7 @@ function cleanSupabaseClientUrl(rawUrl: string): string {
         message: `✅ ${res.message || 'Data ERP berhasil diunggah & disimpan permanen di Supabase!'}`,
       });
       loadStatus();
+      onSuccessRefresh?.();
     } catch (err: any) {
       setFeedbackMsg({
         type: 'error',

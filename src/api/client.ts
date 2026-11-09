@@ -486,6 +486,14 @@ export const api = {
     return data.data;
   },
 
+  deleteProduk: async (kode: string): Promise<{ kode: string; nama: string }> => {
+    const data = await requestJson(`/api/produk/${encodeURIComponent(kode)}`, {
+      method: 'DELETE',
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menghapus produk');
+    return data.data;
+  },
+
   getStok: async (): Promise<StokBarang[]> => {
     const data = await requestJson('/api/stok');
     if (!data.success) throw new Error(data.message || 'Gagal memuat stok');

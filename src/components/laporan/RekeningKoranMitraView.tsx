@@ -2399,12 +2399,18 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               ? row.piutangBerjalan ?? row.sisaPiutangNota ?? row.debet
                               : row.debet;
                           const titipVal =
-                            ledgerTab === 'SALDO_BERJALAN'
-                              ? row.titipBerjalan ?? (row.kredit === 0 ? row.nominalMutasiHak || 0 : 0)
-                              : row.kredit > 0
+                            row.kredit > 0
                               ? row.kredit
+                              : ledgerTab === 'SALDO_BERJALAN'
+                              ? row.titipBerjalan ?? row.nominalMutasiHak ?? 0
                               : row.nominalMutasiHak || 0;
                           const ketNote = (row.catatanTransaksi || row.catatanNgunci || '').trim();
+                          const sudahDibayarNota =
+                            row.debet > 0 &&
+                            row.sisaPiutangNota !== undefined &&
+                            row.sisaPiutangNota < row.debet
+                              ? row.debet - row.sisaPiutangNota
+                              : 0;
 
                           return (
                             <tr key={row.id} className="align-top">
@@ -2426,11 +2432,30 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                         </span>
                                       </div>
                                     ))}
+                                    {sudahDibayarNota > 0 && (
+                                      <div className="text-[9px] text-emerald-800 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-1">
+                                        Sudah Dicicil/Dibayar: {formatRupiah(sudahDibayarNota)} · Sisa Piutang: {formatRupiah(row.sisaPiutangNota || 0)}
+                                      </div>
+                                    )}
                                   </div>
                                 ) : single ? (
-                                  <div className="font-bold text-zinc-900">{single.nama}</div>
+                                  <div>
+                                    <div className="font-bold text-zinc-900">{single.nama}</div>
+                                    {sudahDibayarNota > 0 && (
+                                      <div className="text-[9px] text-emerald-800 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 inline-block">
+                                        Sudah Dicicil/Dibayar: {formatRupiah(sudahDibayarNota)} · Sisa Piutang: {formatRupiah(row.sisaPiutangNota || 0)}
+                                      </div>
+                                    )}
+                                  </div>
                                 ) : (
-                                  <div className="font-semibold">{row.keterangan || row.jenis.replace(/_/g, ' ')}</div>
+                                  <div>
+                                    <div className="font-semibold">{row.keterangan || row.jenis.replace(/_/g, ' ')}</div>
+                                    {sudahDibayarNota > 0 && (
+                                      <div className="text-[9px] text-emerald-800 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 inline-block">
+                                        Sudah Dicicil/Dibayar: {formatRupiah(sudahDibayarNota)} · Sisa Piutang: {formatRupiah(row.sisaPiutangNota || 0)}
+                                      </div>
+                                    )}
+                                  </div>
                                 )}
                               </td>
                               <td className="py-2 px-2 text-center font-mono tabular-nums font-bold whitespace-nowrap">

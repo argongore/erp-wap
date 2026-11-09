@@ -778,6 +778,7 @@ export interface NotaSilangItemInput {
   qty: number;
   satuan?: string;
   harga: number;
+  markup?: number;
 }
 
 export interface NotaSilangRecordSummary {

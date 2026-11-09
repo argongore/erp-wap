@@ -451,6 +451,33 @@ class SupabaseSyncEngine {
     }
   }
 
+  private deepStripImagesForCloud(obj: any): any {
+    if (!obj) return obj;
+    if (Array.isArray(obj)) {
+      return obj
+        .map((item) => {
+          if (typeof item === 'string' && (item.startsWith('data:image/') || item.length > 50000)) return '';
+          return this.deepStripImagesForCloud(item);
+        })
+        .filter((x) => x !== '');
+    }
+    if (typeof obj === 'object') {
+      const res: any = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (
+          typeof v === 'string' &&
+          (v.startsWith('data:image/') || (v.length > 50000 && /^[A-Za-z0-9+/=]+$/.test(v.slice(0, 100))))
+        ) {
+          res[k] = '';
+        } else {
+          res[k] = this.deepStripImagesForCloud(v);
+        }
+      }
+      return res;
+    }
+    return obj;
+  }
+
   /**
    * Push complete ERP data to Supabase (Upsert canonical state into wijaya_agro_erp_state + relational mirrors)
    */
@@ -505,10 +532,14 @@ class SupabaseSyncEngine {
       }
 
       await this.prepareCompactCloudData(data);
+      const compactData = this.deepStripImagesForCloud(data);
+      if (Array.isArray(compactData.auditLogs) && compactData.auditLogs.length > 150) {
+        compactData.auditLogs = compactData.auditLogs.slice(0, 150);
+      }
 
       const payload = {
         id: 'MAIN_DATABASE',
-        data,
+        data: compactData,
         karyawan_count: karyawanCount,
         mitra_count: mitraCount,
         transaksi_count: txCount,
@@ -803,11 +834,14 @@ class SupabaseSyncEngine {
         (local.karyawan?.length || 0) +
         countAllTransactions(local);
 
-      if (cloudScore === 0 && localScore > 0) {
-        const pushRes = await this.pushToSupabase(local);
+      if (localScore > cloudScore) {
+        console.log(
+          `[SupabaseSyncEngine] Data lokal memiliki lebih banyak entitas (${localScore} > ${cloudScore}), memprioritaskan penyimpanan lokal ke Cloud Supabase.`
+        );
+        const pushRes = await this.pushToSupabase(local, { allowOverwrite: true });
         return {
           direction: 'PUSHED_TO_SUPABASE',
-          message: pushRes.message,
+          message: `Data lokal (${localScore} entitas) berhasil disimpan ke Cloud Supabase: ${pushRes.message}`,
         };
       }
 

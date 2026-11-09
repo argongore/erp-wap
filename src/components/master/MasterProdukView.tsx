@@ -73,6 +73,8 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
   // Modal States
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingProduk, setEditingProduk] = useState<Produk | null>(null);
+  const [productToDelete, setProductToDelete] = useState<Produk | null>(null);
+  const [deletingProduct, setDeletingProduct] = useState(false);
   const [showManageKategoriModal, setShowManageKategoriModal] = useState(false);
 
   // Saved Categories from Server
@@ -152,11 +154,17 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
   }, []);
 
   useEffect(() => {
+    onRefresh();
+  }, [onRefresh]);
+
+  useEffect(() => {
     loadKategoriProduk();
   }, [loadKategoriProduk, produkList.length]);
 
   useEffect(() => {
-    const onErpUpdated = () => loadKategoriProduk();
+    const onErpUpdated = () => {
+      loadKategoriProduk();
+    };
     window.addEventListener('erp:data-updated', onErpUpdated);
     return () => window.removeEventListener('erp:data-updated', onErpUpdated);
   }, [loadKategoriProduk]);
@@ -521,6 +529,23 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
     }
   };
 
+  const handleConfirmDeleteProduct = async () => {
+    if (!productToDelete) return;
+    setDeletingProduct(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      await api.deleteProduk(productToDelete.kode);
+      setSuccessMsg(`Produk "${productToDelete.nama}" (${productToDelete.kode}) berhasil dihapus.`);
+      setProductToDelete(null);
+      onRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal menghapus produk');
+    } finally {
+      setDeletingProduct(false);
+    }
+  };
+
   // Dynamic Statistics
   const totalCount = produkList.length;
   const aktifCount = produkList.filter((p) => p.status === 'AKTIF').length;
@@ -552,6 +577,16 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-zinc-700 bg-white hover:bg-zinc-50 border border-zinc-300 rounded-lg shadow-2xs transition-colors cursor-pointer"
+            title="Segarkan data produk riil"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-emerald-700" />
+            <span>Segarkan</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
@@ -1091,17 +1126,28 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                         </span>
                       </td>
 
-                      {/* Aksi Edit */}
+                      {/* Aksi Edit & Hapus */}
                       <td className="py-3 px-4 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEdit(p)}
-                          className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold text-xs transition-colors cursor-pointer"
-                          title={`Edit rincian & kategori ${p.nama}`}
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                          <span>Edit Produk</span>
-                        </button>
+                        <div className="flex items-center justify-center space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEdit(p)}
+                            className="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold text-xs transition-colors cursor-pointer"
+                            title={`Edit rincian & kategori ${p.nama}`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setProductToDelete(p)}
+                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs transition-colors cursor-pointer"
+                            title={`Hapus produk ${p.nama}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                            <span>Hapus</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -2107,6 +2153,59 @@ export const MasterProdukView: React.FC<Props> = ({ produkList, stokList = [], o
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Produk */}
+      {productToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-rose-200">
+            <div className="p-4 bg-rose-600 text-white font-bold text-sm flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Trash2 className="w-4 h-4" />
+                <span>Konfirmasi Hapus Produk</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProductToDelete(null)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 text-xs text-zinc-700">
+              <p>
+                Apakah Anda yakin ingin menghapus produk ini dari database master dan stok toko?
+              </p>
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-1">
+                <div className="font-bold text-sm text-rose-900">{productToDelete.nama}</div>
+                <div className="font-mono text-[11px] text-zinc-600">Kode: {productToDelete.kode} · Satuan: {productToDelete.satuan}</div>
+                <div className="text-[11px] text-zinc-600">Kategori: {productToDelete.kategori} · Harga Jual: {formatRupiah(productToDelete.hargaJual || 0)}</div>
+              </div>
+              <p className="text-[11px] text-zinc-500">
+                Setelah dihapus, produk tidak akan muncul lagi di kasir penjualan, master produk, maupun kartu stok gudang.
+              </p>
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setProductToDelete(null)}
+                  disabled={deletingProduct}
+                  className="px-4 py-2 text-zinc-600 hover:bg-zinc-100 rounded-xl font-medium transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteProduct}
+                  disabled={deletingProduct}
+                  className="flex items-center space-x-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{deletingProduct ? 'Menghapus...' : 'Ya, Hapus Produk'}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

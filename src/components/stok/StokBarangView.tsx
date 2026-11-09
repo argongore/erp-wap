@@ -33,11 +33,15 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
     satuan: string;
     hargaJual: number;
     hargaBeli: number;
+    hargaKhususRekanan: number;
     minimum: number;
     isAlatJasa?: boolean;
   } | null>(null);
+  const [formNama, setFormNama] = useState<string>('');
+  const [formSatuan, setFormSatuan] = useState<string>('');
   const [formHargaJual, setFormHargaJual] = useState<string>('');
   const [formHargaBeli, setFormHargaBeli] = useState<string>('');
+  const [formHargaRekanan, setFormHargaRekanan] = useState<string>('');
   const [formMinimum, setFormMinimum] = useState<string>('');
   const [savingPrice, setSavingPrice] = useState<boolean>(false);
 
@@ -94,19 +98,24 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
     const isAlatJasa = Boolean(item.tanpaStok || isProdukTanpaStok(prod || item));
     const hargaJual = prod?.hargaJual || 0;
     const hargaBeli = prod?.hargaBeli || 0;
+    const hargaKhususRekanan = prod?.hargaKhususRekanan || hargaJual;
     const minimum = isAlatJasa ? 0 : item.minimum || 5;
 
     setEditingPriceItem({
       kode: item.kode,
-      nama: item.namaProduk,
-      satuan: item.satuan,
+      nama: prod?.nama || item.namaProduk,
+      satuan: prod?.satuan || item.satuan,
       hargaJual,
       hargaBeli,
+      hargaKhususRekanan,
       minimum,
       isAlatJasa,
     });
+    setFormNama(prod?.nama || item.namaProduk);
+    setFormSatuan(prod?.satuan || item.satuan);
     setFormHargaJual(String(hargaJual));
     setFormHargaBeli(String(hargaBeli));
+    setFormHargaRekanan(String(hargaKhususRekanan));
     setFormMinimum(String(minimum));
     setErrorMsg('');
     setSuccessMsg('');
@@ -116,8 +125,15 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
     e.preventDefault();
     if (!editingPriceItem) return;
 
+    const namaClean = formNama.trim();
+    if (!namaClean) {
+      setErrorMsg('Nama produk tidak boleh kosong');
+      return;
+    }
+
     const hj = Number(formHargaJual);
     const hb = Number(formHargaBeli);
+    const hr = Number(formHargaRekanan);
     const min = Number(formMinimum);
 
     if (isNaN(hj) || hj < 0) {
@@ -129,16 +145,19 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
     setErrorMsg('');
     try {
       await api.updateProduk(editingPriceItem.kode, {
+        nama: namaClean,
+        satuan: formSatuan.trim() || editingPriceItem.satuan,
         hargaJual: hj,
         hargaBeli: hb >= 0 ? hb : 0,
+        hargaKhususRekanan: hr >= 0 ? hr : hj,
         minimum: editingPriceItem.isAlatJasa ? 0 : min >= 0 ? min : 5,
       });
 
-      setSuccessMsg(`Harga ${editingPriceItem.nama} berhasil diperbarui menjadi ${formatRupiah(hj)}!`);
+      setSuccessMsg(`Data produk "${namaClean}" (${editingPriceItem.kode}) berhasil diperbarui!`);
       setEditingPriceItem(null);
       onRefresh();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Gagal memperbarui harga produk');
+      setErrorMsg(err.message || 'Gagal memperbarui data produk');
     } finally {
       setSavingPrice(false);
     }
@@ -269,10 +288,10 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                             type="button"
                             onClick={() => handleOpenPriceModal(item)}
                             className="flex items-center space-x-1 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors cursor-pointer shadow-2xs"
-                            title="Ubah harga jual / tarif sewa kasir secara fleksibel"
+                            title="Edit nama, satuan, harga jual, harga rekanan, dan HPP produk ini"
                           >
                             <Tag className="w-3 h-3 text-emerald-600" />
-                            <span>Ubah Harga</span>
+                            <span>Edit Produk</span>
                           </button>
                           {!isAlatJasa && (
                             <button
@@ -403,7 +422,7 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
             <div className="p-4 bg-emerald-800 text-white font-bold text-sm flex justify-between items-center">
               <div className="flex items-center space-x-2">
                 <Tag className="w-4 h-4 text-emerald-300" />
-                <span>Ubah Harga Jual &amp; HPP Fleksibel</span>
+                <span>Edit Detail Produk &amp; Harga</span>
               </div>
               <button
                 onClick={() => setEditingPriceItem(null)}
@@ -413,39 +432,98 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
               </button>
             </div>
 
-            <form onSubmit={handleSavePrice} className="p-5 space-y-4 text-xs">
-              <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-lg space-y-1">
-                <div className="font-bold text-emerald-950 text-sm">{editingPriceItem.nama}</div>
-                <div className="text-[11px] text-zinc-600 flex justify-between">
-                  <span>Kode Produk:</span>
-                  <span className="font-mono font-bold text-zinc-900">{editingPriceItem.kode}</span>
-                </div>
-                <div className="text-[11px] text-zinc-600 flex justify-between">
-                  <span>Satuan:</span>
-                  <span className="font-semibold">{editingPriceItem.satuan}</span>
-                </div>
+            <form onSubmit={handleSavePrice} className="p-5 space-y-3.5 text-xs">
+              <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-lg flex items-center justify-between">
+                <span className="text-[11px] text-zinc-600 font-semibold">Kode Produk:</span>
+                <span className="font-mono font-bold text-zinc-900 bg-white px-2 py-0.5 rounded border border-emerald-200">
+                  {editingPriceItem.kode}
+                </span>
               </div>
 
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Harga Jual Kasir Baru (Rp) <span className="text-rose-500">*</span>
+                  Nama Produk <span className="text-rose-500">*</span>
                 </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 font-bold text-zinc-400">Rp</span>
+                <input
+                  type="text"
+                  required
+                  value={formNama}
+                  onChange={(e) => setFormNama(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-bold text-zinc-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Satuan <span className="text-rose-500">*</span>
+                  </label>
                   <input
-                    type="number"
+                    type="text"
                     required
-                    min={0}
-                    value={formHargaJual}
-                    onChange={(e) => setFormHargaJual(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono font-bold text-sm text-zinc-900"
+                    value={formSatuan}
+                    onChange={(e) => setFormSatuan(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-semibold text-zinc-900 uppercase"
                   />
                 </div>
-                {Number(formHargaJual) > 0 && (
-                  <div className="text-[11px] text-emerald-700 font-medium mt-1">
-                    Terbilang: {formatRupiah(Number(formHargaJual))}
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Minimum Stok
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    disabled={editingPriceItem.isAlatJasa}
+                    value={formMinimum}
+                    onChange={(e) => setFormMinimum(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Harga Jual Kasir (Rp) <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-2 font-bold text-zinc-400">Rp</span>
+                    <input
+                      type="number"
+                      required
+                      min={0}
+                      value={formHargaJual}
+                      onChange={(e) => setFormHargaJual(e.target.value)}
+                      className="w-full pl-8 pr-2.5 py-1.5 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono font-bold text-zinc-900"
+                    />
                   </div>
-                )}
+                  {Number(formHargaJual) > 0 && (
+                    <div className="text-[10px] text-emerald-700 font-medium mt-0.5">
+                      {formatRupiah(Number(formHargaJual))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-zinc-700 mb-1">
+                    Harga Khusus Rekanan (Rp)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-2 font-bold text-zinc-400">Rp</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={formHargaRekanan}
+                      onChange={(e) => setFormHargaRekanan(e.target.value)}
+                      className="w-full pl-8 pr-2.5 py-1.5 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono font-bold text-amber-900"
+                    />
+                  </div>
+                  {Number(formHargaRekanan) > 0 && (
+                    <div className="text-[10px] text-amber-700 font-medium mt-0.5">
+                      {formatRupiah(Number(formHargaRekanan))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div>
@@ -453,13 +531,13 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                   Harga Beli / HPP Modal (Rp)
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-2.5 font-bold text-zinc-400">Rp</span>
+                  <span className="absolute left-3 top-2 font-bold text-zinc-400">Rp</span>
                   <input
                     type="number"
                     min={0}
                     value={formHargaBeli}
                     onChange={(e) => setFormHargaBeli(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono text-zinc-900"
+                    className="w-full pl-9 pr-3 py-1.5 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono text-zinc-900"
                   />
                 </div>
               </div>
@@ -471,19 +549,6 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
                     +{formatRupiah(Number(formHargaJual) - Number(formHargaBeli))} (
                     {(((Number(formHargaJual) - Number(formHargaBeli)) / Number(formHargaJual)) * 100).toFixed(1)}%)
                   </span>
-                </div>
-              )}
-
-              {!editingPriceItem.isAlatJasa && (
-                <div>
-                  <label className="block font-semibold text-zinc-700 mb-1">Batas Minimum Stok Aman</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={formMinimum}
-                    onChange={(e) => setFormMinimum(e.target.value)}
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-emerald-500 font-mono"
-                  />
                 </div>
               )}
 
