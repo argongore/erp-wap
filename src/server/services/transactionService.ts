@@ -8883,16 +8883,16 @@ export class TransactionService {
 
     // Hitung Saldo Akhir / Selisih Kasir (KAS01) murni per hari (Saldo Awal Kasir Pagi = Rp 0, tidak menarik hari lain)
     const kasirInPenjualan = penjualanHariIni
-      .filter((p) => p.rekeningTujuan === 'KAS01' || p.metode === 'TUNAI')
+      .filter((p) => p.rekeningTujuan === 'KAS01' || (!p.rekeningTujuan && p.metode === 'TUNAI'))
       .reduce((s, p) => s + (p.totalNominal || 0), 0);
     const kasirInPenjualanHb = penjualanHasilBumiHariIni
-      .filter((j) => j.rekeningTujuan === 'KAS01' || j.metodePembayaran === 'TUNAI')
+      .filter((j) => j.rekeningTujuan === 'KAS01' || (!j.rekeningTujuan && j.metodePembayaran === 'TUNAI'))
       .reduce((s, j) => s + (j.totalNominal || 0), 0);
     const kasirInUangMasuk = uangMasukHariIni
-      .filter((um) => um.rekeningTujuan === 'KAS01' || um.metode === 'TUNAI')
+      .filter((um) => um.rekeningTujuan === 'KAS01' || (!um.rekeningTujuan && um.metode === 'TUNAI'))
       .reduce((s, um) => s + (um.nominal || 0), 0);
     const kasirInBayarBon = bayarBonHariIni
-      .filter((b) => b.rekeningTujuan === 'KAS01' || b.metode === 'TUNAI')
+      .filter((b) => b.rekeningTujuan === 'KAS01' || (!b.rekeningTujuan && b.metode === 'TUNAI'))
       .reduce((s, b) => s + (b.nominalBayar || 0), 0);
     const kasirInPinjamanDana = pinjamanDanaMasukHariIni
       .filter((b) => b.rekeningSumber === 'KAS01')
@@ -8917,16 +8917,16 @@ export class TransactionService {
       .filter((p) => (p.rekeningSumber || 'KAS01') === 'KAS01')
       .reduce((s, p) => s + (p.nominal || 0), 0);
     const kasirOutBeliHb = beliHasilBumiHariIni
-      .filter((b) => b.rekeningSumber === 'KAS01' || b.metodePembayaran === 'TUNAI')
+      .filter((b) => b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI'))
       .reduce((s, b) => s + (b.totalNominal || 0), 0);
     const kasirOutKasbon = kasbonUangHariIni
-      .filter((k) => k.rekeningSumber === 'KAS01' || k.metode === 'TUNAI')
+      .filter((k) => k.rekeningSumber === 'KAS01' || (!k.rekeningSumber && k.metode === 'TUNAI'))
       .reduce((s, k) => s + (k.nominal || 0), 0);
     const kasirOutBeliBarang = beliBarangHariIni
-      .filter((b) => b.rekeningSumber === 'KAS01' || b.metodePembayaran === 'TUNAI')
+      .filter((b) => b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI'))
       .reduce((s, b) => s + (b.totalNominal || 0), 0);
     const kasirOutPencairan = pencairanTitipanHariIni
-      .filter((pt) => pt.rekeningSumber === 'KAS01' || pt.metodePembayaran === 'TUNAI')
+      .filter((pt) => pt.rekeningSumber === 'KAS01' || (!pt.rekeningSumber && pt.metodePembayaran === 'TUNAI'))
       .reduce((s, pt) => s + (pt.nominalPencairan || 0), 0);
     const kasirOutGaji = gajiHariIni
       .filter((g) => this.isKasirPayrollRecord(db, g, 'KAS01'))
@@ -10115,7 +10115,12 @@ export class TransactionService {
       const saldoTitipanSisa = Math.max(0, sisaTitipanSetelahPotong - nominalFisik);
 
       const finalRekKode = isSinkronCair ? 'SINKRON' : params.rekeningSumber;
-      const finalMetode: 'TUNAI' | 'TRANSFER' | 'SINKRON' = isSinkronCair ? 'SINKRON' : params.metode;
+      const isBankSource = !isSinkronCair && finalRekKode !== 'KAS01' && !finalRekKode.startsWith('KAS');
+      const finalMetode: 'TUNAI' | 'TRANSFER' | 'SINKRON' = isSinkronCair
+        ? 'SINKRON'
+        : isBankSource
+        ? 'TRANSFER'
+        : params.metode || 'TUNAI';
       const record: TransaksiPencairanTitipan = {
         idPencairan,
         tanggal: targetTanggal,
@@ -10834,7 +10839,7 @@ export class TransactionService {
         pt.rekeningSumber === 'SINKRON' ||
         Boolean(pt.isKompensasiBon);
       const rekKode = pt.rekeningSumber || (pt.metodePembayaran === 'TUNAI' ? kodeKasir : '');
-      const isKasir = !isKompensasi && (rekKode === kodeKasir || pt.metodePembayaran === 'TUNAI');
+      const isKasir = !isKompensasi && rekKode === kodeKasir;
       list.push({
         id: pt.idPencairan,
         tanggal: normalizeDateStr(pt.tanggal),
@@ -16645,7 +16650,7 @@ export class TransactionService {
       const nom = Math.round(Number(pt.nominalPencairan) || 0);
       if (nom <= 0) continue;
       const rekKode = pt.rekeningSumber || (pt.metodePembayaran === 'TUNAI' ? kodeKasir : '');
-      const isKasir = rekKode === kodeKasir || pt.metodePembayaran === 'TUNAI';
+      const isKasir = rekKode === kodeKasir;
       if (isKasir) addFutureKasirDelta(pt.tanggal, -nom);
 
       if (normalizeDmy(pt.tanggal) === targetTanggal) {

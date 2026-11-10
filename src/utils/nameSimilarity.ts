@@ -306,15 +306,15 @@ export function findSimilarMitra(
   mitraList: Mitra[],
   options?: {
     maxResults?: number;
-    minSimilarity?: number; // default 65
+    minSimilarity?: number; // default 75
     roleFilter?: string; // Optional role filter
   }
 ): NameMatchResult[] {
   const rawInput = (inputName || '').trim();
-  if (rawInput.length < 2 || !Array.isArray(mitraList) || mitraList.length === 0) return [];
+  if (rawInput.length < 3 || !Array.isArray(mitraList) || mitraList.length === 0) return [];
 
   const maxResults = options?.maxResults ?? 8;
-  const minSim = options?.minSimilarity ?? 65;
+  const minSim = options?.minSimilarity ?? 75;
 
   const inputLower = rawInput.toLowerCase();
   const inputPhoneDigits = rawInput.replace(/[^0-9]/g, '');
@@ -335,8 +335,8 @@ export function findSimilarMitra(
     const mitraKodeLower = info.kodeLower;
     const mitraPhone = info.phoneDigits;
 
-    // 1. Phone number match
-    if (inputPhoneDigits.length >= 4 && mitraPhone.length >= 4 && mitraPhone.includes(inputPhoneDigits)) {
+    // 1. Phone number match (requires at least 5 digits to avoid false phone matches)
+    if (inputPhoneDigits.length >= 5 && mitraPhone.length >= 5 && mitraPhone.includes(inputPhoneDigits)) {
       results.push({
         mitra: m,
         matchType: mitraPhone === inputPhoneDigits ? 'EXACT' : 'SUBSTRING',
@@ -363,7 +363,7 @@ export function findSimilarMitra(
       continue;
     }
 
-    if (inputLower.length >= 3 && mitraKodeLower.includes(inputLower)) {
+    if (inputLower.length >= 4 && mitraKodeLower.includes(inputLower)) {
       results.push({
         mitra: m,
         matchType: 'SUBSTRING',
@@ -391,7 +391,7 @@ export function findSimilarMitra(
     }
 
     // 4. Phonetic full match (e.g. Wiwid vs Wiwit, Ahmad vs Achmad, Budi vs Budy)
-    if (info.normFull === inputNormFull && info.normFull.length > 0) {
+    if (info.normFull === inputNormFull && info.normFull.length >= 4) {
       results.push({
         mitra: m,
         matchType: 'PHONETIC',
@@ -404,27 +404,57 @@ export function findSimilarMitra(
       continue;
     }
 
-    // 5. Substring full match
-    if (mitraNameLower.includes(inputLower)) {
+    // 5. Prefix & Word Token Matching (avoid random middle substrings like 'ku' or 'ng')
+    const isPrefixOfWord = info.tokens.some((t) => t.raw.startsWith(inputLower));
+    const isWholeWordMatch = info.tokens.some((t) => t.raw === inputLower);
+
+    if (isWholeWordMatch) {
       results.push({
         mitra: m,
         matchType: 'SUBSTRING',
         similarity: 92,
         distance: 1,
-        isHighRiskDuplicate: true,
+        isHighRiskDuplicate: inputLower.length >= 4,
         matchedField: 'NAMA',
-        highlightReason: `Nama terdaftar "${m.nama}" mengandung kata "${rawInput}"`,
+        highlightReason: `Nama terdaftar "${m.nama}" mengandung kata lengkap "${rawInput}"`,
       });
       continue;
     }
 
-    if (mitraNameLower.length >= 3 && inputLower.includes(mitraNameLower)) {
+    if (isPrefixOfWord && inputLower.length >= 4) {
       results.push({
         mitra: m,
         matchType: 'SUBSTRING',
-        similarity: 90,
+        similarity: 88,
         distance: 1,
-        isHighRiskDuplicate: true,
+        isHighRiskDuplicate: false,
+        matchedField: 'NAMA',
+        highlightReason: `Nama terdaftar "${m.nama}" diawali kata "${rawInput}"`,
+      });
+      continue;
+    }
+
+    // Full substring only if query is long enough (>= 5 chars) to prevent short syllable false positives
+    if (inputLower.length >= 5 && mitraNameLower.includes(inputLower)) {
+      results.push({
+        mitra: m,
+        matchType: 'SUBSTRING',
+        similarity: 85,
+        distance: 1,
+        isHighRiskDuplicate: false,
+        matchedField: 'NAMA',
+        highlightReason: `Nama terdaftar "${m.nama}" mengandung frase "${rawInput}"`,
+      });
+      continue;
+    }
+
+    if (mitraNameLower.length >= 4 && inputLower.length >= 4 && inputLower.includes(mitraNameLower)) {
+      results.push({
+        mitra: m,
+        matchType: 'SUBSTRING',
+        similarity: 85,
+        distance: 1,
+        isHighRiskDuplicate: false,
         matchedField: 'NAMA',
         highlightReason: `Input "${rawInput}" mengandung nama mitra "${m.nama}"`,
       });
@@ -526,7 +556,7 @@ export function useFuzzyMitraMatches(
   const [debouncedQuery, setDebouncedQuery] = useState<string>(trimmed);
 
   useEffect(() => {
-    if (trimmed.length < 2) {
+    if (trimmed.length < 3) {
       setDebouncedQuery('');
       return;
     }
@@ -539,7 +569,7 @@ export function useFuzzyMitraMatches(
   const deferredQuery = useDeferredValue(debouncedQuery);
 
   return useMemo(() => {
-    if (!deferredQuery || deferredQuery.length < 2) return [];
+    if (!deferredQuery || deferredQuery.length < 3) return [];
     return findSimilarMitra(deferredQuery, mitraList, {
       maxResults: options?.maxResults,
       minSimilarity: options?.minSimilarity,

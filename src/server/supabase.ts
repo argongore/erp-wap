@@ -531,10 +531,12 @@ class SupabaseSyncEngine {
         this.hasVerifiedCloudState = true;
       }
 
-      await this.prepareCompactCloudData(data);
-      const compactData = this.deepStripImagesForCloud(data);
-      if (Array.isArray(compactData.auditLogs) && compactData.auditLogs.length > 150) {
-        compactData.auditLogs = compactData.auditLogs.slice(0, 150);
+      // Deep clone before stripping so local in-memory DB keeps physical nota captures intact
+      const dataCopy: DatabaseSchema = JSON.parse(JSON.stringify(data));
+      await this.prepareCompactCloudData(dataCopy);
+      const compactData = this.deepStripImagesForCloud(dataCopy);
+      if (Array.isArray(compactData.auditLogs) && compactData.auditLogs.length > 100) {
+        compactData.auditLogs = compactData.auditLogs.slice(0, 100);
       }
 
       const payload = {
@@ -547,18 +549,45 @@ class SupabaseSyncEngine {
         updated_by: 'KasirWap ERP',
       };
 
+      // Helper to detect PostgreSQL statement timeout (Error 57014)
+      const isStatementTimeout = (err: any): boolean => {
+        if (!err) return false;
+        const msg = String(err.message || '').toLowerCase();
+        const details = String(err.details || '').toLowerCase();
+        return (
+          err.code === '57014' ||
+          msg.includes('statement timeout') ||
+          msg.includes('canceling statement') ||
+          details.includes('statement timeout')
+        );
+      };
+
+      // 1. State Upsert with Exponential Backoff Retry (1s, 2s, 4s, 8s)
       let stateError: any = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      const MAX_STATE_ATTEMPTS = 4;
+      for (let attempt = 1; attempt <= MAX_STATE_ATTEMPTS; attempt++) {
         const res = await this.client
           .from('wijaya_agro_erp_state')
           .upsert(payload, { onConflict: 'id' });
         stateError = res.error;
         if (!stateError) break;
+
+        // If table doesn't exist, don't waste time retrying
         if (stateError.code === '42P01' || String(stateError.message || '').includes('does not exist')) {
           break;
         }
-        if (attempt < 3) {
-          await new Promise((r) => setTimeout(r, attempt * 650));
+
+        if (attempt < MAX_STATE_ATTEMPTS) {
+          const isTimeout = isStatementTimeout(stateError);
+          const backoffDelay = 1000 * Math.pow(2, attempt - 1); // 1000ms, 2000ms, 4000ms, 8000ms
+          console.warn(
+            `[SupabaseSyncEngine] Upsert attempt ${attempt} failed (${isTimeout ? 'Statement Timeout 57014' : stateError.message}). Retrying in ${backoffDelay}ms...`
+          );
+          if (isTimeout && Array.isArray((payload.data as any).auditLogs)) {
+            // Trim logs further if timeout occurs
+            (payload.data as any).auditLogs = (payload.data as any).auditLogs.slice(0, 30);
+          }
+          await new Promise((r) => setTimeout(r, backoffDelay));
         }
       }
 
@@ -580,7 +609,7 @@ class SupabaseSyncEngine {
         this.retryTimer = null;
       }
 
-      // Mirror into optional relational tables ONLY when master counts/fingerprints change (prevents 6,800+ request storm)
+      // Mirror into optional relational tables ONLY when master counts/fingerprints change (prevents request storms)
       const stokFingerprintSum = (data.stokBarang || []).reduce((acc, s) => acc + (Number(s.stok) || 0), 0);
       const mirrorFp = `${produkCount}:${mitraCount}:${karyawanCount}:${stokFingerprintSum}:${data.produk?.[0]?.hargaBeli || 0}:${data.mitra?.[mitraCount - 1]?.id || ''}:${data.karyawan?.[karyawanCount - 1]?.id || ''}`;
       const shouldMirror = Boolean(options?.awaitMirrors) || mirrorFp !== this.lastMirrorFingerprint;
@@ -588,6 +617,37 @@ class SupabaseSyncEngine {
       if (shouldMirror) {
         this.lastMirrorFingerprint = mirrorFp;
         const clientRef = this.client;
+
+        // Chunking and exponential backoff helper for relational table batches
+        const BATCH_SIZE = 30;
+        const batchUpsertWithRetry = async (
+          tableName: string,
+          rows: any[],
+          onConflict: string
+        ): Promise<void> => {
+          if (!rows || rows.length === 0) return;
+          for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            const chunk = rows.slice(i, i + BATCH_SIZE);
+            let chunkErr: any = null;
+            for (let a = 1; a <= 3; a++) {
+              const res = await clientRef.from(tableName).upsert(chunk, { onConflict });
+              chunkErr = res.error;
+              if (!chunkErr) break;
+              if (chunkErr.code === '42P01' || String(chunkErr.message || '').includes('does not exist')) {
+                // Table doesn't exist, ignore relational mirror
+                return;
+              }
+              if (a < 3) {
+                const delay = 800 * Math.pow(2, a - 1);
+                await new Promise((r) => setTimeout(r, delay));
+              }
+            }
+            if (chunkErr) {
+              console.warn(`[SupabaseSyncEngine] Relational mirror chunk on "${tableName}" failed:`, chunkErr.message);
+            }
+          }
+        };
+
         const runMirrors = async () => {
           const mirrorTasks: Promise<any>[] = [];
 
@@ -604,7 +664,7 @@ class SupabaseSyncEngine {
               uang_makan_standar: (k as any).uangMakanStandar || k.tunjanganTetap || 0,
               updated_at: now.iso,
             }));
-            mirrorTasks.push(Promise.resolve(clientRef.from('karyawan').upsert(kRows, { onConflict: 'id' })));
+            mirrorTasks.push(batchUpsertWithRetry('karyawan', kRows, 'id'));
           }
 
           if (data.mitra && data.mitra.length > 0) {
@@ -618,7 +678,7 @@ class SupabaseSyncEngine {
               status: m.status,
               updated_at: now.iso,
             }));
-            mirrorTasks.push(Promise.resolve(clientRef.from('mitra').upsert(mRows, { onConflict: 'id' })));
+            mirrorTasks.push(batchUpsertWithRetry('mitra', mRows, 'id'));
           }
 
           if (data.produk && data.produk.length > 0) {
@@ -635,7 +695,7 @@ class SupabaseSyncEngine {
               status: p.status || 'AKTIF',
               updated_at: now.iso,
             }));
-            mirrorTasks.push(Promise.resolve(clientRef.from('produk').upsert(pRows, { onConflict: 'kode' })));
+            mirrorTasks.push(batchUpsertWithRetry('produk', pRows, 'kode'));
           }
 
           if (mirrorTasks.length > 0) {

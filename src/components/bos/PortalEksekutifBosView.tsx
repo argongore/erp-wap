@@ -586,16 +586,11 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
       if (mitraFilter === 'TITIP' && (m.sisaTitipanBersih ?? m.totalHutangTitipPanen) <= 0) return false;
       if (mitraFilter === 'NGUNCI' && !(m.isNotaNgunci || (m.nominalNotaNgunci || 0) > 0)) return false;
       if (!q) return true;
-      const roleLabel = getRoleMitraLabel(m.role, {
-        isAnakPerusahaan: m.isAnakPerusahaan,
-        isKaryawan: m.isKaryawan,
-      }).toLowerCase();
       return (
         m.nama.toLowerCase().includes(q) ||
         m.kode.toLowerCase().includes(q) ||
         (m.telepon || '').toLowerCase().includes(q) ||
-        (m.alamat || '').toLowerCase().includes(q) ||
-        roleLabel.includes(q)
+        (m.alamat || '').toLowerCase().includes(q)
       );
     });
   }, [rekapMitra, deferredMitraSearch, mitraFilter, mitraRoleFilter]);

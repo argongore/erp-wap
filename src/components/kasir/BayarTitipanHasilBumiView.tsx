@@ -396,14 +396,18 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
       return;
     }
 
+    const effectiveRekening = isZeroCashKliringOnly || metode === 'SINKRON' ? 'SINKRON' : rekeningSumber;
+    const effectiveMetode = isZeroCashKliringOnly || metode === 'SINKRON'
+      ? 'SINKRON'
+      : (effectiveRekening === 'KAS01' ? 'TUNAI' : 'TRANSFER');
+
     setSubmitting(true);
     try {
       const record = await api.cairkanTitipan({
         idMitra: selectedMitraId,
         nominal: nominalToPay,
-        rekeningSumber:
-          isZeroCashKliringOnly || metode === 'SINKRON' ? 'SINKRON' : rekeningSumber,
-        metode: isZeroCashKliringOnly ? 'SINKRON' : metode,
+        rekeningSumber: effectiveRekening,
+        metode: effectiveMetode,
         keterangan: keterangan.trim() || undefined,
         tanggal: tanggalInput,
         potongBonOtomatis: useKliring,
@@ -958,7 +962,15 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                 ) : (
                   <select
                     value={rekeningSumber}
-                    onChange={(e) => setRekeningSumber(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRekeningSumber(val);
+                      if (val === 'KAS01') {
+                        setMetode('TUNAI');
+                      } else if (val && val !== 'SINKRON') {
+                        setMetode('TRANSFER');
+                      }
+                    }}
                     disabled={!selectedMitraId || selectedMitraTitipanKotor <= 0}
                     className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800 disabled:bg-zinc-100"
                   >
@@ -977,12 +989,21 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
                 <label className="block font-semibold text-zinc-700 mb-1">Metode Bayar</label>
                 <select
                   value={metode}
-                  onChange={(e) => setMetode(e.target.value as 'TUNAI' | 'TRANSFER' | 'SINKRON')}
+                  onChange={(e) => {
+                    const newMetode = e.target.value as 'TUNAI' | 'TRANSFER' | 'SINKRON';
+                    setMetode(newMetode);
+                    if (newMetode === 'TUNAI') {
+                      setRekeningSumber('KAS01');
+                    } else if (newMetode === 'TRANSFER' && rekeningSumber === 'KAS01') {
+                      const firstBank = rekeningList.find((r) => !r.isVirtual && r.status === 'AKTIF' && r.kode !== 'KAS01');
+                      if (firstBank) setRekeningSumber(firstBank.kode);
+                    }
+                  }}
                   disabled={!selectedMitraId || selectedMitraTitipanKotor <= 0}
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800 disabled:bg-zinc-100"
                 >
-                  <option value="TUNAI">TUNAI (Kas Kasir)</option>
-                  <option value="TRANSFER">TRANSFER BANK</option>
+                  <option value="TUNAI">TUNAI (Kas Kasir - KAS01)</option>
+                  <option value="TRANSFER">TRANSFER BANK (BNI / Rekening Bank PT)</option>
                   <option value="SINKRON">SINKRON (Non-Kas / Rp 0 Uang Riil)</option>
                 </select>
               </div>

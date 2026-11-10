@@ -108,16 +108,11 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
       if (statusFilter === 'NGUNCI' && !isNgunci) return false;
 
       if (!q) return true;
-      const roleLabel = getRoleMitraLabel(m.role, {
-        isAnakPerusahaan: m.isAnakPerusahaan,
-        isKaryawan: m.isKaryawan || Boolean(m.idKaryawanTerkait),
-      }).toLowerCase();
       return (
         m.nama.toLowerCase().includes(q) ||
         m.kode.toLowerCase().includes(q) ||
         (m.alamat || '').toLowerCase().includes(q) ||
-        (m.telepon || '').toLowerCase().includes(q) ||
-        roleLabel.includes(q)
+        (m.telepon || '').toLowerCase().includes(q)
       );
     });
   }, [items, search, statusFilter]);

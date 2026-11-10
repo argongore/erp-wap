@@ -171,7 +171,7 @@ export const MasterMitraView: React.FC<Props> = ({
       }
       await exportRekeningKoranToPdf(
         statement,
-        fullErpData?.profilPerusahaan || null,
+        (fullErpData as any)?.profilPerusahaan || statement.profilPerusahaan || null,
         undefined,
         { printScope: 'SALDO_BERJALAN', includeNotaProofs: true }
       );
@@ -433,17 +433,11 @@ export const MasterMitraView: React.FC<Props> = ({
 
   // Filtering
   const filteredItems = items.filter((item) => {
-    const q = searchTerm.toLowerCase();
-    const roleLabel = getRoleMitraLabel(item.role, {
-      isAnakPerusahaan: item.isAnakPerusahaan,
-      isKaryawan: item.isKaryawan || Boolean(item.idKaryawanTerkait),
-    }).toLowerCase();
     const matchesSearch =
       item.nama.toLowerCase().includes(q) ||
       item.kode.toLowerCase().includes(q) ||
       item.telepon.toLowerCase().includes(q) ||
-      item.alamat.toLowerCase().includes(q) ||
-      roleLabel.includes(q);
+      item.alamat.toLowerCase().includes(q);
 
     if (!matchesSearch) return false;
 

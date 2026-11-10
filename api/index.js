@@ -590,10 +590,11 @@ var SupabaseSyncEngine = class {
         }
         this.hasVerifiedCloudState = true;
       }
-      await this.prepareCompactCloudData(data);
-      const compactData = this.deepStripImagesForCloud(data);
-      if (Array.isArray(compactData.auditLogs) && compactData.auditLogs.length > 150) {
-        compactData.auditLogs = compactData.auditLogs.slice(0, 150);
+      const dataCopy = JSON.parse(JSON.stringify(data));
+      await this.prepareCompactCloudData(dataCopy);
+      const compactData = this.deepStripImagesForCloud(dataCopy);
+      if (Array.isArray(compactData.auditLogs) && compactData.auditLogs.length > 100) {
+        compactData.auditLogs = compactData.auditLogs.slice(0, 100);
       }
       const payload = {
         id: "MAIN_DATABASE",
@@ -604,16 +605,31 @@ var SupabaseSyncEngine = class {
         updated_at: now.iso,
         updated_by: "KasirWap ERP"
       };
+      const isStatementTimeout = (err) => {
+        if (!err) return false;
+        const msg = String(err.message || "").toLowerCase();
+        const details = String(err.details || "").toLowerCase();
+        return err.code === "57014" || msg.includes("statement timeout") || msg.includes("canceling statement") || details.includes("statement timeout");
+      };
       let stateError = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      const MAX_STATE_ATTEMPTS = 4;
+      for (let attempt = 1; attempt <= MAX_STATE_ATTEMPTS; attempt++) {
         const res = await this.client.from("wijaya_agro_erp_state").upsert(payload, { onConflict: "id" });
         stateError = res.error;
         if (!stateError) break;
         if (stateError.code === "42P01" || String(stateError.message || "").includes("does not exist")) {
           break;
         }
-        if (attempt < 3) {
-          await new Promise((r) => setTimeout(r, attempt * 650));
+        if (attempt < MAX_STATE_ATTEMPTS) {
+          const isTimeout = isStatementTimeout(stateError);
+          const backoffDelay = 1e3 * Math.pow(2, attempt - 1);
+          console.warn(
+            `[SupabaseSyncEngine] Upsert attempt ${attempt} failed (${isTimeout ? "Statement Timeout 57014" : stateError.message}). Retrying in ${backoffDelay}ms...`
+          );
+          if (isTimeout && Array.isArray(payload.data.auditLogs)) {
+            payload.data.auditLogs = payload.data.auditLogs.slice(0, 30);
+          }
+          await new Promise((r) => setTimeout(r, backoffDelay));
         }
       }
       if (stateError) {
@@ -638,6 +654,29 @@ var SupabaseSyncEngine = class {
       if (shouldMirror) {
         this.lastMirrorFingerprint = mirrorFp;
         const clientRef = this.client;
+        const BATCH_SIZE = 30;
+        const batchUpsertWithRetry = async (tableName, rows, onConflict) => {
+          if (!rows || rows.length === 0) return;
+          for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            const chunk = rows.slice(i, i + BATCH_SIZE);
+            let chunkErr = null;
+            for (let a = 1; a <= 3; a++) {
+              const res = await clientRef.from(tableName).upsert(chunk, { onConflict });
+              chunkErr = res.error;
+              if (!chunkErr) break;
+              if (chunkErr.code === "42P01" || String(chunkErr.message || "").includes("does not exist")) {
+                return;
+              }
+              if (a < 3) {
+                const delay = 800 * Math.pow(2, a - 1);
+                await new Promise((r) => setTimeout(r, delay));
+              }
+            }
+            if (chunkErr) {
+              console.warn(`[SupabaseSyncEngine] Relational mirror chunk on "${tableName}" failed:`, chunkErr.message);
+            }
+          }
+        };
         const runMirrors = async () => {
           const mirrorTasks = [];
           if (data.karyawan && data.karyawan.length > 0) {
@@ -653,7 +692,7 @@ var SupabaseSyncEngine = class {
               uang_makan_standar: k.uangMakanStandar || k.tunjanganTetap || 0,
               updated_at: now.iso
             }));
-            mirrorTasks.push(Promise.resolve(clientRef.from("karyawan").upsert(kRows, { onConflict: "id" })));
+            mirrorTasks.push(batchUpsertWithRetry("karyawan", kRows, "id"));
           }
           if (data.mitra && data.mitra.length > 0) {
             const mRows = data.mitra.map((m) => ({
@@ -666,7 +705,7 @@ var SupabaseSyncEngine = class {
               status: m.status,
               updated_at: now.iso
             }));
-            mirrorTasks.push(Promise.resolve(clientRef.from("mitra").upsert(mRows, { onConflict: "id" })));
+            mirrorTasks.push(batchUpsertWithRetry("mitra", mRows, "id"));
           }
           if (data.produk && data.produk.length > 0) {
             const stokMap = new Map((data.stokBarang || []).map((s) => [s.kode, s.stok]));
@@ -682,7 +721,7 @@ var SupabaseSyncEngine = class {
               status: p.status || "AKTIF",
               updated_at: now.iso
             }));
-            mirrorTasks.push(Promise.resolve(clientRef.from("produk").upsert(pRows, { onConflict: "kode" })));
+            mirrorTasks.push(batchUpsertWithRetry("produk", pRows, "kode"));
           }
           if (mirrorTasks.length > 0) {
             await Promise.allSettled(mirrorTasks);
@@ -1616,13 +1655,87 @@ var LEGACY_DUMMY_PRODUK_PRICES = {
 function getDefaultHasilBumiList() {
   const now = getWIBDateTime();
   return [
-    { kode: "HB-01", nama: "KOPI", satuan: "KG", stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: "HB-02", nama: "KULIT KAYU MANIS STIK", satuan: "KG", stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: "HB-03", nama: "KULIT KAYU MANIS KA", satuan: "KG", stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: "HB-04", nama: "KULIT KAYU MANIS KB", satuan: "KG", stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: "HB-05", nama: "LADA", satuan: "KG", stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: "HB-06", nama: "CENGKEH", satuan: "KG", stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: "HB-07", nama: "GG CENGKEH", satuan: "KG", stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
+    {
+      kode: "HB-01",
+      nama: "KOPI",
+      satuan: "KG",
+      stok: 3968.3,
+      stokAwal: 6190.5,
+      modalAwalTotal: 318631226,
+      rataRataModalAwal: 51471,
+      tanggalInputStokAwal: "01/11/2026",
+      keteranganStokAwal: "Stok Awal Paten Saldo Hasil Bumi",
+      hargaBeliStandar: 51471,
+      updateTerakhir: now.iso
+    },
+    {
+      kode: "HB-02",
+      nama: "KULIT KAYU MANIS STIK",
+      satuan: "KG",
+      stok: 18395.2,
+      stokAwal: 15109.1,
+      modalAwalTotal: 509992561,
+      rataRataModalAwal: 33754,
+      tanggalInputStokAwal: "01/11/2026",
+      keteranganStokAwal: "Stok Awal Paten Saldo Hasil Bumi",
+      hargaBeliStandar: 33754,
+      updateTerakhir: now.iso
+    },
+    {
+      kode: "HB-03",
+      nama: "KULIT KAYU MANIS KA",
+      satuan: "KG",
+      stok: 7468.9,
+      stokAwal: 13602.3,
+      modalAwalTotal: 236979271,
+      rataRataModalAwal: 17422,
+      tanggalInputStokAwal: "01/11/2026",
+      keteranganStokAwal: "Stok Awal Paten Saldo Hasil Bumi",
+      hargaBeliStandar: 17422,
+      updateTerakhir: now.iso
+    },
+    {
+      kode: "HB-04",
+      nama: "KULIT KAYU MANIS KB",
+      satuan: "KG",
+      stok: 1249.5,
+      stokAwal: 1029.2,
+      modalAwalTotal: 17366721,
+      rataRataModalAwal: 16874,
+      tanggalInputStokAwal: "01/11/2026",
+      keteranganStokAwal: "Stok Awal Paten Saldo Hasil Bumi",
+      hargaBeliStandar: 16874,
+      updateTerakhir: now.iso
+    },
+    {
+      kode: "HB-05",
+      nama: "LADA",
+      satuan: "KG",
+      stok: 94.8,
+      stokAwal: 122.9,
+      modalAwalTotal: 12094958,
+      rataRataModalAwal: 98413,
+      tanggalInputStokAwal: "01/11/2026",
+      keteranganStokAwal: "Stok Awal Paten Saldo Hasil Bumi",
+      hargaBeliStandar: 98413,
+      updateTerakhir: now.iso
+    },
+    {
+      kode: "HB-06",
+      nama: "CENGKEH",
+      satuan: "KG",
+      stok: 0,
+      hargaBeliStandar: 0,
+      updateTerakhir: now.iso
+    },
+    {
+      kode: "HB-07",
+      nama: "GG CENGKEH",
+      satuan: "KG",
+      stok: 0,
+      hargaBeliStandar: 0,
+      updateTerakhir: now.iso
+    },
     {
       kode: "HB-08",
       nama: "KOPI TITIP",
@@ -1632,58 +1745,74 @@ function getDefaultHasilBumiList() {
       updateTerakhir: now.iso,
       isBelumPutusHarga: true,
       keterangan: "Pembelian Hasil Bumi dari Petani - Belum Putus Harga (Titip Timbang Panen / Harga Mengambang)"
+    },
+    {
+      kode: "HB-09",
+      nama: "KULIT KAYU MANIS KF",
+      satuan: "KG",
+      stok: 1248.1,
+      stokAwal: 1264.8,
+      modalAwalTotal: 28685664,
+      rataRataModalAwal: 22680,
+      tanggalInputStokAwal: "01/11/2026",
+      keteranganStokAwal: "Stok Awal Paten Saldo Hasil Bumi",
+      hargaBeliStandar: 22680,
+      updateTerakhir: now.iso
     }
   ];
 }
 function getDefaultProdukDagangList() {
   const now = getWIBDateTime();
   const rawItems = [
-    { kode: "PRD-09", nama: "BERAS BELITANG", satuan: "SAK", kategori: "BERAS" },
-    { kode: "PRD-10", nama: "BERAS JEMPOL", satuan: "SAK", kategori: "BERAS" },
-    { kode: "PRD-11", nama: "PASIR m2", satuan: "METER KUBIK", kategori: "MATERIAL" },
-    { kode: "PRD-12", nama: "KORAL M2", satuan: "METER KUBIK", kategori: "MATERIAL" },
-    { kode: "PRD-13", nama: "BATU UJM", satuan: "METER KUBIK", kategori: "MATERIAL" },
-    { kode: "PRD-14", nama: "SPLIT", satuan: "METER KUBIK", kategori: "MATERIAL" },
-    { kode: "PRD-15", nama: "BATA", satuan: "BIJI/BUAH", kategori: "MATERIAL" },
-    { kode: "PRD-16", nama: "KARUNG", satuan: "Lembar", kategori: "LAINNYA" },
-    { kode: "PRD-17", nama: "PAPAN", satuan: "BIJI/BUAH", kategori: "MATERIAL" },
-    { kode: "PRD-18", nama: "KASAU", satuan: "BIJI/BUAH", kategori: "MATERIAL" },
-    { kode: "PRD-19", nama: "BALOK 7x14", satuan: "BIJI/BUAH", kategori: "MATERIAL" },
-    { kode: "PRD-20", nama: "BALOK 8X12", satuan: "BIJI/BUAH", kategori: "MATERIAL" },
-    { kode: "PRD-21", nama: "SPANEL 4M", satuan: "BIJI/BUAH", kategori: "MATERIAL" },
-    { kode: "PRD-22", nama: "SPANEL 2M", satuan: "BIJI/BUAH", kategori: "MATERIAL" },
-    { kode: "PRD-23", nama: "UREA", satuan: "SAK", kategori: "PUPUK" },
-    { kode: "PRD-24", nama: "NPK", satuan: "SAK", kategori: "PUPUK" },
-    { kode: "PRD-25", nama: "SOLAR", satuan: "DRIGENT", kategori: "BBM" },
-    { kode: "PRD-26", nama: "DEXLITE", satuan: "DRIGENT", kategori: "BBM" },
-    { kode: "PRD-29", nama: "ROBUSTA PREMIUM OKUSSA 500 GRAM", satuan: "KEMASAN", kategori: "OKUSSA" },
-    { kode: "PRD-30", nama: "ROBUSTA PREMIUM OKUSSA 200 GRAM", satuan: "KEMASAN", kategori: "OKUSSA" },
-    { kode: "PRD-31", nama: "ROBUSTA LANANG OKUSSA 500 GRAM", satuan: "KEMASAN", kategori: "OKUSSA" },
-    { kode: "PRD-32", nama: "ROBUSTA LANANG OKUSSA 200 GRAM", satuan: "KEMASAN", kategori: "OKUSSA" },
-    { kode: "PRD-33", nama: "BUBUK OKUSSA COFFEE 100 GRAM", satuan: "KEMASAN", kategori: "OKUSSA" },
-    { kode: "PRD-34", nama: "BUBUK OKUSSA COFFEE 500 GRAM", satuan: "KEMASAN", kategori: "OKUSSA" },
-    { kode: "PRD-35", nama: "BUBUK OKUSSA COFFEE 1000 GRAM", satuan: "KEMASAN", kategori: "OKUSSA" },
-    { kode: "PRD-6838", nama: "SEWA EXCA 1", satuan: "JAM", kategori: "ALAT" },
-    { kode: "PRD-6839", nama: "SEWA EXCA 2", satuan: "JAM", kategori: "ALAT" },
-    { kode: "PRD-6840", nama: "SEWA TRUCK", satuan: "TRIP", kategori: "ALAT" },
-    { kode: "PRD-6841", nama: "SEWA DUMP", satuan: "RIT", kategori: "ALAT" },
-    { kode: "PRD-6842", nama: "SEWA TOING", satuan: "TRIP", kategori: "ALAT" }
+    { kode: "PRD-09", nama: "BERAS BELITANG", satuan: "SAK", kategori: "BERAS", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-10", nama: "BERAS JEMPOL", satuan: "SAK", kategori: "BERAS", stok: 65, stokAwal: 65, hargaBeli: 162e3, hargaJual: 165e3 },
+    { kode: "PRD-11", nama: "PASIR m2", satuan: "METER KUBIK", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-12", nama: "KORAL M2", satuan: "METER KUBIK", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-13", nama: "BATU UJM", satuan: "METER KUBIK", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-14", nama: "SPLIT", satuan: "METER KUBIK", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-15", nama: "BATA", satuan: "BIJI/BUAH", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-16", nama: "KARUNG", satuan: "Lembar", kategori: "LAINNYA", stok: 87, stokAwal: 87, hargaBeli: 3e3, hargaJual: 3e3 },
+    { kode: "PRD-17", nama: "PAPAN", satuan: "BIJI/BUAH", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-18", nama: "KASAU", satuan: "BIJI/BUAH", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-19", nama: "BALOK 7x14", satuan: "BIJI/BUAH", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-20", nama: "BALOK 8X12", satuan: "BIJI/BUAH", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-21", nama: "SPANEL 4M", satuan: "BIJI/BUAH", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-22", nama: "SPANEL 2M", satuan: "BIJI/BUAH", kategori: "MATERIAL", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-23", nama: "UREA", satuan: "SAK", kategori: "PUPUK", stok: 5, stokAwal: 5, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-24", nama: "NPK", satuan: "SAK", kategori: "PUPUK", stok: 10, stokAwal: 10, hargaBeli: 15e4, hargaJual: 15e4 },
+    { kode: "PRD-25", nama: "SOLAR", satuan: "DRIGENT", kategori: "BBM", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-26", nama: "DEXLITE", satuan: "DRIGENT", kategori: "BBM", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-29", nama: "ROBUSTA PREMIUM OKUSSA 500 GRAM", satuan: "KEMASAN", kategori: "OKUSSA", stok: 8, stokAwal: 8, hargaBeli: 0, hargaJual: 65e3 },
+    { kode: "PRD-30", nama: "ROBUSTA PREMIUM OKUSSA 200 GRAM", satuan: "KEMASAN", kategori: "OKUSSA", stok: 26, stokAwal: 26, hargaBeli: 0, hargaJual: 3e4 },
+    { kode: "PRD-31", nama: "ROBUSTA LANANG OKUSSA 500 GRAM", satuan: "KEMASAN", kategori: "OKUSSA", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 75e3 },
+    { kode: "PRD-32", nama: "ROBUSTA LANANG OKUSSA 200 GRAM", satuan: "KEMASAN", kategori: "OKUSSA", stok: 6, stokAwal: 6, hargaBeli: 0, hargaJual: 4e4 },
+    { kode: "PRD-33", nama: "BUBUK OKUSSA COFFEE 100 GRAM", satuan: "KEMASAN", kategori: "OKUSSA", stok: 9, stokAwal: 9, hargaBeli: 0, hargaJual: 1e4 },
+    { kode: "PRD-34", nama: "BUBUK OKUSSA COFFEE 500 GRAM", satuan: "KEMASAN", kategori: "OKUSSA", stok: 2, stokAwal: 2, hargaBeli: 0, hargaJual: 5e4 },
+    { kode: "PRD-35", nama: "BUBUK OKUSSA COFFEE 1000 GRAM", satuan: "KEMASAN", kategori: "OKUSSA", stok: 1, stokAwal: 1, hargaBeli: 0, hargaJual: 9e4 },
+    { kode: "PRD-1260", nama: "BUBUK OKUSSA COFFEE 250 GRAM", satuan: "Pack", kategori: "OKUSSA", stok: 1, stokAwal: 1, hargaBeli: 25e3, hargaJual: 25e3 },
+    { kode: "PRD-1663", nama: "TUKAR BUBUK KOPI", satuan: "KEMASAN", kategori: "OKUSSA", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 1e4 },
+    { kode: "PRD-6838", nama: "SEWA EXCA 1", satuan: "JAM", kategori: "ALAT", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-6839", nama: "SEWA EXCA 2", satuan: "JAM", kategori: "ALAT", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-6840", nama: "SEWA TRUCK", satuan: "TRIP", kategori: "ALAT", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-6841", nama: "SEWA DUMP", satuan: "RIT", kategori: "ALAT", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: "PRD-6842", nama: "SEWA TOING", satuan: "TRIP", kategori: "ALAT", stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 }
   ];
   const produk = rawItems.map((it) => ({
     kode: it.kode,
     nama: it.nama,
     satuan: it.satuan,
     kategori: it.kategori,
-    hargaBeli: 0,
-    hargaJual: 0,
-    hargaKhususRekanan: 0,
+    hargaBeli: it.hargaBeli ?? 0,
+    hargaJual: it.hargaJual ?? 0,
+    hargaKhususRekanan: it.hargaJual ?? 0,
     status: "AKTIF"
   }));
   const stokBarang = rawItems.map((it) => ({
     kode: it.kode,
     namaProduk: it.nama,
     satuan: it.satuan,
-    stok: 0,
+    stok: it.stok ?? 0,
+    stokAwal: it.stokAwal,
     minimum: 10,
     updateTerakhir: now.iso
   }));
@@ -1996,6 +2125,50 @@ var DatabaseManager = class {
       const raw = it.updateTerakhir || it.terakhirUpdate || it.updatedAt || it.createdAt || it.timestamp || 0;
       return new Date(raw).getTime() || 0;
     };
+    const reconcilePair = (a, b) => {
+      if (!a || !b) return;
+      const photoFields = ["fotoNota", "fotoBukti", "fotoKuitansi", "fotoItem", "fotoStnk", "fotoTimbangan"];
+      for (const pf of photoFields) {
+        if (!a[pf] && b[pf]) a[pf] = b[pf];
+        if (!b[pf] && a[pf]) b[pf] = a[pf];
+      }
+      if ((!a.fotoNotaList || a.fotoNotaList.length === 0) && Array.isArray(b.fotoNotaList) && b.fotoNotaList.length > 0) {
+        a.fotoNotaList = [...b.fotoNotaList];
+      }
+      if ((!b.fotoNotaList || b.fotoNotaList.length === 0) && Array.isArray(a.fotoNotaList) && a.fotoNotaList.length > 0) {
+        b.fotoNotaList = [...a.fotoNotaList];
+      }
+      if (b.stokAwal !== void 0 && a.stokAwal === void 0) {
+        a.stokAwal = b.stokAwal;
+        a.modalAwalTotal = a.modalAwalTotal ?? b.modalAwalTotal;
+        a.rataRataModalAwal = a.rataRataModalAwal ?? b.rataRataModalAwal;
+        a.keteranganStokAwal = a.keteranganStokAwal ?? b.keteranganStokAwal;
+        a.tanggalInputStokAwal = a.tanggalInputStokAwal ?? b.tanggalInputStokAwal;
+      }
+      if (a.stokAwal !== void 0 && b.stokAwal === void 0) {
+        b.stokAwal = a.stokAwal;
+        b.modalAwalTotal = b.modalAwalTotal ?? a.modalAwalTotal;
+        b.rataRataModalAwal = b.rataRataModalAwal ?? a.modalAwalTotal;
+        b.keteranganStokAwal = b.keteranganStokAwal ?? a.keteranganStokAwal;
+        b.tanggalInputStokAwal = b.tanggalInputStokAwal ?? a.tanggalInputStokAwal;
+      }
+      if ((b.stok || 0) > 0 && (a.stok || 0) === 0 && a.stokAwal === void 0) {
+        a.stok = b.stok;
+      }
+      if ((a.stok || 0) > 0 && (b.stok || 0) === 0 && b.stokAwal === void 0) {
+        b.stok = a.stok;
+      }
+      if ((b.hargaJual || 0) > 0 && (a.hargaJual || 0) === 0) {
+        a.hargaJual = b.hargaJual;
+        a.hargaBeli = a.hargaBeli || b.hargaBeli;
+        a.hargaKhususRekanan = a.hargaKhususRekanan || b.hargaKhususRekanan;
+      }
+      if ((a.hargaJual || 0) > 0 && (b.hargaJual || 0) === 0) {
+        b.hargaJual = a.hargaJual;
+        b.hargaBeli = b.hargaBeli || a.hargaBeli;
+        b.hargaKhususRekanan = b.hargaKhususRekanan || a.hargaKhususRekanan;
+      }
+    };
     for (const item of incoming) {
       if (item) {
         const id = getId(item);
@@ -2012,18 +2185,7 @@ var DatabaseManager = class {
           if (!existing) {
             map.set(id, item);
           } else {
-            const localObj = item;
-            const incObj = existing;
-            if (localObj.stokAwal && !incObj.stokAwal) {
-              incObj.stokAwal = localObj.stokAwal;
-              incObj.modalAwalTotal = incObj.modalAwalTotal || localObj.modalAwalTotal;
-              incObj.rataRataModalAwal = incObj.rataRataModalAwal || localObj.rataRataModalAwal;
-              incObj.keteranganStokAwal = incObj.keteranganStokAwal || localObj.keteranganStokAwal;
-              incObj.tanggalInputStokAwal = incObj.tanggalInputStokAwal || localObj.tanggalInputStokAwal;
-            }
-            if ((localObj.stok || 0) > 0 && (incObj.stok || 0) === 0 && !incObj.stokAwal) {
-              incObj.stok = localObj.stok;
-            }
+            reconcilePair(existing, item);
             const incomingTime = getItemTime(existing);
             const localTime = getItemTime(item);
             if (localTime >= incomingTime) {
@@ -10560,10 +10722,10 @@ var TransactionService = class {
     );
     const totalUangKeluar = totalPengeluaranDivisi + totalBeliHasilBumi + totalKasbonUang + totalBeliBarang + totalPencairanTitipan + totalGaji + totalSetorKeluarKasir;
     const arusKasBersih = totalUangMasuk - totalUangKeluar;
-    const kasirInPenjualan = penjualanHariIni.filter((p) => p.rekeningTujuan === "KAS01" || p.metode === "TUNAI").reduce((s, p) => s + (p.totalNominal || 0), 0);
-    const kasirInPenjualanHb = penjualanHasilBumiHariIni.filter((j) => j.rekeningTujuan === "KAS01" || j.metodePembayaran === "TUNAI").reduce((s, j) => s + (j.totalNominal || 0), 0);
-    const kasirInUangMasuk = uangMasukHariIni.filter((um) => um.rekeningTujuan === "KAS01" || um.metode === "TUNAI").reduce((s, um) => s + (um.nominal || 0), 0);
-    const kasirInBayarBon = bayarBonHariIni.filter((b) => b.rekeningTujuan === "KAS01" || b.metode === "TUNAI").reduce((s, b) => s + (b.nominalBayar || 0), 0);
+    const kasirInPenjualan = penjualanHariIni.filter((p) => p.rekeningTujuan === "KAS01" || !p.rekeningTujuan && p.metode === "TUNAI").reduce((s, p) => s + (p.totalNominal || 0), 0);
+    const kasirInPenjualanHb = penjualanHasilBumiHariIni.filter((j) => j.rekeningTujuan === "KAS01" || !j.rekeningTujuan && j.metodePembayaran === "TUNAI").reduce((s, j) => s + (j.totalNominal || 0), 0);
+    const kasirInUangMasuk = uangMasukHariIni.filter((um) => um.rekeningTujuan === "KAS01" || !um.rekeningTujuan && um.metode === "TUNAI").reduce((s, um) => s + (um.nominal || 0), 0);
+    const kasirInBayarBon = bayarBonHariIni.filter((b) => b.rekeningTujuan === "KAS01" || !b.rekeningTujuan && b.metode === "TUNAI").reduce((s, b) => s + (b.nominalBayar || 0), 0);
     const kasirInPinjamanDana = pinjamanDanaMasukHariIni.filter((b) => b.rekeningSumber === "KAS01").reduce((s, b) => s + (b.totalNominal || 0), 0);
     let kasirDeltaBrilink = 0;
     for (const br of (db.brilink || []).filter((x) => isSameDate(x.tanggal))) {
@@ -10580,10 +10742,10 @@ var TransactionService = class {
       }
     }
     const kasirOutPengeluaran = pengeluaranHariIni.filter((p) => (p.rekeningSumber || "KAS01") === "KAS01").reduce((s, p) => s + (p.nominal || 0), 0);
-    const kasirOutBeliHb = beliHasilBumiHariIni.filter((b) => b.rekeningSumber === "KAS01" || b.metodePembayaran === "TUNAI").reduce((s, b) => s + (b.totalNominal || 0), 0);
-    const kasirOutKasbon = kasbonUangHariIni.filter((k) => k.rekeningSumber === "KAS01" || k.metode === "TUNAI").reduce((s, k) => s + (k.nominal || 0), 0);
-    const kasirOutBeliBarang = beliBarangHariIni.filter((b) => b.rekeningSumber === "KAS01" || b.metodePembayaran === "TUNAI").reduce((s, b) => s + (b.totalNominal || 0), 0);
-    const kasirOutPencairan = pencairanTitipanHariIni.filter((pt) => pt.rekeningSumber === "KAS01" || pt.metodePembayaran === "TUNAI").reduce((s, pt) => s + (pt.nominalPencairan || 0), 0);
+    const kasirOutBeliHb = beliHasilBumiHariIni.filter((b) => b.rekeningSumber === "KAS01" || !b.rekeningSumber && b.metodePembayaran === "TUNAI").reduce((s, b) => s + (b.totalNominal || 0), 0);
+    const kasirOutKasbon = kasbonUangHariIni.filter((k) => k.rekeningSumber === "KAS01" || !k.rekeningSumber && k.metode === "TUNAI").reduce((s, k) => s + (k.nominal || 0), 0);
+    const kasirOutBeliBarang = beliBarangHariIni.filter((b) => b.rekeningSumber === "KAS01" || !b.rekeningSumber && b.metodePembayaran === "TUNAI").reduce((s, b) => s + (b.totalNominal || 0), 0);
+    const kasirOutPencairan = pencairanTitipanHariIni.filter((pt) => pt.rekeningSumber === "KAS01" || !pt.rekeningSumber && pt.metodePembayaran === "TUNAI").reduce((s, pt) => s + (pt.nominalPencairan || 0), 0);
     const kasirOutGaji = gajiHariIni.filter((g) => this.isKasirPayrollRecord(db, g, "KAS01")).reduce((s, g) => s + (g.gajiBersihDibayar || 0), 0);
     const kasirOpnameHariIni = (db.cashOpnameLogs || []).filter((op) => op.sesuaikanSaldoSistem && isSameDate(op.tanggal)).reduce((s, op) => s + (op.selisih || 0), 0);
     const saldoKasFisik = 0 + kasirInPenjualan + kasirInPenjualanHb + kasirInUangMasuk + kasirInBayarBon + kasirInPinjamanDana + totalTransferMasuk + kasirDeltaBrilink - kasirOutPengeluaran - kasirOutBeliHb - kasirOutKasbon - kasirOutBeliBarang - kasirOutPencairan - kasirOutGaji - totalSetorKeluarKasir + kasirOpnameHariIni;
@@ -11422,7 +11584,8 @@ var TransactionService = class {
       }
       const saldoTitipanSisa = Math.max(0, sisaTitipanSetelahPotong - nominalFisik);
       const finalRekKode = isSinkronCair ? "SINKRON" : params.rekeningSumber;
-      const finalMetode = isSinkronCair ? "SINKRON" : params.metode;
+      const isBankSource = !isSinkronCair && finalRekKode !== "KAS01" && !finalRekKode.startsWith("KAS");
+      const finalMetode = isSinkronCair ? "SINKRON" : isBankSource ? "TRANSFER" : params.metode || "TUNAI";
       const record = {
         idPencairan,
         tanggal: targetTanggal,
@@ -11953,7 +12116,7 @@ var TransactionService = class {
     for (const pt of db.pencairanTitipan || []) {
       const isKompensasi = pt.metodePembayaran === "SINKRON" || pt.metodePembayaran === "KOMPENSASI_BON" || pt.rekeningSumber === "SINKRON" || Boolean(pt.isKompensasiBon);
       const rekKode = pt.rekeningSumber || (pt.metodePembayaran === "TUNAI" ? kodeKasir : "");
-      const isKasir = !isKompensasi && (rekKode === kodeKasir || pt.metodePembayaran === "TUNAI");
+      const isKasir = !isKompensasi && rekKode === kodeKasir;
       list.push({
         id: pt.idPencairan,
         tanggal: normalizeDateStr(pt.tanggal),
@@ -16078,7 +16241,7 @@ var TransactionService = class {
       const nom = Math.round(Number(pt.nominalPencairan) || 0);
       if (nom <= 0) continue;
       const rekKode = pt.rekeningSumber || (pt.metodePembayaran === "TUNAI" ? kodeKasir : "");
-      const isKasir = rekKode === kodeKasir || pt.metodePembayaran === "TUNAI";
+      const isKasir = rekKode === kodeKasir;
       if (isKasir) addFutureKasirDelta(pt.tanggal, -nom);
       if (normalizeDmy(pt.tanggal) === targetTanggal) {
         detailUangKeluar.push({

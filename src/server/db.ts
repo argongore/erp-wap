@@ -389,13 +389,87 @@ const LEGACY_DUMMY_PRODUK_PRICES: Record<string, [number, number, number]> = {
 export function getDefaultHasilBumiList(): StokHasilBumi[] {
   const now = getWIBDateTime();
   return [
-    { kode: 'HB-01', nama: 'KOPI', satuan: 'KG', stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: 'HB-02', nama: 'KULIT KAYU MANIS STIK', satuan: 'KG', stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: 'HB-03', nama: 'KULIT KAYU MANIS KA', satuan: 'KG', stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: 'HB-04', nama: 'KULIT KAYU MANIS KB', satuan: 'KG', stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: 'HB-05', nama: 'LADA', satuan: 'KG', stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: 'HB-06', nama: 'CENGKEH', satuan: 'KG', stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
-    { kode: 'HB-07', nama: 'GG CENGKEH', satuan: 'KG', stok: 0, hargaBeliStandar: 0, updateTerakhir: now.iso },
+    {
+      kode: 'HB-01',
+      nama: 'KOPI',
+      satuan: 'KG',
+      stok: 3968.3,
+      stokAwal: 6190.5,
+      modalAwalTotal: 318631226,
+      rataRataModalAwal: 51471,
+      tanggalInputStokAwal: '01/11/2026',
+      keteranganStokAwal: 'Stok Awal Paten Saldo Hasil Bumi',
+      hargaBeliStandar: 51471,
+      updateTerakhir: now.iso,
+    },
+    {
+      kode: 'HB-02',
+      nama: 'KULIT KAYU MANIS STIK',
+      satuan: 'KG',
+      stok: 18395.2,
+      stokAwal: 15109.1,
+      modalAwalTotal: 509992561,
+      rataRataModalAwal: 33754,
+      tanggalInputStokAwal: '01/11/2026',
+      keteranganStokAwal: 'Stok Awal Paten Saldo Hasil Bumi',
+      hargaBeliStandar: 33754,
+      updateTerakhir: now.iso,
+    },
+    {
+      kode: 'HB-03',
+      nama: 'KULIT KAYU MANIS KA',
+      satuan: 'KG',
+      stok: 7468.9,
+      stokAwal: 13602.3,
+      modalAwalTotal: 236979271,
+      rataRataModalAwal: 17422,
+      tanggalInputStokAwal: '01/11/2026',
+      keteranganStokAwal: 'Stok Awal Paten Saldo Hasil Bumi',
+      hargaBeliStandar: 17422,
+      updateTerakhir: now.iso,
+    },
+    {
+      kode: 'HB-04',
+      nama: 'KULIT KAYU MANIS KB',
+      satuan: 'KG',
+      stok: 1249.5,
+      stokAwal: 1029.2,
+      modalAwalTotal: 17366721,
+      rataRataModalAwal: 16874,
+      tanggalInputStokAwal: '01/11/2026',
+      keteranganStokAwal: 'Stok Awal Paten Saldo Hasil Bumi',
+      hargaBeliStandar: 16874,
+      updateTerakhir: now.iso,
+    },
+    {
+      kode: 'HB-05',
+      nama: 'LADA',
+      satuan: 'KG',
+      stok: 94.8,
+      stokAwal: 122.9,
+      modalAwalTotal: 12094958,
+      rataRataModalAwal: 98413,
+      tanggalInputStokAwal: '01/11/2026',
+      keteranganStokAwal: 'Stok Awal Paten Saldo Hasil Bumi',
+      hargaBeliStandar: 98413,
+      updateTerakhir: now.iso,
+    },
+    {
+      kode: 'HB-06',
+      nama: 'CENGKEH',
+      satuan: 'KG',
+      stok: 0,
+      hargaBeliStandar: 0,
+      updateTerakhir: now.iso,
+    },
+    {
+      kode: 'HB-07',
+      nama: 'GG CENGKEH',
+      satuan: 'KG',
+      stok: 0,
+      hargaBeliStandar: 0,
+      updateTerakhir: now.iso,
+    },
     {
       kode: 'HB-08',
       nama: 'KOPI TITIP',
@@ -405,6 +479,19 @@ export function getDefaultHasilBumiList(): StokHasilBumi[] {
       updateTerakhir: now.iso,
       isBelumPutusHarga: true,
       keterangan: 'Pembelian Hasil Bumi dari Petani - Belum Putus Harga (Titip Timbang Panen / Harga Mengambang)',
+    },
+    {
+      kode: 'HB-09',
+      nama: 'KULIT KAYU MANIS KF',
+      satuan: 'KG',
+      stok: 1248.1,
+      stokAwal: 1264.8,
+      modalAwalTotal: 28685664,
+      rataRataModalAwal: 22680,
+      tanggalInputStokAwal: '01/11/2026',
+      keteranganStokAwal: 'Stok Awal Paten Saldo Hasil Bumi',
+      hargaBeliStandar: 22680,
+      updateTerakhir: now.iso,
     },
   ];
 }
@@ -416,48 +503,53 @@ export function getDefaultProdukDagangList(): { produk: Produk[]; stokBarang: St
     nama: string;
     satuan: string;
     kategori: Produk['kategori'];
+    stok?: number;
+    stokAwal?: number;
+    hargaBeli?: number;
+    hargaJual?: number;
   }> = [
-    { kode: 'PRD-09', nama: 'BERAS BELITANG', satuan: 'SAK', kategori: 'BERAS' },
-    { kode: 'PRD-10', nama: 'BERAS JEMPOL', satuan: 'SAK', kategori: 'BERAS' },
-    { kode: 'PRD-11', nama: 'PASIR m2', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
-    { kode: 'PRD-12', nama: 'KORAL M2', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
-    { kode: 'PRD-13', nama: 'BATU UJM', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
-    { kode: 'PRD-14', nama: 'SPLIT', satuan: 'METER KUBIK', kategori: 'MATERIAL' },
-    { kode: 'PRD-15', nama: 'BATA', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
-    { kode: 'PRD-16', nama: 'KARUNG', satuan: 'Lembar', kategori: 'LAINNYA' },
-    { kode: 'PRD-17', nama: 'PAPAN', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
-    { kode: 'PRD-18', nama: 'KASAU', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
-    { kode: 'PRD-19', nama: 'BALOK 7x14', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
-    { kode: 'PRD-20', nama: 'BALOK 8X12', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
-    { kode: 'PRD-21', nama: 'SPANEL 4M', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
-    { kode: 'PRD-22', nama: 'SPANEL 2M', satuan: 'BIJI/BUAH', kategori: 'MATERIAL' },
-    { kode: 'PRD-23', nama: 'UREA', satuan: 'SAK', kategori: 'PUPUK' },
-    { kode: 'PRD-24', nama: 'NPK', satuan: 'SAK', kategori: 'PUPUK' },
-    { kode: 'PRD-25', nama: 'SOLAR', satuan: 'DRIGENT', kategori: 'BBM' },
-    { kode: 'PRD-26', nama: 'DEXLITE', satuan: 'DRIGENT', kategori: 'BBM' },
-    { kode: 'PRD-29', nama: 'ROBUSTA PREMIUM OKUSSA 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-30', nama: 'ROBUSTA PREMIUM OKUSSA 200 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-31', nama: 'ROBUSTA LANANG OKUSSA 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-32', nama: 'ROBUSTA LANANG OKUSSA 200 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-33', nama: 'BUBUK OKUSSA COFFEE 100 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-34', nama: 'BUBUK OKUSSA COFFEE 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-35', nama: 'BUBUK OKUSSA COFFEE 1000 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA' },
-    { kode: 'PRD-6838', nama: 'SEWA EXCA 1', satuan: 'JAM', kategori: 'ALAT' },
-    { kode: 'PRD-6839', nama: 'SEWA EXCA 2', satuan: 'JAM', kategori: 'ALAT' },
-    { kode: 'PRD-6840', nama: 'SEWA TRUCK', satuan: 'TRIP', kategori: 'ALAT' },
-    { kode: 'PRD-6841', nama: 'SEWA DUMP', satuan: 'RIT', kategori: 'ALAT' },
-    { kode: 'PRD-6842', nama: 'SEWA TOING', satuan: 'TRIP', kategori: 'ALAT' },
+    { kode: 'PRD-09', nama: 'BERAS BELITANG', satuan: 'SAK', kategori: 'BERAS', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-10', nama: 'BERAS JEMPOL', satuan: 'SAK', kategori: 'BERAS', stok: 65, stokAwal: 65, hargaBeli: 162000, hargaJual: 165000 },
+    { kode: 'PRD-11', nama: 'PASIR m2', satuan: 'METER KUBIK', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-12', nama: 'KORAL M2', satuan: 'METER KUBIK', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-13', nama: 'BATU UJM', satuan: 'METER KUBIK', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-14', nama: 'SPLIT', satuan: 'METER KUBIK', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-15', nama: 'BATA', satuan: 'BIJI/BUAH', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-16', nama: 'KARUNG', satuan: 'Lembar', kategori: 'LAINNYA', stok: 87, stokAwal: 87, hargaBeli: 3000, hargaJual: 3000 },
+    { kode: 'PRD-17', nama: 'PAPAN', satuan: 'BIJI/BUAH', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-18', nama: 'KASAU', satuan: 'BIJI/BUAH', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-19', nama: 'BALOK 7x14', satuan: 'BIJI/BUAH', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-20', nama: 'BALOK 8X12', satuan: 'BIJI/BUAH', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-21', nama: 'SPANEL 4M', satuan: 'BIJI/BUAH', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-22', nama: 'SPANEL 2M', satuan: 'BIJI/BUAH', kategori: 'MATERIAL', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-23', nama: 'UREA', satuan: 'SAK', kategori: 'PUPUK', stok: 5, stokAwal: 5, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-24', nama: 'NPK', satuan: 'SAK', kategori: 'PUPUK', stok: 10, stokAwal: 10, hargaBeli: 150000, hargaJual: 150000 },
+    { kode: 'PRD-25', nama: 'SOLAR', satuan: 'DRIGENT', kategori: 'BBM', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-26', nama: 'DEXLITE', satuan: 'DRIGENT', kategori: 'BBM', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-29', nama: 'ROBUSTA PREMIUM OKUSSA 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 8, stokAwal: 8, hargaBeli: 0, hargaJual: 65000 },
+    { kode: 'PRD-30', nama: 'ROBUSTA PREMIUM OKUSSA 200 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 26, stokAwal: 26, hargaBeli: 0, hargaJual: 30000 },
+    { kode: 'PRD-31', nama: 'ROBUSTA LANANG OKUSSA 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 75000 },
+    { kode: 'PRD-32', nama: 'ROBUSTA LANANG OKUSSA 200 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 6, stokAwal: 6, hargaBeli: 0, hargaJual: 40000 },
+    { kode: 'PRD-33', nama: 'BUBUK OKUSSA COFFEE 100 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 9, stokAwal: 9, hargaBeli: 0, hargaJual: 10000 },
+    { kode: 'PRD-34', nama: 'BUBUK OKUSSA COFFEE 500 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 2, stokAwal: 2, hargaBeli: 0, hargaJual: 50000 },
+    { kode: 'PRD-35', nama: 'BUBUK OKUSSA COFFEE 1000 GRAM', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 1, stokAwal: 1, hargaBeli: 0, hargaJual: 90000 },
+    { kode: 'PRD-1260', nama: 'BUBUK OKUSSA COFFEE 250 GRAM', satuan: 'Pack', kategori: 'OKUSSA', stok: 1, stokAwal: 1, hargaBeli: 25000, hargaJual: 25000 },
+    { kode: 'PRD-1663', nama: 'TUKAR BUBUK KOPI', satuan: 'KEMASAN', kategori: 'OKUSSA', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 10000 },
+    { kode: 'PRD-6838', nama: 'SEWA EXCA 1', satuan: 'JAM', kategori: 'ALAT', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-6839', nama: 'SEWA EXCA 2', satuan: 'JAM', kategori: 'ALAT', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-6840', nama: 'SEWA TRUCK', satuan: 'TRIP', kategori: 'ALAT', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-6841', nama: 'SEWA DUMP', satuan: 'RIT', kategori: 'ALAT', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
+    { kode: 'PRD-6842', nama: 'SEWA TOING', satuan: 'TRIP', kategori: 'ALAT', stok: 0, stokAwal: 0, hargaBeli: 0, hargaJual: 0 },
   ];
 
-  // HPP & harga jual default adalah Rp 0 sampai ada transaksi pembelian modal riil (tidak ada angka karangan)
   const produk: Produk[] = rawItems.map((it) => ({
     kode: it.kode,
     nama: it.nama,
     satuan: it.satuan,
     kategori: it.kategori,
-    hargaBeli: 0,
-    hargaJual: 0,
-    hargaKhususRekanan: 0,
+    hargaBeli: it.hargaBeli ?? 0,
+    hargaJual: it.hargaJual ?? 0,
+    hargaKhususRekanan: it.hargaJual ?? 0,
     status: 'AKTIF',
   }));
 
@@ -465,7 +557,8 @@ export function getDefaultProdukDagangList(): { produk: Produk[]; stokBarang: St
     kode: it.kode,
     namaProduk: it.nama,
     satuan: it.satuan,
-    stok: 0,
+    stok: it.stok ?? 0,
+    stokAwal: it.stokAwal,
     minimum: 10,
     updateTerakhir: now.iso,
   }));
@@ -853,6 +946,64 @@ class DatabaseManager {
       return new Date(raw).getTime() || 0;
     };
 
+    // Helper to merge images & critical stock/price fields bidirectionally
+    const reconcilePair = (a: any, b: any) => {
+      if (!a || !b) return;
+      // 1. Photo guard: never lose image captures from physical notas
+      const photoFields = ['fotoNota', 'fotoBukti', 'fotoKuitansi', 'fotoItem', 'fotoStnk', 'fotoTimbangan'];
+      for (const pf of photoFields) {
+        if (!a[pf] && b[pf]) a[pf] = b[pf];
+        if (!b[pf] && a[pf]) b[pf] = a[pf];
+      }
+      if ((!a.fotoNotaList || a.fotoNotaList.length === 0) && Array.isArray(b.fotoNotaList) && b.fotoNotaList.length > 0) {
+        a.fotoNotaList = [...b.fotoNotaList];
+      }
+      if ((!b.fotoNotaList || b.fotoNotaList.length === 0) && Array.isArray(a.fotoNotaList) && a.fotoNotaList.length > 0) {
+        b.fotoNotaList = [...a.fotoNotaList];
+      }
+
+      // 2. Stock guard: if one has stokAwal or active stock and the other has 0/blank, preserve stock!
+      if (b.stokAwal !== undefined && a.stokAwal === undefined) {
+        a.stokAwal = b.stokAwal;
+        a.modalAwalTotal = a.modalAwalTotal ?? b.modalAwalTotal;
+        a.rataRataModalAwal = a.rataRataModalAwal ?? b.rataRataModalAwal;
+        a.keteranganStokAwal = a.keteranganStokAwal ?? b.keteranganStokAwal;
+        a.tanggalInputStokAwal = a.tanggalInputStokAwal ?? b.tanggalInputStokAwal;
+      }
+      if (a.stokAwal !== undefined && b.stokAwal === undefined) {
+        b.stokAwal = a.stokAwal;
+        b.modalAwalTotal = b.modalAwalTotal ?? a.modalAwalTotal;
+        b.rataRataModalAwal = b.rataRataModalAwal ?? a.modalAwalTotal;
+        b.keteranganStokAwal = b.keteranganStokAwal ?? a.keteranganStokAwal;
+        b.tanggalInputStokAwal = b.tanggalInputStokAwal ?? a.tanggalInputStokAwal;
+      }
+      // 2. Stock guard: if one side has positive stock and the other has 0, always preserve the positive stock!
+      if ((b.stok || 0) > 0 && (a.stok || 0) === 0) {
+        a.stok = b.stok;
+      }
+      if ((a.stok || 0) > 0 && (b.stok || 0) === 0) {
+        b.stok = a.stok;
+      }
+      if ((b.stokAwal || 0) > 0 && (a.stokAwal || 0) === 0) {
+        a.stokAwal = b.stokAwal;
+      }
+      if ((a.stokAwal || 0) > 0 && (b.stokAwal || 0) === 0) {
+        b.stokAwal = a.stokAwal;
+      }
+
+      // 3. Price guard: if one has real harga and the other is 0, preserve real harga
+      if ((b.hargaJual || 0) > 0 && (a.hargaJual || 0) === 0) {
+        a.hargaJual = b.hargaJual;
+        a.hargaBeli = a.hargaBeli || b.hargaBeli;
+        a.hargaKhususRekanan = a.hargaKhususRekanan || b.hargaKhususRekanan;
+      }
+      if ((a.hargaJual || 0) > 0 && (b.hargaJual || 0) === 0) {
+        b.hargaJual = a.hargaJual;
+        b.hargaBeli = b.hargaBeli || a.hargaBeli;
+        b.hargaKhususRekanan = b.hargaKhususRekanan || a.hargaKhususRekanan;
+      }
+    };
+
     // 1. First put incoming items from cloud
     for (const item of incoming) {
       if (item) {
@@ -864,7 +1015,6 @@ class DatabaseManager {
     }
 
     // 2. Put local items: if an item exists locally but not in incoming, PRESERVE IT!
-    // If it exists in both, prefer local if local has newer or equal mutation
     for (const item of local) {
       if (item) {
         const id = getId(item);
@@ -873,20 +1023,7 @@ class DatabaseManager {
           if (!existing) {
             map.set(id, item);
           } else {
-            // CRITICAL INVENTORY GUARD: If local has stokAwal or active stock and incoming is blank, preserve local stock data!
-            const localObj = item as any;
-            const incObj = existing as any;
-            if (localObj.stokAwal && !incObj.stokAwal) {
-              incObj.stokAwal = localObj.stokAwal;
-              incObj.modalAwalTotal = incObj.modalAwalTotal || localObj.modalAwalTotal;
-              incObj.rataRataModalAwal = incObj.rataRataModalAwal || localObj.rataRataModalAwal;
-              incObj.keteranganStokAwal = incObj.keteranganStokAwal || localObj.keteranganStokAwal;
-              incObj.tanggalInputStokAwal = incObj.tanggalInputStokAwal || localObj.tanggalInputStokAwal;
-            }
-            if ((localObj.stok || 0) > 0 && (incObj.stok || 0) === 0 && !incObj.stokAwal) {
-              incObj.stok = localObj.stok;
-            }
-
+            reconcilePair(existing, item);
             const incomingTime = getItemTime(existing);
             const localTime = getItemTime(item);
             if (localTime >= incomingTime) {
