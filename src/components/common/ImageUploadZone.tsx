@@ -40,6 +40,7 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [processing, setProcessing] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string>('');
+  const [cloudWarning, setCloudWarning] = useState<string>('');
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -106,17 +107,22 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
     });
   };
 
-  const offloadToCloudOrFallback = async (compressedDataUrl: string): Promise<string> => {
+  const offloadToCloudOrFallback = async (
+    compressedDataUrl: string
+  ): Promise<{ url: string; storage: string }> => {
     try {
       const res = await Promise.race([
         api.uploadBuktiImage(compressedDataUrl, 'nota'),
-        new Promise<{ url: string }>((resolve) =>
-          setTimeout(() => resolve({ url: compressedDataUrl }), 3500)
+        new Promise<{ url: string; storage: string }>((resolve) =>
+          setTimeout(() => resolve({ url: compressedDataUrl, storage: 'INLINE_COMPRESSED' }), 15000)
         ),
       ]);
-      return res?.url || compressedDataUrl;
+      return {
+        url: res?.url || compressedDataUrl,
+        storage: res?.storage || 'INLINE_COMPRESSED',
+      };
     } catch {
-      return compressedDataUrl;
+      return { url: compressedDataUrl, storage: 'INLINE_COMPRESSED' };
     }
   };
 
@@ -137,16 +143,27 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
     }
 
     setProcessing(true);
+    setCloudWarning('');
     try {
       const finalResults: string[] = [];
+      let anyNonCloud = false;
       for (const file of validFiles) {
         try {
           const compressed = await compressFile(file);
           const stored = await offloadToCloudOrFallback(compressed);
-          finalResults.push(stored);
+          finalResults.push(stored.url);
+          if (stored.storage !== 'SUPABASE_STORAGE') {
+            anyNonCloud = true;
+          }
         } catch (err: any) {
           console.warn('Compress error on file:', file.name, err);
         }
+      }
+
+      if (anyNonCloud) {
+        setCloudWarning(
+          'Peringatan: Foto belum tersimpan ke Cloud Storage (bucket "erp-bukti-nota" Supabase belum aktif / belum tersambung). Jika server restart, foto berisiko hilang. Pastikan Pengaturan Supabase tersambung & skrip SQL bucket sudah dijalankan.'
+        );
       }
 
       if (finalResults.length === 0) {
@@ -206,6 +223,7 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
     if (onChange) onChange('');
     if (onValuesChange) onValuesChange([]);
     setUploadError('');
+    setCloudWarning('');
   };
 
   return (
@@ -246,6 +264,13 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
         <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px] flex items-center space-x-1.5">
           <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
           <span>{uploadError}</span>
+        </div>
+      )}
+
+      {cloudWarning && (
+        <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 text-[11px] font-medium flex items-start space-x-2 leading-relaxed">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <span>{cloudWarning}</span>
         </div>
       )}
 

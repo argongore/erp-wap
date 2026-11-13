@@ -433,7 +433,9 @@ export const MasterMitraView: React.FC<Props> = ({
 
   // Filtering
   const filteredItems = items.filter((item) => {
+    const q = searchTerm.trim().toLowerCase();
     const matchesSearch =
+      !q ||
       item.nama.toLowerCase().includes(q) ||
       item.kode.toLowerCase().includes(q) ||
       item.telepon.toLowerCase().includes(q) ||

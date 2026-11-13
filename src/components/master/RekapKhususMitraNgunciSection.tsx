@@ -1027,26 +1027,39 @@ export const KhususNotaNgunciSection: React.FC<RekapMitraViewProps> = ({
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">
-                          {n.fotoNota && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPreviewFotoNota({
-                                  imageUrl: n.fotoNota!,
-                                  title: `Bukti Nota Ngunci — ${n.noNota}`,
-                                  nomorBukti: n.noNota,
-                                  namaMitra: n.namaMitra,
-                                  tanggal: n.tanggal,
-                                  nominalText: formatRupiah(n.sisaNominalNgunci),
-                                  keterangan: n.rincian,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 cursor-pointer"
-                            >
-                              <Camera className="w-3 h-3" />
-                              <span>Foto Nota</span>
-                            </button>
-                          )}
+                          {(n.attachment_url || n.fotoNota) && (() => {
+                            const photoUrl = (n.attachment_url || n.fotoNota)!;
+                            const firstThumb = photoUrl.split('|||')[0]?.trim() || photoUrl;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPreviewFotoNota({
+                                    imageUrl: photoUrl,
+                                    title: `Bukti Nota Ngunci — ${n.noNota}`,
+                                    nomorBukti: n.noNota,
+                                    namaMitra: n.namaMitra,
+                                    tanggal: n.tanggal,
+                                    nominalText: formatRupiah(n.sisaNominalNgunci),
+                                    keterangan: n.rincian,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1.5 p-1 pr-2 rounded-lg text-[10px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 cursor-pointer shadow-2xs group"
+                                title="Klik untuk memperbesar bukti fisik nota"
+                              >
+                                <img
+                                  src={firstThumb}
+                                  alt="Nota"
+                                  className="w-6 h-6 rounded object-cover border border-amber-300 bg-black shrink-0 group-hover:scale-105 transition-transform"
+                                  loading="lazy"
+                                />
+                                <span className="flex items-center gap-1">
+                                  <Camera className="w-3 h-3 text-amber-700" />
+                                  <span>Fisik Nota</span>
+                                </span>
+                              </button>
+                            );
+                          })()}
                           <button
                             type="button"
                             onClick={() =>

@@ -32,6 +32,8 @@ import {
   Unlock,
   RefreshCw,
   Wallet,
+  UploadCloud,
+  Search,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -69,6 +71,7 @@ import {
 } from '../common/ModalKliringSilangMitra.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalToggleNotaNgunci } from '../master/RekapKhususMitraNgunciSection.tsx';
+import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
 
 // Generated authentic visual preview mockup
 import rekeningKoranMockupImg from '../../assets/images/rekening_koran_preview_1790406863342.jpg';
@@ -111,6 +114,10 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [quickCopied, setQuickCopied] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'TABEL' | 'LEMBAR_CETAK'>('TABEL');
   const [ledgerTab, setLedgerTab] = useState<'SALDO_BERJALAN' | 'HISTORY_SELESAI'>('SALDO_BERJALAN');
+  const [historyFilterType, setHistoryFilterType] = useState<
+    'SEMUA' | 'MASIH_HUTANG' | 'LUNAS_SELESAI' | 'KLIRING_SINKRON' | 'TUNAI_TRANSFER' | 'NOTA_LALU'
+  >('SEMUA');
+  const [historySearch, setHistorySearch] = useState<string>('');
   const [showMockupPreview, setShowMockupPreview] = useState<boolean>(false);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
 
@@ -171,13 +178,88 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
   const [previewPhoto, setPreviewPhoto] = useState<{
     imageUrl: string;
+    fullImageUrl?: string;
     title: string;
     nomorBukti?: string;
+    noNota?: string;
     namaMitra?: string;
     tanggal?: string;
+    jenis?: string;
     nominalText?: string;
+    nominalValue?: number;
     keterangan?: string;
+    targetTxId?: string;
   } | null>(null);
+
+  // Modal Ganti Capture Nota Lalu per transaksi pada Rekening Koran Mitra
+  const [replaceFotoTarget, setReplaceFotoTarget] = useState<{
+    idTransaksi: string;
+    noNota?: string;
+    tanggal: string;
+    jenis: string;
+    nominal: number;
+    keterangan?: string;
+    initialImages: string[];
+  } | null>(null);
+  const [replaceFotoImages, setReplaceFotoImages] = useState<string[]>([]);
+  const [savingReplaceFoto, setSavingReplaceFoto] = useState<boolean>(false);
+  const [replaceFotoError, setReplaceFotoError] = useState<string>('');
+
+  const openReplaceFotoModal = (target: {
+    idTransaksi: string;
+    noNota?: string;
+    tanggal: string;
+    jenis: string;
+    nominal: number;
+    keterangan?: string;
+    rawFotoUrl?: string;
+  }) => {
+    const imgs = (target.rawFotoUrl || '')
+      .split('|||')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    setReplaceFotoError('');
+    setReplaceFotoImages(imgs);
+    setReplaceFotoTarget({
+      idTransaksi: target.idTransaksi,
+      noNota: target.noNota,
+      tanggal: target.tanggal,
+      jenis: target.jenis,
+      nominal: target.nominal,
+      keterangan: target.keterangan,
+      initialImages: imgs,
+    });
+  };
+
+  const handleSaveReplaceFoto = async (imagesToSave: string[]) => {
+    if (!replaceFotoTarget) return;
+    setSavingReplaceFoto(true);
+    setReplaceFotoError('');
+    try {
+      const cleanImages = imagesToSave.map((s) => s.trim()).filter(Boolean);
+      const res = await api.gantiFotoNotaTransaksi({
+        idTransaksi: replaceFotoTarget.idTransaksi,
+        idMitra: statement?.idMitra || currentMitraId,
+        fotoNotaList: cleanImages,
+        fotoNota: cleanImages.join('|||'),
+        attachment_url: cleanImages[0] || undefined,
+        user: 'Kasir/Admin',
+      });
+      setReplaceFotoTarget(null);
+      setReplaceFotoImages([]);
+      setEditSuccessMsg(res.message);
+      setTimeout(() => setEditSuccessMsg(''), 6000);
+      if (currentMitraId) {
+        await loadStatementData(currentMitraId, true);
+      }
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      onRefreshParent?.();
+    } catch (err: any) {
+      setReplaceFotoError(err.message || 'Gagal menyimpan capture foto nota baru');
+    } finally {
+      setSavingReplaceFoto(false);
+    }
+  };
 
   // Recharts: State grafik fluktuasi saldo titipan mitra
   const [showTitipChart, setShowTitipChart] = useState<boolean>(true);
@@ -202,12 +284,20 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     const rawPoints = sorted.map((item, idx) => {
       const jenisUpper = (item.jenis || '').toUpperCase();
       const isTitipMasuk =
-        (jenisUpper.includes('TITIP') && !jenisUpper.includes('PENCAIRAN')) ||
-        jenisUpper.includes('PINJAMAN UANG PT KE MITRA') ||
-        jenisUpper.includes('UPAH KERJA');
+        item.kategoriMutasiHak === 'TITIP_MASUK' ||
+        (!item.kategoriMutasiHak &&
+          ((jenisUpper.includes('TITIP') &&
+            !jenisUpper.includes('PENCAIRAN') &&
+            !jenisUpper.includes('POTONG TITIPAN')) ||
+            jenisUpper.includes('PINJAMAN UANG PT KE MITRA') ||
+            jenisUpper.includes('UPAH KERJA')));
       const isTitipKeluar =
-        (jenisUpper.includes('PENCAIRAN') && jenisUpper.includes('TITIP')) ||
-        jenisUpper.includes('PEMBAYARAN GAJI KARYAWAN');
+        item.kategoriMutasiHak === 'TITIP_CAIR' ||
+        item.kategoriMutasiHak === 'SLIP_GAJI' ||
+        (!item.kategoriMutasiHak &&
+          ((jenisUpper.includes('PENCAIRAN') && jenisUpper.includes('TITIP')) ||
+            jenisUpper.includes('POTONG TITIPAN') ||
+            jenisUpper.includes('PEMBAYARAN GAJI KARYAWAN')));
 
       const nominalItem =
         item.nominalMutasiHak ||
@@ -615,13 +705,79 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     return [...raw].sort((a, b) => parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam));
   }, [statement]);
 
-  const historySelesaiList = useMemo<RekeningKoranHistoryItem[]>(() => {
+  // Tab 2: History Transaksi Mitra — tampilkan SELURUH transaksi mitra (Sinkron, Transfer, Tunai, Kliring Silang,
+  // Kasbon, Titip, maupun Nota Lalu yang masih ada sangkutan hutang ataupun sudah lunas), diurutkan terbaru lebih dulu.
+  const allMitraHistoryList = useMemo<RekeningKoranHistoryItem[]>(() => {
     if (!statement) return [];
-    const raw = Array.isArray(statement.historySelesai)
-      ? statement.historySelesai
-      : (statement.history || []).filter((h) => h.isSaldoBerjalan === false);
-    return [...raw].sort((a, b) => parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam));
+    const raw = Array.isArray(statement.history) ? statement.history : [];
+    return [...raw].sort((a, b) => parseDateMs(b.tanggal, b.jam) - parseDateMs(a.tanggal, a.jam));
   }, [statement]);
+
+  const historySelesaiList = useMemo<RekeningKoranHistoryItem[]>(() => {
+    const q = historySearch.trim().toLowerCase();
+    return allMitraHistoryList.filter((h) => {
+      if (historyFilterType === 'MASIH_HUTANG') {
+        const hasDebt = h.debet > 0 && (h.sisaPiutangNota ?? h.piutangBerjalan ?? 0) > 0;
+        const hasTitipBerjalan = h.kategoriMutasiHak === 'TITIP_MASUK' && (h.titipBerjalan ?? 0) > 0;
+        if (!hasDebt && !hasTitipBerjalan && !h.isSaldoBerjalan) return false;
+      } else if (historyFilterType === 'LUNAS_SELESAI') {
+        if (h.isSaldoBerjalan) return false;
+      } else if (historyFilterType === 'KLIRING_SINKRON') {
+        const jUp = (h.jenis || '').toUpperCase();
+        const mUp = (h.metodePembayaran || '').toUpperCase();
+        const sUp = (h.statusTransaksi || '').toUpperCase();
+        if (
+          !jUp.includes('KLIRING') &&
+          !jUp.includes('SINKRON') &&
+          mUp !== 'KLIRING_SILANG' &&
+          mUp !== 'SINKRON' &&
+          sUp !== 'KLIRING_SILANG' &&
+          sUp !== 'SINKRON'
+        ) {
+          return false;
+        }
+      } else if (historyFilterType === 'TUNAI_TRANSFER') {
+        const jUp = (h.jenis || '').toUpperCase();
+        const mUp = (h.metodePembayaran || '').toUpperCase();
+        if (
+          mUp !== 'TUNAI' &&
+          mUp !== 'TRANSFER' &&
+          !jUp.includes('TUNAI') &&
+          !jUp.includes('TRANSFER')
+        ) {
+          return false;
+        }
+      } else if (historyFilterType === 'NOTA_LALU') {
+        if (!h.isNotaLalu && !h.noNotaLalu && !(h.jenis || '').toUpperCase().includes('NOTA LALU')) {
+          return false;
+        }
+      }
+
+      if (q) {
+        const itemsText = (h.itemsDetail || []).map((i) => i.nama).join(' ');
+        const haystack = [
+          h.id,
+          h.idTransaksiInduk,
+          h.tanggal,
+          h.jenis,
+          h.keterangan,
+          h.catatanTransaksi,
+          h.noNotaLalu,
+          h.rincianNotaLalu,
+          h.noNotaToko,
+          h.metodePembayaran,
+          h.rekeningKode,
+          itemsText,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+
+      return true;
+    });
+  }, [allMitraHistoryList, historyFilterType, historySearch]);
 
   const displayedRows = ledgerTab === 'SALDO_BERJALAN' ? historyBerjalanList : historySelesaiList;
 
@@ -1721,63 +1877,116 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
             )}
           </div>
 
-          {/* TAB PEMISAH: SALDO SEDANG BERJALAN (DEFAULT REKENING KORAN) VS HISTORY TRANSAKSI SELESAI (LUNAS / CAIR) */}
-          <div className="bg-white rounded-xl border border-zinc-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
-            <div className="inline-flex rounded-xl border border-zinc-200 bg-zinc-100 p-1 text-xs gap-1">
-              <button
-                type="button"
-                onClick={() => setLedgerTab('SALDO_BERJALAN')}
-                className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-2 ${
-                  ledgerTab === 'SALDO_BERJALAN'
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'text-zinc-600 hover:text-zinc-900'
-                }`}
-              >
-                <span>Rekening Koran Aktif (Saldo Sedang Berjalan)</span>
-                <span
-                  className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+          {/* TAB PEMISAH: REKENING KORAN AKTIF (SALDO BERJALAN) VS HISTORY TRANSAKSI MITRA (SEMUA TRANSAKSI) */}
+          <div className="bg-white rounded-xl border border-zinc-200 p-3 space-y-3 shadow-2xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="inline-flex rounded-xl border border-zinc-200 bg-zinc-100 p-1 text-xs gap-1">
+                <button
+                  type="button"
+                  onClick={() => setLedgerTab('SALDO_BERJALAN')}
+                  className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-2 ${
                     ledgerTab === 'SALDO_BERJALAN'
-                      ? 'bg-amber-400 text-slate-950 font-extrabold'
-                      : 'bg-zinc-200 text-zinc-700'
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'text-zinc-600 hover:text-zinc-900'
                   }`}
                 >
-                  {historyBerjalanList.length}
-                </span>
-              </button>
+                  <span>Rekening Koran Aktif (Saldo Berjalan)</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                      ledgerTab === 'SALDO_BERJALAN'
+                        ? 'bg-amber-400 text-slate-950 font-extrabold'
+                        : 'bg-zinc-200 text-zinc-700'
+                    }`}
+                  >
+                    {historyBerjalanList.length}
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setLedgerTab('HISTORY_SELESAI')}
-                className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-2 ${
-                  ledgerTab === 'HISTORY_SELESAI'
-                    ? 'bg-emerald-800 text-white shadow-xs'
-                    : 'text-zinc-600 hover:text-zinc-900'
-                }`}
-              >
-                <span>History Transaksi Selesai (Lunas &amp; Cair)</span>
-                <span
-                  className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                <button
+                  type="button"
+                  onClick={() => setLedgerTab('HISTORY_SELESAI')}
+                  className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-2 ${
                     ledgerTab === 'HISTORY_SELESAI'
-                      ? 'bg-emerald-200 text-emerald-950 font-extrabold'
-                      : 'bg-zinc-200 text-zinc-700'
+                      ? 'bg-emerald-800 text-white shadow-xs'
+                      : 'text-zinc-600 hover:text-zinc-900'
                   }`}
                 >
-                  {historySelesaiList.length}
-                </span>
-              </button>
+                  <span>History Transaksi Mitra (Semua)</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                      ledgerTab === 'HISTORY_SELESAI'
+                        ? 'bg-emerald-200 text-emerald-950 font-extrabold'
+                        : 'bg-zinc-200 text-zinc-700'
+                    }`}
+                  >
+                    {allMitraHistoryList.length}
+                  </span>
+                </button>
+              </div>
+
+              <div className="text-[11px] text-zinc-500">
+                {ledgerTab === 'SALDO_BERJALAN' ? (
+                  <span>
+                    Menampilkan <strong>hanya saldo piutang &amp; titipan/upah yang sedang berjalan</strong>. Transaksi yang sudah lunas/cair tersimpan di History.
+                  </span>
+                ) : (
+                  <span>
+                    Menampilkan <strong>seluruh riwayat transaksi mitra</strong> (Lunas Sinkron, Tunai, Transfer, Kliring Silang, serta detail Nota Lalu yang masih ada sangkutan hutang maupun sudah lunas).
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="text-[11px] text-zinc-500">
-              {ledgerTab === 'SALDO_BERJALAN' ? (
-                <span>
-                  Menampilkan <strong>hanya saldo piutang &amp; titipan/upah yang sedang berjalan</strong>. Transaksi yang sudah lunas/cair tersimpan rapi di tab History.
-                </span>
-              ) : (
-                <span>
-                  Arsip riwayat transaksi yang sudah <strong>lunas dibayar</strong> atau <strong>sudah dicairkan</strong> (tidak ikut ditagihkan di Rekening Koran aktif).
-                </span>
-              )}
-            </div>
+            {ledgerTab === 'HISTORY_SELESAI' && (
+              <div className="pt-2 border-t border-zinc-100 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      { key: 'SEMUA', label: 'Semua Transaksi' },
+                      { key: 'MASIH_HUTANG', label: 'Masih Hutang / Berjalan' },
+                      { key: 'LUNAS_SELESAI', label: 'Sudah Lunas / Cair' },
+                      { key: 'KLIRING_SINKRON', label: 'Kliring Silang & Sinkron' },
+                      { key: 'TUNAI_TRANSFER', label: 'Tunai & Transfer' },
+                      { key: 'NOTA_LALU', label: 'Nota Lalu' },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => setHistoryFilterType(f.key)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                        historyFilterType === f.key
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative w-full lg:w-72">
+                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    placeholder="Cari no nota, barang, kliring, tgl..."
+                    className="w-full pl-8 pr-8 py-1.5 text-xs bg-zinc-50 border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-700"
+                  />
+                  {historySearch && (
+                    <button
+                      type="button"
+                      onClick={() => setHistorySearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 cursor-pointer"
+                      title="Bersihkan pencarian"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* VIEW MODE 1: MODERN CORPORATE INVOICE TABLE VIEW */}
@@ -1797,7 +2006,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                         {activeProfil.namaPerusahaan}
                       </h2>
                       <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-400 text-slate-950 uppercase">
-                        {ledgerTab === 'SALDO_BERJALAN' ? 'REKENING KORAN BERJALAN' : 'ARSIP HISTORY LUNAS / CAIR'}
+                        {ledgerTab === 'SALDO_BERJALAN' ? 'REKENING KORAN BERJALAN' : 'HISTORY TRANSAKSI MITRA (SEMUA)'}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-300 mt-0.5">
@@ -1871,10 +2080,10 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                       <th className="py-3 px-3 text-center w-20">QTY</th>
                       <th className="py-3 px-3 text-right w-28">HARGA</th>
                       <th className="py-3 px-3 text-right w-32 bg-rose-50/60 text-rose-900">
-                        {ledgerTab === 'SALDO_BERJALAN' ? 'PIUTANG' : 'BON / KELUAR'}
+                        {ledgerTab === 'SALDO_BERJALAN' ? 'PIUTANG' : 'BON / PIUTANG'}
                       </th>
                       <th className="py-3 px-3 text-right w-32 bg-emerald-50/60 text-emerald-900">
-                        {ledgerTab === 'SALDO_BERJALAN' ? 'TITIP / HAK' : 'BAYAR / CAIR'}
+                        {ledgerTab === 'SALDO_BERJALAN' ? 'TITIP / HAK' : 'BAYAR / NILAI'}
                       </th>
                       <th className="py-3 px-3 min-w-[190px]">KETERANGAN</th>
                       <th className="py-3 px-3 text-center w-28">AKSI</th>
@@ -1886,7 +2095,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                         <td colSpan={9} className="py-10 text-center text-zinc-500">
                           {ledgerTab === 'SALDO_BERJALAN'
                             ? 'Tidak ada saldo piutang atau titipan yang sedang berjalan (Semua transaksi sudah Lunas / Cair).'
-                            : 'Belum ada riwayat transaksi selesai (lunas / cair) untuk mitra ini.'}
+                            : 'Tidak ada riwayat transaksi yang cocok dengan filter / pencarian untuk mitra ini.'}
                         </td>
                       </tr>
                     ) : (
@@ -1907,9 +2116,24 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             ? row.titipBerjalan ?? (row.kredit === 0 ? row.nominalMutasiHak || 0 : 0)
                             : row.kredit > 0
                             ? row.kredit
-                            : row.nominalMutasiHak || 0;
+                            : row.nominalMutasiHak || (row.debet === 0 ? row.nominalTransaksi || 0 : 0);
 
                         const ketUtama = (row.catatanTransaksi || '').trim();
+                        const sisaHutangNotaRow =
+                          row.debet > 0 ? (row.sisaPiutangNota ?? row.piutangBerjalan ?? 0) : 0;
+                        const sudahTerbayarNotaRow =
+                          row.debet > 0 && sisaHutangNotaRow < row.debet
+                            ? row.debet - sisaHutangNotaRow
+                            : 0;
+                        const isKliringRow =
+                          row.statusTransaksi === 'KLIRING_SILANG' ||
+                          row.metodePembayaran === 'KLIRING_SILANG' ||
+                          (row.jenis || '').toUpperCase().includes('KLIRING');
+                        const isSinkronRow =
+                          !isKliringRow &&
+                          (row.statusTransaksi === 'SINKRON' ||
+                            row.metodePembayaran === 'SINKRON' ||
+                            (row.jenis || '').toUpperCase().includes('SINKRON'));
 
                         return (
                           <tr key={row.id} className="hover:bg-amber-50/30 transition-colors align-top">
@@ -1919,53 +2143,161 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             <td className="py-3 px-3 whitespace-nowrap font-mono tabular-nums text-[11px] text-zinc-700">
                               <div className="font-bold text-zinc-900">{row.tanggal}</div>
                               <div className="text-[10px] text-zinc-400">{parentTxId}</div>
+                              {row.jam && <div className="text-[9px] text-zinc-400">{row.jam}</div>}
                             </td>
 
                             {/* ITEM / NAMA BARANG */}
                             <td className="py-3 px-3">
                               <div className="space-y-1">
-                                {(row.isNotaLalu || row.isNotaNgunci || row.fotoNota || !row.isNotaSilang) && (
+                                {(row.isNotaLalu || row.isNotaNgunci || row.fotoNota || !row.isNotaSilang || ledgerTab === 'HISTORY_SELESAI') && (
                                   <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-zinc-500">
                                     {!row.isNotaSilang && (
-                                      <span className="font-bold uppercase tracking-wide text-zinc-600">
+                                      <span className="font-bold uppercase tracking-wide text-zinc-700">
                                         {row.jenis.replace(/_/g, ' ')}
                                       </span>
                                     )}
+                                    {ledgerTab === 'HISTORY_SELESAI' && isKliringRow && (
+                                      <span className="px-1.5 py-0.5 rounded border border-indigo-300 bg-indigo-50 text-indigo-800 font-bold text-[9px] uppercase">
+                                        Kliring Silang
+                                      </span>
+                                    )}
+                                    {ledgerTab === 'HISTORY_SELESAI' && isSinkronRow && (
+                                      <span className="px-1.5 py-0.5 rounded border border-purple-300 bg-purple-50 text-purple-800 font-bold text-[9px] uppercase">
+                                        Lunas Sinkron
+                                      </span>
+                                    )}
+                                    {ledgerTab === 'HISTORY_SELESAI' &&
+                                      !isKliringRow &&
+                                      !isSinkronRow &&
+                                      row.metodePembayaran &&
+                                      row.metodePembayaran !== 'NOTA_LALU' && (
+                                        <span className="px-1.5 py-0.5 rounded border border-zinc-300 bg-zinc-100 text-zinc-800 font-bold text-[9px] uppercase">
+                                          {row.metodePembayaran.replace(/_/g, ' ')}
+                                          {row.rekeningKode &&
+                                          row.rekeningKode !== 'BON01' &&
+                                          row.rekeningKode !== 'TIT01' &&
+                                          row.rekeningKode !== 'SINKRON' &&
+                                          row.rekeningKode !== 'KOMPENSASI_TITIP'
+                                            ? ` · ${row.rekeningKode}`
+                                            : ''}
+                                        </span>
+                                      )}
+                                    {ledgerTab === 'HISTORY_SELESAI' &&
+                                      (row.debet > 0 ? (
+                                        sisaHutangNotaRow > 0 ? (
+                                          <span className="px-1.5 py-0.5 rounded border border-rose-300 bg-rose-50 text-rose-800 font-bold text-[9px] uppercase">
+                                            Belum Lunas · Sisa {formatRupiah(sisaHutangNotaRow)}
+                                          </span>
+                                        ) : (
+                                          <span className="px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 font-bold text-[9px] uppercase">
+                                            Lunas
+                                          </span>
+                                        )
+                                      ) : row.kategoriMutasiHak === 'TITIP_MASUK' && (row.titipBerjalan ?? 0) > 0 ? (
+                                        <span className="px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-900 font-bold text-[9px] uppercase">
+                                          Titip Berjalan · Sisa {formatRupiah(row.titipBerjalan || 0)}
+                                        </span>
+                                      ) : !isKliringRow && !isSinkronRow ? (
+                                        <span className="px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 font-bold text-[9px] uppercase">
+                                          Selesai / Lunas
+                                        </span>
+                                      ) : null)}
                                     {row.isNotaLalu && (
-                                      <span className="font-bold text-amber-800">
+                                      <span className="px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 font-bold text-amber-900 text-[9px] uppercase">
                                         Nota Lalu{row.noNotaLalu ? `: ${row.noNotaLalu}` : ''}
                                       </span>
                                     )}
-                                    {row.isNotaNgunci && (
-                                      <span className="font-bold text-rose-700">
-                                        · Nota Kunci
-                                      </span>
-                                    )}
-                                    {row.fotoNota && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setPreviewPhoto({
-                                            imageUrl: row.fotoNota!,
-                                            title: `Bukti Fisik Nota - ${parentTxId}`,
-                                            nomorBukti: parentTxId,
-                                            namaMitra: statement?.namaMitra,
-                                            tanggal: row.tanggal,
-                                            nominalText:
-                                              nominalPiutangCol > 0
-                                                ? formatRupiah(nominalPiutangCol)
-                                                : formatRupiah(nominalTitipCol),
-                                            keterangan: ketUtama || row.keterangan,
-                                          })
-                                        }
-                                        className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-semibold text-[10px] inline-flex items-center gap-1 cursor-pointer"
-                                      >
-                                        <Camera className="w-3 h-3 text-amber-700" />
-                                        <span>Foto Nota</span>
-                                      </button>
-                                    )}
-                                  </div>
-                                )}
+                                      {row.isNotaNgunci && (
+                                        <span className="font-bold text-rose-700">
+                                          · Nota Kunci
+                                        </span>
+                                      )}
+                                      {(Boolean(row.isNotaLalu) || Boolean(row.noNotaLalu)) && (() => {
+                                        const photoUrl = (row.attachment_url || row.fotoNota || '').trim();
+                                        const allImgs = photoUrl ? photoUrl.split('|||').map((s) => s.trim()).filter(Boolean) : [];
+                                        const firstThumb = allImgs[0];
+                                        const txNominal =
+                                          nominalPiutangCol > 0
+                                            ? nominalPiutangCol
+                                            : nominalTitipCol || row.debet || row.kredit || row.nominalMutasiHak || 0;
+                                        return (
+                                          <div className="inline-flex items-center gap-1.5 flex-wrap">
+                                            {firstThumb && (
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  setPreviewPhoto({
+                                                    imageUrl: photoUrl,
+                                                    fullImageUrl: photoUrl,
+                                                    title: `Bukti Fisik Nota - ${row.noNotaLalu || parentTxId}`,
+                                                    nomorBukti: row.noNotaLalu || parentTxId,
+                                                    noNota: row.noNotaLalu,
+                                                    namaMitra: statement?.namaMitra,
+                                                    tanggal: row.tanggal,
+                                                    jenis: row.jenis,
+                                                    nominalText: formatRupiah(txNominal),
+                                                    nominalValue: txNominal,
+                                                    keterangan: ketUtama || row.keterangan,
+                                                    targetTxId: parentTxId,
+                                                  })
+                                                }
+                                                className="p-1 pr-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs group"
+                                                title="Klik untuk melihat foto fisik nota penuh"
+                                              >
+                                                <div className="relative w-7 h-7 rounded border border-amber-400 overflow-hidden bg-black shrink-0">
+                                                  <img
+                                                    src={firstThumb}
+                                                    alt="Nota"
+                                                    className="w-full h-full object-cover group-hover:scale-110 transition-transform"
+                                                    loading="lazy"
+                                                  />
+                                                </div>
+                                                <div className="flex flex-col text-left">
+                                                  <span className="font-bold flex items-center gap-1 text-[10px] text-amber-950">
+                                                    <Camera className="w-3 h-3 text-amber-700" />
+                                                    <span>Foto Capture</span>
+                                                    {allImgs.length > 1 && (
+                                                      <span className="text-[9px] bg-amber-200 text-amber-900 px-1 rounded font-bold">
+                                                        {allImgs.length}
+                                                      </span>
+                                                    )}
+                                                  </span>
+                                                  <span className="text-[9px] text-amber-700 font-medium">Lihat Nota Fisik</span>
+                                                </div>
+                                              </button>
+                                            )}
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                openReplaceFotoModal({
+                                                  idTransaksi: parentTxId,
+                                                  noNota: row.noNotaLalu,
+                                                  tanggal: row.tanggal,
+                                                  jenis: row.jenis,
+                                                  nominal: txNominal,
+                                                  keterangan: ketUtama || row.keterangan,
+                                                  rawFotoUrl: photoUrl,
+                                                })
+                                              }
+                                              className={`px-2 py-1 rounded-lg text-[10px] font-bold inline-flex items-center gap-1 border transition-colors cursor-pointer ${
+                                                firstThumb
+                                                  ? 'bg-sky-50 hover:bg-sky-600 text-sky-900 hover:text-white border-sky-300'
+                                                  : 'bg-amber-50 hover:bg-amber-600 text-amber-900 hover:text-white border-amber-300'
+                                              }`}
+                                              title={
+                                                firstThumb
+                                                  ? 'Ganti foto capture nota lalu ini jika salah mitra/nota'
+                                                  : 'Upload capture foto nota lalu untuk transaksi ini'
+                                              }
+                                            >
+                                              <UploadCloud className="w-3 h-3" />
+                                              <span>{firstThumb ? 'Ganti Capture' : 'Upload Capture'}</span>
+                                            </button>
+                                          </div>
+                                        );
+                                      })()}
+                                    </div>
+                                  )}
 
                                 {isMultiItem ? (
                                   <div className="border border-zinc-200 rounded-lg overflow-hidden bg-zinc-50/70">
@@ -2039,6 +2371,19 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                     Awal: {formatRupiah(row.debet)}
                                   </div>
                                 )}
+                              {ledgerTab === 'HISTORY_SELESAI' && row.debet > 0 && (
+                                <div
+                                  className={`text-[10px] font-semibold mt-0.5 ${
+                                    sisaHutangNotaRow > 0 ? 'text-amber-800' : 'text-emerald-700'
+                                  }`}
+                                >
+                                  {sisaHutangNotaRow > 0
+                                    ? sudahTerbayarNotaRow > 0
+                                      ? `Cicil ${formatRupiah(sudahTerbayarNotaRow)} · Sisa ${formatRupiah(sisaHutangNotaRow)}`
+                                      : `Sisa Hutang: ${formatRupiah(sisaHutangNotaRow)}`
+                                    : 'Sudah Lunas'}
+                                </div>
+                              )}
                             </td>
 
                             {/* TITIP / HAK */}
@@ -2050,6 +2395,19 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                 nominalTitipCol < (row.nominalMutasiHak || 0) && (
                                   <div className="text-[9px] font-normal text-zinc-500">
                                     Awal: {formatRupiah(row.nominalMutasiHak || 0)}
+                                  </div>
+                                )}
+                              {ledgerTab === 'HISTORY_SELESAI' &&
+                                row.kategoriMutasiHak === 'TITIP_MASUK' &&
+                                (row.nominalMutasiHak || 0) > 0 && (
+                                  <div
+                                    className={`text-[10px] font-semibold mt-0.5 ${
+                                      (row.titipBerjalan ?? 0) > 0 ? 'text-amber-800' : 'text-emerald-700'
+                                    }`}
+                                  >
+                                    {(row.titipBerjalan ?? 0) > 0
+                                      ? `Sisa Titip: ${formatRupiah(row.titipBerjalan || 0)}`
+                                      : 'Sudah Cair / Kliring'}
                                   </div>
                                 )}
                             </td>
@@ -2066,6 +2424,11 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                 </div>
                               ) : (
                                 <span className="text-zinc-400">-</span>
+                              )}
+                              {row.isNotaLalu && row.rincianNotaLalu && !ketUtama.toLowerCase().includes(row.rincianNotaLalu.toLowerCase()) && (
+                                <div className="text-[10px] text-amber-900 bg-amber-50/70 border border-amber-200 rounded px-1.5 py-0.5 mt-1">
+                                  Detail Nota Lalu: {row.rincianNotaLalu}
+                                </div>
                               )}
                             </td>
 
@@ -2169,7 +2532,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                       })
                     )}
                   </tbody>
-                  {ledgerTab === 'SALDO_BERJALAN' && (
+                  {ledgerTab === 'SALDO_BERJALAN' ? (
                     <tfoot className="bg-zinc-100 font-bold border-t-2 border-zinc-300 text-xs">
                       <tr>
                         <td colSpan={5} className="py-3 px-4 text-right uppercase text-[11px] text-zinc-700">
@@ -2187,6 +2550,27 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             : (statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)) > 0
                             ? `Yang Harus Dibayar: Hutang ${formatRupiah(statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan))}`
                             : 'IMPAS (Rp 0)'}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  ) : (
+                    <tfoot className="bg-zinc-100 font-bold border-t-2 border-zinc-300 text-xs">
+                      <tr>
+                        <td colSpan={5} className="py-3 px-4 text-right uppercase text-[11px] text-zinc-700">
+                          Rekap History Ditampilkan ({displayedRows.length} Transaksi) · Saldo Aktif:
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-rose-800 bg-rose-50/50">
+                          {formatRupiah(statement.totalBonKeseluruhan)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums text-emerald-800 bg-emerald-50/50">
+                          {formatRupiah(statement.totalTitip)}
+                        </td>
+                        <td colSpan={2} className="py-3 px-4 text-left font-mono tabular-nums text-slate-900">
+                          {(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)) > 0
+                            ? `Sisa Piutang Berjalan: ${formatRupiah(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip))}`
+                            : (statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)) > 0
+                            ? `Sisa Hutang PT Berjalan: ${formatRupiah(statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan))}`
+                            : 'SALDO AKTIF IMPAS (Rp 0)'}
                         </td>
                       </tr>
                     </tfoot>
@@ -2283,7 +2667,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                       <div className="flex justify-between gap-3">
                         <span className="text-zinc-500 font-sans">Jenis Buku:</span>
                         <strong className="text-amber-900">
-                          {ledgerTab === 'SALDO_BERJALAN' ? 'SALDO BERJALAN' : 'HISTORY SELESAI'}
+                          {ledgerTab === 'SALDO_BERJALAN' ? 'SALDO BERJALAN' : 'HISTORY TRANSAKSI (SEMUA)'}
                         </strong>
                       </div>
                     </div>
@@ -2386,7 +2770,9 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                       {displayedRows.length === 0 ? (
                         <tr>
                           <td colSpan={8} className="py-8 text-center text-zinc-400">
-                            Tidak ada transaksi saldo berjalan pada rekening koran ini
+                            {ledgerTab === 'SALDO_BERJALAN'
+                              ? 'Tidak ada transaksi saldo berjalan pada rekening koran ini'
+                              : 'Tidak ada riwayat transaksi yang cocok dengan filter'}
                           </td>
                         </tr>
                       ) : (
@@ -2403,7 +2789,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               ? row.kredit
                               : ledgerTab === 'SALDO_BERJALAN'
                               ? row.titipBerjalan ?? row.nominalMutasiHak ?? 0
-                              : row.nominalMutasiHak || 0;
+                              : row.nominalMutasiHak || (row.debet === 0 ? row.nominalTransaksi || 0 : 0);
                           const ketNote = (row.catatanTransaksi || row.catatanNgunci || '').trim();
                           const sudahDibayarNota =
                             row.debet > 0 &&
@@ -2534,13 +2920,13 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                 </div>
 
                 {/* Lampiran Bukti Fisik Nota Lalu */}
-                {displayedRows.some((h) => !!h.fotoNota) && (
+                {displayedRows.some((h) => Boolean(h.isNotaLalu) && !!(h.attachment_url || h.fotoNota)) && (
                   <div className="pt-6 border-t-2 border-dashed border-zinc-300 space-y-4 print-page-break print:break-before-page">
                     <div className="flex items-center justify-between border-b border-zinc-200 pb-2">
                       <div className="flex items-center space-x-2">
                         <Camera className="w-4 h-4 text-amber-600" />
                         <h4 className="text-xs font-bold text-zinc-900 uppercase">
-                          Lampiran Fisik Bukti Nota Terkait
+                          Lampiran Fisik Bukti Nota Lalu
                         </h4>
                       </div>
                       <span className="text-[10px] text-zinc-500 font-mono">
@@ -2550,9 +2936,10 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {displayedRows
-                        .filter((h) => !!h.fotoNota)
+                        .filter((h) => Boolean(h.isNotaLalu) && !!(h.attachment_url || h.fotoNota))
                         .flatMap((h) => {
-                          const imgs = (h.fotoNota || '').split('|||').map((s) => s.trim()).filter(Boolean);
+                          const rawAll = h.attachment_url || h.fotoNota || '';
+                          const imgs = rawAll.split('|||').map((s) => s.trim()).filter(Boolean);
                           return imgs.map((img, idx) => ({
                             txId: h.id,
                             noNotaLalu: h.noNotaLalu,
@@ -2561,6 +2948,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             keterangan: h.catatanTransaksi || h.keterangan,
                             nominal: h.piutangBerjalan || h.debet || h.titipBerjalan || h.nominalMutasiHak || 0,
                             img,
+                            rawAll,
                             idx: idx + 1,
                             total: imgs.length,
                           }));
@@ -2571,23 +2959,50 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             onClick={() =>
                               setPreviewPhoto({
                                 imageUrl: att.img,
+                                fullImageUrl: att.rawAll,
                                 title: `Lampiran Fisik: ${att.noNotaLalu ? `Nota ${att.noNotaLalu}` : att.txId} · Lembar ${att.idx} dari ${att.total}`,
                                 nomorBukti: att.noNotaLalu || att.txId,
+                                noNota: att.noNotaLalu,
                                 namaMitra: statement?.namaMitra,
                                 tanggal: att.tanggal,
+                                jenis: att.jenis,
                                 nominalText: formatRupiah(att.nominal),
+                                nominalValue: att.nominal,
                                 keterangan: att.keterangan,
+                                targetTxId: att.txId,
                               })
                             }
                             className="p-3 bg-zinc-50 hover:bg-amber-50/50 rounded-xl border border-zinc-200 hover:border-amber-400 space-y-2 text-left transition-all cursor-pointer group shadow-2xs print-avoid-break print:break-inside-avoid print:bg-white print:border-zinc-300"
                             title="Klik untuk memperbesar lembar nota ini"
                           >
-                            <div className="flex items-center justify-between text-[10px]">
+                            <div className="flex items-center justify-between gap-2 text-[10px]">
                               <span className="font-mono font-black text-amber-950 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-300">
                                 {att.noNotaLalu ? `No. Nota: ${att.noNotaLalu}` : att.txId}
                                 {att.total > 1 ? ` (Hal ${att.idx}/${att.total})` : ''}
                               </span>
-                              <span className="text-zinc-500 font-semibold">{att.tanggal}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-zinc-500 font-semibold">{att.tanggal}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openReplaceFotoModal({
+                                      idTransaksi: att.txId,
+                                      noNota: att.noNotaLalu,
+                                      tanggal: att.tanggal,
+                                      jenis: att.jenis,
+                                      nominal: att.nominal,
+                                      keterangan: att.keterangan,
+                                      rawFotoUrl: att.rawAll,
+                                    });
+                                  }}
+                                  className="px-2 py-0.5 bg-sky-50 hover:bg-sky-600 text-sky-900 hover:text-white border border-sky-300 rounded font-bold inline-flex items-center gap-1 transition-colors cursor-pointer print:hidden"
+                                  title="Ganti capture nota lalu ini"
+                                >
+                                  <UploadCloud className="w-3 h-3" />
+                                  <span>Ganti Capture</span>
+                                </button>
+                              </div>
                             </div>
                             <div className="text-[10px] font-bold text-zinc-900 flex justify-between items-center">
                               <span className="truncate">{att.jenis.replace(/_/g, ' ')}</span>
@@ -2641,6 +3056,41 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           tanggal={previewPhoto.tanggal}
           nominalText={previewPhoto.nominalText}
           keterangan={previewPhoto.keterangan}
+          gantiFotoLabel="Ganti Capture"
+          onGantiFoto={
+            previewPhoto.targetTxId
+              ? () => {
+                  const target = previewPhoto;
+                  openReplaceFotoModal({
+                    idTransaksi: target.targetTxId!,
+                    noNota: target.noNota,
+                    tanggal: target.tanggal || '-',
+                    jenis: target.jenis || 'NOTA LALU',
+                    nominal: target.nominalValue || 0,
+                    keterangan: target.keterangan,
+                    rawFotoUrl: target.fullImageUrl || target.imageUrl,
+                  });
+                }
+              : undefined
+          }
+          onHapusFoto={
+            previewPhoto.targetTxId
+              ? async () => {
+                  const res = await api.gantiFotoNotaTransaksi({
+                    idTransaksi: previewPhoto.targetTxId!,
+                    idMitra: statement?.idMitra || currentMitraId,
+                    fotoNotaList: [],
+                    fotoNota: '',
+                    user: 'Kasir/Admin',
+                  });
+                  setEditSuccessMsg(res.message);
+                  setTimeout(() => setEditSuccessMsg(''), 6000);
+                  if (currentMitraId) await loadStatementData(currentMitraId, true);
+                  window.dispatchEvent(new CustomEvent('erp:data-updated'));
+                  onRefreshParent?.();
+                }
+              : undefined
+          }
         />
       )}
 
@@ -3322,6 +3772,130 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   <span>{deletingTx ? 'Menghapus...' : 'Ya, Hapus Transaksi'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Ganti / Upload Capture Nota Lalu per Mitra */}
+      {replaceFotoTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-zinc-200 shadow-2xl text-xs animate-in fade-in">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <Camera className="w-4 h-4 text-amber-400" />
+                <span>Ganti Capture Nota Lalu Mitra</span>
+              </div>
+              <button
+                type="button"
+                disabled={savingReplaceFoto}
+                onClick={() => setReplaceFotoTarget(null)}
+                className="text-zinc-400 hover:text-white p-1 rounded cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto text-zinc-700">
+              {/* Info identitas mitra & transaksi agar tidak tertukar lagi */}
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-800">
+                    Pastikan Capture Sesuai Dengan Nama Mitra:
+                  </span>
+                  <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-950">
+                    {replaceFotoTarget.tanggal}
+                  </span>
+                </div>
+                <div className="text-sm font-black text-zinc-950 uppercase">
+                  {statement?.namaMitra} ({statement?.kodeMitra})
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-amber-200/80 text-[11px]">
+                  <div>
+                    <span className="text-zinc-500">No. Bukti / Nota: </span>
+                    <span className="font-mono font-bold text-zinc-900">
+                      {replaceFotoTarget.noNota || replaceFotoTarget.idTransaksi}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-zinc-500">Nominal: </span>
+                    <span className="font-mono font-extrabold text-rose-800">
+                      {formatRupiah(replaceFotoTarget.nominal)}
+                    </span>
+                  </div>
+                </div>
+                {replaceFotoTarget.keterangan && (
+                  <div className="text-[11px] text-zinc-600 italic truncate">
+                    Ket: {replaceFotoTarget.keterangan}
+                  </div>
+                )}
+              </div>
+
+              <div className="text-[11px] text-zinc-600 bg-zinc-50 border border-zinc-200 rounded-lg p-2.5 leading-relaxed">
+                Gunakan tombol <strong>×</strong> di pojok foto lama untuk menghapus capture yang salah, lalu unggah foto baru lewat <strong>Kamera HP / Galeri</strong>. Perubahan hanya mengganti gambar capture — <strong>nominal, tanggal, dan saldo mitra tetap utuh</strong>.
+              </div>
+
+              {replaceFotoError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 font-semibold text-[11px] flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{replaceFotoError}</span>
+                </div>
+              )}
+
+              <ImageUploadZone
+                label="Capture Foto Nota Fisik (Bisa Multi-Lembar)"
+                sublabel="Hapus foto yang salah lalu pilih/foto ulang nota asli milik mitra ini"
+                multiple={true}
+                values={replaceFotoImages}
+                onValuesChange={setReplaceFotoImages}
+              />
+            </div>
+
+            <div className="p-4 bg-zinc-50 border-t border-zinc-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+              {replaceFotoTarget.initialImages.length > 0 ? (
+                <button
+                  type="button"
+                  disabled={savingReplaceFoto}
+                  onClick={() => handleSaveReplaceFoto([])}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-[11px] disabled:opacity-50 cursor-pointer"
+                  title="Kosongkan foto capture yang salah tanpa mengganti dulu"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Kosongkan Foto Salah</span>
+                </button>
+              ) : (
+                <div />
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={savingReplaceFoto}
+                  onClick={() => setReplaceFotoTarget(null)}
+                  className="px-4 py-2 rounded-lg text-zinc-700 hover:bg-zinc-200 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={savingReplaceFoto}
+                  onClick={() => handleSaveReplaceFoto(replaceFotoImages)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold disabled:opacity-50 cursor-pointer shadow-2xs"
+                >
+                  {savingReplaceFoto ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Save className="w-3.5 h-3.5 text-amber-400" />
+                  )}
+                  <span>
+                    {savingReplaceFoto
+                      ? 'Menyimpan...'
+                      : replaceFotoImages.length > 0
+                      ? `Simpan Capture (${replaceFotoImages.length} Foto)`
+                      : 'Simpan (Tanpa Foto)'}
+                  </span>
                 </button>
               </div>
             </div>

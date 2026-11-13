@@ -112,6 +112,7 @@ export interface Rekening {
   keterangan?: string;
   kategori?: KategoriRekening; // PERUSAHAAN, ANAK_PERUSAHAAN, OPERASIONAL_DIVISI, VIRTUAL_SISTEM
   rekeningIndukPenyimpan?: string; // Rekening perusahaan tempat fisik uang disimpan (untuk OPERASIONAL_DIVISI)
+  ledgerStartDate?: string; // Tanggal patokan awal hitung saldo riil KAS01 (DD/MM/YYYY) agar surplus/minus hari lalu tidak mengotori kas hari berjalan
 }
 
 export type StatusNotaRekapMitra =
@@ -140,6 +141,7 @@ export interface NotaNgunciDetailItem {
   catatanNgunci?: string;
   tanggalNgunci?: string;
   fotoNota?: string;
+  attachment_url?: string;
   nominalAwal: number;
   sisaNominalNgunci: number;
 }
@@ -589,6 +591,7 @@ export interface TransaksiPenjualan {
   namaAnakPerusahaan?: string;
   noNotaToko?: string;
   fotoNota?: string;
+  attachment_url?: string;
   keterangan: string;
   createdAt: string;
 }
@@ -614,6 +617,7 @@ export interface TransaksiPembelianBarang {
   namaDistributorManual?: string;
   noFakturSupplier?: string;
   fotoNota?: string;     // Base64 data URL / image link of invoice or physical receipt
+  attachment_url?: string;
   divisi?: string;       // Divisi usaha terkait saat kulakan
   metodePembayaran: 'TUNAI' | 'TRANSFER' | 'HUTANG' | 'SINKRON';
   rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for HUTANG, SINKRON for non-cash sync
@@ -754,6 +758,7 @@ export interface TransaksiPembelianHasilBumi {
   tanggalPutusHarga?: string;
   fotoNota?: string;     // Base64 data URL / image link of weighing receipt or physical slip
   fotoNotaList?: string[]; // Multiple photos of physical slips / notes
+  attachment_url?: string;
   driveFileUrl?: string; // Link URL ke Google Drive bukti nota fisik
   driveFileId?: string;  // Google Drive File ID
   driveFolderPath?: string; // e.g. NOTA LALU / HUTANG NOTA LAMA
@@ -837,6 +842,8 @@ export interface TransaksiPenjualanHasilBumi {
   stokGudangSebelum: number;
   stokGudangSetelah: number;
   keterangan: string;
+  fotoNota?: string;
+  attachment_url?: string;
   createdAt: string;
 }
 
@@ -926,6 +933,7 @@ export interface TransaksiKasbonUang {
   status: 'BELUM LUNAS' | 'SEBAGIAN' | 'LUNAS';
   fotoNota?: string;     // Capture foto detail fisik nota lalu / slip kasbon manual
   fotoNotaList?: string[]; // Multiple photos of physical slips / notes
+  attachment_url?: string;
   driveFileUrl?: string; // Link URL ke Google Drive bukti nota fisik
   driveFileId?: string;  // Google Drive File ID
   driveFolderPath?: string; // e.g. NOTA LALU / PIUTANG NOTA LAMA
@@ -972,6 +980,7 @@ export interface TransaksiBayarBon {
   keterangan: string;
   fotoBukti?: string;
   fotoNota?: string;
+  attachment_url?: string;
   createdAt: string;
 }
 
@@ -1298,6 +1307,7 @@ export interface RekeningKoranHistoryItem {
   nominalMutasiHak?: number;  // Nominal titipan hasil panen / upah kerja / pencairan gaji
   kategoriMutasiHak?: 'TITIP_MASUK' | 'TITIP_CAIR' | 'UPAH_TERCATAT' | 'UPAH_SUDAH_CAIR' | 'SLIP_GAJI';
   fotoNota?: string;
+  attachment_url?: string;
   isNotaLalu?: boolean;
   noNotaLalu?: string;
   isNotaNgunci?: boolean;
@@ -1311,6 +1321,11 @@ export interface RekeningKoranHistoryItem {
   pihakNotaSilang?: string;
   idTransaksiInduk?: string;      // ID nota induk asli (misal NSL-... atau NSL-...-DPP) saat Nota Silang dipecah per item
   sisaPiutangNotaInduk?: number;  // Sisa piutang keseluruhan pada nota induk asli untuk aksi Bayar / Kunci
+  metodePembayaran?: string;      // TUNAI, TRANSFER, SINKRON, KLIRING_SILANG, KASBON, TITIP, NOTA_LALU, dll
+  rekeningKode?: string;          // KAS01, BNI01, SINKRON, KOMPENSASI_TITIP, BON01, TIT01, dll
+  statusTransaksi?: string;       // LUNAS, BELUM_LUNAS, SEBAGIAN, TITIP, CAIR, KLIRING_SILANG, NGUNCI, PENDING
+  nominalTransaksi?: number;      // Nilai pokok transaksi (terutama untuk Tunai/Transfer/Sinkron Lunas yang debet=0 & kredit=0)
+  rincianNotaLalu?: string;       // Rincian barang/item asli Nota Lalu
 }
 
 export interface RekeningKoranMitraSummary {
@@ -1542,6 +1557,7 @@ export interface TransaksiPengeluaran {
   penerima?: string;
   idInventaris?: string;
   fotoKuitansi?: string;
+  attachment_url?: string;
   createdAt: string;
 }
 
@@ -1606,6 +1622,9 @@ export interface TransaksiPencairanTitipan {
   metodePembayaran: 'TUNAI' | 'TRANSFER' | 'SINKRON' | 'KOMPENSASI_BON';
   isKompensasiBon?: boolean;
   keterangan: string;
+  fotoNota?: string;
+  fotoBukti?: string;
+  attachment_url?: string;
   createdAt: string;
 }
 // ==========================================
@@ -1630,6 +1649,7 @@ export interface TransaksiBrilink {
   nominalPokok: number;          // Opsional (0 jika hanya catat admin; >0 jika mutasi pokok Bank <-> KAS01 sekaligus)
   keterangan: string;
   fotoBukti?: string;            // Foto struk EDC / bukti transfer BRILink
+  attachment_url?: string;
   status: 'BERHASIL';
   createdAt: string;
 }
@@ -1659,6 +1679,7 @@ export interface TransaksiUangMasuk {
   tandaiPutusLunas?: boolean;
   keterangan: string;
   fotoBukti?: string;
+  attachment_url?: string;
   status?: 'BERHASIL';
   createdAt: string;
 }
@@ -1707,6 +1728,8 @@ export interface UnifiedTransactionItem {
   metode: string;
   status: string;
   fotoBukti?: string;
+  fotoNota?: string;
+  attachment_url?: string;
   divisi?: string;
 }
 

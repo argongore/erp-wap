@@ -1049,26 +1049,39 @@ export const KasbonUangView: React.FC<Props> = ({
                       </span>
 
                       <div className="flex items-center space-x-1.5">
-                        {k.fotoNota && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPreviewPhoto({
-                                imageUrl: k.fotoNota!,
-                                title: `Foto Fisik Nota Lalu - ${k.namaMitra}`,
-                                nomorBukti: k.idTransaksi,
-                                namaMitra: k.namaMitra,
-                                tanggal: k.tanggalNotaLalu || k.tanggal,
-                                nominalText: formatRupiah(k.nominal),
-                                keterangan: k.keterangan,
-                              })
-                            }
-                            className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 font-semibold rounded text-[10px] flex items-center space-x-1 transition-colors cursor-pointer"
-                          >
-                            <Camera className="w-3 h-3 text-amber-700" />
-                            <span>Lihat Foto Fisik</span>
-                          </button>
-                        )}
+                        {(k.attachment_url || k.fotoNota) && (() => {
+                          const photoUrl = (k.attachment_url || k.fotoNota)!;
+                          const firstThumb = photoUrl.split('|||')[0]?.trim() || photoUrl;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  imageUrl: photoUrl,
+                                  title: `Foto Fisik Nota - ${k.namaMitra}`,
+                                  nomorBukti: k.noNotaLalu || k.idTransaksi,
+                                  namaMitra: k.namaMitra,
+                                  tanggal: k.tanggalNotaLalu || k.tanggal,
+                                  nominalText: formatRupiah(k.nominal),
+                                  keterangan: k.keterangan,
+                                })
+                              }
+                              className="p-1 pr-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs group"
+                              title="Klik untuk melihat foto fisik nota penuh"
+                            >
+                              <img
+                                src={firstThumb}
+                                alt="Capture Nota"
+                                className="w-6 h-6 rounded object-cover border border-amber-300 shrink-0 bg-black group-hover:scale-105 transition-transform"
+                                loading="lazy"
+                              />
+                              <span className="flex items-center gap-1">
+                                <Camera className="w-3 h-3 text-amber-700" />
+                                <span>Lihat Fisik</span>
+                              </span>
+                            </button>
+                          );
+                        })()}
 
                         <button
                           type="button"

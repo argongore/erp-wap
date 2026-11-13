@@ -833,15 +833,15 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
               </div>
             </div>
 
-            {/* Lampiran Foto Bukti Nota Fisik (Jika Ada) */}
-            {statement.history.some((h) => !!h.fotoNota) && (
+            {/* Lampiran Foto Bukti Nota Fisik Nota Lalu (Jika Ada) */}
+            {statement.history.some((h) => Boolean(h.isNotaLalu) && !!(h.fotoNota || h.attachment_url)) && (
               <div className="bg-white rounded-2xl p-5 border border-zinc-200 shadow-sm space-y-4">
                 <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
                   <div className="flex items-center space-x-2">
                     <Camera className="w-5 h-5 text-amber-600" />
                     <div>
                       <h3 className="text-sm font-bold text-zinc-900">
-                        Lampiran Foto Bukti Nota Fisik &amp; Kuitansi
+                        Lampiran Foto Bukti Fisik Nota Lalu
                       </h3>
                       <p className="text-[11px] text-zinc-500">
                         Klik pada gambar untuk melihat dalam ukuran penuh
@@ -858,7 +858,8 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                     const seenParent = new Set<string>();
                     return statement.history
                       .filter((h) => {
-                        if (!h.fotoNota) return false;
+                        if (!h.isNotaLalu) return false;
+                        if (!h.fotoNota && !h.attachment_url) return false;
                         const pKey = h.idTransaksiInduk || h.id;
                         if (seenParent.has(pKey)) return false;
                         seenParent.add(pKey);
@@ -866,7 +867,7 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                       })
                       .flatMap((h) => {
                         const parentId = h.idTransaksiInduk || h.id;
-                        const imgs = (h.fotoNota || '').split('|||').map((s) => s.trim()).filter(Boolean);
+                        const imgs = (h.attachment_url || h.fotoNota || '').split('|||').map((s) => s.trim()).filter(Boolean);
                         return imgs.map((img, idx) => ({
                           id: `${parentId}-${idx}`,
                           txId: parentId,

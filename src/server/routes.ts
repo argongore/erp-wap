@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import { dbManager, getWIBDateTime } from './db.ts';
 import { TransactionService } from './services/transactionService.ts';
@@ -17,6 +19,85 @@ import { normalizeDateToDmy } from '../utils/format.ts';
 import { calculateHbMovingAverage } from '../utils/hasilBumiMovingAverage.ts';
 
 export const apiRouter = Router();
+
+async function ensureAttachmentPersisted(body: any, defaultPrefix = 'nota') {
+  if (!body || typeof body !== 'object') return;
+
+  // Handle multi-page fotoNotaList or '|||'-separated fotoNota cleanly
+  const hasList = Array.isArray(body.fotoNotaList) && body.fotoNotaList.length > 0;
+  const rawMain = body.attachment_url || body.fotoNota || body.fotoBukti || body.fotoKuitansi;
+  const hasDelimited = typeof body.fotoNota === 'string' && body.fotoNota.includes('|||');
+
+  if (hasList || hasDelimited) {
+    await ensureMultiAttachmentPersisted(body, defaultPrefix);
+    if (body.fotoBukti !== undefined && body.fotoNota) body.fotoBukti = body.fotoNota;
+    if (body.fotoKuitansi !== undefined && body.fotoNota) body.fotoKuitansi = body.fotoNota;
+    return;
+  }
+
+  if (!rawMain || typeof rawMain !== 'string') return;
+
+  const resolved = await uploadSingleAttachmentString(rawMain, defaultPrefix, true);
+  if (resolved) {
+    body.attachment_url = resolved;
+    if (body.fotoNota !== undefined) body.fotoNota = resolved;
+    if (body.fotoBukti !== undefined) body.fotoBukti = resolved;
+    if (body.fotoKuitansi !== undefined) body.fotoKuitansi = resolved;
+  }
+}
+
+async function uploadSingleAttachmentString(
+  raw: string,
+  defaultPrefix = 'nota',
+  forceRetry = false
+): Promise<string> {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/assets/')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('data:image/')) {
+    try {
+      const cloudUrl = await supabaseSyncEngine.uploadBuktiImage(trimmed, defaultPrefix, forceRetry);
+      if (cloudUrl) return cloudUrl;
+      const match = trimmed.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+      if (match) {
+        const contentType = match[1];
+        const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+        const safePrefix = String(defaultPrefix || 'nota').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'nota';
+        const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const destDir = path.resolve(process.cwd(), 'public', 'assets', 'aistudio');
+        if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+        fs.writeFileSync(path.join(destDir, filename), Buffer.from(match[2], 'base64'));
+        return `/assets/aistudio/${filename}`;
+      }
+    } catch (e) {
+      console.warn('Auto-persist multi-attachment error:', e);
+    }
+  }
+  return trimmed;
+}
+
+async function ensureMultiAttachmentPersisted(body: any, defaultPrefix = 'nota_lalu') {
+  if (!body || typeof body !== 'object') return;
+  let list: string[] = [];
+  if (Array.isArray(body.fotoNotaList) && body.fotoNotaList.length > 0) {
+    list = body.fotoNotaList;
+  } else if (typeof body.fotoNota === 'string' && body.fotoNota.trim()) {
+    list = body.fotoNota.split('|||');
+  } else if (typeof body.attachment_url === 'string' && body.attachment_url.trim()) {
+    list = body.attachment_url.split('|||');
+  }
+
+  const resolved: string[] = [];
+  for (const item of list) {
+    const clean = await uploadSingleAttachmentString(item, defaultPrefix, true);
+    if (clean) resolved.push(clean);
+  }
+  body.fotoNotaList = resolved;
+  body.fotoNota = resolved.join('|||');
+  body.attachment_url = resolved[0] || undefined;
+}
 
 function parseNominalInput(raw: unknown): number | null {
   if (raw === undefined || raw === null || raw === '') return null;
@@ -176,7 +257,10 @@ async function handleUpdateRekeningRequest(rawKode: string, body: any) {
       const oldSaldo = rek.saldoSaatIni;
       rek.saldoSaatIni = parsedSaldoSaatIni;
 
-      if (parsedSaldoAwal !== null) {
+      if (rek.kode === 'KAS01') {
+        const netKasir = dbManager.computeKasirNetLedger(rek.ledgerStartDate);
+        rek.saldoAwal = Math.round(parsedSaldoSaatIni - netKasir);
+      } else if (parsedSaldoAwal !== null) {
         rek.saldoAwal = parsedSaldoAwal;
       } else if (rek.kategori === 'OPERASIONAL_DIVISI') {
         rek.saldoAwal = Math.round((Number(rek.saldoAwal) || 0) + (parsedSaldoSaatIni - oldSaldo));
@@ -228,7 +312,10 @@ async function handleUpdateSaldoRekeningRequest(rawKode: string, body: any) {
     rek.saldoSaatIni = numSaldo;
 
     const explicitSaldoAwal = parseNominalInput(saldoAwalBaru);
-    if (explicitSaldoAwal !== null) {
+    if (rek.kode === 'KAS01') {
+      const netKasir = dbManager.computeKasirNetLedger(rek.ledgerStartDate);
+      rek.saldoAwal = Math.round(numSaldo - netKasir);
+    } else if (explicitSaldoAwal !== null) {
       rek.saldoAwal = explicitSaldoAwal;
     } else if (rek.kategori === 'OPERASIONAL_DIVISI') {
       rek.saldoAwal = Math.round((Number(rek.saldoAwal) || 0) + (numSaldo - oldSaldo));
@@ -1611,6 +1698,7 @@ apiRouter.post('/stok-hasil-bumi/saldo-awal', async (req, res) => {
 // ==========================================
 apiRouter.post('/transaksi/penjualan', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'penjualan');
     const record = await TransactionService.processPenjualan(req.body);
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -1630,6 +1718,7 @@ apiRouter.get('/transaksi/penjualan', (req, res) => {
 // Pembelian Barang Dagang (Kulakan Beras & Stok Toko)
 apiRouter.post('/transaksi/pembelian-barang', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'pembelian_barang');
     const record = await TransactionService.processPembelianBarang(req.body);
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -1677,6 +1766,7 @@ apiRouter.get('/laporan/laba-rugi-produk', (_req, res) => {
 
 apiRouter.post('/transaksi/pembelian-hasil-bumi', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'pembelian_hb');
     const record = await TransactionService.processPembelianHasilBumi(req.body);
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -1752,6 +1842,7 @@ apiRouter.get('/transaksi/nota-silang', (_req, res) => {
 
 apiRouter.post('/transaksi/nota-silang', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'nota_silang');
     const result = await TransactionService.processNotaSilang(req.body);
     res.json({ success: true, data: result });
   } catch (err: any) {
@@ -1929,6 +2020,7 @@ apiRouter.get('/laporan/ringkasan-hasil-bumi-bulanan', (req, res) => {
 
 apiRouter.post('/transaksi/kasbon-uang', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'kasbon');
     const record = await TransactionService.processKasbonUang(req.body);
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -1948,6 +2040,7 @@ apiRouter.get('/transaksi/kasbon-uang', (req, res) => {
 // Input Saldo Awal / Nota Lalu Mitra (Piutang Barang Masa Lalu & Titipan Uang/Panen)
 apiRouter.post('/transaksi/nota-lalu', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'nota_lalu');
     const result = await TransactionService.processInputNotaLalu(req.body);
     res.json({ success: true, data: result });
   } catch (err: any) {
@@ -1984,6 +2077,27 @@ apiRouter.post('/transaksi/bersihkan-bukti-nota-lalu', async (req, res) => {
   }
 });
 
+// Reset / bersihkan seluruh foto capture nota lalu yang salah dari database
+apiRouter.post('/transaksi/reset-seluruh-foto-nota-salah', async (req, res) => {
+  try {
+    const result = await TransactionService.bersihkanSeluruhFotoNotaLaluSalah(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Ganti / unggah ulang capture foto nota lalu pada transaksi (Rekening Koran Mitra)
+apiRouter.post('/transaksi/ganti-foto-nota', async (req, res) => {
+  try {
+    await ensureMultiAttachmentPersisted(req.body, 'nota_lalu');
+    const result = await TransactionService.gantiFotoNotaTransaksi(req.body);
+    res.json({ success: true, data: result, message: result.message });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 // Pinjam Uang dari PT ke Mitra (Masuk Saldo Titip Mitra)
 apiRouter.post('/mitra/pinjam-uang', async (req, res) => {
   try {
@@ -1996,6 +2110,7 @@ apiRouter.post('/mitra/pinjam-uang', async (req, res) => {
 
 apiRouter.post('/transaksi/bayar-bon', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'bayar_bon');
     const record = await TransactionService.processBayarBon(req.body);
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -2035,6 +2150,7 @@ apiRouter.get('/transaksi/transfer-rekening', (req, res) => {
 // ==========================================
 apiRouter.post('/transaksi/cairkan-titipan', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'cairkan_titipan');
     const record = await TransactionService.processPencairanTitipan(req.body);
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -2056,6 +2172,7 @@ apiRouter.get('/transaksi/cairkan-titipan', (_req, res) => {
 // ==========================================
 apiRouter.post('/pengeluaran', async (req, res) => {
   try {
+    await ensureAttachmentPersisted(req.body, 'pengeluaran');
     const record = await TransactionService.processPengeluaran(req.body);
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -3755,19 +3872,46 @@ apiRouter.post('/upload-bukti', async (req, res) => {
     if (!dataUrl || typeof dataUrl !== 'string') {
       return res.status(400).json({ success: false, message: 'Data gambar wajib dikirim' });
     }
-    // If already an external URL, return directly
+    // If already an external URL or static asset path, return accurately
     if (/^https?:\/\//i.test(dataUrl)) {
       return res.json({
         success: true,
-        data: { url: dataUrl, storage: 'SUPABASE_STORAGE' },
+        data: { url: dataUrl, attachment_url: dataUrl, storage: 'SUPABASE_STORAGE' },
       });
     }
-    const cloudUrl = await supabaseSyncEngine.uploadBuktiImage(dataUrl, prefix || 'nota');
+    if (dataUrl.startsWith('/assets/')) {
+      return res.json({
+        success: true,
+        data: { url: dataUrl, attachment_url: dataUrl, storage: 'LOCAL_ASSET' },
+      });
+    }
+    const cloudUrl = await supabaseSyncEngine.uploadBuktiImage(dataUrl, prefix || 'nota', true);
+    let finalUrl = cloudUrl;
+    let storageType = cloudUrl ? 'SUPABASE_STORAGE' : 'LOCAL_ASSET';
+    if (!finalUrl && dataUrl.startsWith('data:image/')) {
+      try {
+        const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+        if (match) {
+          const contentType = match[1];
+          const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+          const safePrefix = String(prefix || 'nota').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'nota';
+          const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+          const destDir = path.resolve(process.cwd(), 'public', 'assets', 'aistudio');
+          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+          fs.writeFileSync(path.join(destDir, filename), Buffer.from(match[2], 'base64'));
+          finalUrl = `/assets/aistudio/${filename}`;
+        }
+      } catch (e) {
+        console.warn('Fallback local file save error:', e);
+      }
+    }
+    if (!finalUrl) finalUrl = dataUrl;
     res.json({
       success: true,
       data: {
-        url: cloudUrl || dataUrl,
-        storage: cloudUrl ? 'SUPABASE_STORAGE' : 'INLINE_COMPRESSED',
+        url: finalUrl,
+        attachment_url: finalUrl,
+        storage: storageType,
       },
     });
   } catch (err: any) {
@@ -3776,6 +3920,7 @@ apiRouter.post('/upload-bukti', async (req, res) => {
       success: true,
       data: {
         url: req.body?.dataUrl || '',
+        attachment_url: req.body?.dataUrl || '',
         storage: 'INLINE_COMPRESSED',
       },
     });

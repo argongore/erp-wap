@@ -1125,6 +1125,52 @@ export const api = {
     return data;
   },
 
+  // Reset / bersihkan seluruh foto capture nota lalu yang salah dari database
+  resetSeluruhFotoNotaSalah: async (payload?: {
+    idMitra?: string;
+    hanyaFotoNotaLalu?: boolean;
+  }): Promise<{
+    success: boolean;
+    clearedCount: number;
+    message: string;
+  }> => {
+    const data = await requestJson('/api/transaksi/reset-seluruh-foto-nota-salah', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mereset foto capture nota lalu');
+    return data;
+  },
+
+  // Ganti atau unggah ulang foto capture nota lalu per transaksi / mitra
+  gantiFotoNotaTransaksi: async (payload: {
+    idTransaksi: string;
+    idMitra?: string;
+    fotoNota?: string;
+    fotoNotaList?: string[];
+    attachment_url?: string;
+    user?: string;
+  }): Promise<{
+    success: boolean;
+    idTransaksi: string;
+    idMitra?: string;
+    namaMitra?: string;
+    fotoNota: string;
+    fotoNotaList: string[];
+    attachment_url?: string;
+    totalLembar: number;
+    message: string;
+  }> => {
+    const data = await requestJson('/api/transaksi/ganti-foto-nota', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mengganti foto capture nota');
+    return data.data;
+  },
+
   // Supabase Auto-Sync & Cloud Storage
   getSupabaseStatus: async (): Promise<{
     configured: boolean;
@@ -2151,16 +2197,20 @@ export const api = {
   uploadBuktiImage: async (
     dataUrl: string,
     prefix = 'nota'
-  ): Promise<{ url: string; storage: 'SUPABASE_STORAGE' | 'INLINE_COMPRESSED' }> => {
+  ): Promise<{ url: string; attachment_url: string; storage: string }> => {
     const data = await requestJson('/api/upload-bukti', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataUrl, prefix }),
     });
     if (!data.success) {
-      return { url: dataUrl, storage: 'INLINE_COMPRESSED' };
+      return { url: dataUrl, attachment_url: dataUrl, storage: 'INLINE_COMPRESSED' };
     }
-    return data.data;
+    return {
+      url: data.data.url,
+      attachment_url: data.data.attachment_url || data.data.url,
+      storage: data.data.storage,
+    };
   },
 
   // Akses PIN Bos & Kasir + Lightweight Snapshot Bos

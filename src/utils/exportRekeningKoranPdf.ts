@@ -21,7 +21,11 @@ export async function loadLogoDataUrl(url: string): Promise<string | null> {
   if (!url) return null;
   if (url.startsWith('data:image/')) return url;
   try {
-    const resp = await fetch(url);
+    const fullUrl =
+      url.startsWith('/') && typeof window !== 'undefined'
+        ? `${window.location.origin}${url}`
+        : url;
+    const resp = await fetch(fullUrl);
     if (!resp.ok) return null;
     const blob = await resp.blob();
     return await new Promise<string | null>((resolve) => {
@@ -125,11 +129,12 @@ export async function exportRekeningKoranToPdf(
   const activeRows: RekeningKoranHistoryItem[] =
     printScope === 'SALDO_BERJALAN' ? runningRows : statement.history || [];
 
-  // Extract uploaded physical nota proofs
+  // Extract uploaded physical nota proofs (HANYA NOTA LALU)
   const seenParentIds = new Set<string>();
   const notaAttachments = activeRows
     .filter((h) => {
-      if (!h.fotoNota) return false;
+      if (!h.isNotaLalu) return false;
+      if (!h.attachment_url && !h.fotoNota) return false;
       const parentKey = h.idTransaksiInduk || h.id;
       if (seenParentIds.has(parentKey)) return false;
       seenParentIds.add(parentKey);
@@ -137,7 +142,7 @@ export async function exportRekeningKoranToPdf(
     })
     .flatMap((h) => {
       const parentId = h.idTransaksiInduk || h.id;
-      const rawImgs = (h.fotoNota || '')
+      const rawImgs = (h.attachment_url || h.fotoNota || '')
         .split('|||')
         .map((s) => s.trim())
         .filter(Boolean);
@@ -207,7 +212,7 @@ export async function exportRekeningKoranToPdf(
       ? row.titipBerjalan ?? (row.kredit === 0 ? row.nominalMutasiHak || 0 : 0)
       : row.kredit > 0
       ? row.kredit
-      : row.nominalMutasiHak || 0;
+      : row.nominalMutasiHak || (row.debet === 0 ? row.nominalTransaksi || 0 : 0);
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -580,7 +585,7 @@ export async function exportRekeningKoranToPdf(
 
       try {
         let embedSrc = att.image || '';
-        if (embedSrc && /^https?:\/\//i.test(embedSrc)) {
+        if (embedSrc && (embedSrc.startsWith('/') || /^https?:\/\//i.test(embedSrc))) {
           const fetched = await loadLogoDataUrl(embedSrc);
           if (fetched) embedSrc = fetched;
         }

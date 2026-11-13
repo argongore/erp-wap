@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Image as ImageIcon,
   X,
@@ -9,6 +9,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
+  ZoomIn,
+  ZoomOut,
+  Trash2,
+  RefreshCw,
+  UploadCloud,
 } from 'lucide-react';
 
 interface FotoNotaPreviewModalProps {
@@ -23,6 +28,9 @@ interface FotoNotaPreviewModalProps {
   tanggal?: string;
   nominalText?: string;
   keterangan?: string;
+  onHapusFoto?: () => Promise<void> | void;
+  onGantiFoto?: () => void;
+  gantiFotoLabel?: string;
 }
 
 export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
@@ -37,8 +45,18 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
   tanggal,
   nominalText,
   keterangan,
+  onHapusFoto,
+  onGantiFoto,
+  gantiFotoLabel = 'Ganti Foto',
 }) => {
   const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [isZoomed, setIsZoomed] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
+  useEffect(() => {
+    setCurrentIndex(0);
+    setIsZoomed(false);
+  }, [isOpen, imageUrl]);
 
   if (!isOpen || !imageUrl) return null;
 
@@ -70,7 +88,9 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-3xl w-full p-4 sm:p-5 shadow-2xl space-y-3 cursor-default text-white"
+        className={`bg-zinc-900 border border-zinc-700 rounded-2xl w-full p-4 sm:p-5 shadow-2xl space-y-3 cursor-default text-white transition-all ${
+          isZoomed ? 'max-w-6xl' : 'max-w-3xl'
+        }`}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
@@ -94,6 +114,34 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
             </div>
           </div>
           <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setIsZoomed((z) => !z)}
+              className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
+              title={isZoomed ? 'Perkecil Ukuran' : 'Perbesar Ukuran Layar'}
+            >
+              {isZoomed ? (
+                <>
+                  <ZoomOut className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Kecilkan</span>
+                </>
+              ) : (
+                <>
+                  <ZoomIn className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Perbesar</span>
+                </>
+              )}
+            </button>
+            <a
+              href={activeImage}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
+              title="Buka Foto Asli di Tab Baru"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-sky-400" />
+              <span>Buka Asli</span>
+            </a>
             {driveFileUrl && (
               <a
                 href={driveFileUrl}
@@ -115,6 +163,48 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
               <Download className="w-3.5 h-3.5 text-amber-400" />
               <span>Unduh</span>
             </button>
+            {onGantiFoto && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onGantiFoto();
+                }}
+                className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-bold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer shadow-2xs"
+                title="Ganti atau unggah ulang foto capture nota yang benar"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>{gantiFotoLabel}</span>
+              </button>
+            )}
+            {onHapusFoto && (
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={async () => {
+                  if (window.confirm(`Lepas atau hapus lampiran foto nota ini dari transaksi ${nomorBukti || ''}?\n(Data nominal dan saldo tetap aman)`)) {
+                    try {
+                      setIsDeleting(true);
+                      await onHapusFoto();
+                      onClose();
+                    } catch (e: any) {
+                      alert('Gagal menghapus lampiran foto: ' + (e.message || e));
+                    } finally {
+                      setIsDeleting(false);
+                    }
+                  }
+                }}
+                className="px-2.5 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-200 text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                title="Hapus foto capture yang salah dari transaksi ini"
+              >
+                {isDeleting ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                )}
+                <span>Hapus Foto Salah</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -158,11 +248,19 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
         )}
 
         {/* Image viewport with carousel if multiple */}
-        <div className="relative max-h-[65vh] overflow-hidden rounded-xl bg-black/60 p-2 flex items-center justify-center border border-zinc-800 group">
+        <div
+          className={`relative overflow-auto rounded-xl bg-black/60 p-2 flex items-center justify-center border border-zinc-800 transition-all ${
+            isZoomed ? 'max-h-[82vh]' : 'max-h-[65vh]'
+          }`}
+        >
           <img
             src={activeImage}
             alt={`Foto Bukti ${currentIndex + 1}`}
-            className="max-h-[60vh] w-auto max-w-full rounded-lg object-contain shadow-2xl transition-all"
+            onClick={() => setIsZoomed((z) => !z)}
+            className={`w-auto rounded-lg object-contain shadow-2xl transition-all ${
+              isZoomed ? 'max-h-[80vh] cursor-zoom-out' : 'max-h-[60vh] max-w-full cursor-zoom-in'
+            }`}
+            title="Klik gambar untuk beralih perbesar/perkecil"
           />
 
           {imageList.length > 1 && (

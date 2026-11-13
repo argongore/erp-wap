@@ -104,6 +104,7 @@ class SupabaseSyncEngine {
   private retryTimer: NodeJS.Timeout | null = null;
   private consecutiveFailures = 0;
   private activeDrainPromise: Promise<void> | null = null;
+  private unavailableRelationalTables = new Set<string>();
 
   constructor() {
     this.loadConfig();
@@ -327,12 +328,12 @@ class SupabaseSyncEngine {
       data.auditLogs = data.auditLogs.slice(0, 200);
     }
 
-    let uploadsRemaining = 1;
+    let uploadsRemaining = 15;
     const uploadWithFastTimeout = async (base64: string, prefix: string): Promise<string | null> => {
       try {
         return await Promise.race([
           this.uploadBuktiImage(base64, prefix),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 4500)),
         ]);
       } catch {
         return null;
@@ -342,7 +343,28 @@ class SupabaseSyncEngine {
     const maybeOffloadField = async (obj: any, field: string, prefix: string) => {
       if (!obj || uploadsRemaining <= 0) return;
       const val = obj[field];
-      if (typeof val === 'string' && val.startsWith('data:image/') && val.length > 25000) {
+      if (typeof val !== 'string' || !val) return;
+
+      if (val.includes('|||')) {
+        const parts = val.split('|||').map((s) => s.trim()).filter(Boolean);
+        let changed = false;
+        for (let i = 0; i < parts.length; i++) {
+          if (parts[i].startsWith('data:image/') && parts[i].length > 25000 && uploadsRemaining > 0) {
+            uploadsRemaining--;
+            const uploadedUrl = await uploadWithFastTimeout(parts[i], `${prefix}_${i}`);
+            if (uploadedUrl) {
+              parts[i] = uploadedUrl;
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          obj[field] = parts.join('|||');
+        }
+        return;
+      }
+
+      if (val.startsWith('data:image/') && val.length > 25000) {
         uploadsRemaining--;
         const uploadedUrl = await uploadWithFastTimeout(val, prefix);
         if (uploadedUrl) {
@@ -381,6 +403,9 @@ class SupabaseSyncEngine {
           await maybeOffloadField(item, col.field, col.prefix);
           if (typeof item[col.field] === 'string' && !item[col.field].startsWith('data:image/')) {
             item[col.listField] = [item[col.field]];
+            if (item.attachment_url && String(item.attachment_url).startsWith('data:image/')) {
+              item.attachment_url = item[col.field];
+            }
           } else {
             // Avoid storing two copies of a large base64 string in the same JSON object
             delete item[col.listField];
@@ -401,6 +426,9 @@ class SupabaseSyncEngine {
                 item[col.listField][idx] = url;
                 if (idx === 0 && (!item[col.field] || item[col.field] === v)) {
                   item[col.field] = url;
+                }
+                if (idx === 0 && (!item.attachment_url || String(item.attachment_url).startsWith('data:image/'))) {
+                  item.attachment_url = url;
                 }
               }
             }
@@ -620,12 +648,31 @@ class SupabaseSyncEngine {
 
         // Chunking and exponential backoff helper for relational table batches
         const BATCH_SIZE = 30;
+        const isTableMissingError = (err: any): boolean => {
+          if (!err) return false;
+          const msg = String(err.message || '').toLowerCase();
+          const details = String(err.details || '').toLowerCase();
+          const hint = String(err.hint || '').toLowerCase();
+          return (
+            err.code === '42P01' ||
+            err.code === 'PGRST204' ||
+            err.code === 'PGRST205' ||
+            msg.includes('does not exist') ||
+            msg.includes('schema cache') ||
+            msg.includes('could not find the table') ||
+            details.includes('does not exist') ||
+            hint.includes('does not exist')
+          );
+        };
+
         const batchUpsertWithRetry = async (
           tableName: string,
           rows: any[],
           onConflict: string
         ): Promise<void> => {
           if (!rows || rows.length === 0) return;
+          if (this.unavailableRelationalTables.has(tableName)) return;
+
           for (let i = 0; i < rows.length; i += BATCH_SIZE) {
             const chunk = rows.slice(i, i + BATCH_SIZE);
             let chunkErr: any = null;
@@ -633,8 +680,9 @@ class SupabaseSyncEngine {
               const res = await clientRef.from(tableName).upsert(chunk, { onConflict });
               chunkErr = res.error;
               if (!chunkErr) break;
-              if (chunkErr.code === '42P01' || String(chunkErr.message || '').includes('does not exist')) {
-                // Table doesn't exist, ignore relational mirror
+              if (isTableMissingError(chunkErr)) {
+                // Relational mirror table doesn't exist yet in Supabase SQL schema; record and skip gracefully
+                this.unavailableRelationalTables.add(tableName);
                 return;
               }
               if (a < 3) {
@@ -642,7 +690,7 @@ class SupabaseSyncEngine {
                 await new Promise((r) => setTimeout(r, delay));
               }
             }
-            if (chunkErr) {
+            if (chunkErr && !isTableMissingError(chunkErr)) {
               console.warn(`[SupabaseSyncEngine] Relational mirror chunk on "${tableName}" failed:`, chunkErr.message);
             }
           }
@@ -907,9 +955,18 @@ class SupabaseSyncEngine {
 
       await dbManager.hydrateFromSupabase(cloud);
 
-      // Pastikan jika ada rekonsiliasi data lokal (seperti Surat Jalan), Cloud langsung diperbarui
+      // Pastikan jika ada rekonsiliasi data lokal (seperti Surat Jalan, pembersihan sweep sintetis KAS01, atau pembersihan PEMBAYARAN_SUPPLIER_SJ), Cloud langsung diperbarui
       const mergedLocal = dbManager.get();
+      const cloudHadSweep = (cloud.transferRekening || []).some((t: any) => t.noTransfer === 'TRF2611099999');
+      const cloudHadSupplierSj =
+        (cloud.pengeluaran || []).some((e: any) => String(e.kategori || '').trim().toUpperCase() === 'PEMBAYARAN_SUPPLIER_SJ') ||
+        (cloud.masterItemPengeluaran || []).some((m: any) => String(m.nama || '').trim().toUpperCase() === 'PEMBAYARAN_SUPPLIER_SJ');
+      const cloudKas01Saldo = (cloud.rekening || []).find((r: any) => r.kode === 'KAS01')?.saldoSaatIni;
+      const mergedKas01Saldo = (mergedLocal.rekening || []).find((r: any) => r.kode === 'KAS01')?.saldoSaatIni;
       if (
+        cloudHadSweep ||
+        cloudHadSupplierSj ||
+        cloudKas01Saldo !== mergedKas01Saldo ||
         (mergedLocal.suratJalan?.length || 0) > (cloud.suratJalan?.length || 0) ||
         countAllTransactions(mergedLocal) > countAllTransactions(cloud)
       ) {
@@ -1207,11 +1264,15 @@ WITH CHECK (bucket_id = 'erp-bukti-nota');
    * Offloads base64 receipt/evidence photos to Supabase Storage bucket ('erp-bukti-nota').
    * Returns lightweight public HTTPS URL (~100 bytes) if successful, or null so caller can safely fall back to compressed inline JPEG.
    */
-  public async uploadBuktiImage(dataUrl: string, prefix = 'bukti'): Promise<string | null> {
+  public async uploadBuktiImage(
+    dataUrl: string,
+    prefix = 'bukti',
+    forceRetry = false
+  ): Promise<string | null> {
     if (!this.client || !dataUrl || !dataUrl.startsWith('data:image/')) {
       return null;
     }
-    if (Date.now() < this.storageUnavailableUntil) {
+    if (!forceRetry && Date.now() < this.storageUnavailableUntil) {
       return null;
     }
 

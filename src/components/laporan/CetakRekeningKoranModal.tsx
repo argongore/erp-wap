@@ -89,11 +89,13 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
   }, [statement, printScope, runningRows]);
 
   // Extract uploaded physical nota proofs for the currently selected scope (deduplicated per parent Nota ID)
+  // Hanya Nota Lalu yang memiliki bukti fisik nota
   const notaAttachments = useMemo(() => {
     const seenParentIds = new Set<string>();
     return activeRows
       .filter((h) => {
-        if (!h.fotoNota) return false;
+        if (!h.isNotaLalu) return false;
+        if (!h.attachment_url && !h.fotoNota) return false;
         const parentKey = h.idTransaksiInduk || h.id;
         if (seenParentIds.has(parentKey)) return false;
         seenParentIds.add(parentKey);
@@ -101,7 +103,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
       })
       .flatMap((h) => {
         const parentId = h.idTransaksiInduk || h.id;
-        const rawImgs = (h.fotoNota || '')
+        const rawImgs = (h.attachment_url || h.fotoNota || '')
           .split('|||')
           .map((s) => s.trim())
           .filter(Boolean);
@@ -174,7 +176,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
       ? row.titipBerjalan ?? (row.kredit === 0 ? row.nominalMutasiHak || 0 : 0)
       : row.kredit > 0
       ? row.kredit
-      : row.nominalMutasiHak || 0;
+      : row.nominalMutasiHak || (row.debet === 0 ? row.nominalTransaksi || 0 : 0);
 
   const formatItemTextForPdfOrWa = (row: RekeningKoranHistoryItem): {
     itemText: string;

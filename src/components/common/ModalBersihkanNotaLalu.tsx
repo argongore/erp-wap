@@ -537,10 +537,16 @@ export const ModalBersihkanNotaLalu: React.FC<ModalBersihkanNotaLaluProps> = ({
                                     `Bukti Fisik Nota: ${item.noNota} (${item.namaMitra})`
                                   );
                                 }}
-                                className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-zinc-700 cursor-pointer"
+                                className="inline-flex items-center gap-1.5 p-1 pr-2 rounded bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-zinc-700 cursor-pointer group"
+                                title="Klik untuk memperbesar bukti nota fisik"
                               >
-                                <ImageIcon className="w-3 h-3 text-amber-400" />
-                                <span className="text-[10px]">{item.fotoNotaCount} Foto</span>
+                                <img
+                                  src={item.fotoNota.split('|||')[0]?.trim()}
+                                  alt="Thumb"
+                                  className="w-6 h-6 rounded object-cover border border-zinc-600 bg-black shrink-0 group-hover:scale-105 transition-transform"
+                                  loading="lazy"
+                                />
+                                <span className="text-[10px] font-medium">{item.fotoNotaCount} Foto</span>
                               </button>
                             ) : (
                               <span className="text-[10px] text-zinc-400 italic">Tanpa Foto</span>
@@ -565,6 +571,47 @@ export const ModalBersihkanNotaLalu: React.FC<ModalBersihkanNotaLaluProps> = ({
           </div>
 
           <div className="flex items-center space-x-2 shrink-0">
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={async () => {
+                const targetText = selectedMitraId === 'ALL' ? 'SELURUH MITRA' : 'Mitra Terpilih';
+                if (
+                  window.confirm(
+                    `HAPUS SEMUA FOTO CAPTURE YANG SALAH UNTUK ${targetText}?\n\n• Seluruh data transaksi, piutang, dan saldo mitra tetap AMAN 100%.\n• Hanya lampiran foto/capture yang salah yang akan dibersihkan agar rekening koran bersih.\n\nLanjutkan?`
+                  )
+                ) {
+                  setIsSubmitting(true);
+                  try {
+                    const res = await api.resetSeluruhFotoNotaSalah({
+                      idMitra: selectedMitraId === 'ALL' ? undefined : selectedMitraId,
+                    });
+                    setSuccessMsg(res.message);
+                    onSuccess({
+                      countDeleted: res.clearedCount,
+                      affectedMitraIds: [],
+                      affectedMitraNames: [],
+                      totalNominalPiutang: 0,
+                      totalNominalTitip: 0,
+                      message: res.message,
+                    });
+                    setTimeout(() => {
+                      loadMatchingItems();
+                    }, 500);
+                  } catch (e: any) {
+                    setErrorMsg('Gagal mereset foto: ' + (e.message || e));
+                  } finally {
+                    setIsSubmitting(false);
+                  }
+                }
+              }}
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-amber-950/70 hover:bg-amber-900 border border-amber-700 text-amber-200 font-bold text-xs shadow-md cursor-pointer transition-all"
+              title="Bersihkan seluruh foto nota yang tidak sesuai tanpa menghapus angka transaksi"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+              <span>Reset Semua Foto Salah</span>
+            </button>
+
             <button
               type="button"
               onClick={onClose}

@@ -1116,6 +1116,9 @@ class DatabaseManager {
     this.db.deletedMasterPengeluaranNames = Array.isArray(incoming.deletedMasterPengeluaranNames)
       ? incoming.deletedMasterPengeluaranNames
       : (this.db.deletedMasterPengeluaranNames || []);
+    this.db.deletedProdukKodes = Array.isArray(incoming.deletedProdukKodes)
+      ? incoming.deletedProdukKodes
+      : (this.db.deletedProdukKodes || []);
   }
 
   /**
@@ -1258,6 +1261,26 @@ class DatabaseManager {
     if (!Array.isArray(this.db.cashOpnameLogs)) this.db.cashOpnameLogs = [];
     if (!Array.isArray(this.db.inventaris)) this.db.inventaris = [];
     if (!Array.isArray(this.db.masterItemPengeluaran)) this.db.masterItemPengeluaran = [];
+    if (!Array.isArray(this.db.suratJalan)) this.db.suratJalan = [];
+
+    // Bersihkan transaksi & master item auto-generated PEMBAYARAN_SUPPLIER_SJ yang tidak termasuk dalam pencatatan Pengeluaran
+    const removedSjExpenseIds = new Set<string>();
+    this.db.pengeluaran = (this.db.pengeluaran || []).filter((ex) => {
+      const kUpper = String(ex.kategori || '').trim().toUpperCase();
+      if (kUpper === 'PEMBAYARAN_SUPPLIER_SJ') {
+        if (ex.idTransaksi) removedSjExpenseIds.add(ex.idTransaksi);
+        return false;
+      }
+      return true;
+    });
+    if (removedSjExpenseIds.size > 0 || this.db.suratJalan.some((s) => s.idPengeluaranBayarMitra)) {
+      const existingPglIds = new Set((this.db.pengeluaran || []).map((p) => p.idTransaksi));
+      for (const sj of this.db.suratJalan) {
+        if (sj.idPengeluaranBayarMitra && (removedSjExpenseIds.has(sj.idPengeluaranBayarMitra) || !existingPglIds.has(sj.idPengeluaranBayarMitra))) {
+          sj.idPengeluaranBayarMitra = undefined;
+        }
+      }
+    }
 
     // Pastikan 24 Item Pengeluaran baku (1-16 Hijau Inventaris & 17-24 Oranye Biasa) selalu tersedia & berurutan rapi
     const legacyUnusedNames = new Set([
@@ -1290,6 +1313,7 @@ class DatabaseManager {
       const uName = String(m.nama || '').trim().toUpperCase();
       const uCompact = uName.replace(/\s+/g, '');
       if (!uName) return false;
+      if (uName === 'PEMBAYARAN_SUPPLIER_SJ' || uCompact === 'PEMBAYARAN_SUPPLIER_SJ') return false;
       if (deletedPengeluaranSet.has(uCompact)) return false;
       if (legacyUnusedNames.has(uName) && !usedKategoriUpper.has(uName)) {
         return false;
@@ -1339,6 +1363,7 @@ class DatabaseManager {
     for (const ex of this.db.pengeluaran) {
       const kName = String(ex.kategori || '').trim();
       const kCompact = kName.replace(/\s+/g, '').toUpperCase();
+      if (kCompact === 'PEMBAYARAN_SUPPLIER_SJ') continue;
       if (kName && !expItemNameSet.has(kCompact) && !deletedPengeluaranSet.has(kCompact)) {
         expItemNameSet.add(kCompact);
         const cleanSlug =
@@ -1630,16 +1655,51 @@ class DatabaseManager {
       s.kode = String(s.kode || '').trim().toUpperCase();
     }
 
+    // Bersihkan transfer sweep sintetis penutupan 09/11/2026 (TRF2611099999) agar saldo riil Berangkas (BRK01) & KAS01 tidak terdistorsi oleh selisih surplus/minus historis
+    const syntheticSweepIdx = (this.db.transferRekening || []).findIndex(
+      (t) => t.noTransfer === 'TRF2611099999'
+    );
+    if (syntheticSweepIdx !== -1) {
+      const sweepRec = this.db.transferRekening[syntheticSweepIdx];
+      const sweepNom = Math.round(Number(sweepRec?.nominal) || 0);
+      this.db.transferRekening.splice(syntheticSweepIdx, 1);
+      const brk01 = this.db.rekening.find((r) => r.kode === 'BRK01');
+      if (brk01 && sweepNom > 0) {
+        brk01.saldoSaatIni = Math.max(0, Math.round(Number(brk01.saldoSaatIni || 0) - sweepNom));
+      }
+    }
+
+    // Hormati daftar produk yang telah dihapus pengguna (deletedProdukKodes)
+    const deletedProdSet = new Set(
+      (this.db.deletedProdukKodes || []).map((x) => String(x || '').trim().toUpperCase()).filter(Boolean)
+    );
+
+    // Bersihkan produk dan stokBarang yang terdaftar di deletedProdukKodes jika masih ada
+    if (deletedProdSet.size > 0) {
+      this.db.produk = (this.db.produk || []).filter(
+        (p) => !deletedProdSet.has(String(p.kode || '').trim().toUpperCase()) &&
+               !deletedProdSet.has(String(p.nama || '').trim().toUpperCase())
+      );
+      this.db.stokBarang = (this.db.stokBarang || []).filter(
+        (s) => !deletedProdSet.has(String(s.kode || '').trim().toUpperCase()) &&
+               !deletedProdSet.has(String(s.namaProduk || '').trim().toUpperCase())
+      );
+    }
+
     const produkMap = new Map(this.db.produk.map((p) => [p.kode, p]));
     const stokMap = new Map(this.db.stokBarang.map((s) => [s.kode, s]));
 
-    // Recover any sold/purchased product code missing from master produk (skip Nota Silang intermediary items)
+    // Recover any sold/purchased product code missing from master produk (skip Nota Silang intermediary items & deleted products)
     for (const pj of this.db.penjualan) {
       if (pj.isNotaSilang) continue;
       for (const it of pj.items || []) {
         const cleanKode = String(it.kodeProduk || '').trim().toUpperCase();
         if (cleanKode) it.kodeProduk = cleanKode;
         if (cleanKode && cleanKode !== 'NOTA-SILANG' && !produkMap.has(cleanKode)) {
+          // Jangan membangkitkan produk yang sudah secara eksplisit dihapus oleh pengguna
+          if (deletedProdSet.has(cleanKode) || deletedProdSet.has(String(it.namaProduk || '').trim().toUpperCase())) {
+            continue;
+          }
           const recovered = {
             kode: cleanKode,
             kategori: ensureKat('LAINNYA'),
@@ -1661,6 +1721,10 @@ class DatabaseManager {
         const cleanKode = String(it.kodeProduk || '').trim().toUpperCase();
         if (cleanKode) it.kodeProduk = cleanKode;
         if (cleanKode && cleanKode !== 'REKAP-NOTA' && !produkMap.has(cleanKode)) {
+          // Jangan membangkitkan produk yang sudah secara eksplisit dihapus oleh pengguna
+          if (deletedProdSet.has(cleanKode) || deletedProdSet.has(String(it.namaProduk || '').trim().toUpperCase())) {
+            continue;
+          }
           const modalBeli = Math.max(0, Number(it.hargaBeliSatuan) || 0);
           const recovered = {
             kode: cleanKode,
@@ -1710,9 +1774,12 @@ class DatabaseManager {
       }
     }
 
-    // If StokBarang has an orphan item not in Produk, ensure Produk master exists
+    // If StokBarang has an orphan item not in Produk, ensure Produk master exists (skip deleted products)
     for (const s of this.db.stokBarang) {
       if (s.kode && !produkMap.has(s.kode)) {
+        if (deletedProdSet.has(s.kode) || deletedProdSet.has(String(s.namaProduk || '').trim().toUpperCase())) {
+          continue;
+        }
         const createdProd = {
           kode: s.kode,
           kategori: ensureKat('LAINNYA'),
@@ -2118,11 +2185,6 @@ class DatabaseManager {
         stok: 87, // Opname 100 - 13 terjual
       },
     };
-
-    const deletedProdSet = new Set(
-      (this.db.deletedProdukKodes || []).map((x) => String(x || '').trim().toUpperCase()).filter(Boolean)
-    );
-
     for (const [k, custom] of Object.entries(userCustomProducts)) {
       const cleanK = String(k || '').trim().toUpperCase();
       if (deletedProdSet.has(cleanK) || deletedProdSet.has(custom.nama.trim().toUpperCase())) {
@@ -2648,6 +2710,112 @@ class DatabaseManager {
   }
 
   /**
+   * Hitung mutasi kas bersih KAS01 mulai dari tanggal patokan (ledgerStartDate, format DD/MM/YYYY)
+   */
+  public computeKasirNetLedger(ledgerStartDate?: string): number {
+    const toKey = (s?: string): number => {
+      if (!s) return 0;
+      const parts = String(s).trim().split(/[-/]/);
+      if (parts.length !== 3) return 0;
+      if (parts[0].length === 4) {
+        return Number(parts[0]) * 10000 + Number(parts[1]) * 100 + Number(parts[2]);
+      }
+      return Number(parts[2]) * 10000 + Number(parts[1]) * 100 + Number(parts[0]);
+    };
+    const cutoff = ledgerStartDate ? toKey(ledgerStartDate) : 0;
+    const inRange = (tgl?: string) => !cutoff || toKey(tgl) >= cutoff;
+
+    let netKasir = 0;
+    for (const p of this.db.penjualan || []) {
+      if (!inRange(p.tanggal)) continue;
+      if (p.metode === 'KASBON' || p.metode === 'SINKRON' || p.metode === 'INTERNAL_PT' || p.metode === 'PEMAKAIAN_PENGELUARAN' || p.isNotaSilang) continue;
+      if (p.rekeningTujuan === 'KAS01' || p.metode === 'TUNAI') netKasir += Math.round(Number(p.totalNominal) || 0);
+    }
+    for (const j of this.db.penjualanHasilBumi || []) {
+      if (!inRange(j.tanggal)) continue;
+      if (j.metodePembayaran === 'PIUTANG' || j.metodePembayaran === 'BELUM_PUTUS_HARGA' || j.metodePembayaran === 'SINKRON') continue;
+      if (j.rekeningTujuan === 'KAS01' || j.metodePembayaran === 'TUNAI') netKasir += Math.round(Number(j.totalNominal) || 0);
+    }
+    for (const um of this.db.uangMasuk || []) {
+      if (!inRange(um.tanggal)) continue;
+      if (um.metode === 'SINKRON' || um.rekeningTujuan === 'SINKRON') continue;
+      if (um.rekeningTujuan === 'KAS01' || (!um.rekeningTujuan && um.metode === 'TUNAI')) netKasir += Math.round(Number(um.nominal) || 0);
+    }
+    for (const b of this.db.bayarBon || []) {
+      if (!inRange(b.tanggal)) continue;
+      if (b.metode === 'SINKRON' || b.metode === 'KOMPENSASI_TITIP' || b.metode === 'POTONG_GAJI' || b.isKompensasiTitipan || b.isPotongGaji) continue;
+      if (b.rekeningTujuan === 'KAS01' || (!b.rekeningTujuan && b.metode === 'TUNAI')) netKasir += Math.round(Number(b.nominalBayar) || 0);
+    }
+    for (const b of this.db.pembelianHasilBumi || []) {
+      if (!inRange(b.tanggal)) continue;
+      const isPinjamanDana = b.komoditasKode === 'PINJAMAN_DANA' || Boolean(b.komoditasNama?.includes('Pinjaman Uang'));
+      if (isPinjamanDana && b.rekeningSumber === 'KAS01') {
+        netKasir += Math.round(Number(b.totalNominal) || 0);
+        continue;
+      }
+      if (b.metodePembayaran === 'TITIP' || b.metodePembayaran === 'SINKRON' || b.isNotaSilang || b.komoditasKode === 'NOTA_SILANG' || isPinjamanDana) continue;
+      if (b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(b.totalNominal) || 0);
+    }
+    for (const br of this.db.brilink || []) {
+      if (!inRange(br.tanggal)) continue;
+      const nomAdmin = Math.round(Number(br.nominalAdmin) || 0);
+      const nomPokok = Math.round(Number(br.nominalPokok) || 0);
+      const rekAdm = br.rekeningAdmin || 'KAS01';
+      const kasPokokKode = br.rekeningKasTunai || 'KAS01';
+      if (br.jenisBrilink === 'TARIK_TUNAI') {
+        if (rekAdm === 'KAS01') netKasir += nomAdmin;
+        if (kasPokokKode === 'KAS01') netKasir -= nomPokok;
+      } else {
+        if (rekAdm === 'KAS01') netKasir -= nomAdmin;
+        if (kasPokokKode === 'KAS01') netKasir += nomPokok;
+      }
+    }
+    for (const p of this.db.pengeluaran || []) {
+      if (!inRange(p.tanggal)) continue;
+      if (p.isNonKas || p.rekeningSumber === 'SINKRON' || p.rekeningSumber === 'STOK_INTERNAL') continue;
+      if (p.rekeningSumber === 'KAS01' || !p.rekeningSumber) netKasir -= Math.round(Number(p.nominal) || 0);
+    }
+    for (const sj of this.db.suratJalan || []) {
+      if (sj.statusPembayaranMitra !== 'LUNAS' || sj.idPengeluaranBayarMitra) continue;
+      if (sj.rekeningPtKode !== 'KAS01') continue;
+      if (!inRange(sj.tanggalBayarMitra || sj.tanggal)) continue;
+      netKasir -= Math.round(Number(sj.jumlahPembayaranMitra) || 0);
+    }
+    for (const k of this.db.kasbonUang || []) {
+      if (!inRange(k.tanggal)) continue;
+      if (k.isNotaLalu || k.rekeningSumber === 'BON01' || k.rekeningSumber === 'SINKRON' || k.metode === 'SINKRON') continue;
+      if (k.rekeningSumber === 'KAS01' || (!k.rekeningSumber && k.metode === 'TUNAI')) netKasir -= Math.round(Number(k.nominal) || 0);
+    }
+    for (const b of this.db.pembelianBarang || []) {
+      if (!inRange(b.tanggal)) continue;
+      if (b.metodePembayaran === 'HUTANG' || b.metodePembayaran === 'SINKRON') continue;
+      if (b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(b.totalNominal) || 0);
+    }
+    for (const pt of this.db.pencairanTitipan || []) {
+      if (!inRange(pt.tanggal)) continue;
+      if (pt.metodePembayaran === 'SINKRON' || pt.metodePembayaran === 'KOMPENSASI_BON' || pt.isKompensasiBon) continue;
+      if (pt.rekeningSumber === 'KAS01' || (!pt.rekeningSumber && pt.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(pt.nominalPencairan) || 0);
+    }
+    for (const g of this.db.penggajian || []) {
+      if (!inRange(g.tanggal)) continue;
+      if (g.metodePembayaran === 'SINKRON') continue;
+      if (g.rekeningSumber === 'KAS01' || (!g.rekeningSumber && g.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(g.gajiBersihDibayar) || 0);
+    }
+    for (const t of this.db.transferRekening || []) {
+      if (!inRange(t.tanggal)) continue;
+      if (t.status && t.status !== 'BERHASIL') continue;
+      const nom = Math.round(Number(t.nominal) || 0);
+      if (t.rekeningTujuan === 'KAS01') netKasir += nom;
+      if (t.rekeningSumber === 'KAS01') netKasir -= nom;
+    }
+    for (const op of this.db.cashOpnameLogs || []) {
+      if (!inRange(op.tanggal)) continue;
+      if (op.sesuaikanSaldoSistem && op.selisih) netKasir += Math.round(Number(op.selisih) || 0);
+    }
+    return netKasir;
+  }
+
+  /**
    * Synchronize Virtual Accounts BON01 (Kasbon/Piutang Customer) and TIT01 (Titip Panen & Hutang Supplier)
    * Uses the exact per-mitra formula as RekapMasterMitra & RekeningKoranMitra so all modules match 100%.
    */
@@ -2757,77 +2925,28 @@ class DatabaseManager {
       sinkronRek.saldoSaatIni = totalSinkronVolume;
     }
 
-    // Sinkronkan Kas Utama Kasir (KAS01) sesuai mutasi ledger riil agar saldo kas di sistem selalu sama dengan aset sesungguhnya
+    // Sinkronkan Kas Utama Kasir (KAS01) sesuai mutasi ledger riil berjalan agar saldo kas di sistem selalu sama dengan uang fisik di laci
     const kas01 = this.db.rekening.find((r) => r.kode === 'KAS01');
     if (kas01) {
-      let netKasir = 0;
-      for (const p of this.db.penjualan || []) {
-        if (p.metode === 'KASBON' || p.metode === 'SINKRON' || p.metode === 'INTERNAL_PT' || p.metode === 'PEMAKAIAN_PENGELUARAN' || p.isNotaSilang) continue;
-        if (p.rekeningTujuan === 'KAS01' || p.metode === 'TUNAI') netKasir += Math.round(Number(p.totalNominal) || 0);
-      }
-      for (const j of this.db.penjualanHasilBumi || []) {
-        if (j.metodePembayaran === 'PIUTANG' || j.metodePembayaran === 'BELUM_PUTUS_HARGA' || j.metodePembayaran === 'SINKRON') continue;
-        if (j.rekeningTujuan === 'KAS01' || j.metodePembayaran === 'TUNAI') netKasir += Math.round(Number(j.totalNominal) || 0);
-      }
-      for (const um of this.db.uangMasuk || []) {
-        if (um.metode === 'SINKRON' || um.rekeningTujuan === 'SINKRON') continue;
-        if (um.rekeningTujuan === 'KAS01' || (!um.rekeningTujuan && um.metode === 'TUNAI')) netKasir += Math.round(Number(um.nominal) || 0);
-      }
-      for (const b of this.db.bayarBon || []) {
-        if (b.metode === 'SINKRON' || b.metode === 'KOMPENSASI_TITIP' || b.metode === 'POTONG_GAJI' || b.isKompensasiTitipan || b.isPotongGaji) continue;
-        if (b.rekeningTujuan === 'KAS01' || (!b.rekeningTujuan && b.metode === 'TUNAI')) netKasir += Math.round(Number(b.nominalBayar) || 0);
-      }
-      for (const b of this.db.pembelianHasilBumi || []) {
-        const isPinjamanDana = b.komoditasKode === 'PINJAMAN_DANA' || Boolean(b.komoditasNama?.includes('Pinjaman Uang'));
-        if (isPinjamanDana && b.rekeningSumber === 'KAS01') {
-          netKasir += Math.round(Number(b.totalNominal) || 0);
-          continue;
-        }
-        if (b.metodePembayaran === 'TITIP' || b.metodePembayaran === 'SINKRON' || b.isNotaSilang || b.komoditasKode === 'NOTA_SILANG' || isPinjamanDana) continue;
-        if (b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(b.totalNominal) || 0);
-      }
-      for (const br of this.db.brilink || []) {
-        const nomAdmin = Math.round(Number(br.nominalAdmin) || 0);
-        const nomPokok = Math.round(Number(br.nominalPokok) || 0);
-        const rekAdm = br.rekeningAdmin || 'KAS01';
-        const kasPokokKode = br.rekeningKasTunai || 'KAS01';
-        if (br.jenisBrilink === 'TARIK_TUNAI') {
-          if (rekAdm === 'KAS01') netKasir += nomAdmin;
-          if (kasPokokKode === 'KAS01') netKasir -= nomPokok;
-        } else {
-          if (rekAdm === 'KAS01') netKasir -= nomAdmin;
-          if (kasPokokKode === 'KAS01') netKasir += nomPokok;
+      if (!kas01.ledgerStartDate) {
+        const toKey = (s?: string) => {
+          if (!s) return 0;
+          const parts = String(s).trim().split(/[-/]/);
+          if (parts.length !== 3) return 0;
+          if (parts[0].length === 4) {
+            return Number(parts[0]) * 10000 + Number(parts[1]) * 100 + Number(parts[2]);
+          }
+          return Number(parts[2]) * 10000 + Number(parts[1]) * 100 + Number(parts[0]);
+        };
+        const hasPreNov10 =
+          (this.db.penjualan || []).some((p) => { const k = toKey(p.tanggal); return k > 0 && k < 20261110; }) ||
+          (this.db.transferRekening || []).some((t) => { const k = toKey(t.tanggal); return k > 0 && k < 20261110; });
+        if (hasPreNov10) {
+          kas01.ledgerStartDate = '10/11/2026';
+          kas01.saldoAwal = 0;
         }
       }
-      for (const p of this.db.pengeluaran || []) {
-        if (p.isNonKas || p.rekeningSumber === 'SINKRON' || p.rekeningSumber === 'STOK_INTERNAL') continue;
-        if (p.rekeningSumber === 'KAS01' || !p.rekeningSumber) netKasir -= Math.round(Number(p.nominal) || 0);
-      }
-      for (const k of this.db.kasbonUang || []) {
-        if (k.isNotaLalu || k.rekeningSumber === 'BON01' || k.rekeningSumber === 'SINKRON' || k.metode === 'SINKRON') continue;
-        if (k.rekeningSumber === 'KAS01' || (!k.rekeningSumber && k.metode === 'TUNAI')) netKasir -= Math.round(Number(k.nominal) || 0);
-      }
-      for (const b of this.db.pembelianBarang || []) {
-        if (b.metodePembayaran === 'HUTANG' || b.metodePembayaran === 'SINKRON') continue;
-        if (b.rekeningSumber === 'KAS01' || (!b.rekeningSumber && b.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(b.totalNominal) || 0);
-      }
-      for (const pt of this.db.pencairanTitipan || []) {
-        if (pt.metodePembayaran === 'SINKRON' || pt.metodePembayaran === 'KOMPENSASI_BON' || pt.isKompensasiBon) continue;
-        if (pt.rekeningSumber === 'KAS01' || (!pt.rekeningSumber && pt.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(pt.nominalPencairan) || 0);
-      }
-      for (const g of this.db.penggajian || []) {
-        if (g.metodePembayaran === 'SINKRON') continue;
-        if (g.rekeningSumber === 'KAS01' || (!g.rekeningSumber && g.metodePembayaran === 'TUNAI')) netKasir -= Math.round(Number(g.gajiBersihDibayar) || 0);
-      }
-      for (const t of this.db.transferRekening || []) {
-        if (t.status && t.status !== 'BERHASIL') continue;
-        const nom = Math.round(Number(t.nominal) || 0);
-        if (t.rekeningTujuan === 'KAS01') netKasir += nom;
-        if (t.rekeningSumber === 'KAS01') netKasir -= nom;
-      }
-      for (const op of this.db.cashOpnameLogs || []) {
-        if (op.sesuaikanSaldoSistem && op.selisih) netKasir += Math.round(Number(op.selisih) || 0);
-      }
+      const netKasir = this.computeKasirNetLedger(kas01.ledgerStartDate);
       kas01.saldoSaatIni = Math.round(Number(kas01.saldoAwal || 0) + netKasir);
     }
 
