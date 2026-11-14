@@ -53,7 +53,29 @@ async function uploadSingleAttachmentString(
 ): Promise<string> {
   const trimmed = String(raw || '').trim();
   if (!trimmed) return '';
-  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/assets/')) {
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/api/bukti-image/')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/assets/aistudio/')) {
+    // If this was a runtime-created local nota capture file still present on disk, promote it to Cloud DB so it survives restarts
+    const fname = trimmed.replace('/assets/aistudio/', '');
+    if (fname.startsWith('nota')) {
+      const localPath = path.resolve(process.cwd(), 'public', 'assets', 'aistudio', fname);
+      if (fs.existsSync(localPath)) {
+        try {
+          const buf = fs.readFileSync(localPath);
+          const mime = fname.endsWith('.png') ? 'image/png' : fname.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+          const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+          const cloudUrl = await supabaseSyncEngine.uploadBuktiImage(dataUrl, defaultPrefix, forceRetry);
+          if (cloudUrl) return cloudUrl;
+        } catch {
+          // Keep existing path if promotion fails
+        }
+      }
+    }
+    return trimmed;
+  }
+  if (trimmed.startsWith('/assets/')) {
     return trimmed;
   }
   if (trimmed.startsWith('data:image/')) {
@@ -3866,17 +3888,37 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
   }
 });
 
+apiRouter.get('/bukti-image/:imageId', async (req, res) => {
+  try {
+    const img = await supabaseSyncEngine.getBuktiImage(req.params.imageId);
+    if (!img) {
+      return res.status(404).json({ success: false, message: 'Gambar bukti nota tidak ditemukan' });
+    }
+    res.setHeader('Content-Type', img.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return res.send(img.buffer);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Gagal memuat gambar bukti' });
+  }
+});
+
 apiRouter.post('/upload-bukti', async (req, res) => {
   try {
     const { dataUrl, prefix } = req.body || {};
     if (!dataUrl || typeof dataUrl !== 'string') {
       return res.status(400).json({ success: false, message: 'Data gambar wajib dikirim' });
     }
-    // If already an external URL or static asset path, return accurately
+    // If already an external URL, Cloud DB image path, or static asset path, return accurately
     if (/^https?:\/\//i.test(dataUrl)) {
       return res.json({
         success: true,
         data: { url: dataUrl, attachment_url: dataUrl, storage: 'SUPABASE_STORAGE' },
+      });
+    }
+    if (dataUrl.startsWith('/api/bukti-image/')) {
+      return res.json({
+        success: true,
+        data: { url: dataUrl, attachment_url: dataUrl, storage: 'SUPABASE_CLOUD' },
       });
     }
     if (dataUrl.startsWith('/assets/')) {
@@ -3885,9 +3927,9 @@ apiRouter.post('/upload-bukti', async (req, res) => {
         data: { url: dataUrl, attachment_url: dataUrl, storage: 'LOCAL_ASSET' },
       });
     }
-    const cloudUrl = await supabaseSyncEngine.uploadBuktiImage(dataUrl, prefix || 'nota', true);
-    let finalUrl = cloudUrl;
-    let storageType = cloudUrl ? 'SUPABASE_STORAGE' : 'LOCAL_ASSET';
+    const cloudResult = await supabaseSyncEngine.uploadBuktiImageWithStorageInfo(dataUrl, prefix || 'nota', true);
+    let finalUrl: string | null = cloudResult?.url || null;
+    let storageType: string = cloudResult?.storage || 'LOCAL_ASSET';
     if (!finalUrl && dataUrl.startsWith('data:image/')) {
       try {
         const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
@@ -3905,7 +3947,10 @@ apiRouter.post('/upload-bukti', async (req, res) => {
         console.warn('Fallback local file save error:', e);
       }
     }
-    if (!finalUrl) finalUrl = dataUrl;
+    if (!finalUrl) {
+      finalUrl = dataUrl;
+      storageType = 'INLINE_COMPRESSED';
+    }
     res.json({
       success: true,
       data: {

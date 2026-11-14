@@ -41,6 +41,8 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
   const [processing, setProcessing] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string>('');
   const [cloudWarning, setCloudWarning] = useState<string>('');
+  const [cloudSuccessMsg, setCloudSuccessMsg] = useState<string>('');
+  const [brokenIndices, setBrokenIndices] = useState<Record<number, boolean>>({});
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -52,6 +54,10 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
       return value.split('|||').map((s) => s.trim()).filter(Boolean);
     }
     return [];
+  }, [value, values]);
+
+  React.useEffect(() => {
+    setBrokenIndices({});
   }, [value, values]);
 
   // Fast & lightweight image compressor using Canvas (~55-75 KB crisp JPEG)
@@ -144,15 +150,21 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
 
     setProcessing(true);
     setCloudWarning('');
+    setCloudSuccessMsg('');
     try {
       const finalResults: string[] = [];
       let anyNonCloud = false;
+      let anyCloudSaved = false;
       for (const file of validFiles) {
         try {
           const compressed = await compressFile(file);
           const stored = await offloadToCloudOrFallback(compressed);
           finalResults.push(stored.url);
-          if (stored.storage !== 'SUPABASE_STORAGE') {
+          const isCloudPersisted =
+            stored.storage === 'SUPABASE_STORAGE' || stored.storage === 'SUPABASE_CLOUD';
+          if (isCloudPersisted) {
+            anyCloudSaved = true;
+          } else {
             anyNonCloud = true;
           }
         } catch (err: any) {
@@ -162,7 +174,11 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
 
       if (anyNonCloud) {
         setCloudWarning(
-          'Peringatan: Foto belum tersimpan ke Cloud Storage (bucket "erp-bukti-nota" Supabase belum aktif / belum tersambung). Jika server restart, foto berisiko hilang. Pastikan Pengaturan Supabase tersambung & skrip SQL bucket sudah dijalankan.'
+          'Peringatan: Koneksi Cloud Supabase belum terhubung. Foto sementara tersimpan lokal — pastikan Pengaturan Supabase tersambung agar aman saat server restart.'
+        );
+      } else if (anyCloudSaved) {
+        setCloudSuccessMsg(
+          'Foto capture berhasil diunggah & tersimpan permanen di Cloud Supabase (aman meski di-refresh atau server restart).'
         );
       }
 
@@ -224,6 +240,7 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
     if (onValuesChange) onValuesChange([]);
     setUploadError('');
     setCloudWarning('');
+    setCloudSuccessMsg('');
   };
 
   return (
@@ -264,6 +281,13 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
         <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px] flex items-center space-x-1.5">
           <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
           <span>{uploadError}</span>
+        </div>
+      )}
+
+      {cloudSuccessMsg && (
+        <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-900 text-[11px] font-medium flex items-start space-x-2 leading-relaxed">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          <span>{cloudSuccessMsg}</span>
         </div>
       )}
 
@@ -350,13 +374,31 @@ export const ImageUploadZone: React.FC<ImageUploadZoneProps> = ({
                 className="relative rounded-xl border border-zinc-200 bg-white p-1.5 shadow-2xs group flex flex-col items-center"
               >
                 <div
-                  onClick={() => setPreviewModalImg(img)}
-                  className="relative w-full h-24 rounded-lg overflow-hidden border border-zinc-200 cursor-pointer bg-zinc-950"
+                  onClick={() => !brokenIndices[idx] && setPreviewModalImg(img)}
+                  className={`relative w-full h-24 rounded-lg overflow-hidden border border-zinc-200 ${
+                    brokenIndices[idx] ? 'bg-rose-50 flex flex-col items-center justify-center p-2 text-center' : 'cursor-pointer bg-zinc-950'
+                  }`}
                 >
-                  <img src={img} alt={`Nota Lembar ${idx + 1}`} className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                    <Eye className="w-4 h-4 text-white" />
-                  </div>
+                  {brokenIndices[idx] ? (
+                    <>
+                      <ImageIcon className="w-5 h-5 text-rose-400 mb-1" />
+                      <span className="text-[9px] font-bold text-rose-800 leading-tight">
+                        Foto lama hilang · Klik × &amp; upload ulang
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <img
+                        src={img}
+                        alt={`Nota Lembar ${idx + 1}`}
+                        onError={() => setBrokenIndices((prev) => ({ ...prev, [idx]: true }))}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                        <Eye className="w-4 h-4 text-white" />
+                      </div>
+                    </>
+                  )}
                   <span className="absolute top-1 left-1 bg-amber-600 text-[9px] font-black text-white px-1.5 py-0.5 rounded shadow-xs">
                     Hal {idx + 1}
                   </span>

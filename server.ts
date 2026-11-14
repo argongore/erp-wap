@@ -93,7 +93,9 @@ async function startServer() {
       const { dbManager, supabaseSyncEngine } = await backendReadyPromise;
       const method = String(req.method || 'GET').toUpperCase();
       if (method === 'GET' || method === 'HEAD') {
-        await supabaseSyncEngine.ensureFreshCloudState(dbManager, 30000);
+        if (!String(req.path || '').startsWith('/bukti-image/')) {
+          await supabaseSyncEngine.ensureFreshCloudState(dbManager, 30000);
+        }
         if (apiRouterInstance) {
           return apiRouterInstance(req, res, next);
         }

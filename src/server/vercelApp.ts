@@ -21,9 +21,14 @@ const sendHealth = (_req: express.Request, res: express.Response) => {
 app.get('/api/health', sendHealth);
 app.get('/health', sendHealth);
 
-// Ensure latest Cloud Supabase snapshot is hydrated before serving any /api request
-app.use(async (_req, _res, next) => {
+// Ensure latest Cloud Supabase snapshot is hydrated before serving any /api request (skip heavy check for cached bukti images)
+app.use(async (req, _res, next) => {
   try {
+    const reqPath = String(req.path || '');
+    if (reqPath.startsWith('/bukti-image/') || reqPath.startsWith('/api/bukti-image/')) {
+      supabaseSyncEngine.reloadConfigIfMissing();
+      return next();
+    }
     await supabaseSyncEngine.ensureFreshCloudState(dbManager, 3500);
     next();
   } catch (err) {

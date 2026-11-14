@@ -105,6 +105,7 @@ class SupabaseSyncEngine {
   private consecutiveFailures = 0;
   private activeDrainPromise: Promise<void> | null = null;
   private unavailableRelationalTables = new Set<string>();
+  private buktiImageCache = new Map<string, { buffer: Buffer; contentType: string }>();
 
   constructor() {
     this.loadConfig();
@@ -1261,61 +1262,175 @@ WITH CHECK (bucket_id = 'erp-bukti-nota');
   }
 
   /**
-   * Offloads base64 receipt/evidence photos to Supabase Storage bucket ('erp-bukti-nota').
-   * Returns lightweight public HTTPS URL (~100 bytes) if successful, or null so caller can safely fall back to compressed inline JPEG.
+   * Offloads base64 receipt/evidence photos to Cloud Supabase:
+   * 1. Tries Supabase Storage bucket ('erp-bukti-nota') if active.
+   * 2. Automatically persists to dedicated Cloud Supabase row (`BUKTI_IMG_*` in `wijaya_agro_erp_state`)
+   *    so images remain 100% persistent across server restarts/refreshes even when storage bucket SQL hasn't been run.
    */
+  public async uploadBuktiImageWithStorageInfo(
+    dataUrl: string,
+    prefix = 'bukti',
+    forceRetry = false
+  ): Promise<{ url: string; storage: 'SUPABASE_STORAGE' | 'SUPABASE_CLOUD' } | null> {
+    if (!this.client || !dataUrl || !dataUrl.startsWith('data:image/')) {
+      return null;
+    }
+
+    const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+    if (!match) return null;
+
+    const contentType = match[1];
+    const base64Body = match[2];
+    const buffer = Buffer.from(base64Body, 'base64');
+    const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+    const safePrefix = String(prefix || 'bukti').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'bukti';
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const rand = Math.random().toString(36).slice(2, 8);
+    const ts = Date.now();
+    const objectPath = `${ym}/${safePrefix}_${ts}_${rand}.${ext}`;
+    const bucketName = 'erp-bukti-nota';
+
+    // Layer 1: Try Supabase Storage Bucket ('erp-bukti-nota')
+    const shouldTryBucket = forceRetry || Date.now() >= this.storageUnavailableUntil;
+    if (shouldTryBucket) {
+      try {
+        let { error: uploadErr } = await this.client.storage
+          .from(bucketName)
+          .upload(objectPath, buffer, { contentType, upsert: true });
+
+        if (
+          !forceRetry &&
+          uploadErr &&
+          (uploadErr.message?.toLowerCase().includes('not found') ||
+            uploadErr.message?.toLowerCase().includes('bucket'))
+        ) {
+          try {
+            await this.client.storage.createBucket(bucketName, { public: true });
+            const retry = await this.client.storage
+              .from(bucketName)
+              .upload(objectPath, buffer, { contentType, upsert: true });
+            uploadErr = retry.error;
+          } catch {
+            // Bucket creation blocked by anon RLS — fall through to Cloud DB layer
+          }
+        }
+
+        if (!uploadErr) {
+          this.storageUnavailableUntil = 0;
+          const { data: pub } = this.client.storage.from(bucketName).getPublicUrl(objectPath);
+          if (pub?.publicUrl) {
+            return { url: pub.publicUrl, storage: 'SUPABASE_STORAGE' };
+          }
+        } else {
+          // Cache bucket unavailability for 2 minutes so batch offloads stay fast via Cloud DB layer
+          this.storageUnavailableUntil = Date.now() + 2 * 60 * 1000;
+        }
+      } catch {
+        this.storageUnavailableUntil = Date.now() + 2 * 60 * 1000;
+      }
+    }
+
+    // Layer 2: Automatic Permanent Cloud DB Storage (`wijaya_agro_erp_state` dedicated image row)
+    try {
+      const imgRowId = `BUKTI_IMG_${safePrefix}_${ts}_${rand}`;
+      const { error: dbImgErr } = await this.client
+        .from('wijaya_agro_erp_state')
+        .upsert(
+          {
+            id: imgRowId,
+            data: {
+              kind: 'BUKTI_IMAGE',
+              contentType,
+              dataUrl,
+              createdAt: now.toISOString(),
+            },
+            karyawan_count: 0,
+            mitra_count: 0,
+            transaksi_count: 0,
+            updated_at: now.toISOString(),
+            updated_by: 'KasirWap Evidence',
+          },
+          { onConflict: 'id' }
+        );
+
+      if (!dbImgErr) {
+        if (this.buktiImageCache.size > 200) {
+          const oldestKey = this.buktiImageCache.keys().next().value;
+          if (oldestKey) this.buktiImageCache.delete(oldestKey);
+        }
+        this.buktiImageCache.set(imgRowId, { buffer, contentType });
+        return {
+          url: `/api/bukti-image/${imgRowId}`,
+          storage: 'SUPABASE_CLOUD',
+        };
+      }
+      console.warn('[SupabaseSyncEngine] Cloud DB image upsert failed:', dbImgErr.message);
+    } catch (err: any) {
+      console.warn('[SupabaseSyncEngine] Cloud DB image exception:', err?.message || err);
+    }
+
+    return null;
+  }
+
   public async uploadBuktiImage(
     dataUrl: string,
     prefix = 'bukti',
     forceRetry = false
   ): Promise<string | null> {
-    if (!this.client || !dataUrl || !dataUrl.startsWith('data:image/')) {
+    const res = await this.uploadBuktiImageWithStorageInfo(dataUrl, prefix, forceRetry);
+    return res?.url || null;
+  }
+
+  public async getBuktiImage(
+    imageId: string
+  ): Promise<{ buffer: Buffer; contentType: string } | null> {
+    const cleanId = String(imageId || '').trim();
+    if (!/^BUKTI_IMG_[a-zA-Z0-9_-]+$/.test(cleanId)) {
       return null;
     }
-    if (!forceRetry && Date.now() < this.storageUnavailableUntil) {
+
+    const cached = this.buktiImageCache.get(cleanId);
+    if (cached) {
+      return cached;
+    }
+
+    if (!this.client) {
+      this.reloadConfigIfMissing();
+    }
+    if (!this.client) {
       return null;
     }
 
     try {
-      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
-      if (!match) return null;
+      const { data, error } = await this.client
+        .from('wijaya_agro_erp_state')
+        .select('data')
+        .eq('id', cleanId)
+        .maybeSingle();
 
-      const contentType = match[1];
-      const base64Body = match[2];
-      const buffer = Buffer.from(base64Body, 'base64');
-      const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
-      const safePrefix = String(prefix || 'bukti').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'bukti';
-      const now = new Date();
-      const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const rand = Math.random().toString(36).slice(2, 8);
-      const objectPath = `${ym}/${safePrefix}_${Date.now()}_${rand}.${ext}`;
-      const bucketName = 'erp-bukti-nota';
-
-      let { error: uploadErr } = await this.client.storage
-        .from(bucketName)
-        .upload(objectPath, buffer, { contentType, upsert: true });
-
-      if (uploadErr && (uploadErr.message?.toLowerCase().includes('not found') || uploadErr.message?.toLowerCase().includes('bucket'))) {
-        try {
-          await this.client.storage.createBucket(bucketName, { public: true });
-          const retry = await this.client.storage
-            .from(bucketName)
-            .upload(objectPath, buffer, { contentType, upsert: true });
-          uploadErr = retry.error;
-        } catch {
-          // Ignore bucket creation error; will return null below
-        }
-      }
-
-      if (uploadErr) {
-        this.storageUnavailableUntil = Date.now() + 5 * 60 * 1000;
+      if (error || !data?.data?.dataUrl) {
         return null;
       }
 
-      const { data: pub } = this.client.storage.from(bucketName).getPublicUrl(objectPath);
-      return pub?.publicUrl || null;
+      const rawDataUrl = String(data.data.dataUrl);
+      const match = rawDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+      if (!match) {
+        return null;
+      }
+
+      const result = {
+        contentType: match[1],
+        buffer: Buffer.from(match[2], 'base64'),
+      };
+
+      if (this.buktiImageCache.size > 200) {
+        const oldestKey = this.buktiImageCache.keys().next().value;
+        if (oldestKey) this.buktiImageCache.delete(oldestKey);
+      }
+      this.buktiImageCache.set(cleanId, result);
+      return result;
     } catch {
-      this.storageUnavailableUntil = Date.now() + 5 * 60 * 1000;
       return null;
     }
   }

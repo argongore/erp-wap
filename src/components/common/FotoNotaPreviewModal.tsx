@@ -52,11 +52,17 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [isZoomed, setIsZoomed] = useState<boolean>(false);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [imgLoadFailed, setImgLoadFailed] = useState<boolean>(false);
 
   useEffect(() => {
     setCurrentIndex(0);
     setIsZoomed(false);
+    setImgLoadFailed(false);
   }, [isOpen, imageUrl]);
+
+  useEffect(() => {
+    setImgLoadFailed(false);
+  }, [currentIndex]);
 
   if (!isOpen || !imageUrl) return null;
 
@@ -253,15 +259,31 @@ export const FotoNotaPreviewModal: React.FC<FotoNotaPreviewModalProps> = ({
             isZoomed ? 'max-h-[82vh]' : 'max-h-[65vh]'
           }`}
         >
-          <img
-            src={activeImage}
-            alt={`Foto Bukti ${currentIndex + 1}`}
-            onClick={() => setIsZoomed((z) => !z)}
-            className={`w-auto rounded-lg object-contain shadow-2xl transition-all ${
-              isZoomed ? 'max-h-[80vh] cursor-zoom-out' : 'max-h-[60vh] max-w-full cursor-zoom-in'
-            }`}
-            title="Klik gambar untuk beralih perbesar/perkecil"
-          />
+          {imgLoadFailed ? (
+            <div className="py-12 px-6 text-center space-y-3 max-w-md">
+              <ImageIcon className="w-10 h-10 text-amber-400 mx-auto opacity-80" />
+              <div className="text-sm font-bold text-amber-300">
+                File Foto Capture Lama Tidak Ditemukan
+              </div>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Foto lama ini pernah terhapus sebelum fitur penyimpanan Cloud permanen aktif.
+                {onGantiFoto
+                  ? ' Silakan klik tombol "Ganti Capture" di atas untuk mengunggah ulang foto nota yang sesuai.'
+                  : ''}
+              </p>
+            </div>
+          ) : (
+            <img
+              src={activeImage}
+              alt={`Foto Bukti ${currentIndex + 1}`}
+              onClick={() => setIsZoomed((z) => !z)}
+              onError={() => setImgLoadFailed(true)}
+              className={`w-auto rounded-lg object-contain shadow-2xl transition-all ${
+                isZoomed ? 'max-h-[80vh] cursor-zoom-out' : 'max-h-[60vh] max-w-full cursor-zoom-in'
+              }`}
+              title="Klik gambar untuk beralih perbesar/perkecil"
+            />
+          )}
 
           {imageList.length > 1 && (
             <>
