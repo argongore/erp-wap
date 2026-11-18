@@ -258,14 +258,14 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
               </div>
 
               <span className="text-[11px] text-zinc-400">Set Cepat:</span>
-              {[120000, 135000, 150000, 175000].map((rate) => (
+              {[0, 120000, 135000, 150000, 175000].map((rate) => (
                 <button
                   key={rate}
                   type="button"
                   onClick={() => handleSetQuickRate(rate)}
                   className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-200 font-mono"
                 >
-                  {formatRupiah(rate)}
+                  {rate === 0 ? 'Rp 0 (Libur)' : formatRupiah(rate)}
                 </button>
               ))}
             </div>
@@ -362,15 +362,14 @@ export const BatchGajiHarianModal: React.FC<BatchGajiHarianModalProps> = ({
                           type="number"
                           min="0"
                           step="any"
-                          value={row.gajiNominal || ''}
+                          value={row.gajiNominal}
                           onChange={(e) =>
                             handleUpdateRow(idx, {
-                              gajiNominal: Math.max(0, Number(e.target.value)),
+                              gajiNominal: Math.max(0, Number(e.target.value) || 0),
                             })
                           }
                           className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-emerald-500 text-xs text-right"
-                          placeholder="Nominal"
-                          required
+                          placeholder="0 (Libur/Sakit)"
                         />
                       </td>
 

@@ -7,6 +7,7 @@ import {
   FileText,
   AlertCircle,
   FileDown,
+  FileSpreadsheet,
   Camera,
   Share2,
 } from 'lucide-react';
@@ -22,6 +23,8 @@ import {
 import { formatRupiah, formatTanggalIndo } from '../../utils/format.ts';
 import { ShareLinkModal } from '../public/ShareLinkModal.tsx';
 import { exportRekeningKoranToPdf } from '../../utils/exportRekeningKoranPdf.ts';
+import { exportHistoryMitraToXlsx } from '../../utils/exportHistoryMitra.ts';
+import { exportRekeningKoranToImage } from '../../utils/exportRekeningKoranImage.ts';
 
 interface Props {
   statement: RekeningKoranMitraSummary | null;
@@ -43,6 +46,7 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [generatingImageFormat, setGeneratingImageFormat] = useState<'jpg' | 'png' | null>(null);
   const [printWarning, setPrintWarning] = useState('');
   const [includeNotaProofs, setIncludeNotaProofs] = useState(true);
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -165,6 +169,14 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
     statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip);
   const sisaTitipBersih =
     statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan);
+  const displayPiutangTotal =
+    printScope === 'SALDO_BERJALAN'
+      ? (statement.totalPiutangBerjalanTampil ?? statement.totalBonKeseluruhan)
+      : statement.totalBonKeseluruhan;
+  const displayTitipTotal =
+    printScope === 'SALDO_BERJALAN'
+      ? (statement.totalTitipBerjalanTampil ?? statement.totalTitip)
+      : statement.totalTitip;
 
   const getRowPiutangVal = (row: RekeningKoranHistoryItem) =>
     printScope === 'SALDO_BERJALAN'
@@ -272,6 +284,43 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
     }
   };
 
+  const handleDownloadExcel = () => {
+    setPrintWarning('');
+    try {
+      exportHistoryMitraToXlsx(statement, activeRows, activeProfil, {
+        isSaldoBerjalanOnly: printScope === 'SALDO_BERJALAN',
+        scopeLabel:
+          printScope === 'SALDO_BERJALAN'
+            ? 'Saldo Berjalan'
+            : 'Semua + History Transaksi Mitra',
+        filterLabel:
+          printScope === 'SALDO_BERJALAN'
+            ? 'Hanya Saldo Berjalan'
+            : 'Seluruh History Transaksi',
+      });
+    } catch (err: any) {
+      console.error('Excel generation error:', err);
+      setPrintWarning(`Gagal membuat file Excel (.xlsx): ${err.message || err}`);
+    }
+  };
+
+  const handleDownloadImage = async (format: 'jpg' | 'png') => {
+    setGeneratingImageFormat(format);
+    setPrintWarning('');
+    try {
+      await exportRekeningKoranToImage(statement, activeProfil, activeRekeningUtama, {
+        format,
+        printScope,
+        includeNotaProofs,
+      });
+    } catch (err: any) {
+      console.error('Image generation error:', err);
+      setPrintWarning(`Gagal membuat gambar ${format.toUpperCase()}: ${err.message || err}`);
+    } finally {
+      setGeneratingImageFormat(null);
+    }
+  };
+
   const generateTextSummary = () => {
     const divider = '==================================================';
     const lines = [
@@ -293,8 +342,8 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
         : sisaTitipBersih > 0
         ? `*YANG HARUS DI BAYAR : HUTANG ${formatRupiah(sisaTitipBersih)}*`
         : `*STATUS SALDO : Rp 0 (IMPAS / LUNAS)*`,
-      `• Total Piutang Berjalan : ${formatRupiah(statement.totalBonKeseluruhan)}`,
-      `• Total Titip / Hak Mitra: ${formatRupiah(statement.totalTitip)}`,
+      `• Total Piutang Berjalan : ${formatRupiah(displayPiutangTotal)}`,
+      `• Total Titip / Bayar Bon: ${formatRupiah(displayTitipTotal)}`,
       divider,
       `*RINCIAN TRANSAKSI (${activeRows.length} Baris):*`,
     ];
@@ -515,13 +564,45 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
 
               <button
                 type="button"
+                onClick={handleDownloadExcel}
+                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition-colors cursor-pointer"
+                title="Download tabel mutasi/history langsung dalam format Excel (.xlsx)"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Excel (.xlsx)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadImage('jpg')}
+                disabled={generatingImageFormat !== null}
+                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-sky-600 hover:bg-sky-500 text-white shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                title="Download rekening koran sebagai gambar JPG (.jpg)"
+              >
+                <FileDown className="w-3.5 h-3.5" />
+                <span>{generatingImageFormat === 'jpg' ? 'Membuat JPG...' : 'JPG'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadImage('png')}
+                disabled={generatingImageFormat !== null}
+                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                title="Download rekening koran sebagai gambar PNG (.png)"
+              >
+                <FileDown className="w-3.5 h-3.5" />
+                <span>{generatingImageFormat === 'png' ? 'Membuat PNG...' : 'PNG'}</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={handleDownloadPdf}
                 disabled={isGeneratingPdf}
                 className="flex items-center space-x-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-rose-700 hover:bg-rose-600 text-white shadow-xs transition-colors cursor-pointer disabled:opacity-50"
                 title="Download dokumen langsung dalam format PDF (.pdf)"
               >
                 <FileDown className="w-3.5 h-3.5" />
-                <span>{isGeneratingPdf ? 'Membuat PDF...' : 'Download PDF (.pdf)'}</span>
+                <span>{isGeneratingPdf ? 'Membuat PDF...' : 'PDF (.pdf)'}</span>
               </button>
 
               <button
@@ -650,8 +731,8 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                         PIUTANG {formatRupiah(sisaBayarBersih)}
                       </div>
                       <div className="text-[10px] font-mono tabular-nums text-zinc-700 border-t border-amber-300 pt-1 flex justify-between gap-2">
-                        <span>Piutang: {formatRupiah(statement.totalBonKeseluruhan)}</span>
-                        <span>Titip: {formatRupiah(statement.totalTitip)}</span>
+                        <span>Piutang: {formatRupiah(displayPiutangTotal)}</span>
+                        <span>Titip: {formatRupiah(displayTitipTotal)}</span>
                       </div>
                     </>
                   ) : sisaTitipBersih > 0 ? (
@@ -663,8 +744,8 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                         HUTANG {formatRupiah(sisaTitipBersih)}
                       </div>
                       <div className="text-[10px] font-mono tabular-nums text-zinc-700 border-t border-amber-300 pt-1 flex justify-between gap-2">
-                        <span>Titip: {formatRupiah(statement.totalTitip)}</span>
-                        <span>Piutang: {formatRupiah(statement.totalBonKeseluruhan)}</span>
+                        <span>Titip: {formatRupiah(displayTitipTotal)}</span>
+                        <span>Piutang: {formatRupiah(displayPiutangTotal)}</span>
                       </div>
                     </>
                   ) : (
@@ -722,7 +803,14 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                         const displayTxId = row.idTransaksiInduk || row.id;
 
                         return (
-                          <tr key={row.id} className="align-top hover:bg-zinc-50/60">
+                          <tr
+                            key={row.id}
+                            className={
+                              row.isBayarBonSiklusBerjalan && printScope === 'SALDO_BERJALAN'
+                                ? 'align-top bg-emerald-50/50 hover:bg-emerald-50/80'
+                                : 'align-top hover:bg-zinc-50/60'
+                            }
+                          >
                             <td className="py-2 px-2 text-center font-mono tabular-nums font-bold">
                               {rIdx + 1}
                             </td>
@@ -801,10 +889,10 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                         TOTAL SALDO BERJALAN :
                       </td>
                       <td className="py-2.5 px-2 text-right font-mono tabular-nums text-rose-900">
-                        {formatRupiah(statement.totalBonKeseluruhan)}
+                        {formatRupiah(displayPiutangTotal)}
                       </td>
                       <td className="py-2.5 px-2 text-right font-mono tabular-nums text-emerald-900">
-                        {formatRupiah(statement.totalTitip)}
+                        {formatRupiah(displayTitipTotal)}
                       </td>
                       <td className="py-2.5 px-2.5 font-mono tabular-nums text-zinc-900">
                         {sisaBayarBersih > 0

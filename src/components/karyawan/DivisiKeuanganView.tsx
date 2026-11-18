@@ -1193,7 +1193,13 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 font-semibold focus:outline-hidden focus:border-emerald-500"
                 >
                   {rekeningList
-                    .filter((r) => r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-')))
+                    .filter(
+                      (r) =>
+                        (r.kategori === 'PERUSAHAAN' ||
+                          (!r.kategori && !r.isVirtual && !r.kode.startsWith('REK-'))) &&
+                        !r.isRekeningTitip &&
+                        !r.isAnakPerusahaan
+                    )
                     .map((r) => (
                       <option key={r.kode} value={r.kode}>
                         {r.nama} ({r.kode}) - Saldo Fisik: {formatRupiah(r.saldoSaatIni)}

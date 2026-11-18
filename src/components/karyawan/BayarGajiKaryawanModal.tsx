@@ -85,7 +85,8 @@ export const isRealPayableRekening = (r: Rekening): boolean =>
   r.kode !== 'BON01' &&
   r.kode !== 'TIT01' &&
   r.kode !== 'SINKRON' &&
-  (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'));
+  (!r.kode.startsWith('REK-') ||
+    Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.isRekeningTitip || r.kategori === 'REKENING_TITIP'));
 
 export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
   initialKaryawanId,
@@ -337,12 +338,8 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
       setErrorMsg('Pilih karyawan terlebih dahulu.');
       return;
     }
-    if (totalGajiKotor <= 0) {
-      setErrorMsg(
-        modePembayaranGaji === 'BULAN_SEBELUMNYA_LANGSUNG'
-          ? `Masukkan nominal Gaji Bulan ${periodeLabel} terlebih dahulu (harus lebih dari Rp 0).`
-          : 'Total gaji kotor harus lebih dari Rp 0.'
-      );
+    if (totalGajiKotor < 0) {
+      setErrorMsg('Total gaji kotor tidak boleh bernilai negatif.');
       return;
     }
     if (metodePembayaran === 'TRANSFER' && !isSinkronMode && bankTransferRekenings.length === 0) {
@@ -655,13 +652,13 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                     type="number"
                     min="0"
                     step="any"
-                    value={gajiBulanLaluInput || ''}
+                    value={gajiBulanLaluInput}
                     onChange={(e) => setGajiBulanLaluInput(Math.max(0, Number(e.target.value) || 0))}
-                    placeholder="Contoh: 2500000"
+                    placeholder="Contoh: 2500000 atau 0"
                     className="w-full px-3.5 py-2.5 text-base font-mono tabular-nums font-bold border border-amber-400 rounded-xl bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                   <div className="flex flex-wrap gap-1.5 mt-2">
-                    {[1500000, 2000000, 2500000, 3000000, 3500000, 4000000].map((preset) => (
+                    {[0, 1500000, 2000000, 2500000, 3000000, 3500000, 4000000].map((preset) => (
                       <button
                         key={preset}
                         type="button"
@@ -672,7 +669,7 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                             : 'bg-white text-slate-700 border-slate-300 hover:bg-amber-100'
                         }`}
                       >
-                        {(preset / 1000000).toLocaleString('id-ID')} Jt
+                        {preset === 0 ? 'Rp 0' : `${(preset / 1000000).toLocaleString('id-ID')} Jt`}
                       </button>
                     ))}
                   </div>
@@ -1126,7 +1123,7 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={submitting || totalGajiKotor <= 0 || saldoTidakCukup}
+                disabled={submitting || saldoTidakCukup}
                 className="px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 flex items-center gap-2 transition-colors shadow-lg cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />

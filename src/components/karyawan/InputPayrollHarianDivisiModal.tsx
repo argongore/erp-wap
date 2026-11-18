@@ -112,7 +112,11 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
 
   // Spreadsheet specific fields matching user format
   const [itemPekerjaan, setItemPekerjaan] = useState<string>('KERJA GUDANG');
-  const [kuantiti, setKuantiti] = useState<number>(1);
+  const [kuantitiText, setKuantitiText] = useState<string>('1');
+  const kuantiti = (() => {
+    const num = Number(String(kuantitiText || '').trim().replace(/,/g, '.'));
+    return Number.isFinite(num) && num >= 0 ? Math.round(num * 10000) / 10000 : 0;
+  })();
   const [ketStatus, setKetStatus] = useState<'BON' | 'LUNAS'>('BON');
   const [catatanKhusus, setCatatanKhusus] = useState<string>('');
 
@@ -161,9 +165,10 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
     }
   };
 
-  const upahHarian = Number(upahHarianInput) || 0;
-  const uangMakanLembur = Number(uangMakanInput) || 0;
-  const totalUpah = upahHarian + uangMakanLembur;
+  const upahHarian = Math.max(0, Number(String(upahHarianInput || '').replace(/,/g, '.')) || 0);
+  const uangMakanLembur = Math.max(0, Number(String(uangMakanInput || '').replace(/,/g, '.')) || 0);
+  const upahPokokTotal = Math.round(kuantiti * upahHarian);
+  const totalUpah = upahPokokTotal + Math.round(uangMakanLembur);
   const totalBon = activeKry?.totalKasbonAktif || 0;
 
   const validRekeningList = rekeningList.filter(
@@ -175,7 +180,8 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
       r.kode !== 'BON01' &&
       r.kode !== 'TIT01' &&
       r.kode !== 'SINKRON' &&
-      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
+      (!r.kode.startsWith('REK-') ||
+        Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.isRekeningTitip || r.kategori === 'REKENING_TITIP'))
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -187,13 +193,13 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
       return;
     }
 
-    if (!tugasPekerjaan.trim()) {
-      setErrorMsg('Isi uraian tugas: hari ini karyawan sedang bekerja untuk apa');
+    if (!itemPekerjaan.trim() && !tugasPekerjaan.trim()) {
+      setErrorMsg('Isi item / jenis pekerjaan atau uraian keterangan pekerjaan');
       return;
     }
 
-    if (kuantiti > 0 && totalUpah <= 0) {
-      setErrorMsg('Nominal upah kerja harian harus lebih dari Rp 0 jika kuantiti > 0');
+    if (kuantiti < 0 || totalUpah < 0) {
+      setErrorMsg('Kuantiti dan nominal upah kerja harian tidak boleh bernilai negatif');
       return;
     }
 
@@ -227,11 +233,11 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
         item: itemPekerjaan || tugasPekerjaan.trim(),
         kuantiti,
         harga: upahHarian,
-        jumlah: totalUpah,
+        jumlah: upahPokokTotal,
         ket: ketStatus,
         catatan: catatanKhusus,
         tugasPekerjaan: tugasPekerjaan.trim() || itemPekerjaan,
-        upahHarian,
+        upahHarian: upahPokokTotal,
         uangMakanLembur,
         modeBayar,
         rekeningSumber: modeBayar === 'LANGSUNG_CAIR' ? rekeningSumber : undefined,
@@ -458,7 +464,6 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                 value={itemPekerjaan}
                 onChange={(e) => {
                   setItemPekerjaan(e.target.value);
-                  if (!tugasPekerjaan) setTugasPekerjaan(e.target.value);
                 }}
                 placeholder="Contoh: KERJA GUDANG, SURJAL, JALAN, DRIVER TRUK, NGEBAL..."
                 className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 font-bold focus:outline-hidden focus:border-amber-500 uppercase"
@@ -483,7 +488,6 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                     type="button"
                     onClick={() => {
                       setItemPekerjaan(it);
-                      if (!tugasPekerjaan) setTugasPekerjaan(it);
                     }}
                     className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
                       itemPekerjaan === it
@@ -492,6 +496,26 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                     }`}
                   >
                     {it}
+                  </button>
+                ))}
+                {(['TIDAK HADIR', 'SAKIT', 'LIBUR', 'IZIN'] as const).map((it) => (
+                  <button
+                    key={it}
+                    type="button"
+                    onClick={() => {
+                      setItemPekerjaan(it);
+                      setUpahHarianInput('0');
+                      setUangMakanInput('0');
+                      setKetStatus('LUNAS');
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
+                      itemPekerjaan === it
+                        ? 'bg-rose-600 text-white border-rose-500'
+                        : 'bg-rose-950/50 text-rose-300 border-rose-800/70 hover:bg-rose-900/60'
+                    }`}
+                    title={`Catat ${it} (otomatis set nominal Rp 0)`}
+                  >
+                    {it} (Rp 0)
                   </button>
                 ))}
               </div>
@@ -505,11 +529,26 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                 </label>
                 <div className="flex items-center space-x-1.5">
                   <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    value={kuantiti}
-                    onChange={(e) => setKuantiti(Number(e.target.value))}
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="Contoh: 1,5"
+                    value={kuantitiText}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/[^0-9.,]/g, '');
+                      let hasSep = false;
+                      let out = '';
+                      for (const ch of cleaned) {
+                        if (ch === ',' || ch === '.') {
+                          if (!hasSep) {
+                            out += ch;
+                            hasSep = true;
+                          }
+                        } else {
+                          out += ch;
+                        }
+                      }
+                      setKuantitiText(out);
+                    }}
                     className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-amber-500"
                   />
                   <span className="text-[10px] text-zinc-400 shrink-0">
@@ -605,9 +644,25 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
                   onChange={(e) => setUpahHarianInput(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-emerald-500"
                 />
-                <span className="text-[10px] text-zinc-500 mt-0.5 block">
-                  Standar karyawan: {formatRupiah(defaultUpah)}
-                </span>
+                <div className="flex items-center justify-between mt-1 gap-2">
+                  <span className="text-[10px] text-zinc-500">
+                    Standar karyawan: {formatRupiah(defaultUpah)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUpahHarianInput('0');
+                      setUangMakanInput('0');
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors cursor-pointer ${
+                      upahHarian === 0
+                        ? 'bg-rose-700 text-white border-rose-500'
+                        : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:text-zinc-200'
+                    }`}
+                  >
+                    Set Rp 0 (Libur/Sakit/Tidak Hadir)
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -628,8 +683,14 @@ export const InputPayrollHarianDivisiModal: React.FC<InputPayrollHarianDivisiMod
               </div>
             </div>
 
-            <div className="pt-2 border-t border-zinc-700 flex items-center justify-between">
-              <span className="font-semibold text-zinc-400 text-xs">Total Gaji Harian Hari Ini:</span>
+            <div className="pt-2 border-t border-zinc-700 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs">
+                <span className="font-semibold text-zinc-400">Total Gaji Harian Hari Ini:</span>
+                <span className="ml-2 text-[11px] font-mono text-zinc-400">
+                  ({kuantiti} &times; {formatRupiah(upahHarian)}
+                  {uangMakanLembur > 0 ? ` + ${formatRupiah(uangMakanLembur)}` : ''})
+                </span>
+              </div>
               <span className="font-mono font-black text-emerald-400 text-base">
                 {formatRupiah(totalUpah)}
               </span>

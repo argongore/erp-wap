@@ -17,12 +17,18 @@ import {
   RefreshCw,
   TrendingUp,
   FileText,
+  UserCheck,
+  Eye,
+  FileDown,
 } from 'lucide-react';
-import { Rekening, KategoriRekening, Mitra } from '../../server/types.ts';
+import { Rekening, KategoriRekening, Mitra, Karyawan } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
+import { ModalTransaksiRekeningTitip } from '../common/ModalTransaksiRekeningTitip.tsx';
+import { ModalAuditRekeningTitip } from '../common/ModalAuditRekeningTitip.tsx';
+import { exportRekeningTitipToPdf } from '../../utils/exportRekeningTitip.ts';
 
 interface Props {
   rekeningList: Rekening[];
@@ -32,7 +38,13 @@ interface Props {
   onSuccessReceipt?: (receipt: ReceiptData) => void;
 }
 
-type TabKategori = 'ALL' | 'PERUSAHAAN' | 'ANAK_PERUSAHAAN' | 'OPERASIONAL_DIVISI' | 'VIRTUAL_SISTEM';
+type TabKategori =
+  | 'ALL'
+  | 'PERUSAHAAN'
+  | 'REKENING_TITIP'
+  | 'ANAK_PERUSAHAAN'
+  | 'OPERASIONAL_DIVISI'
+  | 'VIRTUAL_SISTEM';
 
 export const MasterRekeningView: React.FC<Props> = ({
   rekeningList,
@@ -45,6 +57,23 @@ export const MasterRekeningView: React.FC<Props> = ({
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingRekening, setEditingRekening] = useState<Rekening | null>(null);
   const [anakPerusahaanModalKode, setAnakPerusahaanModalKode] = useState<string | null>(null);
+  const [rekeningTitipModalKode, setRekeningTitipModalKode] = useState<string | null>(null);
+  const [auditRekeningTitipKode, setAuditRekeningTitipKode] = useState<string | null>(null);
+  const [downloadingTitipKode, setDownloadingTitipKode] = useState<string | null>(null);
+  const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    api
+      .getKaryawan()
+      .then((res) => {
+        if (!cancelled && Array.isArray(res)) setKaryawanList(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [rekeningList.length]);
 
   // Dedicated Update Saldo Modal
   const [showSaldoModal, setShowSaldoModal] = useState(false);
@@ -68,6 +97,7 @@ export const MasterRekeningView: React.FC<Props> = ({
   const [formKeterangan, setFormKeterangan] = useState('');
   const [formKategori, setFormKategori] = useState<KategoriRekening>('PERUSAHAAN');
   const [formIndukPenyimpan, setFormIndukPenyimpan] = useState('KAS01');
+  const [formIdKaryawanTerkait, setFormIdKaryawanTerkait] = useState('');
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -75,6 +105,9 @@ export const MasterRekeningView: React.FC<Props> = ({
 
   // Helper classification
   const getKategori = (r: Rekening): KategoriRekening => {
+    if (r.isRekeningTitip || r.kategori === 'REKENING_TITIP') {
+      return 'REKENING_TITIP';
+    }
     if (r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.kode === 'REK-DPPARABO') {
       return 'ANAK_PERUSAHAAN';
     }
@@ -85,6 +118,7 @@ export const MasterRekeningView: React.FC<Props> = ({
   };
 
   const rekeningPerusahaanList = rekeningList.filter((r) => getKategori(r) === 'PERUSAHAAN');
+  const rekeningTitipList = rekeningList.filter((r) => getKategori(r) === 'REKENING_TITIP');
   const rekeningAnakPerusahaanList = rekeningList.filter((r) => getKategori(r) === 'ANAK_PERUSAHAAN');
   const rekeningOperasionalList = rekeningList.filter((r) => getKategori(r) === 'OPERASIONAL_DIVISI');
   const rekeningVirtualList = rekeningList.filter((r) => getKategori(r) === 'VIRTUAL_SISTEM');
@@ -97,6 +131,10 @@ export const MasterRekeningView: React.FC<Props> = ({
 
   // Totals
   const totalDanaFisikPerusahaan = rekeningPerusahaanList
+    .filter((r) => r.status === 'AKTIF')
+    .reduce((sum, r) => sum + r.saldoSaatIni, 0);
+
+  const totalSaldoRekeningTitip = rekeningTitipList
     .filter((r) => r.status === 'AKTIF')
     .reduce((sum, r) => sum + r.saldoSaatIni, 0);
 
@@ -141,6 +179,10 @@ export const MasterRekeningView: React.FC<Props> = ({
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
+    if (formKategori === 'REKENING_TITIP' && !formIdKaryawanTerkait) {
+      setErrorMsg('Pilih Karyawan yang dipercaya memegang Rekening Titip Uang');
+      return;
+    }
     setSubmitting(true);
     try {
       const parsedAwal = parseInputNominal(formSaldoAwal);
@@ -152,7 +194,9 @@ export const MasterRekeningView: React.FC<Props> = ({
         saldoAwal: parsedAwal,
         keterangan: formKeterangan.trim(),
         kategori: formKategori,
+        isRekeningTitip: formKategori === 'REKENING_TITIP',
         isAnakPerusahaan: formKategori === 'ANAK_PERUSAHAAN',
+        idKaryawanTerkait: formKategori === 'REKENING_TITIP' ? formIdKaryawanTerkait : undefined,
         rekeningIndukPenyimpan: formKategori === 'OPERASIONAL_DIVISI' ? formIndukPenyimpan : undefined,
       } as any);
 
@@ -164,6 +208,7 @@ export const MasterRekeningView: React.FC<Props> = ({
       setFormSaldoAwal('');
       setFormKeterangan('');
       setFormKategori('PERUSAHAAN');
+      setFormIdKaryawanTerkait('');
       onRefresh();
     } catch (err: any) {
       setErrorMsg(err.message || 'Gagal menambahkan rekening');
@@ -177,6 +222,10 @@ export const MasterRekeningView: React.FC<Props> = ({
     if (!editingRekening) return;
     setErrorMsg('');
     setSuccessMsg('');
+    if (formKategori === 'REKENING_TITIP' && !formIdKaryawanTerkait) {
+      setErrorMsg('Pilih Karyawan yang dipercaya memegang Rekening Titip Uang');
+      return;
+    }
     setSubmitting(true);
     try {
       const numSaldoSaatIni = parseInputNominal(formSaldoSaatIni);
@@ -189,7 +238,9 @@ export const MasterRekeningView: React.FC<Props> = ({
         status: editingRekening.status,
         keterangan: formKeterangan.trim(),
         kategori: formKategori,
+        isRekeningTitip: formKategori === 'REKENING_TITIP',
         isAnakPerusahaan: formKategori === 'ANAK_PERUSAHAAN',
+        idKaryawanTerkait: formKategori === 'REKENING_TITIP' ? formIdKaryawanTerkait : undefined,
         rekeningIndukPenyimpan: formKategori === 'OPERASIONAL_DIVISI' ? formIndukPenyimpan : undefined,
         saldoSaatIni: numSaldoSaatIni,
         saldoAwal: numSaldoAwal,
@@ -217,6 +268,7 @@ export const MasterRekeningView: React.FC<Props> = ({
     setFormKeterangan(rek.keterangan || '');
     setFormKategori(getKategori(rek));
     setFormIndukPenyimpan(rek.rekeningIndukPenyimpan || 'KAS01');
+    setFormIdKaryawanTerkait(rek.idKaryawanTerkait || '');
     setErrorMsg('');
     setSuccessMsg('');
   };
@@ -338,7 +390,7 @@ export const MasterRekeningView: React.FC<Props> = ({
       </div>
 
       {/* Top Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 text-xs">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3.5 text-xs">
         {/* Card 1: Rekening Perusahaan */}
         <div className="min-w-0 overflow-hidden p-4 bg-white rounded-xl border-2 border-emerald-500/80 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
@@ -359,12 +411,35 @@ export const MasterRekeningView: React.FC<Props> = ({
           </p>
         </div>
 
-        {/* Card 2: Anak Perusahaan & Mitra (DP Parabot) */}
+        {/* Card 2: Rekening Titip Uang (Dana Amanah di Karyawan) */}
+        <div
+          onClick={() => setActiveTab('REKENING_TITIP')}
+          className="min-w-0 overflow-hidden p-4 bg-white rounded-xl border-2 border-sky-500/80 shadow-xs space-y-1.5 cursor-pointer hover:bg-sky-50/30 transition-colors"
+        >
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="text-[10px] font-bold text-sky-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
+              <ShieldCheck className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+              <span className="truncate">REKENING TITIP UANG</span>
+            </span>
+            <span className="text-[10px] text-sky-700 font-semibold shrink-0">Amanah Karyawan</span>
+          </div>
+          <p
+            className="text-lg font-black text-sky-950 font-mono tabular-nums truncate whitespace-nowrap"
+            title={formatRupiah(totalSaldoRekeningTitip)}
+          >
+            {formatRupiahSingkat(totalSaldoRekeningTitip)}
+          </p>
+          <p className="text-[11px] text-zinc-500 leading-tight">
+            Uang PT dititipkan ke karyawan dipercaya untuk transaksi &amp; terhubung ke Rekening Koran ({rekeningTitipList.length} rek).
+          </p>
+        </div>
+
+        {/* Card 3: Anak Perusahaan & Mitra (DP Parabot) */}
         <div className="min-w-0 overflow-hidden p-4 bg-white rounded-xl border-2 border-teal-500/80 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-teal-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
               <Building2 className="w-3.5 h-3.5 text-teal-700 shrink-0" />
-              <span className="truncate">ANAK PERUSAHAAN &amp; MITRA</span>
+              <span className="truncate">ANAK PERUSAHAAN</span>
             </span>
             <span className="text-[10px] text-teal-700 font-semibold shrink-0">1 Transaksi</span>
           </div>
@@ -381,11 +456,11 @@ export const MasterRekeningView: React.FC<Props> = ({
               ? 'Dana PT tersimpan di DP Parabot (otomatis sinkron buku mitra).'
               : totalSaldoAnakPerusahaan < 0
               ? 'Dana talangan DP Parabot ke PT. Wijaya Agro Perkasa.'
-              : 'DP Parabot (bukan bank): otomatis menyatu dengan akun Mitra.'}
+              : 'DP Parabot (bukan bank): menyatu dengan akun Mitra.'}
           </p>
         </div>
 
-        {/* Card 3: Rekening Operasional Divisi */}
+        {/* Card 4: Rekening Operasional Divisi */}
         <div className="min-w-0 overflow-hidden p-4 bg-white rounded-xl border-2 border-indigo-400/80 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
@@ -401,11 +476,11 @@ export const MasterRekeningView: React.FC<Props> = ({
             {formatRupiahSingkat(totalBukuOperasionalDivisi)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
-            Saldo arus kas divisi (otomatis bertambah saat Penjualan &amp; berkurang saat Pembelian/Ops di {rekeningOperasionalList.length} divisi).
+            Saldo arus kas {rekeningOperasionalList.length} divisi internal.
           </p>
         </div>
 
-        {/* Card 4: Piutang BON01 */}
+        {/* Card 5: Piutang BON01 */}
         <div className="min-w-0 overflow-hidden p-4 bg-white rounded-xl border border-zinc-200 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider truncate">
@@ -424,13 +499,13 @@ export const MasterRekeningView: React.FC<Props> = ({
           </p>
         </div>
 
-        {/* Card 5: Titip TIT01 */}
+        {/* Card 6: Titip Panen / Hutang TIT01 */}
         <div className="min-w-0 overflow-hidden p-4 bg-white rounded-xl border border-zinc-200 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-purple-800 uppercase tracking-wider truncate">
-              TITIPAN TIT01
+              HUTANG / TITIP PANEN TIT01
             </span>
-            <span className="text-[10px] text-purple-700 font-semibold shrink-0">Virtual</span>
+            <span className="text-[10px] text-purple-700 font-semibold shrink-0">Virtual Hutang</span>
           </div>
           <p
             className="text-lg font-black text-purple-900 font-mono tabular-nums truncate whitespace-nowrap"
@@ -439,11 +514,11 @@ export const MasterRekeningView: React.FC<Props> = ({
             {formatRupiahSingkat(totalTitipanHasilBumi)}
           </p>
           <p className="text-[11px] text-zinc-500 leading-tight">
-            Hasil panen petani/mitra yang belum dicairkan ke kas/bank.
+            Hutang PT atas titipan panen petani/mitra (berbeda dengan Rekening Titip Uang).
           </p>
         </div>
 
-        {/* Card 6: Rekening SINKRON (Potong Titipan / Uang Hasil Bumi Non-Tunai) */}
+        {/* Card 7: Rekening SINKRON (Potong Titipan / Uang Hasil Bumi Non-Tunai) */}
         <div className="min-w-0 overflow-hidden p-4 bg-white rounded-xl border-2 border-cyan-500/80 shadow-xs space-y-1.5">
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="text-[10px] font-bold text-cyan-900 uppercase tracking-wider flex items-center space-x-1 min-w-0 truncate">
@@ -470,27 +545,33 @@ export const MasterRekeningView: React.FC<Props> = ({
           <ShieldCheck className="w-4 h-4 text-emerald-700" />
           <span>Aturan Tata Kelola Keuangan PT. Wijaya Agro Perkasa:</span>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-[11px] text-emerald-900">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 text-[11px] text-emerald-900">
           <div className="p-2.5 bg-white/80 rounded-lg border border-emerald-200 space-y-1">
             <strong className="text-emerald-950 font-bold">1. Rekening Perusahaan (Kas &amp; Bank Resmi):</strong>
             <p className="text-zinc-600">
               Meliputi <strong>KAS01 (Kas Utama Kasir)</strong> dan rekening bank giro (BNI, BCA, Mandiri, BRI, BSI). Nominal saldo dapat disesuaikan kapan saja agar selaras dengan fisik pembukuan.
             </p>
           </div>
+          <div className="p-2.5 bg-white/80 rounded-lg border border-sky-300 space-y-1">
+            <strong className="text-sky-950 font-bold">2. Rekening Titip Uang (Amanah Karyawan):</strong>
+            <p className="text-zinc-600">
+              Untuk menitipkan sebagian dana dari rekening PT (misal BCA saat owner dinas) ke karyawan dipercaya. Terhubung ke <strong>Rekening Koran Karyawan</strong> untuk audit uang titip vs belanja (terpisah dari <strong>BON01/TIT01</strong>).
+            </p>
+          </div>
           <div className="p-2.5 bg-white/80 rounded-lg border border-teal-300 space-y-1">
-            <strong className="text-teal-950 font-bold">2. Rekening Anak Perusahaan &amp; Mitra (DP Parabot):</strong>
+            <strong className="text-teal-950 font-bold">3. Rekening Anak Perusahaan &amp; Mitra (DP Parabot):</strong>
             <p className="text-zinc-600">
               <strong>DP Parabot</strong> bukan bank, melainkan Anak Perusahaan PT. Wijaya Agro Perkasa yang juga berperan sebagai <strong>Mitra</strong>. Setiap simpan/tarik dana melalui <strong>REK-DPPARABO</strong> tersimpan menjadi <strong>1 Transaksi Terpadu</strong>.
             </p>
           </div>
           <div className="p-2.5 bg-white/80 rounded-lg border border-emerald-200 space-y-1">
-            <strong className="text-indigo-950 font-bold">3. Buku Arus Kas Divisi (Tracking Unit Usaha):</strong>
+            <strong className="text-indigo-950 font-bold">4. Buku Arus Kas Divisi (Tracking Unit Usaha):</strong>
             <p className="text-zinc-600">
               Melacak arus kas masuk &amp; keluar tiap divisi (Gudang, Karya, Transport, CV, Perkasa, Okussa, BRILink). Otomatis <strong>bertambah saat Penjualan</strong> dan <strong>berkurang saat Pembelian / Biaya Ops / Upah</strong>.
             </p>
           </div>
           <div className="p-2.5 bg-white/80 rounded-lg border border-cyan-300 space-y-1">
-            <strong className="text-cyan-950 font-bold">4. Rekening SINKRON (Potong Titipan / Uang Kopi):</strong>
+            <strong className="text-cyan-950 font-bold">5. Rekening SINKRON (Potong Titipan / Uang Kopi):</strong>
             <p className="text-zinc-600">
               Digunakan pada menu <strong>Pelunasan Bon Mitra</strong> saat mitra memiliki uang hasil bumi/titipan — bon langsung dipotong dari uang titipannya tanpa mengeluarkan atau memasukkan kas fisik.
             </p>
@@ -534,6 +615,17 @@ export const MasterRekeningView: React.FC<Props> = ({
         >
           <Landmark className="w-3.5 h-3.5" />
           <span>Rekening Perusahaan ({rekeningPerusahaanList.length})</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('REKENING_TITIP')}
+          className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center space-x-1.5 ${
+            activeTab === 'REKENING_TITIP'
+              ? 'bg-sky-700 text-white shadow-2xs'
+              : 'bg-sky-50 text-sky-800 border border-sky-200 hover:bg-sky-100'
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5" />
+          <span>Rekening Titip Uang ({rekeningTitipList.length})</span>
         </button>
         <button
           onClick={() => setActiveTab('ANAK_PERUSAHAAN')}
@@ -596,11 +688,20 @@ export const MasterRekeningView: React.FC<Props> = ({
                   isSinkronRek;
                 const kat = getKategori(rek);
                 const isPerusahaan = kat === 'PERUSAHAAN';
+                const isRekeningTitip = kat === 'REKENING_TITIP';
                 const isAnakPerusahaan = kat === 'ANAK_PERUSAHAAN';
                 const isDivisi = kat === 'OPERASIONAL_DIVISI';
                 const storageParent = rekeningList.find((r) => r.kode === rek.rekeningIndukPenyimpan);
+                const linkedKry = isRekeningTitip
+                  ? karyawanList.find((k) => k.id === rek.idKaryawanTerkait)
+                  : undefined;
                 const linkedMitra =
-                  mitraList.find((m) => m.id === rek.idMitraTerkait || m.kodeRekeningTerkait === rek.kode) ||
+                  mitraList.find(
+                    (m) =>
+                      m.id === rek.idMitraTerkait ||
+                      (linkedKry?.idMitraTerkait && m.id === linkedKry.idMitraTerkait) ||
+                      (!isRekeningTitip && m.kodeRekeningTerkait === rek.kode)
+                  ) ||
                   (isAnakPerusahaan && rek.kode === 'REK-DPPARABO'
                     ? mitraList.find((m) => m.id === 'MTR-DPPARABOT')
                     : undefined);
@@ -609,13 +710,21 @@ export const MasterRekeningView: React.FC<Props> = ({
                   <tr
                     key={rek.kode}
                     className={`hover:bg-zinc-50/80 transition-colors ${
-                      isAnakPerusahaan ? 'bg-teal-50/30' : isSinkronRek ? 'bg-cyan-50/30' : ''
+                      isRekeningTitip
+                        ? 'bg-sky-50/35'
+                        : isAnakPerusahaan
+                        ? 'bg-teal-50/30'
+                        : isSinkronRek
+                        ? 'bg-cyan-50/30'
+                        : ''
                     }`}
                   >
                     <td className="py-3 px-4 font-mono font-bold text-zinc-900">
                       <span
                         className={`px-2 py-0.5 rounded border ${
-                          isSinkronRek
+                          isRekeningTitip
+                            ? 'bg-sky-100 border-sky-300 text-sky-950'
+                            : isSinkronRek
                             ? 'bg-cyan-100 border-cyan-300 text-cyan-950'
                             : 'bg-zinc-100 border-zinc-200'
                         }`}
@@ -634,6 +743,22 @@ export const MasterRekeningView: React.FC<Props> = ({
                       {isPerusahaan && (
                         <div className="text-[11px] font-semibold text-emerald-800">
                           Rekening Perusahaan · Kas/Bank
+                        </div>
+                      )}
+                      {isRekeningTitip && (
+                        <div className="space-y-0.5">
+                          <div className="text-[11px] font-bold text-sky-900">
+                            Rekening Titip Uang · Dana Amanah PT
+                          </div>
+                          <div className="text-[10px] text-sky-800 font-medium flex items-center space-x-1">
+                            <UserCheck className="w-3 h-3 shrink-0" />
+                            <span>
+                              Pemegang:{' '}
+                              <strong>
+                                {linkedKry?.nama || rek.namaKaryawanTerkait || linkedMitra?.nama || rek.atasNama}
+                              </strong>
+                            </span>
+                          </div>
                         </div>
                       )}
                       {isAnakPerusahaan && (
@@ -675,7 +800,9 @@ export const MasterRekeningView: React.FC<Props> = ({
                             </>
                           ) : (
                             <div className="text-[11px] font-semibold text-amber-800">
-                              Virtual Sistem · Kliring Piutang/Titipan
+                              {rek.kode === 'TIT01'
+                                ? 'Virtual Hutang · Titip Panen Mitra'
+                                : 'Virtual Sistem · Kliring Piutang/Bon'}
                             </div>
                           )}
                         </div>
@@ -692,6 +819,8 @@ export const MasterRekeningView: React.FC<Props> = ({
                             ? 'text-cyan-800 font-mono text-sm tabular-nums'
                             : isVirtual
                             ? 'text-amber-800 font-mono tabular-nums'
+                            : isRekeningTitip
+                            ? 'text-sky-900 font-mono text-sm tabular-nums'
                             : isAnakPerusahaan
                             ? rek.saldoSaatIni < 0
                               ? 'text-rose-700 font-mono text-sm tabular-nums'
@@ -706,6 +835,11 @@ export const MasterRekeningView: React.FC<Props> = ({
                       {isSinkronRek && (
                         <div className="text-[10px] font-normal text-cyan-700 mt-0.5">
                           Total Volume Potong Bon Non-Tunai
+                        </div>
+                      )}
+                      {isRekeningTitip && (
+                        <div className="text-[10px] font-normal text-sky-700 mt-0.5">
+                          Sisa Dana Amanah di Karyawan
                         </div>
                       )}
                       {isAnakPerusahaan && (
@@ -729,6 +863,68 @@ export const MasterRekeningView: React.FC<Props> = ({
                     </td>
                     <td className="py-3 px-4 text-center">
                       <div className="flex flex-wrap items-center justify-center gap-1.5">
+                        {isRekeningTitip && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setRekeningTitipModalKode(rek.kode)}
+                              className="flex items-center space-x-1 px-2.5 py-1 bg-sky-700 hover:bg-sky-800 text-white rounded text-[11px] font-bold transition-colors cursor-pointer"
+                              title="Titip dana dari rekening PT atau kembalikan sisa dana"
+                            >
+                              <ArrowRightLeft className="w-3.5 h-3.5" />
+                              <span>Titip / Tarik</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAuditRekeningTitipKode(rek.kode)}
+                              className="flex items-center space-x-1 px-2 py-1 bg-white hover:bg-sky-50 text-sky-900 border border-sky-300 rounded text-[11px] font-bold transition-colors cursor-pointer"
+                              title="Lihat rincian uang dititipkan & unduh Rekening Koran (PDF, Excel, JPG, PNG, CSV)"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-sky-700" />
+                              <span>Audit &amp; Unduh RK</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={downloadingTitipKode === rek.kode}
+                              onClick={async () => {
+                                setDownloadingTitipKode(rek.kode);
+                                setErrorMsg('');
+                                try {
+                                  const [auditData, profil] = await Promise.all([
+                                    api.getRekeningTitipAudit(rek.kode),
+                                    api.getProfilPerusahaan().catch(() => null),
+                                  ]);
+                                  const fn = await exportRekeningTitipToPdf(auditData, profil);
+                                  setSuccessMsg(`Rekening Koran Khusus ${rek.kode} berhasil diunduh: ${fn}`);
+                                  setTimeout(() => setSuccessMsg(''), 5000);
+                                } catch (err: any) {
+                                  setErrorMsg(err?.message || 'Gagal mengunduh Rekening Koran Titip');
+                                } finally {
+                                  setDownloadingTitipKode(null);
+                                }
+                              }}
+                              className="flex items-center space-x-1 px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded text-[11px] font-bold transition-colors cursor-pointer disabled:opacity-50"
+                              title="Unduh cepat PDF Rekening Koran khusus Rekening Titip Uang ini"
+                            >
+                              <FileDown className="w-3.5 h-3.5 text-rose-700" />
+                              <span>{downloadingTitipKode === rek.kode ? '...' : 'PDF RK'}</span>
+                            </button>
+                            {onOpenStatement && (linkedMitra?.id || rek.idMitraTerkait) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenStatement((linkedMitra?.id || rek.idMitraTerkait)!)
+                                }
+                                className="flex items-center space-x-1 px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded text-[11px] font-bold transition-colors cursor-pointer"
+                                title="Buka Rekening Koran Karyawan terkait"
+                              >
+                                <FileText className="w-3.5 h-3.5 text-sky-700" />
+                                <span>Rek. Koran</span>
+                              </button>
+                            )}
+                          </>
+                        )}
+
                         {isAnakPerusahaan && (
                           <>
                             <button
@@ -976,7 +1172,7 @@ export const MasterRekeningView: React.FC<Props> = ({
                 <label className="block font-bold text-zinc-800 mb-1.5 uppercase tracking-wider text-[10px]">
                   Klasifikasi Kategori Rekening:
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <label
                     className={`p-3 rounded-xl border flex flex-col cursor-pointer transition-all ${
                       formKategori === 'PERUSAHAAN'
@@ -996,7 +1192,33 @@ export const MasterRekeningView: React.FC<Props> = ({
                       <span>Rekening Perusahaan</span>
                     </div>
                     <span className="text-[10px] text-zinc-500 font-normal mt-1">
-                      Penyimpanan fisik kas tunai &amp; bank resmi.
+                      Penyimpanan fisik kas tunai &amp; bank resmi PT.
+                    </span>
+                  </label>
+
+                  <label
+                    className={`p-3 rounded-xl border flex flex-col cursor-pointer transition-all ${
+                      formKategori === 'REKENING_TITIP'
+                        ? 'border-sky-600 bg-sky-50/80 text-sky-950 font-bold'
+                        : 'border-zinc-200 hover:bg-zinc-50 text-zinc-600'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="radio"
+                        name="kategori"
+                        value="REKENING_TITIP"
+                        checked={formKategori === 'REKENING_TITIP'}
+                        onChange={() => {
+                          setFormKategori('REKENING_TITIP');
+                          if (!formKode) setFormKode('TITIP01');
+                        }}
+                        className="text-sky-600"
+                      />
+                      <span>Rekening Titip Uang</span>
+                    </div>
+                    <span className="text-[10px] text-zinc-500 font-normal mt-1">
+                      Titip uang PT ke karyawan dipercaya (terhubung Rekening Koran, beda dgn Hutang TIT01).
                     </span>
                   </label>
 
@@ -1047,6 +1269,44 @@ export const MasterRekeningView: React.FC<Props> = ({
                   </label>
                 </div>
               </div>
+
+              {formKategori === 'REKENING_TITIP' && (
+                <div className="p-3.5 bg-sky-50/90 border border-sky-300 rounded-xl space-y-2">
+                  <label className="block font-bold text-sky-950 text-[11px]">
+                    Pilih Karyawan Pemegang Amanah Rekening Titip <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    required
+                    value={formIdKaryawanTerkait}
+                    onChange={(e) => {
+                      const kryId = e.target.value;
+                      setFormIdKaryawanTerkait(kryId);
+                      const kry = karyawanList.find((k) => k.id === kryId);
+                      if (kry) {
+                        if (!formAtasNama || formAtasNama === 'PT Wijaya Agro') {
+                          setFormAtasNama(kry.nama);
+                        }
+                        if (!formNama) {
+                          setFormNama(`Rekening Titip - ${kry.nama}`);
+                        }
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-white border border-sky-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-sky-600"
+                  >
+                    <option value="">-- Pilih Karyawan Terhubung ke Rekening Koran --</option>
+                    {karyawanList
+                      .filter((k) => k.status === 'AKTIF')
+                      .map((k) => (
+                        <option key={k.id} value={k.id}>
+                          {k.nama} ({k.jabatan} · {k.divisi || k.departemen})
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[10px] text-sky-800 leading-relaxed">
+                    Seluruh dana yang ditransfer dari rekening PT (misal BCA) &amp; setiap belanja memakai rekening ini akan tercatat otomatis di <strong>Rekening Koran Karyawan</strong> tersebut untuk diaudit.
+                  </p>
+                </div>
+              )}
 
               {formKategori === 'OPERASIONAL_DIVISI' && (
                 <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl space-y-1.5">
@@ -1206,10 +1466,32 @@ export const MasterRekeningView: React.FC<Props> = ({
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-purple-600 font-semibold bg-white"
                 >
                   <option value="PERUSAHAAN">PERUSAHAAN (Kas &amp; Bank Resmi)</option>
+                  <option value="REKENING_TITIP">REKENING TITIP UANG (Amanah Transaksi Karyawan)</option>
                   <option value="ANAK_PERUSAHAAN">ANAK PERUSAHAAN &amp; MITRA (1 Transaksi Terpadu)</option>
                   <option value="OPERASIONAL_DIVISI">OPERASIONAL DIVISI (Tracking Unit Usaha)</option>
                 </select>
               </div>
+
+              {formKategori === 'REKENING_TITIP' && (
+                <div className="p-3 bg-sky-50/90 border border-sky-300 rounded-xl space-y-1.5">
+                  <label className="block font-bold text-sky-950 text-[11px]">
+                    Karyawan Pemegang Amanah Rekening Titip <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    required
+                    value={formIdKaryawanTerkait}
+                    onChange={(e) => setFormIdKaryawanTerkait(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-sky-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-sky-600"
+                  >
+                    <option value="">-- Pilih Karyawan Terhubung ke Rekening Koran --</option>
+                    {karyawanList.map((k) => (
+                      <option key={k.id} value={k.id}>
+                        {k.nama} ({k.jabatan} · {k.divisi || k.departemen})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {formKategori === 'OPERASIONAL_DIVISI' && (
                 <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl space-y-1.5">
@@ -1423,6 +1705,31 @@ export const MasterRekeningView: React.FC<Props> = ({
             onSuccessReceipt(receipt);
           }
         }}
+      />
+
+      {/* Modal 6: Titip / Kembalikan Dana Rekening Titip Uang Karyawan */}
+      <ModalTransaksiRekeningTitip
+        isOpen={Boolean(rekeningTitipModalKode)}
+        onClose={() => setRekeningTitipModalKode(null)}
+        rekeningList={rekeningList}
+        targetRekeningKode={rekeningTitipModalKode || undefined}
+        onSuccess={(receipt) => {
+          setSuccessMsg(
+            'Mutasi dana Rekening Titip Uang berhasil dicatat dan terhubung ke Rekening Koran Karyawan!'
+          );
+          onRefresh();
+          if (receipt && onSuccessReceipt) {
+            onSuccessReceipt(receipt);
+          }
+        }}
+      />
+
+      {/* Modal 7: Audit Rincian Dana Dititipkan & Belanja Rekening Titip */}
+      <ModalAuditRekeningTitip
+        kodeRekening={auditRekeningTitipKode}
+        onClose={() => setAuditRekeningTitipKode(null)}
+        onOpenTransfer={(kode) => setRekeningTitipModalKode(kode)}
+        onOpenRekeningKoran={onOpenStatement}
       />
     </div>
   );

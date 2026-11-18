@@ -1221,8 +1221,9 @@ export const PembelianBarangView: React.FC<Props> = ({
                   <div className="relative">
                     <input
                       type="number"
-                      min="1"
-                      placeholder="Contoh: 50"
+                      min="0.0001"
+                      step="any"
+                      placeholder="Contoh: 50 atau 2.5"
                       value={qtyInput === 0 ? '' : qtyInput}
                       onChange={(e) => setQtyInput(e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))}
                       className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-amber-500"

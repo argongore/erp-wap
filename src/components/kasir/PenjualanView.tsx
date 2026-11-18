@@ -77,6 +77,37 @@ interface CartItem {
   isNonStokAlat?: boolean;
 }
 
+function sanitizeDecimalTyping(raw: string): string {
+  const cleaned = raw.replace(/[^0-9.,]/g, '');
+  let hasSep = false;
+  let out = '';
+  for (const ch of cleaned) {
+    if (ch === ',' || ch === '.') {
+      if (!hasSep) {
+        out += ch;
+        hasSep = true;
+      }
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function parseDecimalId(raw: string | number): number {
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw < 0) return 0;
+    return Math.round(raw * 10000) / 10000;
+  }
+  const normalized = String(raw || '')
+    .trim()
+    .replace(/,/g, '.');
+  if (!normalized || normalized === '.') return 0;
+  const num = Number(normalized);
+  if (!Number.isFinite(num) || num < 0) return 0;
+  return Math.round(num * 10000) / 10000;
+}
+
 interface CategoryVisualTheme {
   dot: string;
   leftBorder: string;
@@ -285,7 +316,9 @@ export const PenjualanView: React.FC<Props> = ({
   const [selectedProductCode, setSelectedProductCode] = useState<string>(
     inStockProducts[0]?.kode || activeProducts[0]?.kode || ''
   );
-  const [qtyInput, setQtyInput] = useState<number>(1);
+  const [qtyInputText, setQtyInputText] = useState<string>('1');
+  const qtyInput = parseDecimalId(qtyInputText);
+  const [cartQtyDrafts, setCartQtyDrafts] = useState<Record<string, string>>({});
 
   // Negotiated Price Input (Initial suggestion strictly from purchase HPP / catalog, freely editable)
   const [hargaNegoInput, setHargaNegoInput] = useState<number>(0);
@@ -522,8 +555,8 @@ export const PenjualanView: React.FC<Props> = ({
       hargaBeli: modalHpp,
       hargaSugesti: currentSugestiPrice,
       harga: hargaNegoInput,
-      subtotal: qtyInput * hargaNegoInput,
-      labaKotor: (hargaNegoInput - modalHpp) * qtyInput,
+      subtotal: Math.round(qtyInput * hargaNegoInput),
+      labaKotor: Math.round((hargaNegoInput - modalHpp) * qtyInput),
       stokTersedia: stokTersediaCurrent,
       isNonStokAlat: isAlatJasa,
     };
@@ -547,7 +580,7 @@ export const PenjualanView: React.FC<Props> = ({
       (i) => String(i.kodeProduk).trim().toUpperCase() === String(currentProduct.kode).trim().toUpperCase()
     );
     const existingQty = existingCartItem ? existingCartItem.qty : 0;
-    const totalRequestedQty = existingQty + qtyInput;
+    const totalRequestedQty = Math.round((existingQty + qtyInput) * 10000) / 10000;
 
     if (!isAlatJasa && totalRequestedQty > stokTersedia) {
       setErrorMsg(
@@ -557,8 +590,8 @@ export const PenjualanView: React.FC<Props> = ({
     }
 
     const modalHpp = Math.max(0, Number(currentProduct.hargaBeli) || 0);
-    const subtotal = totalRequestedQty * hargaNegoInput;
-    const labaKotor = (hargaNegoInput - modalHpp) * totalRequestedQty;
+    const subtotal = Math.round(totalRequestedQty * hargaNegoInput);
+    const labaKotor = Math.round((hargaNegoInput - modalHpp) * totalRequestedQty);
 
     if (existingCartItem) {
       setCart(
@@ -576,6 +609,11 @@ export const PenjualanView: React.FC<Props> = ({
             : item
         )
       );
+      setCartQtyDrafts((prev) => {
+        const next = { ...prev };
+        delete next[existingCartItem.kodeProduk];
+        return next;
+      });
     } else {
       setCart([
         ...cart,
@@ -587,15 +625,15 @@ export const PenjualanView: React.FC<Props> = ({
           hargaBeli: modalHpp,
           hargaSugesti: currentSugestiPrice,
           harga: hargaNegoInput,
-          subtotal: qtyInput * hargaNegoInput,
-          labaKotor: (hargaNegoInput - modalHpp) * qtyInput,
+          subtotal: Math.round(qtyInput * hargaNegoInput),
+          labaKotor: Math.round((hargaNegoInput - modalHpp) * qtyInput),
           stokTersedia,
           isNonStokAlat: isAlatJasa,
         },
       ]);
     }
 
-    setQtyInput(1);
+    setQtyInputText('1');
   };
 
   // Inline edit price in cart
@@ -604,8 +642,8 @@ export const PenjualanView: React.FC<Props> = ({
       cart.map((item) => {
         if (item.kodeProduk === kode) {
           const price = Math.max(0, newPrice);
-          const subtotal = item.qty * price;
-          const labaKotor = (price - item.hargaBeli) * item.qty;
+          const subtotal = Math.round(item.qty * price);
+          const labaKotor = Math.round((price - item.hargaBeli) * item.qty);
           return {
             ...item,
             harga: price,
@@ -620,19 +658,20 @@ export const PenjualanView: React.FC<Props> = ({
 
   // Inline edit qty in cart
   const handleUpdateCartQty = (kode: string, newQty: number) => {
-    if (newQty <= 0) return;
+    const cleanQty = Math.round(newQty * 10000) / 10000;
+    if (cleanQty <= 0) return;
     setCart(
       cart.map((item) => {
         if (item.kodeProduk === kode) {
-          if (!item.isNonStokAlat && newQty > item.stokTersedia) {
+          if (!item.isNonStokAlat && cleanQty > item.stokTersedia) {
             setErrorMsg(`Maksimal stok tersedia untuk ${item.nama}: ${item.stokTersedia} ${item.satuan}`);
             return item;
           }
-          const subtotal = newQty * item.harga;
-          const labaKotor = (item.harga - item.hargaBeli) * newQty;
+          const subtotal = Math.round(cleanQty * item.harga);
+          const labaKotor = Math.round((item.harga - item.hargaBeli) * cleanQty);
           return {
             ...item,
-            qty: newQty,
+            qty: cleanQty,
             subtotal,
             labaKotor,
           };
@@ -1532,13 +1571,16 @@ export const PenjualanView: React.FC<Props> = ({
                   Qty / Durasi ({currentProduct?.satuan})
                 </label>
                 <input
-                  type="number"
-                  min="1"
-                  max={!isCurrentAlatJasa && stokTersediaCurrent > 0 ? stokTersediaCurrent : undefined}
-                  value={qtyInput === 0 ? '' : qtyInput}
-                  onChange={(e) => setQtyInput(e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Contoh: 2,5 atau 1.5"
+                  value={qtyInputText}
+                  onChange={(e) => setQtyInputText(sanitizeDecimalTyping(e.target.value))}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-emerald-500"
                 />
+                <span className="block text-[10px] text-zinc-400 mt-0.5">
+                  Mendukung desimal (koma <code className="text-zinc-300">,</code> atau titik <code className="text-zinc-300">.</code>)
+                </span>
               </div>
 
               {/* Editable Suggested / Negotiated Price (8 cols) */}
@@ -1644,7 +1686,7 @@ export const PenjualanView: React.FC<Props> = ({
               <div>
                 <span className="text-xs text-zinc-400">Subtotal Item:</span>
                 <span className="ml-2 text-base font-bold text-zinc-100 font-mono">
-                  {formatRupiah(qtyInput * hargaNegoInput)}
+                  {formatRupiah(Math.round(qtyInput * hargaNegoInput))}
                 </span>
               </div>
 
@@ -1736,13 +1778,29 @@ export const PenjualanView: React.FC<Props> = ({
                         <div className="flex items-center space-x-1.5">
                           <span className="text-zinc-400 text-[10px]">Qty:</span>
                           <input
-                            type="number"
-                            min="1"
-                            value={item.qty}
-                            onChange={(e) =>
-                              handleUpdateCartQty(item.kodeProduk, parseInt(e.target.value, 10) || 1)
+                            type="text"
+                            inputMode="decimal"
+                            value={
+                              cartQtyDrafts[item.kodeProduk] !== undefined
+                                ? cartQtyDrafts[item.kodeProduk]
+                                : String(item.qty).replace('.', ',')
                             }
-                            className="w-14 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 font-mono text-center"
+                            onChange={(e) => {
+                              const cleaned = sanitizeDecimalTyping(e.target.value);
+                              setCartQtyDrafts((prev) => ({ ...prev, [item.kodeProduk]: cleaned }));
+                              const parsed = parseDecimalId(cleaned);
+                              if (parsed > 0) {
+                                handleUpdateCartQty(item.kodeProduk, parsed);
+                              }
+                            }}
+                            onBlur={() => {
+                              setCartQtyDrafts((prev) => {
+                                const next = { ...prev };
+                                delete next[item.kodeProduk];
+                                return next;
+                              });
+                            }}
+                            className="w-16 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 font-mono text-center"
                           />
                           <span className="text-zinc-400 text-[10px]">{item.satuan}</span>
                         </div>

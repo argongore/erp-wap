@@ -20,6 +20,7 @@ import { InventarisDanPengeluaranView } from './components/master/InventarisDanP
 import { MasterKaryawanView } from './components/karyawan/MasterKaryawanView.tsx';
 import { DivisiKeuanganView } from './components/karyawan/DivisiKeuanganView.tsx';
 import { StokBarangView } from './components/stok/StokBarangView.tsx';
+import { AuditStokBarangView } from './components/stok/AuditStokBarangView.tsx';
 import { StokHasilBumiView } from './components/stok/StokHasilBumiView.tsx';
 import { InvoiceSuratJalanView } from './components/stok/InvoiceSuratJalanView.tsx';
 import { LabaRugiProdukView } from './components/laporan/LabaRugiProdukView.tsx';
@@ -1352,7 +1353,20 @@ export default function App() {
               )}
 
               {activeTab === 'stok-barang' && (
-                <StokBarangView stokList={stokList} produkList={produkList} onRefresh={loadAllData} />
+                <StokBarangView
+                  stokList={stokList}
+                  produkList={produkList}
+                  onRefresh={loadAllData}
+                  onNavigateToAuditStok={() => setActiveTab('audit-stok')}
+                />
+              )}
+
+              {activeTab === 'audit-stok' && (
+                <AuditStokBarangView
+                  profilPerusahaan={profilPerusahaan}
+                  onRefreshParent={loadAllData}
+                  onNavigateToStokBarang={() => setActiveTab('stok-barang')}
+                />
               )}
 
               {activeTab === 'stok-hasil-bumi' && (

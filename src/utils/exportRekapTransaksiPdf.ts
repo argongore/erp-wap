@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { ProfilPerusahaan, UnifiedTransactionItem } from '../server/types.ts';
+import type { ProfilPerusahaan, UnifiedTransactionItem } from '../server/types.ts';
 import { formatRupiah } from './format.ts';
 
 export const NAMA_BULAN_INDO: Record<string, string> = {

@@ -9,6 +9,7 @@ import {
   Save,
   TrendingUp,
   Search,
+  ClipboardCheck,
 } from 'lucide-react';
 import { StokBarang, Produk, isProdukTanpaStok } from '../../server/types.ts';
 import { formatTanggalIndo, formatJamIndo, formatRupiah } from '../../utils/format.ts';
@@ -18,9 +19,15 @@ interface Props {
   stokList: StokBarang[];
   produkList?: Produk[];
   onRefresh: () => void;
+  onNavigateToAuditStok?: () => void;
 }
 
-export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onRefresh }) => {
+export const StokBarangView: React.FC<Props> = ({
+  stokList,
+  produkList = [],
+  onRefresh,
+  onNavigateToAuditStok,
+}) => {
   const [selectedItem, setSelectedItem] = useState<StokBarang | null>(null);
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustReason, setAdjustReason] = useState('');
@@ -186,15 +193,27 @@ export const StokBarangView: React.FC<Props> = ({ stokList, produkList = [], onR
           </p>
         </div>
 
-        <div className="relative w-full sm:w-64">
-          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
-          <input
-            type="text"
-            placeholder="Cari barang / kode..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 text-xs border border-zinc-200 rounded-lg focus:ring-1 focus:ring-teal-500"
-          />
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onNavigateToAuditStok && (
+            <button
+              type="button"
+              onClick={onNavigateToAuditStok}
+              className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <ClipboardCheck className="w-3.5 h-3.5" />
+              <span>Audit Stok &amp; Cek Riil</span>
+            </button>
+          )}
+          <div className="relative w-full sm:w-64">
+            <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
+            <input
+              type="text"
+              placeholder="Cari barang / kode..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-3 py-1.5 text-xs border border-zinc-200 rounded-lg focus:ring-1 focus:ring-teal-500"
+            />
+          </div>
         </div>
       </div>
 

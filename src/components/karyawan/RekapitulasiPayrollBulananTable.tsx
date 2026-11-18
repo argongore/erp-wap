@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
   FileSpreadsheet,
-  Printer,
   Search,
   Calendar,
   Layers,
@@ -32,6 +31,8 @@ import {
   Info,
   ExternalLink,
   UserCog,
+  FileDown,
+  Pencil,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
@@ -44,13 +45,16 @@ import {
   RekapPayrollBulananSummary,
   Rekening,
 } from '../../server/types.ts';
-import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
+import { formatHariTanggalLabel, formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import {
   KaryawanAvatar,
   ModalPreviewFotoKaryawan,
   ModalProfilKaryawan,
   ProfilKaryawanEditableData,
 } from './ModalProfilKaryawan.tsx';
+import { CetakRekapGajiModal } from './CetakRekapGajiModal.tsx';
+import { DownloadHistoryGajiButton } from './DownloadHistoryGajiButton.tsx';
+import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 
 interface RekapitulasiPayrollBulananTableProps {
   rekeningList: Rekening[];
@@ -139,12 +143,15 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
 
   // Employee Profile & Division Upgrade Modal
   const [internalProfilKry, setInternalProfilKry] = useState<ProfilKaryawanEditableData | null>(null);
+  const [isCetakRekapOpen, setIsCetakRekapOpen] = useState(false);
+  const [downloadNotice, setDownloadNotice] = useState<string>('');
   const [previewFoto, setPreviewFoto] = useState<{
     nama: string;
     jabatan?: string;
     divisi?: string;
     fotoUrl: string;
   } | null>(null);
+  const [editUpahId, setEditUpahId] = useState<string | null>(null);
 
   const handleOpenProfilItem = (item: ItemRekapPayrollBulanan) => {
     if (onOpenProfilKaryawan) {
@@ -334,7 +341,8 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
       r.kode !== 'BON01' &&
       r.kode !== 'TIT01' &&
       r.kode !== 'SINKRON' &&
-      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
+      (!r.kode.startsWith('REK-') ||
+        Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.isRekeningTitip || r.kategori === 'REKENING_TITIP'))
   );
 
   return (
@@ -380,18 +388,14 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
             </button>
 
             <button
-              onClick={() => {
-                try {
-                  window.print();
-                } catch (e) {
-                  console.error(e);
-                }
-              }}
-              className="flex items-center space-x-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-              title="Cetak format cetak / PDF"
+              type="button"
+              onClick={() => setIsCetakRekapOpen(true)}
+              disabled={!rekapData}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-700 hover:bg-sky-600 text-white border border-sky-600 rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+              title="Unduh PDF / Cetak Rekapan Gaji & Detail Pekerjaan sebagai patokan penggajian awal bulan berikutnya"
             >
-              <Printer className="w-3.5 h-3.5 text-zinc-300" />
-              <span>Cetak Rekap</span>
+              <FileDown className="w-3.5 h-3.5" />
+              <span>Unduh PDF / Cetak Rekapan</span>
             </button>
 
             <button
@@ -532,6 +536,19 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
             </div>
             <span className="text-[10px] text-zinc-400 block truncate">Status tercatat berjalan</span>
           </div>
+        </div>
+      )}
+
+      {downloadNotice && (
+        <div className="p-3 bg-emerald-950/90 border border-emerald-700 text-emerald-200 rounded-xl text-xs flex items-center justify-between gap-2">
+          <span>{downloadNotice}</span>
+          <button
+            type="button"
+            onClick={() => setDownloadNotice('')}
+            className="text-emerald-400 hover:text-white font-bold cursor-pointer"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -743,6 +760,26 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                         {/* 8. Aksi */}
                         <td className="py-3 px-3 text-center" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-center space-x-1.5">
+                            <DownloadHistoryGajiButton
+                              idKaryawan={item.idKaryawan}
+                              namaKaryawan={item.nama}
+                              compact
+                              variant="sky"
+                              label="Unduh"
+                              defaultFilter={{
+                                periodeMode: 'BULAN_TAHUN',
+                                bulan: selectedBulan,
+                                tahun: selectedTahun,
+                                statusKerja: 'SEMUA',
+                              }}
+                              defaultPeriodLabel={rekapData?.periodeBulan}
+                              onDownloaded={(msg) => {
+                                setDownloadNotice(msg);
+                                setTimeout(() => setDownloadNotice(''), 7000);
+                              }}
+                              onError={(msg) => setDownloadNotice(`Gagal: ${msg}`)}
+                            />
+
                             <button
                               type="button"
                               onClick={() => handleOpenProfilItem(item)}
@@ -921,7 +958,26 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center space-x-2 shrink-0">
+                                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                    <DownloadHistoryGajiButton
+                                      idKaryawan={item.idKaryawan}
+                                      namaKaryawan={item.nama}
+                                      variant="emerald"
+                                      label={`Unduh History ${item.nama.split(' ')[0]}`}
+                                      defaultFilter={{
+                                        periodeMode: 'BULAN_TAHUN',
+                                        bulan: selectedBulan,
+                                        tahun: selectedTahun,
+                                        statusKerja: 'SEMUA',
+                                      }}
+                                      defaultPeriodLabel={rekapData?.periodeBulan}
+                                      onDownloaded={(msg) => {
+                                        setDownloadNotice(msg);
+                                        setTimeout(() => setDownloadNotice(''), 7000);
+                                      }}
+                                      onError={(msg) => setDownloadNotice(`Gagal: ${msg}`)}
+                                    />
+
                                     <button
                                       onClick={() => onOpenInputPayrollHarian(item.idKaryawan, item.divisiUtama)}
                                       className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-lg flex items-center space-x-1.5 shadow-2xs transition-colors cursor-pointer shrink-0"
@@ -949,14 +1005,15 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                           <th className="py-2.5 px-3 text-right">TARIF / HARGA</th>
                                           <th className="py-2.5 px-3 text-right">TOTAL UPAH</th>
                                           <th className="py-2.5 px-2 text-center">STATUS KET</th>
-                                          <th className="py-2.5 px-3">CATATAN</th>
+                                          <th className="py-2.5 px-3">KETERANGAN / CATATAN</th>
+                                          <th className="py-2.5 px-2 text-center">AKSI</th>
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-zinc-800/40 font-mono text-[11px]">
                                         {item.rincianHarian.map((log) => (
                                           <tr key={log.id} className="hover:bg-zinc-900/60 transition-colors">
                                             <td className="py-2.5 px-3 text-zinc-200 font-bold whitespace-nowrap">
-                                              {log.hariTanggal || log.tanggal}
+                                              {log.hariTanggal || formatHariTanggalLabel(log.tanggal) || log.tanggal}
                                             </td>
                                             <td className="py-2.5 px-3 whitespace-nowrap">
                                               <span className={`text-[9px] px-2 py-0.5 rounded border font-semibold ${DIVISI_BADGES[log.divisi] || 'bg-zinc-800 text-zinc-300'}`}>
@@ -972,7 +1029,13 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                             <td className="py-2.5 px-3 text-right text-zinc-300">
                                               {formatRupiah(log.harga !== undefined ? log.harga : log.upahHarian)}
                                             </td>
-                                            <td className="py-2.5 px-3 text-right font-bold text-emerald-400">
+                                            <td
+                                              className={`py-2.5 px-3 text-right font-bold ${
+                                                (log.jumlah !== undefined ? log.jumlah : log.totalUpah) > 0
+                                                  ? 'text-emerald-400'
+                                                  : 'text-rose-300/90'
+                                              }`}
+                                            >
                                               {formatRupiah(log.jumlah !== undefined ? log.jumlah : log.totalUpah)}
                                             </td>
                                             <td className="py-2.5 px-2 text-center whitespace-nowrap">
@@ -987,7 +1050,33 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                               )}
                                             </td>
                                             <td className="py-2.5 px-3 font-sans text-zinc-300 text-xs">
-                                              {log.catatan || (log.uangMakanLembur > 0 ? `Lembur +${formatRupiah(log.uangMakanLembur)}` : '-')}
+                                              {(() => {
+                                                const ketAdmin = log.tugas?.trim() || '';
+                                                const catKhusus = log.catatan?.trim() || '';
+                                                const parts = [
+                                                  ketAdmin,
+                                                  catKhusus &&
+                                                  !ketAdmin.toLowerCase().includes(catKhusus.toLowerCase())
+                                                    ? catKhusus
+                                                    : '',
+                                                  log.uangMakanLembur > 0
+                                                    ? `Lembur +${formatRupiah(log.uangMakanLembur)}`
+                                                    : '',
+                                                  log.tanggalDibayar ? `Cair ${log.tanggalDibayar}` : '',
+                                                ].filter(Boolean);
+                                                return parts.length > 0 ? parts.join(' · ') : '-';
+                                              })()}
+                                            </td>
+                                            <td className="py-2.5 px-2 text-center whitespace-nowrap">
+                                              <button
+                                                type="button"
+                                                onClick={() => setEditUpahId(log.id)}
+                                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 hover:bg-amber-600 text-zinc-200 hover:text-white border border-zinc-700 hover:border-amber-500 text-[10px] font-semibold transition-colors cursor-pointer"
+                                                title="Edit inputan gaji harian langsung di Rekap Gaji"
+                                              >
+                                                <Pencil className="w-3 h-3" />
+                                                <span>Edit</span>
+                                              </button>
                                             </td>
                                           </tr>
                                         ))}
@@ -1005,10 +1094,56 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                               )
                                             )}
                                           </td>
-                                          <td colSpan={2}></td>
+                                          <td colSpan={3}></td>
                                         </tr>
                                       </tfoot>
                                     </table>
+                                  </div>
+                                )}
+
+                                {(titipUangVal > 0 || totalBonAktifVal > 0) && (
+                                  <div className="p-3 bg-violet-950/30 border border-violet-800/60 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                                      <span className="font-bold text-violet-300">
+                                        Ringkasan Uang Titip &amp; Hutang-Piutang:
+                                      </span>
+                                      <span className="text-zinc-300">
+                                        Saldo Uang Titip:{' '}
+                                        <strong className="font-mono text-violet-300">{formatRupiah(titipUangVal)}</strong>
+                                      </span>
+                                      <span className="text-zinc-300">
+                                        Total Bon/Piutang Aktif:{' '}
+                                        <strong className="font-mono text-rose-400">{formatRupiah(totalBonAktifVal)}</strong>
+                                      </span>
+                                      <span className="text-zinc-300">
+                                        Posisi Bersih:{' '}
+                                        <strong className={`font-mono ${netBalance >= 0 ? 'text-emerald-400' : 'text-amber-300'}`}>
+                                          {netBalance >= 0
+                                            ? `HUTANG PT ${formatRupiah(netBalance)}`
+                                            : `PIUTANG PT ${formatRupiah(Math.abs(netBalance))}`}
+                                        </strong>
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {onOpenDetailKaryawan && (
+                                        <button
+                                          type="button"
+                                          onClick={() => onOpenDetailKaryawan(item.idKaryawan)}
+                                          className="px-2.5 py-1 rounded bg-violet-900/70 hover:bg-violet-800 text-violet-100 border border-violet-700 text-[11px] font-semibold cursor-pointer"
+                                        >
+                                          Lihat Detail Uang Titip →
+                                        </button>
+                                      )}
+                                      {onOpenStatement && item.idMitraTerkait && titipUangVal > 0 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => onOpenStatement(item.idMitraTerkait!)}
+                                          className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[11px] font-semibold cursor-pointer"
+                                        >
+                                          Rekening Koran
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                 )}
                               </div>
@@ -1655,6 +1790,28 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
           divisi={previewFoto.divisi}
           fotoUrl={previewFoto.fotoUrl}
           onClose={() => setPreviewFoto(null)}
+        />
+      )}
+
+      <CetakRekapGajiModal
+        isOpen={isCetakRekapOpen}
+        onClose={() => setIsCetakRekapOpen(false)}
+        rekapData={rekapData}
+        initialDivisi={selectedDivisi}
+        initialSearch={searchQuery}
+      />
+
+      {editUpahId && (
+        <ModalEditTransaksiUniversal
+          isOpen={true}
+          transactionId={editUpahId}
+          jenisHint="UPAH_HARIAN"
+          onClose={() => setEditUpahId(null)}
+          onSuccess={() => {
+            setEditUpahId(null);
+            loadRekap(true);
+            onRefreshAll?.();
+          }}
         />
       )}
     </div>

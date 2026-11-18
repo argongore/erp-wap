@@ -33,6 +33,7 @@ import {
   LogOut,
   FileSpreadsheet,
   CreditCard,
+  ClipboardCheck,
 } from 'lucide-react';
 
 export type ActiveTab =
@@ -60,6 +61,7 @@ export type ActiveTab =
   | 'master-karyawan'
   | 'menu-divisi'
   | 'stok-barang'
+  | 'audit-stok'
   | 'stok-hasil-bumi'
   | 'invoice-surat-jalan'
   | 'laba-rugi-produk'
@@ -95,6 +97,7 @@ export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   'master-karyawan': 'Rekap Karyawan & Upah',
   'menu-divisi': 'Divisi & Kas Operasional',
   'stok-barang': 'Stok Barang Toko',
+  'audit-stok': 'Audit Stok & Cek Riil',
   'stok-hasil-bumi': 'Stok & Rekap Hasil Bumi',
   'invoice-surat-jalan': 'Invoice Surat Jalan Penjualan',
   'laba-rugi-produk': 'Laba & Rugi Per Divisi',
@@ -129,6 +132,7 @@ export const ACTIVE_TAB_CASH_FLOW: Record<ActiveTab, CashFlowDirection> = {
   'master-karyawan': null,
   'menu-divisi': null,
   'stok-barang': null,
+  'audit-stok': null,
   'stok-hasil-bumi': null,
   'invoice-surat-jalan': null,
   'laba-rugi-produk': null,
@@ -403,6 +407,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             keywords: 'stok barang toko gudang pupuk obat pakan',
             icon: Boxes,
             tab: 'stok-barang',
+          },
+          {
+            id: 'audit-stok',
+            label: 'Audit Stok & Riil',
+            sublabel: 'Lacak kulakan → penjualan',
+            keywords: 'audit stok barang riil opname kulakan penjualan selisih rekonsiliasi kartu stok',
+            icon: ClipboardCheck,
+            tab: 'audit-stok',
           },
           {
             id: 'stok-hasil-bumi',

@@ -12,6 +12,8 @@ import { formatRupiah, formatTanggalIndo } from './format.ts';
 export interface ExportRekeningKoranPdfOptions {
   printScope?: 'SALDO_BERJALAN' | 'SEMUA_HISTORY';
   includeNotaProofs?: boolean;
+  customRows?: RekeningKoranHistoryItem[];
+  scopeLabel?: string;
 }
 
 /**
@@ -126,8 +128,11 @@ export async function exportRekeningKoranToPdf(
     ? statement.historySaldoBerjalan
     : (statement.history || []).filter((h) => h.isSaldoBerjalan !== false);
 
-  const activeRows: RekeningKoranHistoryItem[] =
-    printScope === 'SALDO_BERJALAN' ? runningRows : statement.history || [];
+  const activeRows: RekeningKoranHistoryItem[] = Array.isArray(options.customRows)
+    ? options.customRows
+    : printScope === 'SALDO_BERJALAN'
+    ? runningRows
+    : statement.history || [];
 
   // Extract uploaded physical nota proofs (HANYA NOTA LALU)
   const seenParentIds = new Set<string>();
@@ -201,6 +206,14 @@ export async function exportRekeningKoranToPdf(
     statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip);
   const sisaTitipBersih =
     statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan);
+  const displayPiutangTotal =
+    printScope === 'SALDO_BERJALAN'
+      ? (statement.totalPiutangBerjalanTampil ?? statement.totalBonKeseluruhan)
+      : statement.totalBonKeseluruhan;
+  const displayTitipTotal =
+    printScope === 'SALDO_BERJALAN'
+      ? (statement.totalTitipBerjalanTampil ?? statement.totalTitip)
+      : statement.totalTitip;
 
   const getRowPiutangVal = (row: RekeningKoranHistoryItem) =>
     printScope === 'SALDO_BERJALAN'
@@ -287,7 +300,10 @@ export async function exportRekeningKoranToPdf(
   doc.text(`No. Dok  : ${noDokumen}`, rightBoxX + 3, 21);
   doc.text(`Tanggal  : ${tglCetak} ${jamCetak}`, rightBoxX + 3, 24.5);
   doc.text(
-    `Buku     : ${printScope === 'SALDO_BERJALAN' ? 'SALDO BERJALAN' : 'SEMUA + HISTORY'}`,
+    `Buku     : ${
+      options.scopeLabel ||
+      (printScope === 'SALDO_BERJALAN' ? 'SALDO BERJALAN' : 'SEMUA + HISTORY')
+    }`,
     rightBoxX + 3,
     28
   );
@@ -377,7 +393,7 @@ export async function exportRekeningKoranToPdf(
   doc.setFontSize(6.5);
   doc.setTextColor(55, 65, 81);
   doc.text(
-    `Piutang: ${formatRupiah(statement.totalBonKeseluruhan)} | Titip: ${formatRupiah(statement.totalTitip)}`,
+    `Piutang: ${formatRupiah(displayPiutangTotal)} | Titip: ${formatRupiah(displayTitipTotal)}`,
     rightX + 3.5,
     subY + 21
   );
@@ -468,6 +484,14 @@ export async function exportRekeningKoranToPdf(
       6: { cellWidth: 22, halign: 'right', font: 'courier', fontStyle: 'bold', textColor: [6, 95, 70] },
       7: { cellWidth: 26 },
     },
+    didParseCell: (hookData) => {
+      if (hookData.section === 'body') {
+        const srcRow = activeRows[hookData.row.index];
+        if (printScope === 'SALDO_BERJALAN' && srcRow?.isBayarBonSiklusBerjalan) {
+          hookData.cell.styles.fillColor = [240, 253, 244];
+        }
+      }
+    },
     foot: [
       [
         {
@@ -476,11 +500,11 @@ export async function exportRekeningKoranToPdf(
           styles: { halign: 'right', fontStyle: 'bold', fontSize: 7.5 },
         },
         {
-          content: formatRupiah(statement.totalBonKeseluruhan),
+          content: formatRupiah(displayPiutangTotal),
           styles: { halign: 'right', fontStyle: 'bold', fontSize: 7.5, textColor: [159, 18, 57] },
         },
         {
-          content: formatRupiah(statement.totalTitip),
+          content: formatRupiah(displayTitipTotal),
           styles: { halign: 'right', fontStyle: 'bold', fontSize: 7.5, textColor: [6, 95, 70] },
         },
         {
@@ -629,6 +653,8 @@ export async function exportRekeningKoranToPdf(
   }
 
   const safeMitraName = statement.namaMitra.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const filename = `Rekening_Koran_${statement.kodeMitra}_${safeMitraName}.pdf`;
+  const filePrefix =
+    printScope === 'SEMUA_HISTORY' ? 'History_Transaksi' : 'Rekening_Koran';
+  const filename = `${filePrefix}_${statement.kodeMitra}_${safeMitraName}.pdf`;
   doc.save(filename);
 }

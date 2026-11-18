@@ -8,6 +8,7 @@ import {
   PergerakanKeuanganDivisiSummary,
   Produk,
   Rekening,
+  RekeningTitipAuditSummary,
   RekeningKoranMitraSummary,
   RekapMasterMitraSummary,
   RekapMitraItem,
@@ -52,6 +53,9 @@ import {
   NotaSilangItemInput,
   NotaSilangRecordSummary,
   InvoiceSuratJalanRecord,
+  AuditStokResponse,
+  AuditStokOpnameLog,
+  RekapCtrContract,
 } from '../server/types.ts';
 
 export interface KaryawanWithBon extends Karyawan {
@@ -299,6 +303,25 @@ export const api = {
     return data.data;
   },
 
+  getAllRekeningTitipAudit: async (params?: {
+    idKaryawan?: string;
+    idMitra?: string;
+  }): Promise<RekeningTitipAuditSummary[]> => {
+    const qs = new URLSearchParams();
+    if (params?.idKaryawan) qs.set('idKaryawan', params.idKaryawan);
+    if (params?.idMitra) qs.set('idMitra', params.idMitra);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const data = await requestJson(`/api/rekening-titip/audit${suffix}`);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat audit rekening titip');
+    return data.data;
+  },
+
+  getRekeningTitipAudit: async (kode: string): Promise<RekeningTitipAuditSummary> => {
+    const data = await requestJson(`/api/rekening-titip/${encodeURIComponent(kode)}/audit`);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat detail audit rekening titip');
+    return data.data;
+  },
+
   // Master Mitra
   getMitra: async (): Promise<Mitra[]> => {
     const data = await requestJson('/api/mitra');
@@ -507,6 +530,44 @@ export const api = {
       body: JSON.stringify(payload),
     });
     if (!data.success) throw new Error(data.message || 'Gagal menyesuaikan stok');
+    return data.data;
+  },
+
+  getAuditStokBarang: async (params?: { tanggalDari?: string; tanggalSampai?: string }): Promise<AuditStokResponse> => {
+    const searchParams = new URLSearchParams();
+    if (params?.tanggalDari) searchParams.set('tanggalDari', params.tanggalDari);
+    if (params?.tanggalSampai) searchParams.set('tanggalSampai', params.tanggalSampai);
+    const qs = searchParams.toString();
+    const data = await requestJson(`/api/stok/audit${qs ? `?${qs}` : ''}`);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat audit stok barang');
+    return data.data;
+  },
+
+  updateStokAwalAudit: async (payload: {
+    items: Array<{ kode: string; stokAwal: number; keterangan?: string }>;
+    petugas?: string;
+  }): Promise<{ updatedCount: number }> => {
+    const data = await requestJson('/api/stok/audit/stok-awal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui stok awal audit');
+    return data.data;
+  },
+
+  applyOpnameAuditStok: async (payload: {
+    items: Array<{ kode: string; stokFisikRiil: number; catatan?: string }>;
+    mode?: 'OPNAME_FISIK' | 'SINKRON_KE_AUDIT';
+    petugas?: string;
+    catatanUmum?: string;
+  }): Promise<{ updatedCount: number; logs: AuditStokOpnameLog[] }> => {
+    const data = await requestJson('/api/stok/audit/opname', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memproses audit / opname stok riil');
     return data.data;
   },
 
@@ -844,11 +905,13 @@ export const api = {
     kategori?: string;
     keterangan?: string;
     nominal: number;
-    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
+    metode: 'TUNAI' | 'TRANSFER' | 'SINKRON' | 'PIUTANG';
     rekeningTujuan?: string;
     idMitra?: string;
     namaPengirimManual?: string;
     noPenjualanHasilBumi?: string;
+    tonaseAkhirKg?: number;
+    hargaPerKg?: number;
     tandaiPutusLunas?: boolean;
     tanggal?: string;
     fotoBukti?: string;
@@ -884,6 +947,7 @@ export const api = {
     namaPembeliManual?: string;
     komoditasKode: string;
     beratKotor: number;
+    tonaseAkhir?: number;
     potonganRafaksi?: number;
     hargaJualPerKg?: number;
     divisi?: string;
@@ -1284,6 +1348,7 @@ export const api = {
     keterangan?: string;
     idNotaTarget?: string;
     potongTitipanOtomatis?: boolean;
+    koreksiTanpaPotongTitipan?: boolean;
   }): Promise<TransaksiBayarBon> => {
     const data = await requestJson('/api/transaksi/bayar-bon', {
       method: 'POST',
@@ -1312,16 +1377,30 @@ export const api = {
     tanggal?: string;
     idMitra: string;
     namaMitra: string;
-    komoditasNama: string;
+    komoditasNama?: string;
     kategoriKode?: string;
     platTruk?: string;
-    tonaseAwalKg: number;
-    tonaseAkhirKg: number;
-    basisMitra: number;
-    basisBuyer: number;
-    rendemen: number;
+    tonaseAwalKg?: number;
+    tonaseAkhirKg?: number;
+    basisMitra?: number;
+    basisBuyer?: number;
+    rendemen?: number;
     hargaPerKgMitra?: number;
     hargaPerKgBuyer?: number;
+    detailItems?: Array<{
+      id?: string;
+      deskripsi: string;
+      platTruk?: string;
+      tonaseAwalKg?: number;
+      tonaseAkhirKg: number;
+      basisMitra: number;
+      basisBuyer?: number;
+      rendemen: number;
+      hargaPerKgMitra?: number;
+      hargaPerKgBuyer?: number;
+      keterangan?: string;
+    }>;
+    catatan?: string;
     pajakNominal?: number;
     komisiNominal?: number;
     kasbonNominal?: number;
@@ -1332,6 +1411,9 @@ export const api = {
     tambahanNominal?: number;
     rekeningPtKode?: string;
     statusPembayaranMitra?: 'PENDING' | 'LUNAS';
+    sumberBarang?: 'MITRA' | 'STOK_HB_PT';
+    noPenjualanHasilBumi?: string;
+    catatArusKas?: boolean;
   }): Promise<InvoiceSuratJalanRecord> => {
     const data = await requestJson('/api/surat-jalan', {
       method: 'POST',
@@ -1339,6 +1421,60 @@ export const api = {
       body: JSON.stringify(payload),
     });
     if (!data.success) throw new Error(data.message || 'Gagal membuat invoice surat jalan');
+    return data.data;
+  },
+
+  updateInvoiceSuratJalan: async (
+    id: string,
+    payload: {
+      noInvoice?: string;
+      tanggal?: string;
+      idMitra?: string;
+      namaMitra?: string;
+      komoditasNama?: string;
+      kategoriKode?: string;
+      platTruk?: string;
+      tonaseAwalKg?: number;
+      tonaseAkhirKg?: number;
+      basisMitra?: number;
+      basisBuyer?: number;
+      rendemen?: number;
+      hargaPerKgMitra?: number;
+      hargaPerKgBuyer?: number;
+      detailItems?: Array<{
+        id?: string;
+        deskripsi: string;
+        platTruk?: string;
+        tonaseAwalKg?: number;
+        tonaseAkhirKg: number;
+        basisMitra: number;
+        basisBuyer?: number;
+        rendemen: number;
+        hargaPerKgMitra?: number;
+        hargaPerKgBuyer?: number;
+        keterangan?: string;
+      }>;
+      catatan?: string;
+      pajakNominal?: number;
+      komisiNominal?: number;
+      kasbonNominal?: number;
+      potongPiutang?: boolean;
+      potonganLainLabel?: string;
+      potonganLainNominal?: number;
+      tambahanLabel?: string;
+      tambahanNominal?: number;
+      rekeningPtKode?: string;
+      statusPembayaranMitra?: 'PENDING' | 'LUNAS';
+      sumberBarang?: 'MITRA' | 'STOK_HB_PT';
+      noPenjualanHasilBumi?: string;
+    }
+  ): Promise<InvoiceSuratJalanRecord> => {
+    const data = await requestJson(`/api/surat-jalan/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal memperbarui invoice surat jalan');
     return data.data;
   },
 
@@ -1361,6 +1497,31 @@ export const api = {
       method: 'DELETE',
     });
     if (!data.success) throw new Error(data.message || 'Gagal menghapus invoice surat jalan');
+    return data.data;
+  },
+
+  // Rekap CTR Surat Jalan (REKAP CTR WAP)
+  getRekapCtr: async (): Promise<RekapCtrContract[]> => {
+    const data = await requestJson('/api/rekap-ctr');
+    if (!data.success) throw new Error(data.message || 'Gagal memuat rekap CTR surat jalan');
+    return data.data;
+  },
+
+  saveRekapCtr: async (contracts: RekapCtrContract[]): Promise<RekapCtrContract[]> => {
+    const data = await requestJson('/api/rekap-ctr', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contracts }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyimpan rekap CTR surat jalan');
+    return data.data;
+  },
+
+  syncRekapCtr: async (): Promise<{ contracts: RekapCtrContract[]; addedCount: number }> => {
+    const data = await requestJson('/api/rekap-ctr/sync', {
+      method: 'POST',
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal menyinkronkan data CTR');
     return data.data;
   },
 
@@ -2000,6 +2161,7 @@ export const api = {
     beratKotor?: number;
     potonganRafaksi?: number;
     beratBersihManual?: number;
+    tonaseAkhirKg?: number;
     hargaPerKg?: number;
     hargaJualPerKg?: number;
     isBelumPutusHarga?: boolean;

@@ -969,6 +969,7 @@ class SupabaseSyncEngine {
         cloudHadSupplierSj ||
         cloudKas01Saldo !== mergedKas01Saldo ||
         (mergedLocal.suratJalan?.length || 0) > (cloud.suratJalan?.length || 0) ||
+        (mergedLocal.rekapCtr?.length || 0) > (cloud.rekapCtr?.length || 0) ||
         countAllTransactions(mergedLocal) > countAllTransactions(cloud)
       ) {
         void this.pushToSupabase(mergedLocal, { allowOverwrite: true }).catch((err) =>

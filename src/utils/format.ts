@@ -156,3 +156,22 @@ export function dmyToIsoInput(dmy?: string | null): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+export function formatHariTanggalLabel(dmy?: string | null): string | undefined {
+  const normalized = normalizeDateToDmy(dmy, '');
+  if (!normalized) return undefined;
+  const parts = normalized.split('/');
+  if (parts.length < 3) return undefined;
+  const dd = Number(parts[0]);
+  const mm = Number(parts[1]);
+  const yyyy = Number(parts[2]);
+  if (!dd || !mm || !yyyy) return undefined;
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (isNaN(dt.getTime())) return undefined;
+  const NAMA_HARI = ['MINGGU', 'SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'SABTU'];
+  const BULAN_SINGKAT = ['JAN', 'FEB', 'MAR', 'APR', 'MEI', 'JUN', 'JUL', 'AGU', 'SEP', 'OKT', 'NOV', 'DES'];
+  const bulan = BULAN_SINGKAT[mm - 1];
+  if (!bulan) return undefined;
+  return `${NAMA_HARI[dt.getUTCDay()]} ${String(dd).padStart(2, '0')} ${bulan}`;
+}
+
+

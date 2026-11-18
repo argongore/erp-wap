@@ -34,6 +34,12 @@ import {
   Wallet,
   UploadCloud,
   Search,
+  Download,
+  FileSpreadsheet,
+  ShieldCheck,
+  UserCheck,
+  ArrowDownCircle,
+  ArrowUpCircle,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -55,6 +61,7 @@ import {
   Rekening,
   RekeningKoranHistoryItem,
   RekeningKoranMitraSummary,
+  RekeningTitipAuditSummary,
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat, formatTanggalIndo } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
@@ -64,6 +71,7 @@ import { ModalPinjamUangMitra } from '../common/ModalPinjamUangMitra.tsx';
 import { ShareLinkModal } from '../public/ShareLinkModal.tsx';
 import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
+import { ModalTransaksiRekeningTitip } from '../common/ModalTransaksiRekeningTitip.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import {
   KliringModalMode,
@@ -72,6 +80,15 @@ import {
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalToggleNotaNgunci } from '../master/RekapKhususMitraNgunciSection.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
+import { exportHistoryMitraToCsv, exportHistoryMitraToXlsx } from '../../utils/exportHistoryMitra.ts';
+import { exportRekeningKoranToPdf } from '../../utils/exportRekeningKoranPdf.ts';
+import { exportRekeningKoranToImage } from '../../utils/exportRekeningKoranImage.ts';
+import {
+  exportRekeningTitipToCsv,
+  exportRekeningTitipToImage,
+  exportRekeningTitipToPdf,
+  exportRekeningTitipToXlsx,
+} from '../../utils/exportRekeningTitip.ts';
 
 // Generated authentic visual preview mockup
 import rekeningKoranMockupImg from '../../assets/images/rekening_koran_preview_1790406863342.jpg';
@@ -108,6 +125,9 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [modalPinjamUangOpen, setModalPinjamUangOpen] = useState<boolean>(false);
   const [modalBersihkanNotaOpen, setModalBersihkanNotaOpen] = useState<boolean>(false);
   const [anakPerusahaanModalOpen, setAnakPerusahaanModalOpen] = useState<boolean>(false);
+  const [rekeningTitipModalOpen, setRekeningTitipModalOpen] = useState<boolean>(false);
+  const [selectedRekTitipKode, setSelectedRekTitipKode] = useState<string>('');
+  const [titipFilterArah, setTitipFilterArah] = useState<'ALL' | 'MASUK' | 'BELANJA' | 'KEMBALI'>('ALL');
   const [kliringModalOpen, setKliringModalOpen] = useState<boolean>(false);
   const [kliringInitialMode, setKliringInitialMode] = useState<KliringModalMode>('KLIRING_SILANG');
   const [shareModalOpen, setShareModalOpen] = useState<boolean>(false);
@@ -118,6 +138,14 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     'SEMUA' | 'MASIH_HUTANG' | 'LUNAS_SELESAI' | 'KLIRING_SINKRON' | 'TUNAI_TRANSFER' | 'NOTA_LALU'
   >('SEMUA');
   const [historySearch, setHistorySearch] = useState<string>('');
+  const [downloadHistoryMenuOpen, setDownloadHistoryMenuOpen] = useState<boolean>(false);
+  const [downloadingHistoryFormat, setDownloadingHistoryFormat] = useState<
+    'xlsx' | 'pdf' | 'csv' | 'jpg' | 'png' | null
+  >(null);
+  const [downloadTitipMenuOpen, setDownloadTitipMenuOpen] = useState<boolean>(false);
+  const [downloadingTitipFormat, setDownloadingTitipFormat] = useState<
+    'xlsx' | 'pdf' | 'csv' | 'jpg' | 'png' | null
+  >(null);
   const [showMockupPreview, setShowMockupPreview] = useState<boolean>(false);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
 
@@ -170,6 +198,9 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     isTargetNgunci?: boolean;
   } | null>(null);
   const [quickPayMetode, setQuickPayMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
+  const [quickPaySinkronMode, setQuickPaySinkronMode] = useState<'POTONG_TITIPAN' | 'KOREKSI_LUNAS'>(
+    'KOREKSI_LUNAS'
+  );
   const [quickPayRekening, setQuickPayRekening] = useState<string>('BNI01');
   const [quickPayNominalInput, setQuickPayNominalInput] = useState<string>('');
   const [quickPayKeterangan, setQuickPayKeterangan] = useState<string>('');
@@ -491,6 +522,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
         : defaultNominal;
 
     setQuickPayMetode(defaultMetode);
+    setQuickPaySinkronMode(maksSinkron > 0 ? 'POTONG_TITIPAN' : 'KOREKSI_LUNAS');
     setQuickPayRekening(availableBanks[0]?.kode || 'BNI01');
     setQuickPayNominalInput(suggestedNominal > 0 ? String(suggestedNominal) : '');
     setQuickPayKeterangan(
@@ -519,6 +551,11 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
       return;
     }
 
+    const titipAktifNow = statement.totalTitip || 0;
+    const useKoreksiTanpaPotongTitipan =
+      quickPayMetode === 'SINKRON' &&
+      (quickPaySinkronMode === 'KOREKSI_LUNAS' || titipAktifNow <= 0);
+
     setQuickPayBusy(true);
     setQuickPayError('');
     try {
@@ -534,6 +571,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
             : 'KAS01',
         keterangan: quickPayKeterangan.trim() || undefined,
         idNotaTarget: quickPayModal.idNotaTarget,
+        koreksiTanpaPotongTitipan: useKoreksiTanpaPotongTitipan,
       });
 
       setQuickPayModal(null);
@@ -553,12 +591,15 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
       if (onSuccessReceipt) {
         const isResultSinkron = result.metode === 'SINKRON' || result.rekeningTujuan === 'SINKRON';
+        const isPotongTitip = (result.nominalPotongTitipanOtomatis || 0) > 0;
         const detailRows: ReceiptData['detailRows'] = [
           { label: 'Nama Mitra', value: result.namaMitra },
           {
             label: 'Metode Pembayaran',
             value: isResultSinkron
-              ? 'SINKRON (Potong Titipan / Uang Hasil Bumi)'
+              ? isPotongTitip
+                ? 'SINKRON (Potong Titipan / Uang Hasil Bumi)'
+                : 'SINKRON (Koreksi Lunas Pencatatan · Rp 0 Kas)'
               : `${result.metode} (${result.rekeningTujuan})`,
           },
           { label: 'Total Piutang Sebelum Bayar', value: result.totalBonSebelum },
@@ -702,7 +743,12 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     const raw = Array.isArray(statement.historySaldoBerjalan)
       ? statement.historySaldoBerjalan
       : (statement.history || []).filter((h) => h.isSaldoBerjalan !== false);
-    return [...raw].sort((a, b) => parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam));
+    return [...raw].sort((a, b) => {
+      const aBayar = a.isBayarBonSiklusBerjalan ? 1 : 0;
+      const bBayar = b.isBayarBonSiklusBerjalan ? 1 : 0;
+      if (aBayar !== bBayar) return aBayar - bBayar;
+      return parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam);
+    });
   }, [statement]);
 
   // Tab 2: History Transaksi Mitra — tampilkan SELURUH transaksi mitra (Sinkron, Transfer, Tunai, Kliring Silang,
@@ -853,6 +899,154 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     });
   };
 
+  const getHistoryFilterLabel = () => {
+    const filterMap: Record<typeof historyFilterType, string> = {
+      SEMUA: 'Semua Transaksi',
+      MASIH_HUTANG: 'Masih Hutang / Berjalan',
+      LUNAS_SELESAI: 'Sudah Lunas / Cair',
+      KLIRING_SINKRON: 'Kliring Silang & Sinkron',
+      TUNAI_TRANSFER: 'Tunai & Transfer',
+      NOTA_LALU: 'Nota Lalu',
+    };
+    const base = filterMap[historyFilterType] || 'Semua Transaksi';
+    return historySearch.trim() ? `${base} (Cari: "${historySearch.trim()}")` : base;
+  };
+
+  const handleDownloadHistoryTransaksi = async (
+    format: 'xlsx' | 'pdf' | 'csv' | 'jpg' | 'png',
+    source: 'ALL_HISTORY' | 'CURRENT_VIEW' | 'SALDO_BERJALAN'
+  ) => {
+    if (!statement) return;
+    setDownloadHistoryMenuOpen(false);
+    setDownloadingHistoryFormat(format);
+    setErrorMsg('');
+
+    const isSaldoBerjalanView =
+      source === 'SALDO_BERJALAN' || (source === 'CURRENT_VIEW' && ledgerTab === 'SALDO_BERJALAN');
+    const targetRows =
+      source === 'ALL_HISTORY'
+        ? allMitraHistoryList
+        : source === 'SALDO_BERJALAN'
+        ? historyBerjalanList
+        : ledgerTab === 'HISTORY_SELESAI'
+        ? historySelesaiList
+        : historyBerjalanList;
+    const scopeLabel =
+      source === 'ALL_HISTORY'
+        ? `Seluruh History Transaksi (${allMitraHistoryList.length} Transaksi)`
+        : isSaldoBerjalanView
+        ? `Saldo Berjalan (${historyBerjalanList.length} Transaksi)`
+        : `History Transaksi — ${getHistoryFilterLabel()} (${historySelesaiList.length} Transaksi)`;
+    const shortScopeTitle = isSaldoBerjalanView ? 'Rekening Koran Berjalan' : 'History Transaksi';
+
+    try {
+      if (format === 'xlsx') {
+        const filename = exportHistoryMitraToXlsx(statement, targetRows, activeProfil, {
+          isSaldoBerjalanOnly: isSaldoBerjalanView,
+          scopeLabel,
+          filterLabel:
+            source === 'ALL_HISTORY'
+              ? 'Semua Transaksi'
+              : isSaldoBerjalanView
+              ? 'Saldo Berjalan'
+              : getHistoryFilterLabel(),
+        });
+        setEditSuccessMsg(
+          `${shortScopeTitle} berhasil diunduh ke Excel (${filename} · ${targetRows.length} transaksi).`
+        );
+      } else if (format === 'csv') {
+        const filename = exportHistoryMitraToCsv(statement, targetRows, {
+          isSaldoBerjalanOnly: isSaldoBerjalanView,
+          scopeLabel,
+        });
+        setEditSuccessMsg(
+          `${shortScopeTitle} berhasil diunduh ke CSV (${filename} · ${targetRows.length} transaksi).`
+        );
+      } else if (format === 'jpg' || format === 'png') {
+        const res = await exportRekeningKoranToImage(statement, activeProfil, activeRekeningUtama, {
+          format,
+          printScope: isSaldoBerjalanView ? 'SALDO_BERJALAN' : 'SEMUA_HISTORY',
+          includeNotaProofs: true,
+          customRows: targetRows,
+          scopeLabel: isSaldoBerjalanView ? 'SALDO BERJALAN' : 'HISTORY TRANSAKSI MITRA',
+        });
+        setEditSuccessMsg(
+          `${shortScopeTitle} berhasil diunduh sebagai gambar ${format.toUpperCase()} (${res.filenames[0]}${res.pageCount > 1 ? ` · ${res.pageCount} halaman` : ''}).`
+        );
+      } else {
+        await exportRekeningKoranToPdf(statement, activeProfil, activeRekeningUtama, {
+          printScope: isSaldoBerjalanView ? 'SALDO_BERJALAN' : 'SEMUA_HISTORY',
+          includeNotaProofs: true,
+          customRows: targetRows,
+          scopeLabel: isSaldoBerjalanView ? 'SALDO BERJALAN' : 'HISTORY TRANSAKSI MITRA',
+        });
+        setEditSuccessMsg(
+          `${shortScopeTitle} berhasil diunduh dalam format PDF (${targetRows.length} transaksi).`
+        );
+      }
+      setTimeout(() => setEditSuccessMsg(''), 6000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || `Gagal mengunduh ${shortScopeTitle} (${format.toUpperCase()})`);
+    } finally {
+      setDownloadingHistoryFormat(null);
+    }
+  };
+
+  const handleDownloadRekeningTitip = async (
+    format: 'xlsx' | 'pdf' | 'csv' | 'jpg' | 'png',
+    targetAudit?: RekeningTitipAuditSummary,
+    usePanelFilter = false
+  ) => {
+    const titipList = statement?.rekeningTitipList || [];
+    const activeAudit =
+      targetAudit ||
+      titipList.find((t) => t.kodeRekening === selectedRekTitipKode) ||
+      titipList[0];
+    if (!activeAudit) return;
+
+    const activeArah = usePanelFilter ? titipFilterArah : 'ALL';
+    setDownloadTitipMenuOpen(false);
+    setDownloadHistoryMenuOpen(false);
+    setDownloadingTitipFormat(format);
+    setErrorMsg('');
+
+    try {
+      if (format === 'pdf') {
+        const fn = await exportRekeningTitipToPdf(activeAudit, activeProfil, {
+          filterArah: activeArah,
+        });
+        setEditSuccessMsg(
+          `Rekening Koran khusus Rekening Titip (${activeAudit.kodeRekening}) berhasil diunduh: ${fn}`
+        );
+      } else if (format === 'xlsx') {
+        const fn = exportRekeningTitipToXlsx(activeAudit, activeProfil, {
+          filterArah: activeArah,
+        });
+        setEditSuccessMsg(
+          `Excel Rekening Koran khusus Rekening Titip (${activeAudit.kodeRekening}) berhasil diunduh: ${fn}`
+        );
+      } else if (format === 'jpg' || format === 'png') {
+        const res = await exportRekeningTitipToImage(activeAudit, activeProfil, {
+          format,
+          filterArah: activeArah,
+        });
+        setEditSuccessMsg(
+          `Gambar ${format.toUpperCase()} Rekening Koran khusus Rekening Titip (${res.pageCount} hal.) berhasil diunduh: ${res.filenames.join(', ')}`
+        );
+      } else if (format === 'csv') {
+        const fn = exportRekeningTitipToCsv(activeAudit, { filterArah: activeArah });
+        setEditSuccessMsg(
+          `CSV Rekening Koran khusus Rekening Titip (${activeAudit.kodeRekening}) berhasil diunduh: ${fn}`
+        );
+      }
+      setTimeout(() => setEditSuccessMsg(''), 6000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || `Gagal mengunduh Rekening Koran Titip (${format.toUpperCase()})`);
+    } finally {
+      setDownloadingTitipFormat(null);
+    }
+  };
+
   const now = new Date();
   const tglCetak = formatTanggalIndo(now.toISOString().split('T')[0]);
   const jamCetak = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
@@ -951,6 +1145,197 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
               <Share2 className="w-3.5 h-3.5 text-indigo-600" />
               <span>Bagikan Link Mitra</span>
             </button>
+          )}
+
+          {statement && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setDownloadHistoryMenuOpen((prev) => !prev)}
+                disabled={downloadingHistoryFormat !== null}
+                className="flex items-center space-x-1.5 px-3.5 py-2 text-xs font-bold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                title="Download Rekening Berjalan atau History Transaksi (JPG, PNG, PDF, Excel, CSV)"
+              >
+                <Download className="w-4 h-4 text-emerald-700" />
+                <span>
+                  {downloadingHistoryFormat
+                    ? `Mengunduh ${downloadingHistoryFormat.toUpperCase()}...`
+                    : 'Unduh JPG / PNG / PDF'}
+                </span>
+                <ChevronDown className="w-3.5 h-3.5 text-emerald-700" />
+              </button>
+
+              {downloadHistoryMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setDownloadHistoryMenuOpen(false)}
+                  />
+                  <div className="absolute right-0 mt-1.5 w-72 bg-white rounded-xl shadow-xl border border-zinc-200 py-1.5 z-40 animate-in fade-in zoom-in-95 duration-100 max-h-[80vh] overflow-y-auto">
+                    <div className="px-3 py-1.5 border-b border-zinc-100 bg-amber-50/70 text-[10px] font-extrabold uppercase tracking-wider text-amber-900 flex items-center justify-between">
+                      <span>Rekening Berjalan (Aktif)</span>
+                      <span className="font-mono text-amber-800">
+                        {historyBerjalanList.length} Baris
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 p-1.5 border-b border-zinc-100">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadHistoryTransaksi('jpg', 'SALDO_BERJALAN')}
+                        className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-sky-50 hover:bg-sky-100 text-sky-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+                        <span>JPG (.jpg)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadHistoryTransaksi('png', 'SALDO_BERJALAN')}
+                        className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-cyan-50 hover:bg-cyan-100 text-cyan-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5 text-cyan-700 shrink-0" />
+                        <span>PNG (.png)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadHistoryTransaksi('pdf', 'SALDO_BERJALAN')}
+                        className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-rose-50 hover:bg-rose-100 text-rose-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <FileDown className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                        <span>PDF (.pdf)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadHistoryTransaksi('xlsx', 'SALDO_BERJALAN')}
+                        className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                        <span>Excel (.xlsx)</span>
+                      </button>
+                    </div>
+
+                    <div className="px-3 py-1.5 border-b border-zinc-100 bg-emerald-50/70 text-[10px] font-extrabold uppercase tracking-wider text-emerald-900 flex items-center justify-between">
+                      <span>Semua History Transaksi</span>
+                      <span className="font-mono text-emerald-700">
+                        {allMitraHistoryList.length} Baris
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadHistoryTransaksi('jpg', 'ALL_HISTORY')}
+                      className="w-full px-3 py-2 text-left text-xs hover:bg-sky-50 flex items-start gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <ImageIcon className="w-4 h-4 text-sky-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-zinc-900">Download JPG (.jpg)</div>
+                        <div className="text-[10px] text-zinc-500">
+                          Versi gambar siap kirim ke WhatsApp
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadHistoryTransaksi('png', 'ALL_HISTORY')}
+                      className="w-full px-3 py-2 text-left text-xs hover:bg-cyan-50 flex items-start gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <ImageIcon className="w-4 h-4 text-cyan-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-zinc-900">Download PNG (.png)</div>
+                        <div className="text-[10px] text-zinc-500">
+                          Versi gambar HD resolusi tajam
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadHistoryTransaksi('pdf', 'ALL_HISTORY')}
+                      className="w-full px-3 py-2 text-left text-xs hover:bg-rose-50 flex items-start gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <FileDown className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-zinc-900">Download PDF (.pdf)</div>
+                        <div className="text-[10px] text-zinc-500">
+                          Dokumen lengkap + lampiran foto nota
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadHistoryTransaksi('xlsx', 'ALL_HISTORY')}
+                      className="w-full px-3 py-2 text-left text-xs hover:bg-emerald-50 flex items-start gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-zinc-900">Download Excel (.xlsx)</div>
+                        <div className="text-[10px] text-zinc-500">
+                          Rekap mutasi + sheet rincian item barang
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadHistoryTransaksi('csv', 'ALL_HISTORY')}
+                      className="w-full px-3 py-2 text-left text-xs hover:bg-zinc-50 flex items-start gap-2.5 transition-colors cursor-pointer"
+                    >
+                      <FileText className="w-4 h-4 text-zinc-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold text-zinc-900">Download CSV (.csv)</div>
+                        <div className="text-[10px] text-zinc-500">
+                          Format tabel ringan untuk Excel / import
+                        </div>
+                      </div>
+                    </button>
+
+                    {statement.rekeningTitipList && statement.rekeningTitipList.length > 0 && (() => {
+                      const topTitip =
+                        statement.rekeningTitipList.find((t) => t.kodeRekening === selectedRekTitipKode) ||
+                        statement.rekeningTitipList[0];
+                      return (
+                        <>
+                          <div className="px-3 py-1.5 border-t border-b border-sky-200 bg-sky-50 text-[10px] font-extrabold uppercase tracking-wider text-sky-950 flex items-center justify-between mt-1">
+                            <span>Khusus Rekening Titip ({topTitip.kodeRekening})</span>
+                            <span className="font-mono text-sky-800">{topTitip.mutasi.length} Mutasi</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1 p-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('pdf', topTitip, false)}
+                              className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-rose-50 hover:bg-rose-100 text-rose-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <FileDown className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                              <span>PDF Titip</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('xlsx', topTitip, false)}
+                              className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                              <span>Excel Titip</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('jpg', topTitip, false)}
+                              className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-sky-50 hover:bg-sky-100 text-sky-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <ImageIcon className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+                              <span>JPG Titip</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('png', topTitip, false)}
+                              className="px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-cyan-50 hover:bg-cyan-100 text-cyan-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <ImageIcon className="w-3.5 h-3.5 text-cyan-700 shrink-0" />
+                              <span>PNG Titip</span>
+                            </button>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </>
+              )}
+            </div>
           )}
 
           <button
@@ -1671,6 +2056,344 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
             </div>
           )}
 
+          {/* PANEL AUDIT REKENING TITIP UANG PERUSAHAAN (AMANAH TRANSAKSI KARYAWAN) */}
+          {statement.rekeningTitipList && statement.rekeningTitipList.length > 0 && (() => {
+            const titipList: RekeningTitipAuditSummary[] = statement.rekeningTitipList;
+            const activeTitip =
+              titipList.find((t) => t.kodeRekening === selectedRekTitipKode) || titipList[0];
+            const filteredMutasi = (activeTitip?.mutasi || []).filter((m) =>
+              titipFilterArah === 'ALL' ? true : m.arah === titipFilterArah
+            );
+
+            return (
+              <div className="bg-sky-50/60 border border-sky-300 rounded-xl p-4 sm:p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start space-x-3">
+                    <div className="w-9 h-9 rounded-lg bg-sky-800 text-white flex items-center justify-center shrink-0">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-bold text-sky-950">
+                          Rekening Titip Uang Perusahaan: {activeTitip.namaRekening} ({activeTitip.kodeRekening})
+                        </span>
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-100 text-sky-900 border border-sky-300 text-[10px] font-bold">
+                          <UserCheck className="w-3 h-3" />
+                          Pemegang Amanah: {activeTitip.namaKaryawanTerkait || statement.namaMitra}
+                        </span>
+                      </div>
+                      <p className="text-xs text-zinc-600 mt-0.5">
+                        Dana backup transaksi milik perusahaan yang dititipkan sementara ke karyawan untuk melakukan belanja/pembayaran (mis. backup BCA saat owner perjalanan).{' '}
+                        <strong>Terpisah dari Kasbon Pribadi (BON01) &amp; Hutang Panen (TIT01)</strong> — memudahkan audit dana dititipkan, rincian yang sudah dibelanjakan, dan sisa dana amanah.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-center">
+                    <div className="relative">
+                      <button
+                        type="button"
+                        disabled={downloadingTitipFormat !== null}
+                        onClick={() => setDownloadTitipMenuOpen((prev) => !prev)}
+                        className="flex items-center space-x-1.5 px-3.5 py-2 text-xs font-bold text-sky-950 bg-white hover:bg-sky-100 border border-sky-300 rounded-lg shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                        title="Unduh Rekening Koran yang hanya berisi transaksi Rekening Titip Uang Kantor"
+                      >
+                        <Download className="w-4 h-4 text-sky-700" />
+                        <span>
+                          {downloadingTitipFormat
+                            ? `Mengunduh ${downloadingTitipFormat.toUpperCase()}...`
+                            : 'Unduh Rek. Koran Titip'}
+                        </span>
+                        <ChevronDown className="w-3.5 h-3.5 text-sky-700" />
+                      </button>
+
+                      {downloadTitipMenuOpen && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-30"
+                            onClick={() => setDownloadTitipMenuOpen(false)}
+                          />
+                          <div className="absolute right-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-sky-200 py-1.5 z-40">
+                            <div className="px-3 py-1.5 border-b border-sky-100 bg-sky-50 text-[10px] font-extrabold uppercase tracking-wider text-sky-950">
+                              Khusus Mutasi {activeTitip.kodeRekening} ({filteredMutasi.length} Baris)
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('pdf', activeTitip, true)}
+                              className="w-full px-3 py-2 text-left text-xs hover:bg-rose-50 flex items-center gap-2 cursor-pointer"
+                            >
+                              <FileDown className="w-4 h-4 text-rose-700 shrink-0" />
+                              <div>
+                                <div className="font-bold text-zinc-900">Download PDF (.pdf)</div>
+                                <div className="text-[10px] text-zinc-500">Rekening koran A4 siap cetak</div>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('xlsx', activeTitip, true)}
+                              className="w-full px-3 py-2 text-left text-xs hover:bg-emerald-50 flex items-center gap-2 cursor-pointer"
+                            >
+                              <FileSpreadsheet className="w-4 h-4 text-emerald-700 shrink-0" />
+                              <div>
+                                <div className="font-bold text-zinc-900">Download Excel (.xlsx)</div>
+                                <div className="text-[10px] text-zinc-500">Mutasi + sheet rincian item belanja</div>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('jpg', activeTitip, true)}
+                              className="w-full px-3 py-2 text-left text-xs hover:bg-amber-50 flex items-center gap-2 cursor-pointer"
+                            >
+                              <ImageIcon className="w-4 h-4 text-amber-700 shrink-0" />
+                              <div>
+                                <div className="font-bold text-zinc-900">Download JPG (.jpg)</div>
+                                <div className="text-[10px] text-zinc-500">Format gambar siap kirim WhatsApp</div>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('png', activeTitip, true)}
+                              className="w-full px-3 py-2 text-left text-xs hover:bg-sky-50 flex items-center gap-2 cursor-pointer"
+                            >
+                              <ImageIcon className="w-4 h-4 text-sky-700 shrink-0" />
+                              <div>
+                                <div className="font-bold text-zinc-900">Download PNG (.png)</div>
+                                <div className="text-[10px] text-zinc-500">Format gambar HD resolusi tajam</div>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRekeningTitip('csv', activeTitip, true)}
+                              className="w-full px-3 py-2 text-left text-xs hover:bg-zinc-50 flex items-center gap-2 cursor-pointer"
+                            >
+                              <FileText className="w-4 h-4 text-zinc-700 shrink-0" />
+                              <div>
+                                <div className="font-bold text-zinc-900">Download CSV (.csv)</div>
+                                <div className="text-[10px] text-zinc-500">Data tabel ringan untuk olah lanjut</div>
+                              </div>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {rekeningList.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedRekTitipKode(activeTitip.kodeRekening);
+                          setRekeningTitipModalOpen(true);
+                        }}
+                        className="flex items-center space-x-1.5 px-4 py-2 text-xs font-bold text-white bg-sky-700 hover:bg-sky-800 rounded-lg shadow-xs transition-colors cursor-pointer"
+                      >
+                        <ArrowRightLeft className="w-4 h-4" />
+                        <span>Titip / Kembalikan Dana</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Selector bila karyawan memegang >1 Rekening Titip */}
+                {titipList.length > 1 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {titipList.map((t) => (
+                      <button
+                        key={t.kodeRekening}
+                        type="button"
+                        onClick={() => setSelectedRekTitipKode(t.kodeRekening)}
+                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold cursor-pointer border transition-colors ${
+                          activeTitip.kodeRekening === t.kodeRekening
+                            ? 'bg-sky-800 text-white border-sky-800'
+                            : 'bg-white text-sky-900 border-sky-200 hover:bg-sky-100'
+                        }`}
+                      >
+                        {t.namaRekening} ({t.kodeRekening}) · Sisa {formatRupiahSingkat(t.saldoSaatIni)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* 4 KPI Audit Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3.5 bg-white rounded-lg border border-emerald-200 space-y-1 min-w-0 overflow-hidden">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-emerald-900 uppercase tracking-wider">
+                      <span className="truncate">Total Dana Dititipkan (+)</span>
+                      <ArrowDownCircle className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                    </div>
+                    <div
+                      className="text-lg font-black text-emerald-800 font-mono tabular-nums truncate whitespace-nowrap"
+                      title={formatRupiah(activeTitip.saldoAwal + activeTitip.totalDititipkanMasuk)}
+                    >
+                      +{formatRupiahSingkat(activeTitip.saldoAwal + activeTitip.totalDititipkanMasuk)}
+                    </div>
+                    <div className="text-[11px] text-zinc-500 truncate">
+                      {activeTitip.saldoAwal !== 0
+                        ? `Saldo Awal ${formatRupiahSingkat(activeTitip.saldoAwal)} + ${activeTitip.jumlahTransaksiMasuk} Setoran`
+                        : `${activeTitip.jumlahTransaksiMasuk} Transaksi Dana Masuk PT`}
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-white rounded-lg border border-amber-200 space-y-1 min-w-0 overflow-hidden">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 uppercase tracking-wider">
+                      <span className="truncate">Sudah Dibelanjakan (-)</span>
+                      <ArrowUpCircle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                    </div>
+                    <div
+                      className="text-lg font-black text-amber-800 font-mono tabular-nums truncate whitespace-nowrap"
+                      title={formatRupiah(activeTitip.totalDibelanjakanKeluar)}
+                    >
+                      -{formatRupiahSingkat(activeTitip.totalDibelanjakanKeluar)}
+                    </div>
+                    <div className="text-[11px] text-zinc-500 truncate">
+                      {activeTitip.jumlahTransaksiBelanja} Transaksi Belanja / Biaya / Gaji
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-white rounded-lg border border-zinc-200 space-y-1 min-w-0 overflow-hidden">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-zinc-700 uppercase tracking-wider">
+                      <span className="truncate">Dikembalikan ke PT (-)</span>
+                      <RotateCcw className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
+                    </div>
+                    <div
+                      className="text-lg font-black text-zinc-800 font-mono tabular-nums truncate whitespace-nowrap"
+                      title={formatRupiah(activeTitip.totalDikembalikanKePt)}
+                    >
+                      -{formatRupiahSingkat(activeTitip.totalDikembalikanKePt)}
+                    </div>
+                    <div className="text-[11px] text-zinc-500 truncate">
+                      {activeTitip.jumlahTransaksiKembali} Transfer Balik ke Rekening PT
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-white rounded-lg border-2 border-sky-300 space-y-1 min-w-0 overflow-hidden">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-sky-900 uppercase tracking-wider">
+                      <span className="truncate">Sisa Saldo Rekening Titip</span>
+                      <Wallet className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+                    </div>
+                    <div
+                      className={`text-lg font-black font-mono tabular-nums truncate whitespace-nowrap ${
+                        activeTitip.saldoSaatIni >= 0 ? 'text-sky-900' : 'text-rose-700'
+                      }`}
+                      title={formatRupiah(activeTitip.saldoSaatIni)}
+                    >
+                      {formatRupiahSingkat(activeTitip.saldoSaatIni)}
+                    </div>
+                    <div className="text-[11px] text-sky-800 truncate">
+                      Dana amanah siap dipakai transaksi
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filter Arah & Tabel Rincian Mutasi */}
+                <div className="bg-white border border-sky-200 rounded-xl overflow-hidden">
+                  <div className="px-3.5 py-2.5 bg-sky-100/60 border-b border-sky-200 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(
+                        [
+                          { key: 'ALL', label: `Semua (${activeTitip.mutasi.length})` },
+                          { key: 'MASUK', label: `Dana Masuk / Titip (+)` },
+                          { key: 'BELANJA', label: `Sudah Dibelanjakan (-)` },
+                          { key: 'KEMBALI', label: `Kembali ke PT (-)` },
+                        ] as const
+                      ).map((f) => (
+                        <button
+                          key={f.key}
+                          type="button"
+                          onClick={() => setTitipFilterArah(f.key)}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold cursor-pointer transition-colors ${
+                            titipFilterArah === f.key
+                              ? 'bg-sky-800 text-white'
+                              : 'bg-white text-sky-900 border border-sky-200 hover:bg-sky-100'
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[11px] text-sky-900 font-medium">
+                      Audit Kronologis: Uang Dititipkan → Rincian Belanja → Sisa Saldo
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 uppercase text-[10px] font-bold sticky top-0">
+                        <tr>
+                          <th className="py-2 px-3">Tanggal</th>
+                          <th className="py-2 px-3">Jenis Transaksi</th>
+                          <th className="py-2 px-3">Sumber / Pihak / Rincian Belanja</th>
+                          <th className="py-2 px-3 text-right">Dana Masuk (+)</th>
+                          <th className="py-2 px-3 text-right">Belanja / Keluar (-)</th>
+                          <th className="py-2 px-3 text-right">Sisa Saldo</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-100">
+                        {filteredMutasi.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-zinc-400">
+                              Belum ada mutasi transaksi pada Rekening Titip ini.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredMutasi.map((m) => (
+                            <tr key={`${m.id}-${m.modulSumber}`} className="hover:bg-sky-50/40 align-top">
+                              <td className="py-2 px-3 whitespace-nowrap">
+                                <div className="font-semibold text-zinc-900">{m.tanggal}</div>
+                                <div className="text-[10px] font-mono text-zinc-400">{m.jam}</div>
+                              </td>
+                              <td className="py-2 px-3 whitespace-nowrap">
+                                <span
+                                  className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    m.arah === 'MASUK'
+                                      ? 'bg-emerald-100 text-emerald-900'
+                                      : m.arah === 'KEMBALI'
+                                      ? 'bg-zinc-200 text-zinc-800'
+                                      : 'bg-amber-100 text-amber-900'
+                                  }`}
+                                >
+                                  {m.jenis}
+                                </span>
+                                <div className="text-[10px] font-mono text-zinc-400 mt-0.5">{m.id}</div>
+                              </td>
+                              <td className="py-2 px-3 max-w-md">
+                                <div className="font-semibold text-zinc-900">{m.pihakAtauRekeningLawan}</div>
+                                <div className="text-[11px] text-zinc-600 mt-0.5">{m.uraian}</div>
+                                {m.detailItems && m.detailItems.length > 0 && (
+                                  <div className="mt-1 space-y-0.5 pl-2 border-l-2 border-sky-200">
+                                    {m.detailItems.map((it, idx) => (
+                                      <div key={idx} className="text-[10px] text-zinc-600">
+                                        • {it.nama} ({it.qty.toLocaleString('id-ID')} {it.satuan} ×{' '}
+                                        {formatRupiah(it.harga)}) = <strong>{formatRupiah(it.subtotal)}</strong>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {m.catatan && m.catatan !== m.uraian && (
+                                  <div className="text-[10px] text-zinc-400 italic mt-0.5">
+                                    Ket: {m.catatan}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700 whitespace-nowrap tabular-nums">
+                                {m.nominalMasuk > 0 ? `+${formatRupiah(m.nominalMasuk)}` : '-'}
+                              </td>
+                              <td className="py-2 px-3 text-right font-mono font-bold text-amber-800 whitespace-nowrap tabular-nums">
+                                {m.nominalKeluar > 0 ? `-${formatRupiah(m.nominalKeluar)}` : '-'}
+                              </td>
+                              <td className="py-2 px-3 text-right font-mono font-black text-sky-950 whitespace-nowrap tabular-nums">
+                                {formatRupiah(m.saldoSetelah)}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* GRAFIK RECHARTS: FLUKTUASI SALDO TITIPAN MITRA DARI WAKTU KE WAKTU */}
           <div className="bg-white rounded-xl border border-purple-200/90 shadow-2xs overflow-hidden">
             <div className="p-4 bg-gradient-to-r from-purple-50/70 via-indigo-50/40 to-white border-b border-purple-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -1937,53 +2660,180 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
               </div>
             </div>
 
-            {ledgerTab === 'HISTORY_SELESAI' && (
-              <div className="pt-2 border-t border-zinc-100 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {(
-                    [
-                      { key: 'SEMUA', label: 'Semua Transaksi' },
-                      { key: 'MASIH_HUTANG', label: 'Masih Hutang / Berjalan' },
-                      { key: 'LUNAS_SELESAI', label: 'Sudah Lunas / Cair' },
-                      { key: 'KLIRING_SINKRON', label: 'Kliring Silang & Sinkron' },
-                      { key: 'TUNAI_TRANSFER', label: 'Tunai & Transfer' },
-                      { key: 'NOTA_LALU', label: 'Nota Lalu' },
-                    ] as const
-                  ).map((f) => (
+            {ledgerTab === 'SALDO_BERJALAN' && (
+              <div className="pt-2 border-t border-zinc-100">
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-sky-50/70 border border-sky-200/80 rounded-lg px-3 py-2">
+                  <div className="text-[11px] text-sky-950 flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+                    <span>
+                      <strong>Download Rekening Koran Berjalan</strong> ({historyBerjalanList.length} baris saldo aktif):
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <button
-                      key={f.key}
                       type="button"
-                      onClick={() => setHistoryFilterType(f.key)}
-                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
-                        historyFilterType === f.key
-                          ? 'bg-slate-900 text-white border-slate-900'
-                          : 'bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100'
-                      }`}
+                      disabled={downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('jpg', 'SALDO_BERJALAN')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-sky-600 hover:bg-sky-700 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh Rekening Koran Berjalan sebagai gambar JPG (.jpg)"
                     >
-                      {f.label}
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>{downloadingHistoryFormat === 'jpg' ? 'Membuat JPG...' : 'JPG (.jpg)'}</span>
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      disabled={downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('png', 'SALDO_BERJALAN')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-cyan-700 hover:bg-cyan-800 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh Rekening Koran Berjalan sebagai gambar PNG (.png)"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>{downloadingHistoryFormat === 'png' ? 'Membuat PNG...' : 'PNG (.png)'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('pdf', 'SALDO_BERJALAN')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh Rekening Koran Berjalan sebagai dokumen PDF (.pdf)"
+                    >
+                      <FileDown className="w-3.5 h-3.5" />
+                      <span>{downloadingHistoryFormat === 'pdf' ? 'Membuat PDF...' : 'PDF (.pdf)'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('xlsx', 'SALDO_BERJALAN')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-700 hover:bg-emerald-800 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh Rekening Koran Berjalan ke Excel (.xlsx)"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>{downloadingHistoryFormat === 'xlsx' ? 'Membuat Excel...' : 'Excel (.xlsx)'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {ledgerTab === 'HISTORY_SELESAI' && (
+              <div className="pt-2 border-t border-zinc-100 space-y-2.5">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        { key: 'SEMUA', label: 'Semua Transaksi' },
+                        { key: 'MASIH_HUTANG', label: 'Masih Hutang / Berjalan' },
+                        { key: 'LUNAS_SELESAI', label: 'Sudah Lunas / Cair' },
+                        { key: 'KLIRING_SINKRON', label: 'Kliring Silang & Sinkron' },
+                        { key: 'TUNAI_TRANSFER', label: 'Tunai & Transfer' },
+                        { key: 'NOTA_LALU', label: 'Nota Lalu' },
+                      ] as const
+                    ).map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setHistoryFilterType(f.key)}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                          historyFilterType === f.key
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="relative w-full lg:w-72">
+                    <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={historySearch}
+                      onChange={(e) => setHistorySearch(e.target.value)}
+                      placeholder="Cari no nota, barang, kliring, tgl..."
+                      className="w-full pl-8 pr-8 py-1.5 text-xs bg-zinc-50 border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-700"
+                    />
+                    {historySearch && (
+                      <button
+                        type="button"
+                        onClick={() => setHistorySearch('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 cursor-pointer"
+                        title="Bersihkan pencarian"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <div className="relative w-full lg:w-72">
-                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={historySearch}
-                    onChange={(e) => setHistorySearch(e.target.value)}
-                    placeholder="Cari no nota, barang, kliring, tgl..."
-                    className="w-full pl-8 pr-8 py-1.5 text-xs bg-zinc-50 border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-700"
-                  />
-                  {historySearch && (
+                {/* Bar Aksi Unduh History Transaksi Sesuai Filter Aktif */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-emerald-50/60 border border-emerald-200/80 rounded-lg px-3 py-2">
+                  <div className="text-[11px] text-emerald-950 flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                    <span>
+                      <strong>Download History Transaksi</strong> ({historySelesaiList.length} baris
+                      {historyFilterType !== 'SEMUA' || historySearch.trim()
+                        ? ` · Filter: ${getHistoryFilterLabel()}`
+                        : ''}
+                      ):
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
-                      onClick={() => setHistorySearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 cursor-pointer"
-                      title="Bersihkan pencarian"
+                      disabled={historySelesaiList.length === 0 || downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('jpg', 'CURRENT_VIEW')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-sky-600 hover:bg-sky-700 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh history transaksi sesuai filter sebagai gambar JPG (.jpg)"
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>{downloadingHistoryFormat === 'jpg' ? 'Membuat JPG...' : 'JPG (.jpg)'}</span>
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      disabled={historySelesaiList.length === 0 || downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('png', 'CURRENT_VIEW')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-cyan-700 hover:bg-cyan-800 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh history transaksi sesuai filter sebagai gambar PNG (.png)"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>{downloadingHistoryFormat === 'png' ? 'Membuat PNG...' : 'PNG (.png)'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={historySelesaiList.length === 0 || downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('pdf', 'CURRENT_VIEW')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh data history transaksi sesuai filter dalam format PDF (.pdf)"
+                    >
+                      <FileDown className="w-3.5 h-3.5" />
+                      <span>
+                        {downloadingHistoryFormat === 'pdf' ? 'Membuat PDF...' : 'PDF (.pdf)'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={historySelesaiList.length === 0 || downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('xlsx', 'CURRENT_VIEW')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-700 hover:bg-emerald-800 text-white disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh data history transaksi sesuai filter ke Microsoft Excel (.xlsx)"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>
+                        {downloadingHistoryFormat === 'xlsx' ? 'Membuat Excel...' : 'Excel (.xlsx)'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={historySelesaiList.length === 0 || downloadingHistoryFormat !== null}
+                      onClick={() => handleDownloadHistoryTransaksi('csv', 'CURRENT_VIEW')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-white hover:bg-zinc-100 text-zinc-800 border border-zinc-300 disabled:opacity-40 transition-colors cursor-pointer shadow-2xs"
+                      title="Unduh data history transaksi sesuai filter dalam format CSV (.csv)"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>CSV (.csv)</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -2021,7 +2871,18 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                   {(() => {
                     const sisaBayar = statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip);
                     const sisaTitip = statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan);
+                    const displayPiutangTotal =
+                      ledgerTab === 'SALDO_BERJALAN'
+                        ? (statement.totalPiutangBerjalanTampil ?? statement.totalBonKeseluruhan)
+                        : statement.totalBonKeseluruhan;
+                    const displayTitipTotal =
+                      ledgerTab === 'SALDO_BERJALAN'
+                        ? (statement.totalTitipBerjalanTampil ?? statement.totalTitip)
+                        : statement.totalTitip;
+                    const hasBayarBonSiklus =
+                      ledgerTab === 'SALDO_BERJALAN' && (statement.totalBayarBonSiklusBerjalan || 0) > 0;
                     const adaSaldoSilang = statement.totalBonKeseluruhan > 0 && statement.totalTitip > 0;
+                    const adaRumusPengurang = displayPiutangTotal > 0 && displayTitipTotal > 0;
                     if (sisaBayar > 0) {
                       return (
                         <>
@@ -2031,9 +2892,10 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                           <div className="text-base sm:text-lg font-black font-mono tabular-nums text-white">
                             Piutang {formatRupiah(sisaBayar)}
                           </div>
-                          {adaSaldoSilang && (
+                          {adaRumusPengurang && (
                             <div className="text-[10px] font-mono tabular-nums text-slate-300">
-                              Piutang {formatRupiahSingkat(statement.totalBonKeseluruhan)} − Titip {formatRupiahSingkat(statement.totalTitip)} · Belum Kliring
+                              Piutang {formatRupiahSingkat(displayPiutangTotal)} − {hasBayarBonSiklus && statement.totalTitip <= 0 ? 'Bayar Bon' : 'Titip'} {formatRupiahSingkat(displayTitipTotal)}
+                              {adaSaldoSilang && !hasBayarBonSiklus ? ' · Belum Kliring' : ''}
                             </div>
                           )}
                         </>
@@ -2136,7 +2998,14 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             (row.jenis || '').toUpperCase().includes('SINKRON'));
 
                         return (
-                          <tr key={row.id} className="hover:bg-amber-50/30 transition-colors align-top">
+                          <tr
+                            key={row.id}
+                            className={
+                              row.isBayarBonSiklusBerjalan && ledgerTab === 'SALDO_BERJALAN'
+                                ? 'bg-emerald-50/50 hover:bg-emerald-50/80 transition-colors align-top'
+                                : 'hover:bg-amber-50/30 transition-colors align-top'
+                            }
+                          >
                             <td className="py-3 px-3 text-center font-mono tabular-nums font-bold text-zinc-500 text-[11px]">
                               {rowIdx + 1}
                             </td>
@@ -2371,6 +3240,17 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                     Awal: {formatRupiah(row.debet)}
                                   </div>
                                 )}
+                              {ledgerTab === 'SALDO_BERJALAN' &&
+                                (statement.totalBayarBonSiklusBerjalan || 0) > 0 &&
+                                row.debet > 0 &&
+                                nominalPiutangCol === row.debet &&
+                                (row.sisaPiutangNota ?? row.debet) < row.debet && (
+                                  <div className="text-[9px] font-normal text-zinc-500">
+                                    {(row.sisaPiutangNota ?? 0) > 0
+                                      ? `Sisa nota: ${formatRupiah(row.sisaPiutangNota || 0)}`
+                                      : 'Tertutup Bayar Bon'}
+                                  </div>
+                                )}
                               {ledgerTab === 'HISTORY_SELESAI' && row.debet > 0 && (
                                 <div
                                   className={`text-[10px] font-semibold mt-0.5 ${
@@ -2536,17 +3416,17 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                     <tfoot className="bg-zinc-100 font-bold border-t-2 border-zinc-300 text-xs">
                       <tr>
                         <td colSpan={5} className="py-3 px-4 text-right uppercase text-[11px] text-zinc-700">
-                          Total Saldo Berjalan (Piutang vs Titip/Hak Mitra):
+                          Total Saldo Berjalan (Piutang − Titip/Bayar Bon):
                         </td>
                         <td className="py-3 px-3 text-right font-mono tabular-nums text-rose-800 bg-rose-50/50">
-                          {formatRupiah(statement.totalBonKeseluruhan)}
+                          {formatRupiah(statement.totalPiutangBerjalanTampil ?? statement.totalBonKeseluruhan)}
                         </td>
                         <td className="py-3 px-3 text-right font-mono tabular-nums text-emerald-800 bg-emerald-50/50">
-                          {formatRupiah(statement.totalTitip)}
+                          {formatRupiah(statement.totalTitipBerjalanTampil ?? statement.totalTitip)}
                         </td>
                         <td colSpan={2} className="py-3 px-4 text-left font-mono tabular-nums text-slate-900">
                           {(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)) > 0
-                            ? `Yang Harus Dibayar: Piutang ${formatRupiah(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip))}`
+                            ? `Sisa Piutang Berjalan: ${formatRupiah(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip))}`
                             : (statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)) > 0
                             ? `Yang Harus Dibayar: Hutang ${formatRupiah(statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan))}`
                             : 'IMPAS (Rp 0)'}
@@ -2604,21 +3484,43 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           {/* VIEW MODE 2: MODERN CORPORATE INVOICE A4 PRINT SHEET (MIRIP NOTA PERUSAHAAN) */}
           {viewMode === 'LEMBAR_CETAK' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between bg-slate-900 text-white rounded-xl px-4 py-3 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 text-white rounded-xl px-4 py-3 text-xs gap-3">
                 <div className="flex items-center space-x-2">
                   <FileText className="w-4 h-4 text-amber-400 shrink-0" />
                   <span>
                     <strong>Mode Nota / Rekening Koran Resmi Perusahaan:</strong> Menampilkan tata letak khas nota PT Wijaya Agro Perkasa (Kolom ITEM, QTY, HARGA, PIUTANG, TITIP, KETERANGAN).
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={handlePrintClick}
-                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow-2xs shrink-0 cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Cetak / Download PDF</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={downloadingHistoryFormat !== null}
+                    onClick={() => handleDownloadHistoryTransaksi('jpg', 'CURRENT_VIEW')}
+                    className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow-2xs cursor-pointer disabled:opacity-50"
+                    title="Download lembar ini dalam format gambar JPG (.jpg)"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>{downloadingHistoryFormat === 'jpg' ? 'Membuat JPG...' : 'JPG'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={downloadingHistoryFormat !== null}
+                    onClick={() => handleDownloadHistoryTransaksi('png', 'CURRENT_VIEW')}
+                    className="bg-cyan-700 hover:bg-cyan-600 text-white font-bold px-3 py-1.5 rounded-lg flex items-center space-x-1.5 shadow-2xs cursor-pointer disabled:opacity-50"
+                    title="Download lembar ini dalam format gambar PNG (.png)"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>{downloadingHistoryFormat === 'png' ? 'Membuat PNG...' : 'PNG'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePrintClick}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold px-3.5 py-1.5 rounded-lg flex items-center space-x-1.5 shadow-2xs shrink-0 cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Cetak / Download PDF</span>
+                  </button>
+                </div>
               </div>
 
               <div className="bg-white rounded-xl shadow-md border-2 border-zinc-800 p-6 sm:p-8 space-y-5 max-w-5xl mx-auto text-zinc-900 print:shadow-none print:border-none print:p-0">
@@ -2704,6 +3606,14 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                     {(() => {
                       const sisaBayar = statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip);
                       const sisaTitip = statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan);
+                      const displayPiutangTotal =
+                        ledgerTab === 'SALDO_BERJALAN'
+                          ? (statement.totalPiutangBerjalanTampil ?? statement.totalBonKeseluruhan)
+                          : statement.totalBonKeseluruhan;
+                      const displayTitipTotal =
+                        ledgerTab === 'SALDO_BERJALAN'
+                          ? (statement.totalTitipBerjalanTampil ?? statement.totalTitip)
+                          : statement.totalTitip;
                       if (sisaBayar > 0) {
                         return (
                           <>
@@ -2714,8 +3624,8 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               PIUTANG {formatRupiah(sisaBayar)}
                             </div>
                             <div className="text-[10px] font-mono text-zinc-600 border-t border-amber-300 pt-1 flex justify-between">
-                              <span>Piutang: {formatRupiah(statement.totalBonKeseluruhan)}</span>
-                              <span>Titip: {formatRupiah(statement.totalTitip)}</span>
+                              <span>Piutang: {formatRupiah(displayPiutangTotal)}</span>
+                              <span>Titip: {formatRupiah(displayTitipTotal)}</span>
                             </div>
                           </>
                         );
@@ -2730,8 +3640,8 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               HUTANG {formatRupiah(sisaTitip)}
                             </div>
                             <div className="text-[10px] font-mono text-zinc-600 border-t border-amber-300 pt-1 flex justify-between">
-                              <span>Titip: {formatRupiah(statement.totalTitip)}</span>
-                              <span>Piutang: {formatRupiah(statement.totalBonKeseluruhan)}</span>
+                              <span>Titip: {formatRupiah(displayTitipTotal)}</span>
+                              <span>Piutang: {formatRupiah(displayPiutangTotal)}</span>
                             </div>
                           </>
                         );
@@ -2791,7 +3701,11 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               ? row.titipBerjalan ?? row.nominalMutasiHak ?? 0
                               : row.nominalMutasiHak || (row.debet === 0 ? row.nominalTransaksi || 0 : 0);
                           const ketNote = (row.catatanTransaksi || row.catatanNgunci || '').trim();
+                          const hideItemCicilanNote =
+                            ledgerTab === 'SALDO_BERJALAN' &&
+                            (statement.totalBayarBonSiklusBerjalan || 0) > 0;
                           const sudahDibayarNota =
+                            !hideItemCicilanNote &&
                             row.debet > 0 &&
                             row.sisaPiutangNota !== undefined &&
                             row.sisaPiutangNota < row.debet
@@ -2799,7 +3713,14 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               : 0;
 
                           return (
-                            <tr key={row.id} className="align-top">
+                            <tr
+                              key={row.id}
+                              className={
+                                row.isBayarBonSiklusBerjalan && ledgerTab === 'SALDO_BERJALAN'
+                                  ? 'align-top bg-emerald-50/50'
+                                  : 'align-top'
+                              }
+                            >
                               <td className="py-2 px-2 text-center font-mono tabular-nums font-bold">{rIdx + 1}</td>
                               <td className="py-2 px-2 font-mono tabular-nums whitespace-nowrap">{row.tanggal}</td>
                               <td className="py-2 px-2.5">
@@ -2870,10 +3791,18 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                           TOTAL SALDO BERJALAN :
                         </td>
                         <td className="py-2.5 px-2 text-right font-mono tabular-nums text-rose-900">
-                          {formatRupiah(statement.totalBonKeseluruhan)}
+                          {formatRupiah(
+                            ledgerTab === 'SALDO_BERJALAN'
+                              ? (statement.totalPiutangBerjalanTampil ?? statement.totalBonKeseluruhan)
+                              : statement.totalBonKeseluruhan
+                          )}
                         </td>
                         <td className="py-2.5 px-2 text-right font-mono tabular-nums text-emerald-900">
-                          {formatRupiah(statement.totalTitip)}
+                          {formatRupiah(
+                            ledgerTab === 'SALDO_BERJALAN'
+                              ? (statement.totalTitipBerjalanTampil ?? statement.totalTitip)
+                              : statement.totalTitip
+                          )}
                         </td>
                         <td className="py-2.5 px-2.5 font-mono text-zinc-900">
                           {(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)) > 0
@@ -3261,6 +4190,23 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
         }}
       />
 
+      {/* Modal Titip / Kembalikan Dana Rekening Titip Uang Karyawan */}
+      <ModalTransaksiRekeningTitip
+        isOpen={rekeningTitipModalOpen}
+        onClose={() => setRekeningTitipModalOpen(false)}
+        rekeningList={rekeningList}
+        targetRekeningKode={
+          selectedRekTitipKode || statement?.rekeningTitipList?.[0]?.kodeRekening
+        }
+        onSuccess={(receipt) => {
+          if (currentMitraId) loadStatementData(currentMitraId);
+          onRefreshParent?.();
+          if (receipt && onSuccessReceipt) {
+            onSuccessReceipt(receipt);
+          }
+        }}
+      />
+
       {/* Modal Universal Edit Detail Setiap Transaksi Mitra */}
       <ModalEditTransaksiUniversal
         isOpen={Boolean(universalEditId)}
@@ -3382,8 +4328,17 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
         const titipAktif = statement.totalTitip || 0;
         const maksSinkron = Math.min(bonKotor, titipAktif);
         const sisaFisik = bonKotor;
-        const canSinkron = bonKotor > 0 && titipAktif > 0 && maksSinkron > 0;
-        const targetMaks = quickPayMetode === 'SINKRON' ? maksSinkron : sisaFisik;
+        const hasTitipForSinkron = bonKotor > 0 && titipAktif > 0 && maksSinkron > 0;
+        const effectiveSinkronMode =
+          hasTitipForSinkron && quickPaySinkronMode === 'POTONG_TITIPAN'
+            ? 'POTONG_TITIPAN'
+            : 'KOREKSI_LUNAS';
+        const targetMaks =
+          quickPayMetode === 'SINKRON'
+            ? effectiveSinkronMode === 'POTONG_TITIPAN'
+              ? maksSinkron
+              : bonKotor
+            : sisaFisik;
         const nomInput = Math.round(Number(quickPayNominalInput) || 0);
         const isOver = targetMaks > 0 && nomInput > targetMaks;
 
@@ -3515,16 +4470,27 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                     </button>
                     <button
                       type="button"
-                      disabled={!canSinkron}
+                      disabled={bonKotor <= 0}
                       onClick={() => {
                         setQuickPayMetode('SINKRON');
+                        const nextMode = hasTitipForSinkron ? quickPaySinkronMode : 'KOREKSI_LUNAS';
+                        setQuickPaySinkronMode(nextMode);
+                        const batas =
+                          nextMode === 'POTONG_TITIPAN' && maksSinkron > 0 ? maksSinkron : bonKotor;
                         setQuickPayNominalInput(
                           String(
                             quickPayModal.sisaNotaTarget
-                              ? Math.min(quickPayModal.sisaNotaTarget, maksSinkron)
-                              : maksSinkron
+                              ? Math.min(quickPayModal.sisaNotaTarget, batas)
+                              : batas
                           )
                         );
+                        if (nextMode === 'KOREKSI_LUNAS') {
+                          setQuickPayKeterangan(
+                            quickPayModal.noNotaLabel
+                              ? `Pelunasan SINKRON koreksi pencatatan nota ${quickPayModal.noNotaLabel} (nota terbukti sudah lunas sebelumnya / Rp 0 uang masuk)`
+                              : `Pelunasan SINKRON koreksi pencatatan piutang ${statement.namaMitra} (Rp 0 uang masuk)`
+                          );
+                        }
                       }}
                       className={`py-2 px-2.5 rounded-lg font-bold border text-center flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
                         quickPayMetode === 'SINKRON'
@@ -3533,9 +4499,81 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                       }`}
                     >
                       <RefreshCw className="w-3 h-3 shrink-0" />
-                      <span>Potong Titipan</span>
+                      <span>Sinkron (Non-Kas)</span>
                     </button>
                   </div>
+
+                  {quickPayMetode === 'SINKRON' && (
+                    <div className="mt-2.5 p-3 rounded-xl bg-cyan-50 border border-cyan-200 space-y-2 text-[11px] text-cyan-950">
+                      {hasTitipForSinkron && (
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuickPaySinkronMode('POTONG_TITIPAN');
+                              const batas = maksSinkron;
+                              setQuickPayNominalInput(
+                                String(
+                                  quickPayModal.sisaNotaTarget
+                                    ? Math.min(quickPayModal.sisaNotaTarget, batas)
+                                    : batas
+                                )
+                              );
+                              setQuickPayKeterangan(
+                                quickPayModal.noNotaLabel
+                                  ? `Pelunasan SINKRON potong titipan untuk nota ${quickPayModal.noNotaLabel}`
+                                  : `Pelunasan SINKRON potong titipan / uang hasil bumi ${statement.namaMitra}`
+                              );
+                            }}
+                            className={`px-2 py-1.5 rounded-lg border font-bold text-left cursor-pointer ${
+                              effectiveSinkronMode === 'POTONG_TITIPAN'
+                                ? 'bg-cyan-700 text-white border-cyan-800'
+                                : 'bg-white text-cyan-900 border-cyan-200 hover:bg-cyan-100/60'
+                            }`}
+                          >
+                            Potong Titipan ({formatRupiahSingkat(maksSinkron)})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuickPaySinkronMode('KOREKSI_LUNAS');
+                              const batas = bonKotor;
+                              setQuickPayNominalInput(
+                                String(
+                                  quickPayModal.sisaNotaTarget
+                                    ? Math.min(quickPayModal.sisaNotaTarget, batas)
+                                    : batas
+                                )
+                              );
+                              setQuickPayKeterangan(
+                                quickPayModal.noNotaLabel
+                                  ? `Pelunasan SINKRON koreksi pencatatan nota ${quickPayModal.noNotaLabel} (nota terbukti sudah lunas sebelumnya / Rp 0 uang masuk)`
+                                  : `Pelunasan SINKRON koreksi pencatatan piutang ${statement.namaMitra} (Rp 0 uang masuk)`
+                              );
+                            }}
+                            className={`px-2 py-1.5 rounded-lg border font-bold text-left cursor-pointer ${
+                              effectiveSinkronMode === 'KOREKSI_LUNAS'
+                                ? 'bg-cyan-700 text-white border-cyan-800'
+                                : 'bg-white text-cyan-900 border-cyan-200 hover:bg-cyan-100/60'
+                            }`}
+                          >
+                            Koreksi Lunas (Tanpa Potong Titipan)
+                          </button>
+                        </div>
+                      )}
+                      <p className="leading-snug">
+                        {effectiveSinkronMode === 'POTONG_TITIPAN' ? (
+                          <>
+                            <strong>SINKRON Potong Titipan:</strong> Langsung memotong saldo titipan/hasil bumi mitra tanpa kas keluar/masuk.
+                          </>
+                        ) : (
+                          <>
+                            <strong>SINKRON Koreksi Pencatatan (Rp 0 Uang Masuk):</strong> Melunaskan nota piutang yang terbukti sudah dibayar sebelumnya tanpa menambah saldo kas/bank dan tanpa memotong saldo titipan.
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {quickPayMetode === 'TRANSFER' && (
@@ -3639,10 +4677,16 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                   <button
                     type="submit"
                     disabled={quickPayBusy || nomInput <= 0 || isOver}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold cursor-pointer disabled:opacity-50"
+                    className={`px-4 py-2 text-white rounded-lg font-bold cursor-pointer disabled:opacity-50 ${
+                      quickPayMetode === 'SINKRON'
+                        ? 'bg-cyan-700 hover:bg-cyan-800'
+                        : 'bg-emerald-700 hover:bg-emerald-800'
+                    }`}
                   >
                     {quickPayBusy
                       ? 'Memproses...'
+                      : quickPayMetode === 'SINKRON'
+                      ? `Lunaskan via SINKRON (${formatRupiah(nomInput)})`
                       : `Simpan Pembayaran (${formatRupiah(nomInput)})`}
                   </button>
                 </div>

@@ -119,7 +119,8 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
       r.kode !== 'BON01' &&
       r.kode !== 'TIT01' &&
       r.kode !== 'SINKRON' &&
-      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
+      (!r.kode.startsWith('REK-') ||
+        Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.isRekeningTitip || r.kategori === 'REKENING_TITIP'))
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -136,8 +137,8 @@ export const InputKerjaHarianModal: React.FC<InputKerjaHarianModalProps> = ({
       return;
     }
 
-    if (totalUpah <= 0) {
-      setErrorMsg('Nominal upah kerja harian harus lebih dari Rp 0.');
+    if (totalUpah < 0) {
+      setErrorMsg('Nominal upah kerja harian tidak boleh bernilai negatif.');
       return;
     }
 

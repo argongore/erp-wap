@@ -92,6 +92,35 @@ function isoToDmyDate(iso: string): string {
   return iso;
 }
 
+function sanitizeDecimalTypingEdit(raw: string): string {
+  const cleaned = raw.replace(/[^0-9.,]/g, '');
+  let hasSep = false;
+  let out = '';
+  for (const ch of cleaned) {
+    if (ch === ',' || ch === '.') {
+      if (!hasSep) {
+        out += ch;
+        hasSep = true;
+      }
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function parseDecimalEdit(raw: string | number): number {
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw < 0) return 0;
+    return Math.round(raw * 10000) / 10000;
+  }
+  const normalized = String(raw || '').trim().replace(/,/g, '.');
+  if (!normalized || normalized === '.') return 0;
+  const num = Number(normalized);
+  if (!Number.isFinite(num) || num < 0) return 0;
+  return Math.round(num * 10000) / 10000;
+}
+
 const JENIS_LABEL_MAP: Record<JenisTransaksiEdit, string> = {
   NOTA_SILANG: 'Nota Silang (Mitra ⇄ Anak Perusahaan / Sesama Mitra)',
   PEMBELIAN_HASIL_BUMI: 'Pembelian Hasil Bumi (Timbangan / Dana Mitra)',
@@ -197,6 +226,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
   const [hargaSatuanPengeluaranInput, setHargaSatuanPengeluaranInput] = useState('');
   const [idInventaris, setIdInventaris] = useState('');
   const [penerima, setPenerima] = useState('');
+  const [tonaseAkhirUmInput, setTonaseAkhirUmInput] = useState('');
+  const [hargaPerKgUmInput, setHargaPerKgUmInput] = useState('');
+  const [tonaseAkhirJhbInput, setTonaseAkhirJhbInput] = useState('');
 
   // BRILink Fields
   const [jenisBrilink, setJenisBrilink] = useState<JenisTransaksiBrilink>('TARIK_TUNAI');
@@ -322,6 +354,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           const isCustomNet = kotor > 0 && Math.abs(computedNet - bersih) > 0.05;
           setUseManualNetto(isCustomNet);
           setBeratBersihManualInput(String(bersih));
+          setTonaseAkhirJhbInput(
+            r.tonaseAkhir && Number(r.tonaseAkhir) > 0 ? String(r.tonaseAkhir) : ''
+          );
           setHargaPerKgInput(String(Number(r.hargaJualPerKg) || 0));
           setNoSuratJalan(r.noSuratJalan || '');
           setMetode(r.metodePembayaran || 'TUNAI');
@@ -437,10 +472,15 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           setNominalInput(String(Number(r.nominal) || 0));
           setMetode(r.metode || 'TUNAI');
           setRekeningTujuan(
-            r.rekeningTujuan && r.rekeningTujuan !== 'KAS01' ? r.rekeningTujuan : defaultTransferBank
+            r.rekeningTujuan && r.rekeningTujuan !== 'KAS01' && r.rekeningTujuan !== 'SINKRON'
+              ? r.rekeningTujuan
+              : defaultTransferBank
           );
           setDivisi(r.divisi || 'PT Wijaya Agro Perkasa');
           setKategoriBiaya(r.kategori || 'Penerimaan Operasional');
+          setTonaseAkhirUmInput(r.tonaseAkhirKg ? String(r.tonaseAkhirKg) : '');
+          const hrgInit = Number(r.hargaDealPerKg) || Number(r.hargaRealisasiPerKg) || 0;
+          setHargaPerKgUmInput(hrgInit > 0 ? String(hrgInit) : '');
         } else if (j === 'BRILINK') {
           setJenisBrilink(r.jenisBrilink === 'TUKAR_CASH' ? 'TUKAR_CASH' : 'TARIK_TUNAI');
           setNominalInput(String(Number(r.nominalAdmin) || 0));
@@ -600,6 +640,11 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
       if (jenis === 'PEMBELIAN_HASIL_BUMI' && isBelumPutusHarga && (Number(hargaPerKgInput) || 0) === 0) {
         return 0;
       }
+      if (jenis === 'PENJUALAN_HASIL_BUMI') {
+        const tAkhirJhb = Math.max(0, Math.round((Number(tonaseAkhirJhbInput) || 0) * 100) / 100);
+        const basisKgJhb = tAkhirJhb > 0 ? tAkhirJhb : computedBeratBersih;
+        return Math.round(basisKgJhb * (Number(hargaPerKgInput) || 0));
+      }
       return Math.round(computedBeratBersih * (Number(hargaPerKgInput) || 0));
     }
     if (
@@ -607,13 +652,13 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
       ((jenis === 'PENJUALAN' || jenis === 'PEMBELIAN_BARANG') && !isRekapNotaBarang)
     ) {
       return lineItems.reduce((sum, it) => {
-        const q = Math.max(0, Number(it.qty) || 0);
+        const q = parseDecimalEdit(it.qty);
         const h = Math.max(0, Number(it.hargaSatuan) || 0);
         return sum + Math.round(q * h);
       }, 0);
     }
     if (jenis === 'UPAH_HARIAN') {
-      const q = Math.max(0, Number(kuantitiUpahInput) || 0);
+      const q = Math.max(0, parseDecimalEdit(kuantitiUpahInput));
       const h = Math.max(0, Number(hargaSatuanUpahInput) || 0);
       const m = Math.max(0, Number(uangMakanLemburInput) || 0);
       return Math.round(q * h) + Math.round(m);
@@ -631,6 +676,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
     isNonPhysicalHasilBumi,
     isBelumPutusHarga,
     computedBeratBersih,
+    tonaseAkhirJhbInput,
     hargaPerKgInput,
     isRekapNotaBarang,
     lineItems,
@@ -858,6 +904,10 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         if (useManualNetto) {
           payload.beratBersihManual = Number(beratBersihManualInput) || 0;
         }
+        payload.tonaseAkhirKg =
+          tonaseAkhirJhbInput.trim() !== ''
+            ? Math.max(0, Math.round((Number(tonaseAkhirJhbInput) || 0) * 100) / 100)
+            : 0;
         payload.hargaJualPerKg = Number(hargaPerKgInput) || 0;
         payload.noSuratJalan = noSuratJalan;
         payload.metode = metode;
@@ -887,7 +937,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
             kodeProduk: it.kodeProduk,
             namaProduk: it.namaProduk,
             satuan: it.satuan,
-            qty: Number(it.qty) || 0,
+            qty: parseDecimalEdit(it.qty),
             hargaBeliSatuan: Math.round(Number(it.hargaSatuan) || 0),
           }));
         }
@@ -904,7 +954,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           kodeProduk: it.kodeProduk,
           namaProduk: it.namaProduk,
           satuan: it.satuan,
-          qty: Number(it.qty) || 0,
+          qty: parseDecimalEdit(it.qty),
           harga: Math.round(Number(it.hargaSatuan) || 0),
         }));
       } else if (jenis === 'KASBON_UANG') {
@@ -963,9 +1013,24 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
       } else if (jenis === 'UANG_MASUK') {
         payload.nominal = Math.round(Number(nominalInput) || 0);
         payload.metode = metode;
-        payload.rekeningTujuan = metode === 'TUNAI' ? 'KAS01' : rekeningTujuan;
+        payload.rekeningTujuan =
+          metode === 'PIUTANG'
+            ? 'BON01'
+            : metode === 'SINKRON'
+            ? 'SINKRON'
+            : metode === 'TUNAI'
+            ? 'KAS01'
+            : rekeningTujuan;
         payload.divisi = divisi;
         payload.kategori = kategoriBiaya;
+        if (record?.noPenjualanHasilBumi) {
+          const tAkhir = Number(tonaseAkhirUmInput);
+          const hKg = Number(hargaPerKgUmInput);
+          payload.tonaseAkhirKg = !isNaN(tAkhir) && tAkhir >= 0 ? tAkhir : undefined;
+          if (!isNaN(hKg) && hKg > 0) {
+            payload.hargaPerKg = Math.round(hKg);
+          }
+        }
       } else if (jenis === 'BRILINK') {
         payload.jenisBrilink = jenisBrilink;
         payload.nominal = Math.round(Number(nominalInput) || 0);
@@ -982,7 +1047,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         if (namaKaryawanManual.trim()) payload.namaKaryawanManual = namaKaryawanManual.trim();
         payload.divisi = divisi;
         payload.itemKerja = itemKerja;
-        payload.kuantiti = Number(kuantitiUpahInput) || 0;
+        payload.kuantiti = parseDecimalEdit(kuantitiUpahInput);
         payload.hargaSatuanUpah = Math.round(Number(hargaSatuanUpahInput) || 0);
         payload.uangMakanLembur = Math.round(Number(uangMakanLemburInput) || 0);
         payload.catatanKerja = catatanKerja;
@@ -1001,6 +1066,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
 
       const res = await api.editTransactionDetail(payload);
       setSaveSuccess(res.message || 'Detail transaksi berhasil diperbarui.');
+      window.dispatchEvent(
+        new CustomEvent('erp:data-updated', { detail: { jenis, idTransaksi: res.idTransaksi } })
+      );
       onSuccess();
       setTimeout(() => {
         onClose();
@@ -1810,6 +1878,90 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                     </div>
                   </div>
 
+                  {jenis === 'PENJUALAN_HASIL_BUMI' && (() => {
+                    const tAkhirJhb = Math.max(
+                      0,
+                      Math.round((Number(tonaseAkhirJhbInput) || 0) * 100) / 100
+                    );
+                    const susutJhb =
+                      tAkhirJhb > 0 && computedBeratBersih > 0
+                        ? Math.round((computedBeratBersih - tAkhirJhb) * 100) / 100
+                        : null;
+                    const susutJhbPct =
+                      susutJhb !== null && computedBeratBersih > 0
+                        ? Math.round((susutJhb / computedBeratBersih) * 10000) / 100
+                        : null;
+                    return (
+                      <div className="p-3 rounded-xl bg-sky-50/80 border border-sky-200 space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="font-semibold text-sky-950">
+                                Tonase Akhir Buyer / Pabrik (Kg)
+                              </label>
+                              <div className="flex items-center gap-2 text-[10px]">
+                                <button
+                                  type="button"
+                                  onClick={() => setTonaseAkhirJhbInput(String(computedBeratBersih))}
+                                  className="font-semibold text-sky-700 hover:underline cursor-pointer"
+                                >
+                                  = Muat Awal
+                                </button>
+                                {tonaseAkhirJhbInput && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setTonaseAkhirJhbInput('')}
+                                    className="font-semibold text-zinc-500 hover:text-rose-700 hover:underline cursor-pointer"
+                                  >
+                                    Kosongkan
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              placeholder={`Kosongkan jika = ${computedBeratBersih.toLocaleString('id-ID')} Kg`}
+                              value={tonaseAkhirJhbInput}
+                              onChange={(e) => setTonaseAkhirJhbInput(e.target.value)}
+                              className="w-full px-3 py-2 border border-sky-300 bg-white rounded-lg font-mono tabular-nums font-bold text-sky-950 focus:outline-none focus:border-sky-600"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-semibold text-sky-950 mb-1">
+                              Susut / Selisih Perjalanan
+                            </label>
+                            <div
+                              className={`px-3 py-2 rounded-lg border font-mono tabular-nums font-bold ${
+                                susutJhb === null
+                                  ? 'bg-white border-zinc-200 text-zinc-400 font-sans font-normal'
+                                  : susutJhb > 0
+                                    ? 'bg-amber-50 border-amber-300 text-amber-900'
+                                    : susutJhb < 0
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                                      : 'bg-white border-zinc-200 text-zinc-700'
+                              }`}
+                            >
+                              {susutJhb === null
+                                ? 'Belum diisi (pakai Berat Bersih Muat Awal)'
+                                : susutJhb > 0
+                                  ? `Susut -${susutJhb.toLocaleString('id-ID')} Kg (${susutJhbPct}%)`
+                                  : susutJhb < 0
+                                    ? `Lebih +${Math.abs(susutJhb).toLocaleString('id-ID')} Kg (+${Math.abs(susutJhbPct || 0)}%)`
+                                    : 'Pas 0 Kg (0%)'}
+                            </div>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-sky-900 leading-snug">
+                          Jika Tonase Akhir diisi, total tagihan omzet/piutang ke buyer dihitung dari{' '}
+                          <strong>Tonase Akhir × Harga Jual/Kg</strong>, sedangkan pengurang stok gudang tetap menggunakan Berat Bersih Muat Awal ({computedBeratBersih.toLocaleString('id-ID')} Kg).
+                        </p>
+                      </div>
+                    );
+                  })()}
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-zinc-700 mb-1">
@@ -1829,7 +1981,12 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
 
                     <div>
                       <label className="block font-semibold text-zinc-700 mb-1">
-                        Total Nilai Transaksi Otomatis
+                        Total Nilai Transaksi Otomatis{' '}
+                        {jenis === 'PENJUALAN_HASIL_BUMI' && Number(tonaseAkhirJhbInput) > 0 && (
+                          <span className="text-[10px] text-sky-700 font-semibold">
+                            (Basis: Tonase Akhir)
+                          </span>
+                        )}
                       </label>
                       <div className="px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg font-mono tabular-nums font-bold text-emerald-900">
                         {formatRupiah(liveNominalBaru)}
@@ -1916,7 +2073,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                     <div className="space-y-2.5">
                       {lineItems.map((it, idx) => {
                         const rowSub = Math.round(
-                          (Number(it.qty) || 0) * (Number(it.hargaSatuan) || 0)
+                          parseDecimalEdit(it.qty) * (Number(it.hargaSatuan) || 0)
                         );
                         const stokRef = masters.stokBarangList.find(
                           (s) =>
@@ -1979,17 +2136,17 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                                   Qty ({it.satuan})
                                 </label>
                                 <input
-                                  type="number"
-                                  step="any"
-                                  min="0.01"
+                                  type="text"
+                                  inputMode="decimal"
                                   value={it.qty}
-                                  onChange={(e) =>
+                                  onChange={(e) => {
+                                    const cleaned = sanitizeDecimalTypingEdit(e.target.value);
                                     setLineItems((prev) =>
                                       prev.map((row, rIdx) =>
-                                        rIdx === idx ? { ...row, qty: e.target.value } : row
+                                        rIdx === idx ? { ...row, qty: cleaned } : row
                                       )
-                                    )
-                                  }
+                                    );
+                                  }}
                                   className="w-full px-2.5 py-1.5 border border-zinc-300 rounded-lg bg-white font-mono tabular-nums font-bold text-right"
                                 />
                               </div>
@@ -2361,6 +2518,110 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               ================================================================= */}
               {jenis === 'UANG_MASUK' && (
                 <div className="p-4 rounded-xl border border-zinc-200 bg-white space-y-3.5">
+                  {record?.noPenjualanHasilBumi && (() => {
+                    const beratAwal = Number(record.beratMuatKg) || 0;
+                    const tAkhir = Math.max(0, Number(tonaseAkhirUmInput) || 0);
+                    const hPerKg = Math.max(0, Math.round(Number(hargaPerKgUmInput) || 0));
+                    const susut =
+                      tAkhir > 0 && beratAwal > 0
+                        ? Math.round((beratAwal - tAkhir) * 100) / 100
+                        : null;
+                    const susutPct =
+                      susut !== null && beratAwal > 0
+                        ? Math.round((susut / beratAwal) * 10000) / 100
+                        : null;
+                    return (
+                      <div className="p-3 rounded-lg bg-sky-50 border border-sky-200 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold text-sky-950">
+                          <span>
+                            Ref Nota Muat Hasil Bumi: {record.noPenjualanHasilBumi}{' '}
+                            {record.komoditasNama ? `(${record.komoditasNama})` : ''}
+                          </span>
+                          <span className="font-mono">
+                            Muat Awal: {beratAwal.toLocaleString('id-ID')} Kg
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-sky-950 mb-1">
+                              Tonase Akhir (Kg)
+                            </label>
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              placeholder="Kosongkan jika belum ada"
+                              value={tonaseAkhirUmInput}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setTonaseAkhirUmInput(val);
+                                const kg = Math.max(0, Number(val) || 0);
+                                const hrg = Math.max(0, Math.round(Number(hargaPerKgUmInput) || 0));
+                                if (kg > 0 && hrg > 0) {
+                                  setNominalInput(String(Math.round(kg * hrg)));
+                                }
+                              }}
+                              className="w-full px-2.5 py-1.5 border border-sky-300 bg-white rounded-lg font-mono tabular-nums font-bold text-sky-950"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-sky-950 mb-1">
+                              Harga Deal / Kg (Rp)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="Harga per Kg"
+                              value={hargaPerKgUmInput}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setHargaPerKgUmInput(val);
+                                const hrg = Math.max(0, Math.round(Number(val) || 0));
+                                const kg =
+                                  Math.max(0, Number(tonaseAkhirUmInput) || 0) || beratAwal;
+                                if (kg > 0 && hrg > 0) {
+                                  setNominalInput(String(Math.round(kg * hrg)));
+                                }
+                              }}
+                              className="w-full px-2.5 py-1.5 border border-sky-300 bg-white rounded-lg font-mono tabular-nums font-bold text-emerald-900"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-sky-950 mb-1">
+                              Susut Perjalanan
+                            </label>
+                            <div
+                              className={`px-2.5 py-1.5 rounded-lg border font-mono font-bold text-xs ${
+                                susut === null
+                                  ? 'bg-white border-zinc-200 text-zinc-400'
+                                  : susut > 0
+                                    ? 'bg-amber-50 border-amber-300 text-amber-900'
+                                    : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                              }`}
+                            >
+                              {susut === null
+                                ? 'Belum diisi'
+                                : susut > 0
+                                  ? `Susut -${susut.toLocaleString('id-ID')} Kg (${susutPct}%)`
+                                  : susut < 0
+                                    ? `Lebih +${Math.abs(susut).toLocaleString('id-ID')} Kg`
+                                    : 'Pas 0 Kg'}
+                            </div>
+                          </div>
+                        </div>
+                        {hPerKg > 0 && (tAkhir > 0 || beratAwal > 0) && (
+                          <div className="text-[11px] font-mono text-sky-900">
+                            Kalkulasi: {(tAkhir > 0 ? tAkhir : beratAwal).toLocaleString('id-ID')} Kg ×{' '}
+                            {formatRupiah(hPerKg)}/Kg ={' '}
+                            <strong>
+                              {formatRupiah(Math.round((tAkhir > 0 ? tAkhir : beratAwal) * hPerKg))}
+                            </strong>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block font-semibold text-zinc-700 mb-1">
@@ -2395,7 +2656,20 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         type="number"
                         min="1"
                         value={nominalInput}
-                        onChange={(e) => setNominalInput(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNominalInput(val);
+                          if (record?.noPenjualanHasilBumi) {
+                            const nom = Math.max(0, Math.round(Number(val) || 0));
+                            const kg =
+                              Math.max(0, Number(tonaseAkhirUmInput) || 0) ||
+                              Number(record.beratMuatKg) ||
+                              0;
+                            if (kg > 0 && nom > 0) {
+                              setHargaPerKgUmInput(String(Math.round(nom / kg)));
+                            }
+                          }
+                        }}
                         className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-emerald-900"
                       />
                     </div>
@@ -2413,6 +2687,12 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                       >
                         <option value="TUNAI">TUNAI (Masuk Kas Tunai KAS01)</option>
                         <option value="TRANSFER">TRANSFER BANK PT</option>
+                        <option value="SINKRON">SINKRON (Non-Kas)</option>
+                        {(record?.noPenjualanHasilBumi || metode === 'PIUTANG') && (
+                          <option value="PIUTANG">
+                            PIUTANG BUYER / MITRA (BON01 — Tempo / Belum Bayar)
+                          </option>
+                        )}
                       </select>
                     </div>
                     {metode === 'TRANSFER' && (
@@ -2573,11 +2853,11 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                     <div>
                       <label className="block font-semibold text-zinc-700 mb-1">Kuantiti / Hari</label>
                       <input
-                        type="number"
-                        step="any"
-                        min="0"
+                        type="text"
+                        inputMode="decimal"
                         value={kuantitiUpahInput}
-                        onChange={(e) => setKuantitiUpahInput(e.target.value)}
+                        onChange={(e) => setKuantitiUpahInput(sanitizeDecimalTypingEdit(e.target.value))}
+                        placeholder="Contoh: 1 atau 1,5"
                         className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold"
                       />
                     </div>
@@ -2604,11 +2884,12 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-zinc-700 mb-1">Catatan Kerja</label>
+                    <label className="block font-semibold text-zinc-700 mb-1">Catatan Khusus Kerja</label>
                     <input
                       type="text"
                       value={catatanKerja}
                       onChange={(e) => setCatatanKerja(e.target.value)}
+                      placeholder="e.g. MBL ARYA, SAKIT, LIBUR..."
                       className="w-full px-3 py-2 border border-zinc-300 rounded-lg"
                     />
                   </div>
@@ -2945,7 +3226,9 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               {/* Keterangan / Catatan */}
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Keterangan / Catatan Transaksi
+                  {jenis === 'UPAH_HARIAN'
+                    ? 'Uraian Keterangan Pekerjaan (Tampil di Keterangan / Catatan)'
+                    : 'Keterangan / Catatan Transaksi'}
                 </label>
                 <textarea
                   rows={2}

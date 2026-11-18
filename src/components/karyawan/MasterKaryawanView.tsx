@@ -60,6 +60,7 @@ import {
   ProfilKaryawanEditableData,
   compressFotoProfilImage,
 } from './ModalProfilKaryawan.tsx';
+import { DownloadHistoryGajiButton } from './DownloadHistoryGajiButton.tsx';
 
 interface MasterKaryawanViewProps {
   rekeningList: Rekening[];
@@ -202,7 +203,11 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   const [inputUangMakan, setInputUangMakan] = useState<number>(0);
   const [inputTugas, setInputTugas] = useState<string>('');
   const [inputItem, setInputItem] = useState<string>('KERJA GUDANG');
-  const [inputKuantiti, setInputKuantiti] = useState<number>(1);
+  const [inputKuantitiText, setInputKuantitiText] = useState<string>('1');
+  const inputKuantiti = (() => {
+    const num = Number(String(inputKuantitiText || '').trim().replace(/,/g, '.'));
+    return Number.isFinite(num) && num >= 0 ? Math.round(num * 10000) / 10000 : 0;
+  })();
   const [inputKet, setInputKet] = useState<'BON' | 'LUNAS'>('BON');
   const [inputCatatanKhusus, setInputCatatanKhusus] = useState<string>('');
   const [inputModeBayar, setInputModeBayar] = useState<'CATAT_HAK_UPAH' | 'LANGSUNG_CAIR'>('CATAT_HAK_UPAH');
@@ -338,6 +343,12 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
   }, [fullErpData, refreshTrigger]);
 
   useEffect(() => {
+    if (fullErpData) {
+      setRefreshTrigger((p) => p + 1);
+    }
+  }, [fullErpData]);
+
+  useEffect(() => {
     const onErpUpdated = () => loadData(true);
     window.addEventListener('erp:data-updated', onErpUpdated);
     return () => window.removeEventListener('erp:data-updated', onErpUpdated);
@@ -366,8 +377,8 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
       setInputErrorMsg('Pilih karyawan yang bertugas');
       return;
     }
-    if (inputKuantiti > 0 && inputUpahHarian <= 0) {
-      setInputErrorMsg('Nominal gaji harian harus lebih dari Rp 0 jika kuantiti > 0');
+    if (inputKuantiti < 0 || inputUpahHarian < 0) {
+      setInputErrorMsg('Kuantiti dan nominal gaji harian tidak boleh bernilai negatif');
       return;
     }
 
@@ -399,11 +410,11 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         item: inputItem || inputTugas || 'KERJA GUDANG',
         kuantiti: inputKuantiti,
         harga: inputUpahHarian,
-        jumlah: inputKuantiti * inputUpahHarian + inputUangMakan,
+        jumlah: Math.round(inputKuantiti * inputUpahHarian),
         ket: inputKet,
         catatan: inputCatatanKhusus,
         tugasPekerjaan: inputTugas || inputItem || `Tugas operasional divisi ${inputDivisi}`,
-        upahHarian: inputUpahHarian,
+        upahHarian: Math.round(inputKuantiti * inputUpahHarian),
         uangMakanLembur: inputUangMakan,
         modeBayar: inputModeBayar,
         rekeningSumber: inputModeBayar === 'LANGSUNG_CAIR' ? inputRekeningSumber : undefined,
@@ -417,10 +428,11 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
             : undefined,
       });
 
+      const previewTotalUpah = Math.round(inputKuantiti * inputUpahHarian) + inputUangMakan;
       setInputSuccessMsg(
         inputModeBayar === 'LANGSUNG_CAIR'
-          ? `Berhasil mencatat & mencairkan upah ${kryObj.nama} (${formatRupiah(inputKuantiti * inputUpahHarian + inputUangMakan)}) pada Arus Kas Harian tanggal ${formattedTanggalBayar}!`
-          : `Berhasil mencatat upah harian ${kryObj.nama} (${inputItem}: ${formatRupiah(inputKuantiti * inputUpahHarian + inputUangMakan)}) untuk divisi ${inputDivisi}!`
+          ? `Berhasil mencatat & mencairkan upah ${kryObj.nama} (${formatRupiah(previewTotalUpah)}) pada Arus Kas Harian tanggal ${formattedTanggalBayar}!`
+          : `Berhasil mencatat upah harian ${kryObj.nama} (${inputItem}: ${formatRupiah(previewTotalUpah)}) untuk divisi ${inputDivisi}!`
       );
       setInputTugas('');
       setInputCatatanKhusus('');
@@ -1257,7 +1269,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                 {/* Quick nominal chips */}
                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
                   <span className="text-[10px] text-zinc-500 mr-1">Pilihan Cepat:</span>
-                  {[100000, 120000, 125000, 135000, 140000, 150000, 175000, 200000].map((nom) => (
+                  {[0, 100000, 120000, 125000, 135000, 140000, 150000, 175000, 200000].map((nom) => (
                     <button
                       key={nom}
                       type="button"
@@ -1268,7 +1280,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                           : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
                       }`}
                     >
-                      {nom / 1000}k
+                      {nom === 0 ? 'Rp 0 (Libur/Sakit)' : `${nom / 1000}k`}
                     </button>
                   ))}
                 </div>
@@ -1293,9 +1305,12 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                   </div>
 
                   <div className="flex flex-col justify-end">
-                    <span className="text-[10px] text-zinc-400">Total Upah Harian:</span>
+                    <span className="text-[10px] text-zinc-400">
+                      Total Upah Harian ({inputKuantiti} &times; {formatRupiah(inputUpahHarian)}
+                      {inputUangMakan > 0 ? ` + ${formatRupiah(inputUangMakan)}` : ''}):
+                    </span>
                     <span className="text-base font-bold text-emerald-400 font-mono">
-                      {formatRupiah(inputUpahHarian + inputUangMakan)}
+                      {formatRupiah(Math.round(inputKuantiti * inputUpahHarian) + inputUangMakan)}
                     </span>
                   </div>
                 </div>
@@ -1322,7 +1337,6 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                     value={inputItem}
                     onChange={(e) => {
                       setInputItem(e.target.value);
-                      if (!inputTugas) setInputTugas(e.target.value);
                     }}
                     placeholder="Contoh: KERJA GUDANG, SURJAL, JALAN, DRIVER TRUK, NGEBAL..."
                     className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 font-bold focus:outline-hidden focus:border-amber-500 uppercase"
@@ -1347,7 +1361,6 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                         type="button"
                         onClick={() => {
                           setInputItem(it);
-                          if (!inputTugas) setInputTugas(it);
                         }}
                         className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
                           inputItem === it
@@ -1356,6 +1369,25 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                         }`}
                       >
                         {it}
+                      </button>
+                    ))}
+                    {(['TIDAK HADIR', 'SAKIT', 'LIBUR', 'IZIN'] as const).map((it) => (
+                      <button
+                        key={it}
+                        type="button"
+                        onClick={() => {
+                          setInputItem(it);
+                          setInputUpahHarian(0);
+                          setInputUangMakan(0);
+                          setInputKet('LUNAS');
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-all ${
+                          inputItem === it
+                            ? 'bg-rose-600 text-white border-rose-500'
+                            : 'bg-rose-950/50 text-rose-300 border-rose-800/70 hover:bg-rose-900/60'
+                        }`}
+                      >
+                        {it} (Rp 0)
                       </button>
                     ))}
                   </div>
@@ -1367,11 +1399,26 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                       Kuantiti (Qty):
                     </label>
                     <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={inputKuantiti}
-                      onChange={(e) => setInputKuantiti(Number(e.target.value))}
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="Contoh: 1,5"
+                      value={inputKuantitiText}
+                      onChange={(e) => {
+                        const cleaned = e.target.value.replace(/[^0-9.,]/g, '');
+                        let hasSep = false;
+                        let out = '';
+                        for (const ch of cleaned) {
+                          if (ch === ',' || ch === '.') {
+                            if (!hasSep) {
+                              out += ch;
+                              hasSep = true;
+                            }
+                          } else {
+                            out += ch;
+                          }
+                        }
+                        setInputKuantitiText(out);
+                      }}
                       className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-100 font-mono font-bold focus:outline-hidden focus:border-amber-500"
                     />
                   </div>
@@ -1513,7 +1560,12 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                               r.kode !== 'TIT01' &&
                               r.kode !== 'SINKRON' &&
                               (!r.kode.startsWith('REK-') ||
-                                Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
+                                Boolean(
+                                  r.isAnakPerusahaan ||
+                                    r.kategori === 'ANAK_PERUSAHAAN' ||
+                                    r.isRekeningTitip ||
+                                    r.kategori === 'REKENING_TITIP'
+                                ))
                           )
                           .map((r) => (
                             <option key={r.kode} value={r.kode}>
@@ -1928,6 +1980,23 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                                 <span>+ Upah</span>
                               </button>
 
+                              {/* Unduh Detail History Penggajian */}
+                              <DownloadHistoryGajiButton
+                                idKaryawan={k.id}
+                                namaKaryawan={k.nama}
+                                compact
+                                variant="sky"
+                                label="Unduh History"
+                                onDownloaded={(msg) => {
+                                  setSuccessBanner(msg);
+                                  setTimeout(() => setSuccessBanner(''), 7000);
+                                }}
+                                onError={(msg) => {
+                                  setSuccessBanner(`Gagal mengunduh: ${msg}`);
+                                  setTimeout(() => setSuccessBanner(''), 7000);
+                                }}
+                              />
+
                               {/* Detail logs */}
                               <button
                                 onClick={() => setDetailKaryawanId(k.id)}
@@ -2053,13 +2122,30 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
                           {formatRupiah(g.gajiBersihDibayar)}
                         </td>
                         <td className="py-2.5 px-3 text-center font-sans">
-                          <button
-                            onClick={() => setActiveSlip(g)}
-                            className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-[11px] font-medium transition-colors flex items-center justify-center space-x-1 mx-auto"
-                          >
-                            <Printer className="w-3 h-3 text-emerald-400" />
-                            <span>Slip</span>
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => setActiveSlip(g)}
+                              className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-[11px] font-medium transition-colors flex items-center space-x-1 cursor-pointer"
+                            >
+                              <Printer className="w-3 h-3 text-emerald-400" />
+                              <span>Slip</span>
+                            </button>
+                            <DownloadHistoryGajiButton
+                              idKaryawan={g.idKaryawan}
+                              namaKaryawan={g.namaKaryawan}
+                              compact
+                              variant="sky"
+                              label="History"
+                              onDownloaded={(msg) => {
+                                setSuccessBanner(msg);
+                                setTimeout(() => setSuccessBanner(''), 7000);
+                              }}
+                              onError={(msg) => {
+                                setSuccessBanner(`Gagal mengunduh: ${msg}`);
+                                setTimeout(() => setSuccessBanner(''), 7000);
+                              }}
+                            />
+                          </div>
                         </td>
                       </tr>
                     ))

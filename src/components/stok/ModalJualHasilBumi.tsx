@@ -192,13 +192,16 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
     movingAvg?.stokReadyKg ?? Math.max(0, Number(selectedKomoditas?.stok) || 0);
   const beratKotor = Math.max(0, parseFloat(beratKotorStr) || 0);
   const tonaseAkhir = Math.max(0, parseFloat(tonaseAkhirStr) || 0);
-  const susutPerjalananKg =
-    tonaseAkhir > 0 && beratKotor > 0
-      ? Math.round((beratKotor - tonaseAkhir) * 100) / 100
-      : 0;
   const potonganRafaksi = Math.min(99.9, Math.max(0, parseFloat(potonganRafaksiStr) || 0));
   const beratBersih = Math.round(beratKotor * (1 - potonganRafaksi / 100) * 100) / 100;
-  const beratPenentuHarga = Math.round(tonaseAkhir * (1 - potonganRafaksi / 100) * 100) / 100;
+  const susutPerjalananKg =
+    tonaseAkhir > 0 && beratBersih > 0
+      ? Math.round((beratBersih - tonaseAkhir) * 100) / 100
+      : 0;
+  const beratPenentuHarga =
+    tonaseAkhir > 0
+      ? Math.round(tonaseAkhir * (1 - potonganRafaksi / 100) * 100) / 100
+      : beratBersih;
   const hargaJualPerKg = isBelumPutusHarga
     ? hargaRataPengurangStokPerKg
     : parseRupiahInput(hargaJualDisplay);
@@ -753,14 +756,13 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
 
             <div className="sm:col-span-2">
               <label className="block text-[11px] font-semibold text-sky-900 mb-1">
-                Tonase Akhir (Kg) *
+                Tonase Akhir (Kg) {isBelumPutusHarga ? '(Opsional)' : ''}
               </label>
               <input
                 type="number"
                 step="any"
                 min="0"
-                placeholder="3050"
-                required
+                placeholder={isBelumPutusHarga ? 'Nanti di Uang Masuk' : '3050'}
                 value={tonaseAkhirStr}
                 onChange={(e) => {
                   setTonaseAkhirStr(e.target.value);
@@ -768,11 +770,15 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                 }}
                 className="w-full px-2.5 py-2 rounded-lg border border-sky-400 bg-sky-50/50 font-mono tabular-nums font-bold text-sky-900 focus:outline-none focus:border-sky-600"
               />
-              {susutPerjalananKg !== 0 && (
+              {susutPerjalananKg !== 0 ? (
                 <div className="text-[10px] font-semibold text-amber-700 mt-0.5">
                   Susut: {susutPerjalananKg} Kg
                 </div>
-              )}
+              ) : isBelumPutusHarga ? (
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  Bisa diisi nanti saat cair di Uang Masuk
+                </div>
+              ) : null}
             </div>
 
             <div className="sm:col-span-1">

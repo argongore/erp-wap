@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Printer, Copy, Check, Download, X, Wallet, Building2, User, CheckCircle2 } from 'lucide-react';
 import { TransaksiPenggajian, CatatanUpahHarian } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
+import { DownloadHistoryGajiButton } from './DownloadHistoryGajiButton.tsx';
 
 interface SlipGajiModalProps {
   slip: TransaksiPenggajian | null;
@@ -366,11 +367,17 @@ _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
             </button>
             <button
               onClick={handleDownload}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded-lg text-xs font-medium border border-zinc-600 transition-colors"
+              className="flex items-center space-x-1.5 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded-lg text-xs font-medium border border-zinc-600 transition-colors cursor-pointer"
             >
               <Download className="w-4 h-4" />
               <span>Download (.txt)</span>
             </button>
+            <DownloadHistoryGajiButton
+              idKaryawan={slip.idKaryawan}
+              namaKaryawan={slip.namaKaryawan}
+              variant="sky"
+              label="Unduh History Gaji"
+            />
           </div>
 
           <button

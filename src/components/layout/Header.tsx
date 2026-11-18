@@ -102,7 +102,9 @@ export const Header: React.FC<HeaderProps> = ({
     .filter(
       (r) =>
         r &&
-        (r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode?.startsWith('REK-'))) &&
+        (r.kategori === 'PERUSAHAAN' || (!r.kategori && !r.isVirtual && !r.kode?.startsWith('REK-'))) &&
+        !r.isRekeningTitip &&
+        !r.isAnakPerusahaan &&
         r.kode !== 'KAS01' &&
         r.status === 'AKTIF'
     )

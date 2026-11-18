@@ -25,6 +25,7 @@ import {
   Unlock,
   LayoutList,
   FileDown,
+  Printer,
 } from 'lucide-react';
 import {
   CanonicalRoleMitra,
@@ -59,6 +60,10 @@ import {
   ModalToggleNotaNgunci,
 } from './RekapKhususMitraNgunciSection.tsx';
 import { exportRekeningKoranToPdf } from '../../utils/exportRekeningKoranPdf.ts';
+import {
+  CetakListMitraModal,
+  InitialCetakMitraPreset,
+} from './CetakListMitraModal.tsx';
 
 interface Props {
   mitraList: Mitra[];
@@ -114,6 +119,8 @@ export const MasterMitraView: React.FC<Props> = ({
   const [pinjamUangSelectedMitraId, setPinjamUangSelectedMitraId] = useState<string | undefined>(undefined);
   const [anakPerusahaanRekKode, setAnakPerusahaanRekKode] = useState<string | null>(null);
   const [kliringTargetMitra, setKliringTargetMitra] = useState<RekapMitraItem | null>(null);
+  const [cetakListModalOpen, setCetakListModalOpen] = useState(false);
+  const [cetakListPreset, setCetakListPreset] = useState<InitialCetakMitraPreset>('ALL_ACTIVE');
 
   // Form State
   const [formKode, setFormKode] = useState('');
@@ -160,6 +167,23 @@ export const MasterMitraView: React.FC<Props> = ({
 
   // Pintasan Download PDF Rekening Koran Langsung
   const [downloadingPdfMitraId, setDownloadingPdfMitraId] = useState<string | null>(null);
+
+  const openCetakListModal = (explicitPreset?: InitialCetakMitraPreset) => {
+    if (explicitPreset) {
+      setCetakListPreset(explicitPreset);
+    } else if (viewModeMaster === 'KHUSUS_NOTA_NGUNCI' || activeFilter === 'NOTA_NGUNCI') {
+      setCetakListPreset('NGUNCI_ONLY');
+    } else if (activeFilter === 'BON_AKTIF') {
+      setCetakListPreset('PIUTANG_ONLY');
+    } else if (activeFilter === 'HUTANG_TITIP') {
+      setCetakListPreset('HUTANG_ONLY');
+    } else if (activeFilter === 'SIAP_KLIRING') {
+      setCetakListPreset('KLIRING_ONLY');
+    } else {
+      setCetakListPreset('ALL_ACTIVE');
+    }
+    setCetakListModalOpen(true);
+  };
 
   const handleDirectDownloadPdf = async (mitraId: string, mitraNama: string) => {
     setDownloadingPdfMitraId(mitraId);
@@ -506,6 +530,16 @@ export const MasterMitraView: React.FC<Props> = ({
           {/* Tombol Sinkronisasi Langsung ke Google Spreadsheet */}
           <button
             type="button"
+            onClick={() => openCetakListModal()}
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-white bg-zinc-900 hover:bg-zinc-800 rounded-lg shadow-xs transition-colors cursor-pointer"
+            title="Cetak atau Download PDF List Mitra dengan filter Hutang, Piutang, dan Ngunci"
+          >
+            <Printer className="w-4 h-4 text-sky-300" />
+            <span>Cetak / PDF List Mitra</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleSyncToSupabase}
             disabled={isSyncingSupabase}
             className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
@@ -816,6 +850,7 @@ export const MasterMitraView: React.FC<Props> = ({
           }}
           onOpenKliringSilang={(mitraItem) => setKliringTargetMitra(mitraItem)}
           onPreviewFotoMitra={setPreviewFotoMitra}
+          onOpenCetakList={(preset) => openCetakListModal(preset)}
         />
       )}
 
@@ -835,6 +870,7 @@ export const MasterMitraView: React.FC<Props> = ({
             setNotaLaluModalOpen(true);
           }}
           onPreviewFotoMitra={setPreviewFotoMitra}
+          onOpenCetakList={(preset) => openCetakListModal(preset)}
         />
       )}
 
@@ -2163,6 +2199,24 @@ export const MasterMitraView: React.FC<Props> = ({
           onClose={() => setPreviewFotoMitra(null)}
         />
       )}
+
+      <CetakListMitraModal
+        isOpen={cetakListModalOpen}
+        onClose={() => setCetakListModalOpen(false)}
+        items={items}
+        profilPerusahaan={(fullErpData as any)?.profilPerusahaan || null}
+        initialPreset={cetakListPreset}
+        initialRoleFilter={
+          activeFilter === 'SUPPLIER' ||
+          activeFilter === 'CUSTOMER' ||
+          activeFilter === 'SUPPLIER_CUSTOMER' ||
+          activeFilter === 'ANAK_PERUSAHAAN' ||
+          activeFilter === 'KARYAWAN'
+            ? activeFilter
+            : 'ALL'
+        }
+        initialSearchTerm={searchTerm}
+      />
     </div>
   );
 };

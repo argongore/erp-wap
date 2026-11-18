@@ -95,24 +95,87 @@ export interface RiwayatDivisiKaryawan {
 
 export type MetodePembayaran = 'TUNAI' | 'TRANSFER' | 'KASBON' | 'TITIP' | 'SINKRON';
 
-export type KategoriRekening = 'PERUSAHAAN' | 'ANAK_PERUSAHAAN' | 'OPERASIONAL_DIVISI' | 'VIRTUAL_SISTEM';
+export type KategoriRekening =
+  | 'PERUSAHAAN'
+  | 'REKENING_TITIP'
+  | 'ANAK_PERUSAHAAN'
+  | 'OPERASIONAL_DIVISI'
+  | 'VIRTUAL_SISTEM';
 
 export interface Rekening {
-  kode: string;          // e.g. "KAS01", "BNI01", "BCA01", "REK-DPPARABO", "BON01", "TIT01"
-  nama: string;          // e.g. "Kas Utama Kasir", "DP Parabot", etc.
-  atasNama: string;      // e.g. "PT Wijaya Agro" / "DP Parabot - Anak Perusahaan PT. Wijaya Agro Perkasa"
+  kode: string;          // e.g. "KAS01", "BNI01", "BCA01", "TITIP01", "REK-DPPARABO", "BON01", "TIT01"
+  nama: string;          // e.g. "Kas Utama Kasir", "Rekening Titip Operasional Budi", etc.
+  atasNama: string;      // e.g. "PT Wijaya Agro" / "Budi Santoso (Pemegang Amanah)"
   nomorRekening: string; // e.g. "0847291048"
   saldoAwal: number;
   saldoSaatIni: number;
   status: StatusAktif;
-  isVirtual?: boolean;   // true for BON01 (Kasbon Customer) and TIT01 (Titip Supplier)
+  isVirtual?: boolean;        // true for BON01 (Kasbon Customer), TIT01 (Titip Panen / Hutang), and SINKRON
+  isRekeningTitip?: boolean;  // true for REKENING_TITIP (Dana PT dititipkan ke Karyawan dipercaya untuk transaksi)
   isAnakPerusahaan?: boolean; // true for DP Parabot (Anak Perusahaan PT. Wijaya Agro Perkasa sekaligus Mitra)
-  idMitraTerkait?: string;    // Relasi 1-ke-1 ke tabel Mitra (e.g. "MTR-DPPARABOT")
-  namaMitraTerkait?: string;  // Nama mitra afiliasi terkait (e.g. "DP Parabot")
+  idKaryawanTerkait?: string; // Relasi ke Master Karyawan pemegang Rekening Titip Uang
+  namaKaryawanTerkait?: string;
+  idMitraTerkait?: string;    // Relasi ke tabel Mitra (e.g. "MTR-DPPARABOT" atau "MTR-KRY-001")
+  namaMitraTerkait?: string;  // Nama mitra/karyawan terkait
   keterangan?: string;
-  kategori?: KategoriRekening; // PERUSAHAAN, ANAK_PERUSAHAAN, OPERASIONAL_DIVISI, VIRTUAL_SISTEM
+  kategori?: KategoriRekening; // PERUSAHAAN, REKENING_TITIP, ANAK_PERUSAHAAN, OPERASIONAL_DIVISI, VIRTUAL_SISTEM
   rekeningIndukPenyimpan?: string; // Rekening perusahaan tempat fisik uang disimpan (untuk OPERASIONAL_DIVISI)
   ledgerStartDate?: string; // Tanggal patokan awal hitung saldo riil KAS01 (DD/MM/YYYY) agar surplus/minus hari lalu tidak mengotori kas hari berjalan
+}
+
+export interface AuditMutasiRekeningTitipItem {
+  id: string;
+  tanggal: string;
+  jam: string;
+  arah: 'MASUK' | 'BELANJA' | 'KEMBALI';
+  jenis: string;
+  modulSumber:
+    | 'SALDO_AWAL'
+    | 'TRANSFER_MASUK'
+    | 'TRANSFER_KEMBALI'
+    | 'PEMBELIAN_HASIL_BUMI'
+    | 'PEMBELIAN_BARANG'
+    | 'PENGELUARAN'
+    | 'PENGGAJIAN'
+    | 'KASBON_UANG'
+    | 'PENCAIRAN_TITIPAN'
+    | 'UANG_MASUK'
+    | 'PENJUALAN'
+    | 'BAYAR_BON'
+    | 'BRILINK';
+  pihakAtauRekeningLawan: string; // e.g. "Bank BCA (BCA01)", "Suplayer Kopi - Roni", "Divisi Gudang"
+  uraian: string;
+  catatan?: string;
+  divisi?: string;
+  nominalMasuk: number;   // Uang masuk / dititipkan ke Rekening Titip
+  nominalKeluar: number;  // Uang dibelanjakan / dikembalikan ke Rekening PT
+  saldoSetelah: number;
+  detailItems?: RekeningKoranItemDetail[];
+  createdAt?: string;
+}
+
+export interface RekeningTitipAuditSummary {
+  kodeRekening: string;
+  namaRekening: string;
+  nomorRekening: string;
+  atasNama: string;
+  status: StatusAktif;
+  keterangan?: string;
+  idKaryawanTerkait?: string;
+  namaKaryawanTerkait?: string;
+  idMitraTerkait?: string;
+  namaMitraTerkait?: string;
+  saldoAwal: number;
+  totalDititipkanMasuk: number;    // Total dana masuk / dititipkan (Transfer PT + penerimaan lain)
+  totalDibelanjakanKeluar: number; // Total belanja / pengeluaran / gaji / kasbon / pencairan via rekening titip
+  totalDikembalikanKePt: number;   // Total transfer setor balik sisa dana ke Rekening Perusahaan
+  totalKeluarKeseluruhan: number;  // totalDibelanjakanKeluar + totalDikembalikanKePt
+  saldoSaatIni: number;            // Saldo aktual di Master Rekening
+  saldoTeoritis: number;           // saldoAwal + totalDititipkanMasuk - totalKeluarKeseluruhan
+  jumlahTransaksiMasuk: number;
+  jumlahTransaksiBelanja: number;
+  jumlahTransaksiKembali: number;
+  mutasi: AuditMutasiRekeningTitipItem[];
 }
 
 export type StatusNotaRekapMitra =
@@ -295,6 +358,39 @@ export interface RekapMasterKaryawanSummary {
   items: RekapKaryawanItem[];
 }
 
+export interface ItemMutasiUangTitipKaryawan {
+  id: string;
+  tanggal: string;
+  jam: string;
+  arah: 'TITIP_MASUK' | 'TITIP_KELUAR';
+  kategori:
+    | 'TITIP_SISA_GAJI_DANA'
+    | 'PINJAMAN_DANA_KE_PT'
+    | 'TITIP_HASIL_BUMI'
+    | 'HUTANG_SUPPLIER'
+    | 'AMBIL_UANG_TITIP'
+    | 'KLIRING_POTONG_BON';
+  judul: string;
+  keterangan: string;
+  metode: string;
+  rekeningKode: string;
+  nominalMasuk: number;
+  nominalKeluar: number;
+  saldoTitipSetelah: number;
+  noReferensi?: string;
+  createdAt?: string;
+}
+
+export interface RingkasanUangTitipKaryawan {
+  totalTitipMasuk: number;
+  totalTitipDicairkan: number;
+  saldoTitipAktif: number;
+  totalBonAktif: number;
+  selisihTitipVsBon: number;
+  totalHakUpahBelumCair: number;
+  saldoBersihTerpadu: number;
+}
+
 export interface DetailHarianKaryawanResponse {
   karyawan: RekapKaryawanItem;
   logHarian: CatatanUpahHarian[];
@@ -302,6 +398,9 @@ export interface DetailHarianKaryawanResponse {
   riwayatKasbonBarang: any[];
   riwayatKasbonUang: TransaksiKasbonUang[];
   riwayatBayarBon: TransaksiBayarBon[];
+  riwayatUangTitip?: ItemMutasiUangTitipKaryawan[];
+  ringkasanUangTitip?: RingkasanUangTitipKaryawan;
+  rekeningTitipList?: RekeningTitipAuditSummary[];
 }
 
 export interface ItemRincianHarianPayroll {
@@ -528,6 +627,11 @@ export interface StokBarang {
   kategori?: string;
   tanpaStok?: boolean;
   stok: number;
+  stokAwal?: number;
+  keteranganStokAwal?: string;
+  stokFisikTerakhir?: number;
+  tanggalAuditTerakhir?: string;
+  catatanAuditTerakhir?: string;
   minimum: number;
   updateTerakhir: string;
 }
@@ -817,6 +921,8 @@ export interface TransaksiPenjualanHasilBumi {
   beratKotor: number;    // Kg
   potonganRafaksi: number; // %
   beratBersih: number;   // Kg keluar dari gudang
+  tonaseAkhir?: number;  // Kg timbangan akhir pabrik/pembeli saat putus harga / terima barang
+  susutPerjalananKg?: number; // Selisih berat muat awal - tonase akhir (Kg; positif = susut)
   modalRataRataPerKg: number; // HPP modal rata-rata beli gudang saat transaksi (Rp/Kg)
   totalModalHpp: number; // beratBersih * modalRataRataPerKg
   nilaiModalPengurangStok?: number; // Nilai pengurang stok menggunakan harga rata-rata pembelian
@@ -976,6 +1082,7 @@ export interface TransaksiBayarBon {
   rekeningTujuan: string; // KAS01, chosen bank, SINKRON, KOMPENSASI_TITIP, or POTONG_GAJI
   isKompensasiTitipan?: boolean;
   isPotongGaji?: boolean;
+  isSuratJalanPotongBon?: boolean;
   alokasi: AlokasiPembayaranBon[];
   keterangan: string;
   fotoBukti?: string;
@@ -995,7 +1102,15 @@ export interface TransaksiTransferRekening {
   status: 'BERHASIL';
   idMitraTerkait?: string;
   namaMitraTerkait?: string;
-  tipeMutasiAfiliasi?: 'SIMPAN_KE_ANAK_PERUSAHAAN' | 'TARIK_DARI_ANAK_PERUSAHAAN' | 'ANTAR_ANAK_PERUSAHAAN';
+  idKaryawanTerkait?: string;
+  namaKaryawanTerkait?: string;
+  tipeMutasiAfiliasi?:
+    | 'SIMPAN_KE_ANAK_PERUSAHAAN'
+    | 'TARIK_DARI_ANAK_PERUSAHAAN'
+    | 'ANTAR_ANAK_PERUSAHAAN'
+    | 'TITIP_UANG_KARYAWAN'
+    | 'KEMBALIKAN_TITIP_KARYAWAN'
+    | 'ANTAR_REKENING_TITIP';
   createdAt: string;
 }
 
@@ -1315,7 +1430,8 @@ export interface RekeningKoranHistoryItem {
   sisaPiutangNota?: number;
   isSaldoBerjalan?: boolean;  // true = masih berjalan (piutang belum lunas / titipan & upah belum cair), false = sudah lunas/cair (masuk history)
   piutangBerjalan?: number;   // Sisa nominal piutang berjalan pada baris ini
-  titipBerjalan?: number;     // Sisa nominal titip/hak mitra berjalan pada baris ini
+  titipBerjalan?: number;     // Sisa nominal titip/hak mitra berjalan pada baris ini (termasuk Bayar Bon siklus berjalan)
+  isBayarBonSiklusBerjalan?: boolean; // True jika baris adalah setoran Bayar Bon pada siklus bon aktif yang belum lunas penuh
   isNotaSilang?: boolean;
   noNotaToko?: string;
   pihakNotaSilang?: string;
@@ -1355,6 +1471,7 @@ export interface RekeningKoranMitraSummary {
   totalSimpanKeAnakPerusahaan?: number;
   totalPakaiDariAnakPerusahaan?: number;
   posisiBersihTerpadu?: number;
+  rekeningTitipList?: RekeningTitipAuditSummary[];
   profilPerusahaan?: ProfilPerusahaan;
   rekeningUtamaDetail?: {
     kode: string;
@@ -1371,6 +1488,9 @@ export interface RekeningKoranMitraSummary {
   potonganTitipanOtomatis?: number; // min(totalBonKeseluruhan, totalTitip)
   sisaBonBersih?: number;           // max(0, totalBonKeseluruhan - totalTitip) -> bon bersih wajib dibayar mitra
   sisaTitipanBersih?: number;       // max(0, totalTitip - totalBonKeseluruhan) -> sisa bersih wajib dibayar PT ke mitra
+  totalBayarBonSiklusBerjalan?: number; // Total pembayaran bon pada siklus piutang aktif yang masih berjalan
+  totalPiutangBerjalanTampil?: number;  // Total kolom PIUTANG pada Rekening Koran Saldo Berjalan (sebelum dikurangi Bayar Bon siklus aktif)
+  totalTitipBerjalanTampil?: number;    // Total kolom TITIP pada Rekening Koran Saldo Berjalan (Titip + Bayar Bon siklus aktif)
   isNotaNgunci?: boolean;
   catatanNgunci?: string;
   nominalNotaNgunci?: number;
@@ -1666,17 +1786,23 @@ export interface TransaksiUangMasuk {
   namaPengirim: string;          // Nama pembeli / pabrik / bandar / penyetor
   pengirim?: string;             // Alias kompatibel
   idMitra?: string;              // 'UMUM' atau ID Mitra terdaftar
-  metode: 'TUNAI' | 'TRANSFER' | 'SINKRON';
-  rekeningTujuan: string;        // KAS01, Rekening Bank PT, atau SINKRON
-  nominal: number;               // Nominal uang riil masuk (+)
+  metode: 'TUNAI' | 'TRANSFER' | 'SINKRON' | 'PIUTANG';
+  rekeningTujuan: string;        // KAS01, Rekening Bank PT, SINKRON, atau BON01 (Piutang Buyer)
+  nominal: number;               // Nominal uang riil masuk (+) atau nilai piutang yang ditetapkan
   noPenjualanHasilBumi?: string; // Opsional link ke nota muat/jual hasil bumi (JHB-...)
   komoditasNama?: string;
   beratMuatKg?: number;
+  tonaseAkhirKg?: number;
+  susutKg?: number;
+  susutPersen?: number;
   modalRataRataPerKg?: number;
   nilaiModalStok?: number;
   totalModalStok?: number;
+  hargaDealPerKg?: number;
   hargaRealisasiPerKg?: number;
   tandaiPutusLunas?: boolean;
+  prevJhbIdMitra?: string;
+  prevJhbNamaMitra?: string;
   keterangan: string;
   fotoBukti?: string;
   attachment_url?: string;
@@ -2058,6 +2184,23 @@ export interface RekapHarianBosLengkapResponse {
   barangTokoMasukHariIni: ItemBarangTokoMasukBos[];
   totalRpBarangTokoHariIni: number;
 }
+export interface InvoiceSuratJalanDetailItem {
+  id: string;
+  deskripsi: string;
+  platTruk?: string;
+  tonaseAwalKg: number;
+  tonaseAkhirKg: number;
+  susutKg: number;
+  basisMitra: number;
+  basisBuyer: number;
+  rendemen: number;
+  hargaPerKgMitra: number;
+  hargaPerKgBuyer: number;
+  subtotalMitra: number;
+  subtotalBuyer: number;
+  keterangan?: string;
+}
+
 export interface InvoiceSuratJalanRecord {
   id: string;
   noInvoice: string;
@@ -2076,8 +2219,10 @@ export interface InvoiceSuratJalanRecord {
   rendemen: number;
   hargaPerKgMitra: number;
   hargaPerKgBuyer: number;
-  totalPenjualanMitra: number; // Tonase Akhir * hargaPerKgMitra
-  totalPenjualanBuyer: number; // Tonase Akhir * hargaPerKgBuyer
+  totalPenjualanMitra: number; // Sum of detail subtotals (or Tonase Akhir * hargaPerKgMitra)
+  totalPenjualanBuyer: number; // Sum of buyer detail subtotals (or Tonase Akhir * hargaPerKgBuyer)
+  detailItems?: InvoiceSuratJalanDetailItem[]; // Multi-partai / multi-detail baris invoice
+  catatan?: string;
   marginHargaPt: number; // totalPenjualanBuyer - totalPenjualanMitra
   pajakNominal: number; // 0.25% * totalPenjualanMitra
   komisiNominal: number; // Komisi jasa jual PT WAP
@@ -2092,10 +2237,161 @@ export interface InvoiceSuratJalanRecord {
   jumlahPembayaranMitra: number; // Hak bersih mitra
   rekeningPtKode: string; // e.g. BNI01
   statusPembayaranMitra: 'PENDING' | 'LUNAS'; // Pending Order vs Langsung Bayar
+  sumberBarang?: 'MITRA' | 'STOK_HB_PT'; // Titip jual mitra vs penjualan stok barang HB sendiri (PT)
+  noPenjualanHasilBumi?: string; // Referensi JHB jika ditarik dari penjualan stok HB
+  catatArusKas?: boolean; // false jika hanya arsip administrasi surat jalan tanpa menggandakan kas
   tanggalBayarMitra?: string;
   idUangMasukBuyer?: string;
   idUangMasukKomisi?: string;
   idPengeluaranBayarMitra?: string;
   idBayarBonMitra?: string;
   createdAt: string;
+}
+
+// ==========================================
+// AUDIT STOK BARANG TOKO (KULAKAN -> OPNAME -> PENJUALAN -> STOK RIIL)
+// ==========================================
+export type AuditStokMovementKind =
+  | 'STOK_AWAL'
+  | 'KULAKAN'
+  | 'PENJUALAN'
+  | 'PEMAKAIAN'
+  | 'INTERNAL_PT'
+  | 'KOREKSI_OPNAME'
+  | 'SINKRON_SISTEM';
+
+export interface AuditStokMovementItem {
+  id: string;
+  jenis: AuditStokMovementKind;
+  arah: 'AWAL' | 'MASUK' | 'KELUAR' | 'KOREKSI';
+  tanggal: string;
+  jam: string;
+  sortKey: string;
+  idReferensi: string;
+  noFaktur?: string;
+  pihakTerkait: string;
+  metode?: string;
+  qty: number;
+  deltaQty: number;
+  hargaSatuan: number;
+  hppSatuan?: number;
+  subtotal: number;
+  labaKotor?: number;
+  saldoSebelum: number;
+  saldoSetelah: number;
+  keterangan: string;
+}
+
+export interface AuditStokOpnameLog {
+  id: string;
+  kodeProduk: string;
+  namaProduk: string;
+  satuan: string;
+  tanggal: string;
+  jam: string;
+  petugas: string;
+  mode: 'OPNAME_FISIK' | 'SINKRON_KE_AUDIT' | 'SET_STOK_AWAL';
+  stokSistemSebelum: number;
+  stokHitunganSebelum: number;
+  stokFisikRiil: number;
+  selisihVsAudit: number;
+  selisihVsSistem: number;
+  catatan: string;
+  auditLogId?: string;
+  createdAt: string;
+}
+
+export interface AuditStokProdukSummary {
+  kode: string;
+  namaProduk: string;
+  kategori: string;
+  satuan: string;
+  hargaBeli: number;
+  hargaJual: number;
+  minimum: number;
+  stokAwalMaster: number;
+  isStokAwalTercatat: boolean;
+  keteranganStokAwal?: string;
+  stokAwalPeriode: number;
+  totalMasukKulakan: number;
+  nilaiMasukKulakan: number;
+  jumlahNotaKulakan: number;
+  totalKeluarPenjualan: number;
+  qtyTerjualKomersial: number;
+  qtyPemakaianInternal: number;
+  nilaiOmzetPenjualan: number;
+  nilaiHppPenjualan: number;
+  totalLabaKotorPenjualan: number;
+  jumlahNotaPenjualan: number;
+  totalKoreksiOpname: number;
+  jumlahKoreksiOpname: number;
+  stokHitunganAudit: number;
+  stokSistemSaatIni: number;
+  selisihSistemVsAudit: number;
+  stokFisikTerakhir?: number;
+  tanggalAuditTerakhir?: string;
+  catatanAuditTerakhir?: string;
+  nilaiAsetStokAudit: number;
+  nilaiAsetStokSistem: number;
+  statusAudit: 'COCOK' | 'SELISIH' | 'MINUS' | 'BELUM_SET_AWAL';
+  updateTerakhir: string;
+  movements: AuditStokMovementItem[];
+}
+
+export interface AuditStokResponse {
+  generatedAt: string;
+  periodeLabel: string;
+  isFilteredPeriod: boolean;
+  summary: {
+    totalProdukFisik: number;
+    totalProdukTanpaStok: number;
+    totalItemCocok: number;
+    totalItemSelisih: number;
+    totalItemBelumSetAwal: number;
+    totalItemStokMenipis: number;
+    totalQtyMasukKulakan: number;
+    totalNilaiMasukKulakan: number;
+    totalQtyKeluarPenjualan: number;
+    totalNilaiOmzetPenjualan: number;
+    totalLabaKotorPenjualan: number;
+    totalNilaiAsetStokAudit: number;
+    totalNilaiAsetStokSistem: number;
+  };
+  items: AuditStokProdukSummary[];
+  recentAuditLogs: AuditStokOpnameLog[];
+}
+
+export interface RekapCtrPartaiRow {
+  id: string;
+  basisWap: number;
+  basisSuplayer: number;
+  namaSuplayer: string;
+  idMitra?: string;
+  qtySuplayer?: number | null;
+  tglMasuk?: string;
+  truck?: string;
+  qtyAwal?: number | null;
+  qtyAkhir: number;
+  rendemen: number;
+  pajakNominal?: number | null;
+  komisiNominal: number;
+  cekList: boolean;
+  statusPencairan?: 'PENDING' | 'LUNAS';
+  highlightYellow?: boolean;
+  highlightTglYellow?: boolean;
+  highlightQtyAwalYellow?: boolean;
+  sourceType?: 'MANUAL' | 'SURAT_JALAN' | 'PENJUALAN_HB';
+  sourceRefId?: string;
+  isStokHbPt?: boolean;
+  keterangan?: string;
+}
+
+export interface RekapCtrContract {
+  id: string;
+  noUrut: number;
+  tglCtr: string;
+  gudang: string;
+  qtyCtr: number;
+  openingCumulativeLr?: number;
+  rows: RekapCtrPartaiRow[];
 }

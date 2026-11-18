@@ -17,6 +17,7 @@ import {
   Wallet,
   PackagePlus,
   FileText,
+  ShieldCheck,
 } from 'lucide-react';
 import { DashboardStatsResponse } from '../../api/client.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
@@ -559,7 +560,13 @@ export const DashboardView: React.FC<Props> = ({
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {stats.rekeningList
-            .filter((r) => r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-')))
+            .filter(
+              (r) =>
+                (r.kategori === 'PERUSAHAAN' ||
+                  (!r.kategori && !r.isVirtual && !r.kode.startsWith('REK-'))) &&
+                !r.isRekeningTitip &&
+                !r.isAnakPerusahaan
+            )
             .map((rek) => (
               <div
                 key={rek.kode}
@@ -585,6 +592,58 @@ export const DashboardView: React.FC<Props> = ({
               </div>
             ))}
         </div>
+
+        {/* Rekening Titip Uang Karyawan (Backup Transaksi PT) */}
+        {(() => {
+          const titipAccounts = stats.rekeningList.filter(
+            (r) =>
+              !r.isVirtual &&
+              !r.isAnakPerusahaan &&
+              (r.kategori === 'REKENING_TITIP' || r.isRekeningTitip) &&
+              r.status === 'AKTIF'
+          );
+          if (titipAccounts.length === 0) return null;
+          return (
+            <div className="pt-2 space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-1.5 font-bold text-sky-900">
+                  <ShieldCheck className="w-4 h-4 text-sky-700" />
+                  <span>Rekening Titip Uang Karyawan (Dana Amanah Transaksi PT)</span>
+                </div>
+                <span className="text-[11px] text-sky-700">
+                  Terhubung ke Rekening Koran karyawan untuk audit pembelanjaan
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {titipAccounts.map((rek) => (
+                  <div
+                    key={rek.kode}
+                    className="min-w-0 overflow-hidden p-3.5 rounded-xl border border-sky-200 bg-sky-50/60 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-1.5 mb-1 min-w-0">
+                      <span className="font-mono font-bold text-sky-900 truncate">{rek.kode}</span>
+                      <span className="text-[10px] text-sky-700 font-semibold shrink-0">
+                        Titip Uang
+                      </span>
+                    </div>
+                    <div className="text-slate-800 font-semibold text-[11px] truncate">
+                      {rek.nama}
+                    </div>
+                    <div className="text-sky-700 text-[10px] truncate mb-1.5">
+                      Pemegang: {rek.namaKaryawanTerkait || rek.atasNama || '-'}
+                    </div>
+                    <div
+                      className="text-sm font-bold text-sky-950 font-mono tabular-nums truncate whitespace-nowrap"
+                      title={formatRupiah(rek.saldoSaatIni)}
+                    >
+                      {formatRupiahSingkat(rek.saldoSaatIni)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Division Operational Accounts Note & Mini Ribbon */}
         <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">

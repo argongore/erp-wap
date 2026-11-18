@@ -64,6 +64,9 @@ export const BayarBonView: React.FC<Props> = ({
   const [loadingStatement, setLoadingStatement] = useState<boolean>(false);
 
   const [metode, setMetode] = useState<'SINKRON' | 'TUNAI' | 'TRANSFER'>('TUNAI');
+  const [sinkronSubMode, setSinkronSubMode] = useState<'POTONG_TITIPAN' | 'KOREKSI_LUNAS'>(
+    'KOREKSI_LUNAS'
+  );
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(availableBanks[0]?.kode || 'BNI01');
   const [nominalBayarInput, setNominalBayarInput] = useState<string>('');
   const [tanggalBayar, setTanggalBayar] = useState<string>(dmyToIsoInput());
@@ -146,15 +149,18 @@ export const BayarBonView: React.FC<Props> = ({
 
     if (bonKotor > 0 && titipAktif > 0 && maksSinkron > 0) {
       setMetode('SINKRON');
+      setSinkronSubMode('POTONG_TITIPAN');
       setNominalBayarInput(String(maksSinkron));
       setKeterangan(
         'Pelunasan bon via SINKRON (potong langsung dari titipan / uang hasil bumi mitra)'
       );
     } else if (netBonFisik > 0) {
+      setSinkronSubMode('KOREKSI_LUNAS');
       setMetode((prev) => (prev === 'SINKRON' ? 'TUNAI' : prev));
       setNominalBayarInput(String(netBonFisik));
       setKeterangan('Pembayaran pelunasan bon mitra');
     } else {
+      setSinkronSubMode('KOREKSI_LUNAS');
       setMetode('TUNAI');
       setNominalBayarInput('0');
       setKeterangan('Pembayaran pelunasan bon mitra');
@@ -205,8 +211,18 @@ export const BayarBonView: React.FC<Props> = ({
   const sisaBayarPtKeMitra =
     statementData?.sisaTitipanBersih ?? Math.max(0, saldoTitipHasilBumi - bonKotorAwal);
 
+  const effectiveSinkronMode: 'POTONG_TITIPAN' | 'KOREKSI_LUNAS' =
+    maksPotongSinkron > 0 && sinkronSubMode === 'POTONG_TITIPAN'
+      ? 'POTONG_TITIPAN'
+      : 'KOREKSI_LUNAS';
+
   // Target batas maksimal sesuai metode yang dipilih
-  const targetMaksBayar = metode === 'SINKRON' ? bonKotorAwal : sisaBonFisik;
+  const targetMaksBayar =
+    metode === 'SINKRON'
+      ? effectiveSinkronMode === 'POTONG_TITIPAN'
+        ? maksPotongSinkron
+        : bonKotorAwal
+      : sisaBonFisik;
 
   const nominalBayar = Number(nominalBayarInput) || 0;
   const isPartial = nominalBayar > 0 && nominalBayar < targetMaksBayar;
@@ -220,7 +236,9 @@ export const BayarBonView: React.FC<Props> = ({
 
   const sisaTitipanSetelahSinkron =
     metode === 'SINKRON'
-      ? Math.max(0, saldoTitipHasilBumi - nominalBayar)
+      ? effectiveSinkronMode === 'POTONG_TITIPAN'
+        ? Math.max(0, saldoTitipHasilBumi - nominalBayar)
+        : saldoTitipHasilBumi
       : Math.max(0, saldoTitipHasilBumi - maksPotongSinkron);
 
   // Kalkulasi otomatis pengurangan Status Nota Kunci (Nominal Uang Tidak Bisa Kembali)
@@ -235,13 +253,15 @@ export const BayarBonView: React.FC<Props> = ({
     setErrorMsg('');
     setMetode(nextMetode);
     if (nextMetode === 'SINKRON') {
-      setNominalBayarInput(
-        maksPotongSinkron > 0 ? String(maksPotongSinkron) : String(bonKotorAwal || 0)
-      );
+      const nextSub = maksPotongSinkron > 0 ? sinkronSubMode : 'KOREKSI_LUNAS';
+      setSinkronSubMode(nextSub);
+      const targetVal =
+        nextSub === 'POTONG_TITIPAN' && maksPotongSinkron > 0 ? maksPotongSinkron : bonKotorAwal;
+      setNominalBayarInput(String(targetVal || 0));
       setKeterangan(
-        maksPotongSinkron > 0
+        nextSub === 'POTONG_TITIPAN' && maksPotongSinkron > 0
           ? 'Pelunasan bon via SINKRON (potong langsung dari titipan / uang hasil bumi mitra)'
-          : 'Pelunasan bon via SINKRON (tanpa menggerakkan uang riil kas/bank)'
+          : 'Pelunasan bon via SINKRON — Koreksi pencatatan / nota sudah lunas sebelumnya (Rp 0 uang masuk)'
       );
     } else {
       setNominalBayarInput(sisaBonFisik > 0 ? String(sisaBonFisik) : '0');
@@ -292,6 +312,8 @@ export const BayarBonView: React.FC<Props> = ({
             : 'KAS01',
         tanggal: tanggalBayar,
         keterangan,
+        koreksiTanpaPotongTitipan:
+          metode === 'SINKRON' && effectiveSinkronMode === 'KOREKSI_LUNAS',
       });
 
       setShowConfirmModal(false);
@@ -305,13 +327,16 @@ export const BayarBonView: React.FC<Props> = ({
 
       const isResultSinkron =
         result?.metode === 'SINKRON' || result?.rekeningTujuan === 'SINKRON' || metode === 'SINKRON';
+      const isPotongTitipResult = (result?.nominalPotongTitipanOtomatis || 0) > 0;
 
       const detailRows: ReceiptData['detailRows'] = [
         { label: 'Nama Mitra', value: result?.namaMitra || 'Mitra' },
         {
           label: 'Metode Pelunasan',
           value: isResultSinkron
-            ? 'SINKRON (Potong Titipan / Uang Hasil Bumi)'
+            ? isPotongTitipResult
+              ? 'SINKRON (Potong Titipan / Uang Hasil Bumi)'
+              : 'SINKRON (Koreksi Lunas Pencatatan · Rp 0 Uang Masuk)'
             : result?.metode || metode,
         },
         {
@@ -593,45 +618,59 @@ export const BayarBonView: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Banner Siap SINKRON ketika Mitra punya Bon DAN punya Uang Hasil Bumi / Titipan */}
+                {/* Banner SINKRON: Potong Titipan atau Koreksi Lunas Non-Kas */}
                 {canUseSinkron && (
                   <div className="p-4 bg-cyan-50/80 border border-cyan-300 rounded-xl text-xs space-y-2.5">
                     <div className="flex items-start space-x-2.5">
                       <RefreshCw className="w-4 h-4 text-cyan-700 shrink-0 mt-0.5" />
                       <div className="space-y-1 flex-1">
                         <div className="font-bold text-cyan-950">
-                          Tersedia Potong Bon via Rekening SINKRON (Tanpa Mengeluarkan Uang Kas)
+                          {saldoTitipHasilBumi > 0
+                            ? 'Tersedia Pelunasan Bon via Rekening SINKRON (Potong Titipan / Koreksi Lunas Non-Kas)'
+                            : 'Tersedia Pelunasan Piutang via Rekening SINKRON (Koreksi Lunas Non-Kas · Rp 0 Uang Masuk)'}
                         </div>
                         <p className="text-cyan-900 text-[11px] leading-relaxed">
-                          <strong>{statementData.namaMitra}</strong> memiliki bon{' '}
-                          <strong className="font-mono">{formatRupiah(bonKotorAwal)}</strong> dan saldo titipan / uang hasil bumi{' '}
-                          <strong className="font-mono">{formatRupiah(saldoTitipHasilBumi)}</strong>. Pilih metode{' '}
-                          <strong>SINKRON</strong> di bawah untuk langsung melunasi/memotong bon dari uang hasil buminya tanpa transaksi kas fisik.
+                          {saldoTitipHasilBumi > 0 ? (
+                            <>
+                              <strong>{statementData.namaMitra}</strong> memiliki bon{' '}
+                              <strong className="font-mono">{formatRupiah(bonKotorAwal)}</strong> dan saldo titipan / uang hasil bumi{' '}
+                              <strong className="font-mono">{formatRupiah(saldoTitipHasilBumi)}</strong>. Pilih{' '}
+                              <strong>SINKRON</strong> di bawah untuk memotong dari titipan atau melunaskan koreksi pencatatan tanpa uang masuk kas/bank.
+                            </>
+                          ) : (
+                            <>
+                              Jika <strong>{statementData.namaMitra}</strong> mampu membuktikan nota piutang senilai{' '}
+                              <strong className="font-mono">{formatRupiah(bonKotorAwal)}</strong> sebenarnya sudah dibayar / lunas sebelumnya (kesalahan pencatatan), pilih metode{' '}
+                              <strong>SINKRON</strong> di bawah agar piutang langsung <strong>LUNAS</strong> tanpa ada uang kas/bank yang masuk.
+                            </>
+                          )}
                         </p>
                       </div>
                     </div>
 
-                    <div className="p-3 rounded-lg bg-white border border-cyan-200 space-y-1 font-mono text-[11px]">
-                      <div className="flex justify-between text-zinc-600">
-                        <span className="font-sans">Saldo Titipan / Uang Hasil Bumi Saat Ini:</span>
-                        <span className="font-bold text-zinc-900">{formatRupiah(saldoTitipHasilBumi)}</span>
+                    {saldoTitipHasilBumi > 0 && (
+                      <div className="p-3 rounded-lg bg-white border border-cyan-200 space-y-1 font-mono text-[11px]">
+                        <div className="flex justify-between text-zinc-600">
+                          <span className="font-sans">Saldo Titipan / Uang Hasil Bumi Saat Ini:</span>
+                          <span className="font-bold text-zinc-900">{formatRupiah(saldoTitipHasilBumi)}</span>
+                        </div>
+                        <div className="flex justify-between text-rose-700">
+                          <span className="font-sans">Bon Mitra yang Dapat Dipotong SINKRON:</span>
+                          <span className="font-bold">- {formatRupiah(maksPotongSinkron)}</span>
+                        </div>
+                        <div className="flex justify-between pt-1.5 border-t border-zinc-200 text-cyan-900">
+                          <span className="font-sans font-bold">Sisa Bon Setelah SINKRON:</span>
+                          <span className="font-extrabold">
+                            {formatRupiah(Math.max(0, bonKotorAwal - maksPotongSinkron))}{' '}
+                            {bonKotorAwal <= saldoTitipHasilBumi ? '(LUNAS)' : ''}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-amber-900">
+                          <span className="font-sans font-bold">Sisa Uang Hasil Bumi (PT Bayar ke Mitra):</span>
+                          <span className="font-extrabold">{formatRupiah(sisaBayarPtKeMitra)}</span>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-rose-700">
-                        <span className="font-sans">Bon Mitra yang Dapat Dipotong SINKRON:</span>
-                        <span className="font-bold">- {formatRupiah(maksPotongSinkron)}</span>
-                      </div>
-                      <div className="flex justify-between pt-1.5 border-t border-zinc-200 text-cyan-900">
-                        <span className="font-sans font-bold">Sisa Bon Setelah SINKRON:</span>
-                        <span className="font-extrabold">
-                          {formatRupiah(Math.max(0, bonKotorAwal - maksPotongSinkron))}{' '}
-                          {bonKotorAwal <= saldoTitipHasilBumi ? '(LUNAS)' : ''}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-amber-900">
-                        <span className="font-sans font-bold">Sisa Uang Hasil Bumi (PT Bayar ke Mitra):</span>
-                        <span className="font-extrabold">{formatRupiah(sisaBayarPtKeMitra)}</span>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 )}
 
@@ -683,7 +722,7 @@ export const BayarBonView: React.FC<Props> = ({
                     } disabled:opacity-45`}
                   >
                     <RefreshCw className="w-3.5 h-3.5 shrink-0" />
-                    <span>Sinkron (Non-Kas / Titipan)</span>
+                    <span>Sinkron (Non-Kas / Koreksi)</span>
                   </button>
 
                   <button
@@ -716,22 +755,72 @@ export const BayarBonView: React.FC<Props> = ({
 
               {/* Detail Rekening Sesuai Metode */}
               {metode === 'SINKRON' ? (
-                <div className="p-3 bg-cyan-50/80 rounded-lg border border-cyan-200 text-xs space-y-1">
+                <div className="p-3 bg-cyan-50/80 rounded-lg border border-cyan-200 text-xs space-y-2">
+                  {maksPotongSinkron > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSinkronSubMode('POTONG_TITIPAN');
+                          setNominalBayarInput(String(maksPotongSinkron));
+                          setKeterangan(
+                            'Pelunasan bon via SINKRON (potong langsung dari titipan / uang hasil bumi mitra)'
+                          );
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold text-left cursor-pointer ${
+                          effectiveSinkronMode === 'POTONG_TITIPAN'
+                            ? 'bg-cyan-700 text-white border-cyan-800'
+                            : 'bg-white text-cyan-900 border-cyan-200 hover:bg-cyan-100/60'
+                        }`}
+                      >
+                        Potong Saldo Titipan ({formatRupiahSingkat(maksPotongSinkron)})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSinkronSubMode('KOREKSI_LUNAS');
+                          setNominalBayarInput(String(bonKotorAwal));
+                          setKeterangan(
+                            'Pelunasan bon via SINKRON — Koreksi pencatatan / nota sudah lunas sebelumnya (Rp 0 uang masuk)'
+                          );
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold text-left cursor-pointer ${
+                          effectiveSinkronMode === 'KOREKSI_LUNAS'
+                            ? 'bg-cyan-700 text-white border-cyan-800'
+                            : 'bg-white text-cyan-900 border-cyan-200 hover:bg-cyan-100/60'
+                        }`}
+                      >
+                        Koreksi Lunas Pencatatan (Tanpa Potong Titipan)
+                      </button>
+                    </div>
+                  )}
                   <div className="flex justify-between items-center">
                     <span className="text-cyan-900">Rekening Kliring Sistem:</span>
                     <span className="font-mono font-bold text-cyan-950">
-                      SINKRON ({sinkronRek?.nama || 'Potong Titipan / Uang Hasil Bumi'})
+                      SINKRON (
+                      {effectiveSinkronMode === 'POTONG_TITIPAN'
+                        ? sinkronRek?.nama || 'Potong Titipan / Uang Hasil Bumi'
+                        : 'Koreksi Lunas Pencatatan'}
+                      )
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-cyan-900">Uang Kas Keluar / Masuk:</span>
                     <span className="font-mono font-bold text-emerald-800">
-                      Rp 0 (Tidak Mengeluarkan Uang Fisik)
+                      Rp 0 (Tidak Menggerakkan Uang Fisik Kas/Bank)
                     </span>
                   </div>
                   <div className="text-[11px] text-cyan-800 pt-0.5">
-                    Langsung memotong Saldo Titipan / Uang Hasil Bumi milik{' '}
-                    <strong>{statementData?.namaMitra || 'Mitra'}</strong> sehingga bon berkurang permanen di buku mitra.
+                    {effectiveSinkronMode === 'POTONG_TITIPAN' ? (
+                      <>
+                        Langsung memotong Saldo Titipan / Uang Hasil Bumi milik{' '}
+                        <strong>{statementData?.namaMitra || 'Mitra'}</strong> sehingga bon berkurang permanen di buku mitra.
+                      </>
+                    ) : (
+                      <>
+                        Digunakan saat mitra membuktikan nota piutang sebenarnya sudah lunas/terbayar sebelumnya (kesalahan pencatatan). Piutang langsung dilunaskan via <strong>SINKRON</strong> tanpa uang masuk dan tanpa memotong saldo titipan.
+                      </>
+                    )}
                   </div>
                 </div>
               ) : metode === 'TUNAI' ? (
@@ -771,7 +860,9 @@ export const BayarBonView: React.FC<Props> = ({
               <div>
                 <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
                   {metode === 'SINKRON'
-                    ? 'Nominal Bon yang Dipotong dari Uang Hasil Bumi / Titipan (Rp)'
+                    ? effectiveSinkronMode === 'POTONG_TITIPAN'
+                      ? 'Nominal Bon yang Dipotong dari Uang Hasil Bumi / Titipan (Rp)'
+                      : 'Nominal Piutang yang Dilunaskan via SINKRON Koreksi (Rp)'
                     : 'Nominal Uang Setoran Diterima Kasir dari Mitra (Rp)'}{' '}
                   <span className="text-rose-500">*</span>
                 </label>
@@ -814,11 +905,17 @@ export const BayarBonView: React.FC<Props> = ({
                   }`}
                 >
                   {metode === 'SINKRON' ? (
-                    <>
-                      ✓ Sinkron Penuh — Bon sebesar <strong>{formatRupiah(nominalBayar)}</strong> langsung dipotong dari uang hasil bumi/titipan tanpa kas keluar. Sisa bon menjadi{' '}
-                      <strong>{formatRupiah(sisaBonSetelahTransaksi)}</strong> dan sisa uang hasil bumi mitra menjadi{' '}
-                      <strong>{formatRupiah(sisaTitipanSetelahSinkron)}</strong>.
-                    </>
+                    effectiveSinkronMode === 'POTONG_TITIPAN' ? (
+                      <>
+                        ✓ Sinkron Penuh — Bon sebesar <strong>{formatRupiah(nominalBayar)}</strong> langsung dipotong dari uang hasil bumi/titipan tanpa kas keluar. Sisa bon menjadi{' '}
+                        <strong>{formatRupiah(sisaBonSetelahTransaksi)}</strong> dan sisa uang hasil bumi mitra menjadi{' '}
+                        <strong>{formatRupiah(sisaTitipanSetelahSinkron)}</strong>.
+                      </>
+                    ) : (
+                      <>
+                        ✓ Sinkron Koreksi Penuh — Piutang sebesar <strong>{formatRupiah(nominalBayar)}</strong> dilunaskan menjadi <strong>Rp 0</strong> via SINKRON (Rp 0 uang masuk kas/bank, tanpa memotong titipan).
+                      </>
+                    )
                   ) : (
                     <>
                       ✓ Pembayaran Lunas Penuh — Seluruh sisa kewajiban bon mitra ({formatRupiah(targetMaksBayar)}) akan ditutup menjadi LUNAS.
@@ -1025,11 +1122,17 @@ export const BayarBonView: React.FC<Props> = ({
                     <div className="flex justify-between">
                       <span className="text-zinc-500">Rekening Kliring:</span>
                       <span className="font-mono font-bold text-cyan-800">
-                        SINKRON (Rp 0 Kas Keluar/Masuk)
+                        {effectiveSinkronMode === 'KOREKSI_LUNAS'
+                          ? 'SINKRON Koreksi Lunas (Rp 0 Kas Masuk)'
+                          : 'SINKRON (Rp 0 Kas Keluar/Masuk)'}
                       </span>
                     </div>
                     <div className="flex justify-between pt-1.5 border-t border-zinc-200">
-                      <span className="text-zinc-700 font-bold">Nominal Dipotong via SINKRON:</span>
+                      <span className="text-zinc-700 font-bold">
+                        {effectiveSinkronMode === 'KOREKSI_LUNAS'
+                          ? 'Nominal Dilunaskan via SINKRON:'
+                          : 'Nominal Dipotong via SINKRON:'}
+                      </span>
                       <span className="font-bold text-sm text-cyan-800 font-mono">
                         {formatRupiah(nominalBayar)}
                       </span>

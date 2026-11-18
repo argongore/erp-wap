@@ -37,6 +37,8 @@ export const TransferRekeningView: React.FC<Props> = ({
 
   const isAnakPerusahaanAccount = (r?: Rekening) =>
     Boolean(r && (r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.kode === 'REK-DPPARABO'));
+  const isRekeningTitipAccount = (r?: Rekening) =>
+    Boolean(r && !isAnakPerusahaanAccount(r) && (r.isRekeningTitip || r.kategori === 'REKENING_TITIP'));
 
   const sourceObj = validAccounts.find((r) => r.kode === rekeningSumber);
   const destObj = validAccounts.find((r) => r.kode === rekeningTujuan);
@@ -44,6 +46,10 @@ export const TransferRekeningView: React.FC<Props> = ({
   const isSourceAnakPerusahaan = isAnakPerusahaanAccount(sourceObj);
   const isDestAnakPerusahaan = isAnakPerusahaanAccount(destObj);
   const isTouchAnakPerusahaan = isSourceAnakPerusahaan || isDestAnakPerusahaan;
+
+  const isSourceTitip = isRekeningTitipAccount(sourceObj);
+  const isDestTitip = isRekeningTitipAccount(destObj);
+  const isTouchTitip = !isTouchAnakPerusahaan && (isSourceTitip || isDestTitip);
 
   const isSameAccount = rekeningSumber === rekeningTujuan;
   const isBalanceSufficient = sourceObj
@@ -91,14 +97,22 @@ export const TransferRekeningView: React.FC<Props> = ({
       const receipt: ReceiptData = {
         title: isTouchAnakPerusahaan
           ? 'BUKTI TRANSAKSI TERPADU ANAK PERUSAHAAN'
+          : isTouchTitip
+          ? isDestTitip
+            ? 'BUKTI PENITIPAN DANA KE REKENING TITIP'
+            : 'BUKTI PENGEMBALIAN DANA REKENING TITIP'
           : 'BUKTI TRANSFER ANTAR REKENING',
         subtitle: isTouchAnakPerusahaan
           ? '1 Transaksi Otomatis di Master Rekening & Mitra Anak Perusahaan'
+          : isTouchTitip
+          ? `Terhubung Otomatis ke Rekening Koran ${
+              result.namaKaryawanTerkait || result.namaMitraTerkait || 'Karyawan Pemegang Amanah'
+            }`
           : 'Mutasi Dana Internal PT Wijaya Agro',
         nomorTransaksi: result.noTransfer,
         tanggal: result.tanggal,
         jam: result.jam,
-        mitra: result.namaMitraTerkait || undefined,
+        mitra: result.namaKaryawanTerkait || result.namaMitraTerkait || undefined,
         rekening: `${result.rekeningSumber} -> ${result.rekeningTujuan}`,
         kategori: 'TRANSFER_REKENING',
         detailRows: [
@@ -106,11 +120,22 @@ export const TransferRekeningView: React.FC<Props> = ({
             label: 'Jenis Mutasi',
             value: isTouchAnakPerusahaan
               ? '1 TRANSAKSI TERPADU (REKENING & MITRA ANAK PERUSAHAAN)'
+              : isTouchTitip
+              ? isDestTitip
+                ? 'TITIP DANA PERUSAHAAN KE KARYAWAN AMANAH'
+                : 'PENGEMBALIAN SISA DANA TITIP KE PERUSAHAAN'
               : 'TRANSFER INTERNAL PERUSAHAAN',
           },
           { label: 'Dari Rekening (Pengirim)', value: `${result.rekeningSumber} (${sourceObj?.nama})` },
           { label: 'Ke Rekening (Penerima)', value: `${result.rekeningTujuan} (${destObj?.nama})` },
-          ...(result.namaMitraTerkait
+          ...(result.namaKaryawanTerkait
+            ? [
+                {
+                  label: 'Tautan Rekening Koran Karyawan',
+                  value: `${result.namaKaryawanTerkait} (Audit Terpisah dari Kasbon Pribadi)`,
+                },
+              ]
+            : result.namaMitraTerkait
             ? [{ label: 'Sinkron Buku Mitra', value: `${result.namaMitraTerkait} (Otomatis 1 Transaksi)` }]
             : []),
           { label: 'Status Transaksi', value: result.status, highlight: true },
@@ -158,6 +183,9 @@ export const TransferRekeningView: React.FC<Props> = ({
             <strong>Rekening Anak Perusahaan (DP Parabot / REK-DPPARABO):</strong> Jika Bank/Kas Perusahaan melakukan transfer ke <strong>DP Parabot</strong> (misal payment barang toko DP Parabot), otomatis tercatat sebagai <strong>Piutang Anak Perusahaan ke Perusahaan</strong> di Rekening Koran DP Parabot.
           </li>
           <li>
+            <strong>Rekening Titip Uang Karyawan (Backup Transaksi PT):</strong> Jika Rekening Perusahaan (misal BCA) menitipkan dana ke Rekening Titip yang terhubung ke Karyawan amanah, dana otomatis teraudit pada Rekening Koran karyawan tersebut (total dititipkan vs sudah dibelanjakan apa saja) tanpa mencampur Kasbon/Upah pribadinya.
+          </li>
+          <li>
             <strong>DILARANG</strong> melibatkan rekening virtual BON01 dan TIT01 secara langsung.
           </li>
         </ul>
@@ -191,7 +219,12 @@ export const TransferRekeningView: React.FC<Props> = ({
               >
                 {validAccounts.map((r) => (
                   <option key={r.kode} value={r.kode}>
-                    {isAnakPerusahaanAccount(r) ? `[ANAK PERUSAHAAN] ${r.nama} (${r.kode})` : `${r.nama} (${r.kode})`} — Saldo: {formatRupiah(r.saldoSaatIni)}
+                    {isAnakPerusahaanAccount(r)
+                      ? `[ANAK PERUSAHAAN] ${r.nama} (${r.kode})`
+                      : isRekeningTitipAccount(r)
+                      ? `[REKENING TITIP · ${r.namaKaryawanTerkait || r.atasNama || 'Karyawan'}] ${r.nama} (${r.kode})`
+                      : `${r.nama} (${r.kode})`}{' '}
+                    — Saldo: {formatRupiah(r.saldoSaatIni)}
                   </option>
                 ))}
               </select>
@@ -215,7 +248,12 @@ export const TransferRekeningView: React.FC<Props> = ({
               >
                 {validAccounts.map((r) => (
                   <option key={r.kode} value={r.kode}>
-                    {isAnakPerusahaanAccount(r) ? `[ANAK PERUSAHAAN] ${r.nama} (${r.kode})` : `${r.nama} (${r.kode})`} — Saldo: {formatRupiah(r.saldoSaatIni)}
+                    {isAnakPerusahaanAccount(r)
+                      ? `[ANAK PERUSAHAAN] ${r.nama} (${r.kode})`
+                      : isRekeningTitipAccount(r)
+                      ? `[REKENING TITIP · ${r.namaKaryawanTerkait || r.atasNama || 'Karyawan'}] ${r.nama} (${r.kode})`
+                      : `${r.nama} (${r.kode})`}{' '}
+                    — Saldo: {formatRupiah(r.saldoSaatIni)}
                   </option>
                 ))}
               </select>
@@ -239,6 +277,26 @@ export const TransferRekeningView: React.FC<Props> = ({
                   {isDestAnakPerusahaan
                     ? `Transfer dari ${sourceObj?.nama} (${sourceObj?.kode}) ke rekening Anak Perusahaan ${destObj?.nama} (${destObj?.kode}) — misalnya untuk payment barang toko DP Parabot — otomatis mengurangi saldo ${sourceObj?.kode} dan dicatat sebagai PIUTANG ANAK PERUSAHAAN KE PERUSAHAAN pada Rekening Koran ${destObj?.nama}.`
                     : `Transfer dari ${sourceObj?.nama} (${sourceObj?.kode}) ke ${destObj?.nama} (${destObj?.kode}) otomatis mengurangi Piutang Anak Perusahaan ke Perusahaan (atau menjadi saldo Titipan/Talangan Anak Perusahaan jika melebihi piutang berjalan).`}
+                </p>
+              </div>
+            )}
+
+            {/* Banner Mode Rekening Titip Uang Karyawan */}
+            {isTouchTitip && !isSameAccount && (
+              <div className="p-3.5 bg-sky-50/90 border border-sky-300 rounded-lg text-xs text-sky-950 space-y-1">
+                <div className="font-bold text-sky-900">
+                  {isDestTitip
+                    ? `Penitipan Dana Amanah ke Karyawan: ${
+                        destObj?.namaKaryawanTerkait || destObj?.atasNama || destObj?.nama
+                      }`
+                    : `Pengembalian Sisa Dana Titip dari: ${
+                        sourceObj?.namaKaryawanTerkait || sourceObj?.atasNama || sourceObj?.nama
+                      }`}
+                </div>
+                <p className="text-[11px] text-zinc-700 leading-relaxed">
+                  {isDestTitip
+                    ? `Dana ${formatRupiah(nominal)} dari ${sourceObj?.nama} (${sourceObj?.kode}) dititipkan ke ${destObj?.nama} (${destObj?.kode}). Mutasi ini otomatis tampil di Panel Audit Rekening Titip pada Rekening Koran karyawan terkait sehingga seluruh pembelanjaan backup transaksi mudah diaudit tanpa mencampur kasbon pribadinya.`
+                    : `Sisa dana amanah dari ${sourceObj?.nama} (${sourceObj?.kode}) dikembalikan ke rekening perusahaan ${destObj?.nama} (${destObj?.kode}) dan tercatat di Panel Audit Rekening Titip pada Rekening Koran karyawan terkait.`}
                 </p>
               </div>
             )}
@@ -354,11 +412,15 @@ export const TransferRekeningView: React.FC<Props> = ({
                       <span className="bg-sky-50 text-sky-800 px-1.5 py-0.5 rounded font-mono font-bold">
                         {t.rekeningTujuan}
                       </span>
-                      {t.namaMitraTerkait && (
+                      {t.namaKaryawanTerkait ? (
+                        <span className="text-[10px] text-sky-800 font-semibold">
+                          · Rekening Titip ({t.namaKaryawanTerkait})
+                        </span>
+                      ) : t.namaMitraTerkait ? (
                         <span className="text-[10px] text-teal-800 font-semibold">
                           · 1 Transaksi Mitra: {t.namaMitraTerkait}
                         </span>
-                      )}
+                      ) : null}
                     </div>
 
                     <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1">

@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   AlertCircle,
   ArrowRightLeft,
+  Printer,
 } from 'lucide-react';
 import {
   getRoleMitraLabel,
@@ -19,6 +20,7 @@ import {
 import { formatRupiah } from '../../utils/format.ts';
 import { KaryawanAvatar } from '../karyawan/ModalProfilKaryawan.tsx';
 import { FotoNotaPreviewModal } from '../common/FotoNotaPreviewModal.tsx';
+import type { InitialCetakMitraPreset } from './CetakListMitraModal.tsx';
 
 interface RekapMitraViewProps {
   rekapData: RekapMasterMitraSummary | null;
@@ -36,6 +38,7 @@ interface RekapMitraViewProps {
   onOpenInputNotaLalu: (opts?: { mitraId?: string; defaultNgunci?: boolean }) => void;
   onOpenKliringSilang?: (mitra: RekapMitraItem) => void;
   onPreviewFotoMitra?: (payload: { nama: string; roleLabel?: string; fotoUrl: string }) => void;
+  onOpenCetakList?: (preset?: InitialCetakMitraPreset) => void;
 }
 
 export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
@@ -46,6 +49,7 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
   onOpenInputNotaLalu,
   onOpenKliringSilang,
   onPreviewFotoMitra,
+  onOpenCetakList,
 }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<
@@ -148,6 +152,31 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onOpenCetakList && (
+              <button
+                type="button"
+                onClick={() => {
+                  const preset: InitialCetakMitraPreset =
+                    statusFilter === 'PIUTANG'
+                      ? 'PIUTANG_ONLY'
+                      : statusFilter === 'HUTANG'
+                      ? 'HUTANG_ONLY'
+                      : statusFilter === 'NGUNCI'
+                      ? 'NGUNCI_ONLY'
+                      : statusFilter === 'SIAP_KLIRING'
+                      ? 'KLIRING_ONLY'
+                      : statusFilter === 'NOTA_AKTIF'
+                      ? 'ALL_ACTIVE'
+                      : 'ALL_ACTIVE';
+                  onOpenCetakList(preset);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-zinc-900 bg-zinc-100 hover:bg-zinc-200 border border-zinc-300 rounded-lg transition-colors cursor-pointer"
+                title="Cetak atau Download PDF List Mitra sesuai filter Hutang / Piutang / Ngunci"
+              >
+                <Printer className="w-3.5 h-3.5 text-sky-700" />
+                <span>Cetak / PDF List Mitra</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onOpenInputNotaLalu({ defaultNgunci: false })}
@@ -635,6 +664,7 @@ export const KhususNotaNgunciSection: React.FC<RekapMitraViewProps> = ({
   onRequestToggleNgunci,
   onOpenInputNotaLalu,
   onPreviewFotoMitra,
+  onOpenCetakList,
 }) => {
   const [search, setSearch] = useState('');
   const [modeTabel, setModeTabel] = useState<'PER_MITRA' | 'PER_NOTA'>('PER_MITRA');
@@ -705,6 +735,17 @@ export const KhususNotaNgunciSection: React.FC<RekapMitraViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onOpenCetakList && (
+              <button
+                type="button"
+                onClick={() => onOpenCetakList('NGUNCI_ONLY')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-300 rounded-lg transition-colors cursor-pointer"
+                title="Cetak atau Download PDF Daftar Mitra Nota Ngunci"
+              >
+                <Printer className="w-3.5 h-3.5 text-rose-700" />
+                <span>Cetak / PDF List Ngunci</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onOpenInputNotaLalu({ defaultNgunci: true })}

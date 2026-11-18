@@ -105,7 +105,8 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
       r.kode !== 'BON01' &&
       r.kode !== 'TIT01' &&
       r.kode !== 'SINKRON' &&
-      (!r.kode.startsWith('REK-') || Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
+      (!r.kode.startsWith('REK-') ||
+        Boolean(r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN' || r.isRekeningTitip || r.kategori === 'REKENING_TITIP'))
   );
 
   const totalBon = activeKaryawan.totalKasbonAktif || 0;
@@ -159,8 +160,8 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
     e.preventDefault();
     setErrorMsg('');
 
-    if (upahPokok <= 0) {
-      setErrorMsg('Nominal upah/gaji harus lebih dari Rp 0');
+    if (upahPokok < 0 || lemburBonus < 0) {
+      setErrorMsg('Nominal upah/gaji tidak boleh bernilai negatif');
       return;
     }
 
@@ -355,16 +356,15 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                   type="number"
                   min="0"
                   step="any"
-                  value={gajiNominal || ''}
-                  onChange={(e) => setGajiNominal(Math.max(0, Number(e.target.value)))}
-                  placeholder="Contoh: 120000"
+                  value={gajiNominal}
+                  onChange={(e) => setGajiNominal(Math.max(0, Number(e.target.value) || 0))}
+                  placeholder="Contoh: 120000 (atau 0 untuk Libur/Sakit)"
                   className="w-full bg-zinc-800 border border-emerald-600/70 rounded-md px-3 py-2 text-zinc-100 text-sm font-mono font-bold focus:outline-hidden focus:border-emerald-400"
-                  required
                 />
                 {/* Preset tombol cepat upah harian */}
                 {tipeGaji === 'HARIAN' && (
                   <div className="flex flex-wrap gap-1 mt-1.5">
-                    {[100000, 120000, 135000, 150000, 175000, 200000].map((preset) => (
+                    {[0, 100000, 120000, 135000, 150000, 175000, 200000].map((preset) => (
                       <button
                         key={preset}
                         type="button"
@@ -375,7 +375,7 @@ export const ProsesGajiModal: React.FC<ProsesGajiModalProps> = ({
                             : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
                         }`}
                       >
-                        {formatRupiah(preset)}
+                        {preset === 0 ? 'Rp 0 (Libur/Sakit)' : formatRupiah(preset)}
                       </button>
                     ))}
                   </div>

@@ -11,6 +11,7 @@ import {
   Building2,
   Truck,
   Pencil,
+  Scale,
 } from 'lucide-react';
 import {
   Mitra,
@@ -128,8 +129,10 @@ export const UangMasukView: React.FC<Props> = ({
   const [editTxJenisHint, setEditTxJenisHint] = useState<string>('UANG_MASUK');
 
   const [tanggal, setTanggal] = useState<string>(getTodayIsoDate());
+  const [tonaseAkhirStr, setTonaseAkhirStr] = useState<string>('');
+  const [hargaPerKgDisplay, setHargaPerKgDisplay] = useState<string>('');
   const [nominalDisplay, setNominalDisplay] = useState<string>('');
-  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>(
+  const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON' | 'PIUTANG'>(
     bankAccounts.length > 0 ? 'TRANSFER' : 'TUNAI'
   );
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(bankAccounts[0]?.kode || '');
@@ -188,7 +191,7 @@ export const UangMasukView: React.FC<Props> = ({
     [penjualanHasilBumiList, noPenjualanHb]
   );
 
-  // Sync pengirim & divisi when selectedHb changes
+  // Sync pengirim, divisi & tonase akhir when selectedHb changes
   useEffect(() => {
     if (jenisSumber === 'PENJUALAN_HASIL_BUMI' && selectedHb) {
       setKategori(`Penjualan Hasil Bumi (${selectedHb.komoditasNama})`);
@@ -203,26 +206,95 @@ export const UangMasukView: React.FC<Props> = ({
         setModePengirim('MANUAL');
         setNamaPengirim(selectedHb.namaMitra || '');
       }
+      setTonaseAkhirStr(
+        selectedHb.tonaseAkhir && selectedHb.tonaseAkhir > 0
+          ? String(selectedHb.tonaseAkhir)
+          : ''
+      );
+      if (
+        selectedHb.statusUangMasuk === 'SEBAGIAN' &&
+        selectedHb.hargaJualPerKg > 0 &&
+        selectedHb.hargaJualPerKg !== selectedHb.modalRataRataPerKg
+      ) {
+        setHargaPerKgDisplay(Math.round(selectedHb.hargaJualPerKg).toLocaleString('id-ID'));
+      } else {
+        setHargaPerKgDisplay('');
+      }
+      setNominalDisplay('');
     } else if (jenisSumber === 'UMUM') {
       if (kategori.startsWith('Penjualan Hasil Bumi')) {
         setKategori(KATEGORI_UMUM_PRESETS[0]);
       }
     }
-  }, [jenisSumber, selectedHb]);
+  }, [jenisSumber, selectedHb?.noPenjualan]);
 
   const nominal = parseRupiahInput(nominalDisplay);
+  const tonaseAkhirKg = Math.max(0, Math.round((parseFloat(tonaseAkhirStr) || 0) * 100) / 100);
+  const hargaPerKg = parseRupiahInput(hargaPerKgDisplay);
 
-  // Kalkulasi perbandingan terhadap Nota Muat Hasil Bumi
+  const handleTonaseAkhirChange = (rawVal: string) => {
+    setTonaseAkhirStr(rawVal);
+    setStepVerifikasi(false);
+    const kg = Math.max(0, Math.round((parseFloat(rawVal) || 0) * 100) / 100);
+    if (kg > 0 && hargaPerKg > 0) {
+      const sudah = Number(selectedHb?.nominalUangMasukTerkumpul) || 0;
+      const targetNom = Math.max(0, Math.round(kg * hargaPerKg) - sudah);
+      setNominalDisplay(targetNom > 0 ? targetNom.toLocaleString('id-ID') : '');
+    }
+  };
+
+  const handleHargaPerKgChange = (rawVal: string) => {
+    const hrg = parseRupiahInput(rawVal);
+    setHargaPerKgDisplay(hrg > 0 ? hrg.toLocaleString('id-ID') : '');
+    setStepVerifikasi(false);
+    const kg = tonaseAkhirKg > 0 ? tonaseAkhirKg : Number(selectedHb?.beratBersih) || 0;
+    if (hrg > 0 && kg > 0) {
+      const sudah = Number(selectedHb?.nominalUangMasukTerkumpul) || 0;
+      const targetNom = Math.max(0, Math.round(kg * hrg) - sudah);
+      setNominalDisplay(targetNom > 0 ? targetNom.toLocaleString('id-ID') : '');
+    }
+  };
+
+  const handleNominalChange = (rawVal: string) => {
+    const num = parseRupiahInput(rawVal);
+    setNominalDisplay(num > 0 ? num.toLocaleString('id-ID') : '');
+    setStepVerifikasi(false);
+    if (jenisSumber === 'PENJUALAN_HASIL_BUMI' && selectedHb) {
+      const kg = tonaseAkhirKg > 0 ? tonaseAkhirKg : Number(selectedHb.beratBersih) || 0;
+      const sudah = Number(selectedHb.nominalUangMasukTerkumpul) || 0;
+      if (kg > 0 && num > 0) {
+        const hrg = Math.round((sudah + num) / kg);
+        setHargaPerKgDisplay(hrg > 0 ? hrg.toLocaleString('id-ID') : '');
+      } else if (num === 0) {
+        setHargaPerKgDisplay('');
+      }
+    }
+  };
+
+  // Kalkulasi perbandingan terhadap Nota Muat Hasil Bumi (menggunakan Tonase Akhir bila diisi)
   const hbCalc = useMemo(() => {
     if (!selectedHb) return null;
+    const beratAwalMuat = Number(selectedHb.beratBersih) || 0;
     const modalPengurangStok =
       Number(selectedHb.nilaiModalPengurangStok) ||
-      Math.round((Number(selectedHb.beratBersih) || 0) * (Number(selectedHb.modalRataRataPerKg) || 0));
+      Math.round(beratAwalMuat * (Number(selectedHb.modalRataRataPerKg) || 0));
     const sudahTerkumpul = Number(selectedHb.nominalUangMasukTerkumpul) || 0;
     const totalSetelahInput = sudahTerkumpul + nominal;
     const selisihLabaRiil = totalSetelahInput - modalPengurangStok;
+    const hasTonaseAkhir = tonaseAkhirKg > 0;
+    const basisKgRealisasi = hasTonaseAkhir ? tonaseAkhirKg : beratAwalMuat;
+    const susutKg =
+      hasTonaseAkhir && beratAwalMuat > 0
+        ? Math.round((beratAwalMuat - tonaseAkhirKg) * 100) / 100
+        : null;
+    const susutPersen =
+      susutKg !== null && beratAwalMuat > 0
+        ? Math.round((susutKg / beratAwalMuat) * 10000) / 100
+        : null;
     const hargaRealisasiPerKg =
-      selectedHb.beratBersih > 0 ? Math.round(totalSetelahInput / selectedHb.beratBersih) : 0;
+      basisKgRealisasi > 0 ? Math.round(totalSetelahInput / basisKgRealisasi) : 0;
+    const totalNilaiDeal =
+      hargaPerKg > 0 && basisKgRealisasi > 0 ? Math.round(basisKgRealisasi * hargaPerKg) : 0;
     const stokAwalSaatMuat = Number(selectedHb.stokGudangSebelum) || 0;
     const sisaStokSaatMuat =
       (Number(selectedHb.selisihTimbangMuatKg) || 0) > 0
@@ -230,6 +302,12 @@ export const UangMasukView: React.FC<Props> = ({
         : Number(selectedHb.stokGudangSetelah) || 0;
 
     return {
+      beratAwalMuat,
+      hasTonaseAkhir,
+      basisKgRealisasi,
+      susutKg,
+      susutPersen,
+      totalNilaiDeal,
       modalPengurangStok,
       sudahTerkumpul,
       totalSetelahInput,
@@ -239,7 +317,7 @@ export const UangMasukView: React.FC<Props> = ({
       sisaStokSaatMuat,
       isLebihTimbang: (Number(selectedHb.selisihTimbangMuatKg) || 0) > 0,
     };
-  }, [selectedHb, nominal]);
+  }, [selectedHb, nominal, tonaseAkhirKg, hargaPerKg]);
 
   // Gabungkan Uang Masuk murni + Pendapatan Biaya Admin BRILink (Tunai KAS01 maupun Transfer BRI/Bank)
   const combinedUangMasukList = useMemo<UnifiedUangMasukItem[]>(() => {
@@ -293,16 +371,18 @@ export const UangMasukView: React.FC<Props> = ({
     return merged;
   }, [uangMasukList, brilinkList]);
 
-  // KPI Ringkasan (Termasuk Admin BRILink Cash & Transfer)
+  // KPI Ringkasan (Termasuk Admin BRILink Cash & Transfer, tidak termasuk Piutang BON01 karena uang belum diterima)
   const kpi = useMemo(() => {
     const todayIso = getTodayIsoDate();
     const todayIndo = getTodayIndoDate();
+    const isPiutangItem = (u: { metode?: string; rekeningTujuan?: string }) =>
+      u.metode === 'PIUTANG' || u.rekeningTujuan === 'BON01';
     const hariIniItems = combinedUangMasukList.filter(
-      (u) => u.tanggal === todayIndo || u.tanggal === todayIso
+      (u) => !isPiutangItem(u) && (u.tanggal === todayIndo || u.tanggal === todayIso)
     );
     const totalHariIni = hariIniItems.reduce((s, u) => s + (Number(u.nominal) || 0), 0);
     const totalDariHb = uangMasukList
-      .filter((u) => Boolean(u.noPenjualanHasilBumi))
+      .filter((u) => Boolean(u.noPenjualanHasilBumi) && !isPiutangItem(u))
       .reduce((s, u) => s + (Number(u.nominal) || 0), 0);
     const totalAdminBrilink = combinedUangMasukList
       .filter((u) => Boolean(u.isBrilinkAdmin))
@@ -356,7 +436,7 @@ export const UangMasukView: React.FC<Props> = ({
   const validateForm = (): boolean => {
     setErrorMsg('');
     if (nominal <= 0) {
-      setErrorMsg('Masukkan nominal Uang Masuk lebih dari Rp 0.');
+      setErrorMsg('Masukkan nominal nilai penjualan / uang masuk lebih dari Rp 0.');
       return false;
     }
     if (jenisSumber === 'PENJUALAN_HASIL_BUMI' && !selectedHb) {
@@ -364,6 +444,20 @@ export const UangMasukView: React.FC<Props> = ({
         'Pilih Nota Muat / Penjualan Hasil Bumi terlebih dahulu, atau ubah ke tab "Uang Masuk Umum".'
       );
       return false;
+    }
+    if (metode === 'PIUTANG') {
+      if (jenisSumber !== 'PENJUALAN_HASIL_BUMI' || !selectedHb) {
+        setErrorMsg(
+          'Opsi Piutang Buyer / Mitra hanya tersedia untuk Pencairan Nota Muat Hasil Bumi.'
+        );
+        return false;
+      }
+      if (modePengirim !== 'MITRA' || !idMitra) {
+        setErrorMsg(
+          'Untuk dijadikan Piutang Buyer / Mitra, wajib memilih Buyer / Mitra terdaftar (bukan ketik nama manual) agar masuk ke Rekening Koran Mitra & BON01.'
+        );
+        return false;
+      }
     }
     if (metode === 'TRANSFER' && !rekeningTujuan) {
       setErrorMsg('Pilih rekening bank tujuan penerimaan transfer.');
@@ -381,50 +475,94 @@ export const UangMasukView: React.FC<Props> = ({
 
   const buildReceiptFromRecord = (rec: TransaksiUangMasuk): ReceiptData => {
     const pengirimStr = rec.namaPengirim || rec.pengirim || 'Umum';
-    const beratKg = Number(rec.beratMuatKg) || 0;
+    const beratMuatKg = Number(rec.beratMuatKg) || 0;
+    const tonaseAkhir = Number(rec.tonaseAkhirKg) || 0;
+    const effectiveKg = tonaseAkhir > 0 ? tonaseAkhir : beratMuatKg;
+    const hargaKg =
+      Number(rec.hargaDealPerKg) ||
+      Number(rec.hargaRealisasiPerKg) ||
+      (effectiveKg > 0 ? Math.round(rec.nominal / effectiveKg) : rec.nominal);
     const isHb = Boolean(rec.noPenjualanHasilBumi);
+    const isPiutang = rec.metode === 'PIUTANG' || rec.rekeningTujuan === 'BON01';
     return {
-      title: isHb
+      title: isPiutang
+        ? 'BUKTI PUTUS HARGA — PIUTANG BUYER / MITRA'
+        : isHb
         ? 'BUKTI UANG MASUK — PENJUALAN HASIL BUMI'
         : 'BUKTI PENERIMAAN UANG MASUK',
-      subtitle: `Kas Masuk Perusahaan | Divisi: ${rec.divisi}`,
+      subtitle: isPiutang
+        ? `Piutang Usaha / Tempo (BON01) | Divisi: ${rec.divisi}`
+        : `Kas Masuk Perusahaan | Divisi: ${rec.divisi}`,
       nomorTransaksi: rec.idTransaksi,
       tanggal: rec.tanggal,
       jam: rec.jam,
       mitra: pengirimStr,
-      rekening: `${rec.metode} (${rec.rekeningTujuan})`,
+      rekening: isPiutang ? 'PIUTANG MITRA (BON01)' : `${rec.metode} (${rec.rekeningTujuan})`,
       kategori: rec.kategori,
       total: rec.nominal,
       items: [
         {
           nama:
             isHb && rec.noPenjualanHasilBumi
-              ? `Pencairan Nota ${rec.noPenjualanHasilBumi}${
-                  rec.komoditasNama ? ` — ${rec.komoditasNama}` : ''
-                }`
+              ? `${isPiutang ? 'Putus Harga → Piutang' : 'Pencairan Nota'} ${
+                  rec.noPenjualanHasilBumi
+                }${rec.komoditasNama ? ` — ${rec.komoditasNama}` : ''}`
               : rec.kategori,
-          qty: beratKg > 0 ? beratKg : 1,
-          satuan: beratKg > 0 ? 'Kg' : 'Transaksi',
-          harga: beratKg > 0 ? Math.round(rec.nominal / beratKg) : rec.nominal,
+          qty: effectiveKg > 0 ? effectiveKg : 1,
+          satuan: effectiveKg > 0 ? 'Kg' : 'Transaksi',
+          harga: hargaKg,
           subtotal: rec.nominal,
         },
       ],
       detailRows: [
         { label: 'Divisi Terkait', value: rec.divisi },
-        { label: 'Rekening Tujuan', value: `${rec.metode} (${rec.rekeningTujuan})` },
-        { label: 'Pengirim / Pembayar', value: pengirimStr },
+        {
+          label: isPiutang ? 'Dialokasikan Ke' : 'Rekening Tujuan',
+          value: isPiutang ? 'PIUTANG MITRA (BON01 — Belum Bayar)' : `${rec.metode} (${rec.rekeningTujuan})`,
+        },
+        { label: 'Pengirim / Buyer', value: pengirimStr },
         ...(rec.noPenjualanHasilBumi
           ? [
               {
                 label: 'Ref Nota Muat Hasil Bumi',
                 value: `${rec.noPenjualanHasilBumi}${
-                  beratKg > 0 ? ` (${beratKg.toLocaleString('id-ID')} Kg)` : ''
+                  beratMuatKg > 0 ? ` (Muat Awal: ${formatKgSpreadsheet(beratMuatKg)} Kg)` : ''
                 }`,
                 highlight: true,
               },
+              ...(tonaseAkhir > 0
+                ? [
+                    {
+                      label: 'Tonase Akhir (Pabrik / Pembeli)',
+                      value: `${formatKgSpreadsheet(tonaseAkhir)} Kg`,
+                    },
+                  ]
+                : []),
+              ...(rec.susutKg !== undefined
+                ? [
+                    {
+                      label: rec.susutKg < 0 ? 'Lebih Timbang' : 'Susut Perjalanan',
+                      value: `${rec.susutKg < 0 ? '+' : '-'}${formatKgSpreadsheet(
+                        Math.abs(rec.susutKg)
+                      )} Kg (${Math.abs(Number(rec.susutPersen) || 0)}%)`,
+                    },
+                  ]
+                : []),
+              ...(hargaKg > 0
+                ? [
+                    {
+                      label: 'Harga Deal / Realisasi per Kg',
+                      value: `${formatRupiah(hargaKg)} / Kg`,
+                    },
+                  ]
+                : []),
             ]
           : []),
-        { label: 'Total Uang Masuk', value: formatRupiah(rec.nominal), isTotal: true },
+        {
+          label: isPiutang ? 'Total Dijadikan Piutang Mitra' : 'Total Uang Masuk',
+          value: formatRupiah(rec.nominal),
+          isTotal: true,
+        },
       ],
       catatan: rec.keterangan,
     };
@@ -447,12 +585,22 @@ export const UangMasukView: React.FC<Props> = ({
         namaPengirimManual: pengirimFinalLabel,
         noPenjualanHasilBumi:
           jenisSumber === 'PENJUALAN_HASIL_BUMI' ? noPenjualanHb : undefined,
+        tonaseAkhirKg:
+          jenisSumber === 'PENJUALAN_HASIL_BUMI' && tonaseAkhirKg > 0 ? tonaseAkhirKg : undefined,
+        hargaPerKg:
+          jenisSumber === 'PENJUALAN_HASIL_BUMI' && hargaPerKg > 0 ? hargaPerKg : undefined,
         tandaiPutusLunas:
-          jenisSumber === 'PENJUALAN_HASIL_BUMI' ? tandaiLunasHb : undefined,
+          jenisSumber === 'PENJUALAN_HASIL_BUMI'
+            ? metode === 'PIUTANG'
+              ? true
+              : tandaiLunasHb
+            : undefined,
         nominal,
         metode,
         rekeningTujuan:
-          metode === 'SINKRON'
+          metode === 'PIUTANG'
+            ? 'BON01'
+            : metode === 'SINKRON'
             ? 'SINKRON'
             : metode === 'TRANSFER'
             ? rekeningTujuan
@@ -463,15 +611,19 @@ export const UangMasukView: React.FC<Props> = ({
       });
 
       const receipt = buildReceiptFromRecord(record);
+      setTonaseAkhirStr('');
+      setHargaPerKgDisplay('');
       setNominalDisplay('');
       setKeterangan('');
       setFotoBukti('');
       setStepVerifikasi(false);
       setVerifiedDoubleCheck(false);
       setSuccessBanner(
-        `Uang Masuk ${record.idTransaksi} sebesar ${formatRupiah(
-          record.nominal
-        )} berhasil disimpan ke ${record.rekeningTujuan}.`
+        record.metode === 'PIUTANG'
+          ? `Nota ${record.noPenjualanHasilBumi || record.idTransaksi} berhasil dikunci harga & masuk ke Piutang Buyer / Mitra (${record.namaPengirim || pengirimFinalLabel}) sebesar ${formatRupiah(record.nominal)} (BON01).`
+          : `Uang Masuk ${record.idTransaksi} sebesar ${formatRupiah(
+              record.nominal
+            )} berhasil disimpan ke ${record.rekeningTujuan}.`
       );
       onRefresh();
       onSuccess(receipt);
@@ -647,6 +799,9 @@ export const UangMasukView: React.FC<Props> = ({
               type="button"
               onClick={() => {
                 setJenisSumber('UMUM');
+                if (metode === 'PIUTANG') {
+                  setMetode(bankAccounts.length > 0 ? 'TRANSFER' : 'TUNAI');
+                }
                 setStepVerifikasi(false);
               }}
               className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
@@ -790,7 +945,155 @@ export const UangMasukView: React.FC<Props> = ({
                       </table>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 bg-white p-3 rounded-lg border border-zinc-200">
+                    {/* Panel Input Tonase Akhir, Harga Deal/Kg & Susut Perjalanan */}
+                    <div className="p-3.5 rounded-xl bg-sky-50/80 border border-sky-200 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold text-sky-950">
+                          <Scale className="w-3.5 h-3.5 text-sky-700" />
+                          <span>Input Tonase Akhir Pabrik &amp; Harga Putus / Kg (Hitung Susut &amp; Nominal)</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-sky-800">
+                          Muat Awal Gudang: <strong>{formatKgSpreadsheet(hbCalc.beratAwalMuat)} Kg</strong>
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[11px] font-bold text-sky-950">
+                              Tonase Akhir (Kg)
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleTonaseAkhirChange(String(hbCalc.beratAwalMuat))}
+                              className="text-[10px] font-semibold text-sky-700 hover:underline cursor-pointer"
+                            >
+                              = Muat Awal
+                            </button>
+                          </div>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder={`Contoh: ${Math.max(1, Math.round(hbCalc.beratAwalMuat - 30))}`}
+                            value={tonaseAkhirStr}
+                            onChange={(e) => handleTonaseAkhirChange(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-sky-300 bg-white font-mono tabular-nums font-bold text-sky-950 focus:outline-none focus:border-sky-600"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[11px] font-bold text-sky-950">
+                              Harga Deal / Kg (Rp)
+                            </label>
+                            {selectedHb.modalRataRataPerKg > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleHargaPerKgChange(
+                                    Math.round(selectedHb.modalRataRataPerKg).toLocaleString('id-ID')
+                                  )
+                                }
+                                className="text-[10px] font-semibold text-emerald-700 hover:underline cursor-pointer"
+                              >
+                                = Modal ({formatRupiahSingkat(selectedHb.modalRataRataPerKg)})
+                              </button>
+                            )}
+                          </div>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-2 text-zinc-400 font-mono font-bold">
+                              Rp
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              placeholder="Contoh: 56.000"
+                              value={hargaPerKgDisplay}
+                              onChange={(e) => handleHargaPerKgChange(e.target.value)}
+                              className="w-full pl-8 pr-2.5 py-2 rounded-lg border border-sky-300 bg-white font-mono tabular-nums font-bold text-emerald-900 focus:outline-none focus:border-sky-600"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-bold text-sky-950 mb-1">
+                            Susut / Selisih Timbangan
+                          </label>
+                          <div
+                            className={`px-3 py-2 rounded-lg border font-mono tabular-nums font-bold text-xs flex items-center justify-between ${
+                              hbCalc.susutKg === null
+                                ? 'bg-white border-zinc-200 text-zinc-400'
+                                : hbCalc.susutKg > 0
+                                  ? 'bg-amber-50 border-amber-300 text-amber-900'
+                                  : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                            }`}
+                          >
+                            {hbCalc.susutKg === null ? (
+                              <span className="font-sans font-normal text-[11px]">
+                                Isi Tonase Akhir...
+                              </span>
+                            ) : hbCalc.susutKg === 0 ? (
+                              <span>Pas 0,0 Kg (0%)</span>
+                            ) : hbCalc.susutKg > 0 ? (
+                              <>
+                                <span>Susut -{formatKgSpreadsheet(hbCalc.susutKg)} Kg</span>
+                                <span className="text-[11px]">({hbCalc.susutPersen}%)</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>
+                                  Lebih +{formatKgSpreadsheet(Math.abs(hbCalc.susutKg))} Kg
+                                </span>
+                                <span className="text-[11px]">
+                                  (+{Math.abs(hbCalc.susutPersen || 0)}%)
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {hbCalc.totalNilaiDeal > 0 && (
+                        <div className="px-3 py-2 rounded-lg bg-white border border-sky-200 text-[11px] text-zinc-700 flex flex-wrap items-center justify-between gap-2 font-mono">
+                          <span>
+                            {formatKgSpreadsheet(hbCalc.basisKgRealisasi)} Kg{' '}
+                            {hbCalc.hasTonaseAkhir ? '(Tonase Akhir)' : '(Muat Awal)'} ×{' '}
+                            {formatRupiah(hargaPerKg)}/Kg ={' '}
+                            <strong className="text-zinc-950">
+                              {formatRupiah(hbCalc.totalNilaiDeal)}
+                            </strong>
+                          </span>
+                          {hbCalc.sudahTerkumpul > 0 && (
+                            <span className="text-sky-800">
+                              Dikurangi DP {formatRupiah(hbCalc.sudahTerkumpul)} → Sisa:{' '}
+                              <strong className="text-emerald-800">
+                                {formatRupiah(
+                                  Math.max(0, hbCalc.totalNilaiDeal - hbCalc.sudahTerkumpul)
+                                )}
+                              </strong>
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 bg-white p-3 rounded-lg border border-zinc-200">
+                      <div>
+                        <span className="text-[10px] text-zinc-500 block">
+                          Muat Awal → Akhir
+                        </span>
+                        <span className="font-mono font-bold text-zinc-900">
+                          {formatKgSpreadsheet(hbCalc.beratAwalMuat)} →{' '}
+                          {hbCalc.hasTonaseAkhir ? (
+                            <span className="text-sky-800">
+                              {formatKgSpreadsheet(tonaseAkhirKg)} Kg
+                            </span>
+                          ) : (
+                            <span className="text-zinc-400 font-normal">Belum diisi</span>
+                          )}
+                        </span>
+                      </div>
                       <div>
                         <span className="text-[10px] text-zinc-500 block">
                           Nilai Pengurang Stok
@@ -809,10 +1112,12 @@ export const UangMasukView: React.FC<Props> = ({
                       </div>
                       <div>
                         <span className="text-[10px] text-zinc-500 block">
-                          Harga Realisasi Setara / Kg
+                          Harga Realisasi {hbCalc.hasTonaseAkhir ? '(Akhir)' : '(Awal)'}
                         </span>
                         <span className="font-mono font-bold text-zinc-900">
-                          {nominal > 0 ? `${formatRupiah(hbCalc.hargaRealisasiPerKg)}/Kg` : '-'}
+                          {nominal > 0 || hargaPerKg > 0
+                            ? `${formatRupiah(hargaPerKg > 0 ? hargaPerKg : hbCalc.hargaRealisasiPerKg)}/Kg`
+                            : '-'}
                         </span>
                       </div>
                       <div>
@@ -833,18 +1138,20 @@ export const UangMasukView: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    <label className="inline-flex items-center space-x-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={tandaiLunasHb}
-                        onChange={(e) => setTandaiLunasHb(e.target.checked)}
-                        className="rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
-                      />
-                      <span className="text-xs font-semibold text-zinc-800">
-                        Tandai Nota Muat {selectedHb.noPenjualan} ini sudah{' '}
-                        <strong>LUNAS / Selesai Putus Harga</strong> (matikan centang jika baru menerima DP / cicilan)
-                      </span>
-                    </label>
+                    {metode !== 'PIUTANG' && (
+                      <label className="inline-flex items-center space-x-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={tandaiLunasHb}
+                          onChange={(e) => setTandaiLunasHb(e.target.checked)}
+                          className="rounded border-zinc-300 text-emerald-700 focus:ring-emerald-600"
+                        />
+                        <span className="text-xs font-semibold text-zinc-800">
+                          Tandai Nota Muat {selectedHb.noPenjualan} ini sudah{' '}
+                          <strong>LUNAS / Selesai Putus Harga</strong> (matikan centang jika baru menerima DP / cicilan)
+                        </span>
+                      </label>
+                    )}
                   </div>
                 )}
               </>
@@ -852,12 +1159,14 @@ export const UangMasukView: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Detail Nominal, Tanggal & Rekening Penerimaan */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Detail Nominal & Tanggal */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-[11px] font-bold text-zinc-800">
-                Nominal Uang Masuk (Rp)
+                {metode === 'PIUTANG'
+                  ? 'Nominal Nilai Putus Harga → Piutang (Rp)'
+                  : 'Nominal Uang Masuk (Rp)'}
               </label>
               {hbCalc && hbCalc.modalPengurangStok > 0 && (
                 <button
@@ -868,7 +1177,7 @@ export const UangMasukView: React.FC<Props> = ({
                       hbCalc.modalPengurangStok - hbCalc.sudahTerkumpul
                     );
                     if (sisaModal > 0) {
-                      setNominalDisplay(sisaModal.toLocaleString('id-ID'));
+                      handleNominalChange(sisaModal.toLocaleString('id-ID'));
                     }
                   }}
                   className="text-[10px] font-semibold text-emerald-700 hover:underline cursor-pointer"
@@ -882,13 +1191,9 @@ export const UangMasukView: React.FC<Props> = ({
               <input
                 type="text"
                 inputMode="numeric"
-                placeholder="Contoh: 168.500.000"
+                placeholder="Otomatis dari Tonase × Harga atau ketik..."
                 value={nominalDisplay}
-                onChange={(e) => {
-                  const num = parseRupiahInput(e.target.value);
-                  setNominalDisplay(num > 0 ? num.toLocaleString('id-ID') : '');
-                  setStepVerifikasi(false);
-                }}
+                onChange={(e) => handleNominalChange(e.target.value)}
                 className="w-full pl-9 pr-3 py-2 rounded-lg border border-zinc-300 font-mono tabular-nums text-sm font-bold text-emerald-900 focus:outline-none focus:border-emerald-600"
               />
             </div>
@@ -896,7 +1201,7 @@ export const UangMasukView: React.FC<Props> = ({
 
           <div>
             <label className="block text-[11px] font-bold text-zinc-800 mb-1">
-              Tanggal Penerimaan Uang
+              {metode === 'PIUTANG' ? 'Tanggal Putus Harga / Nota Piutang' : 'Tanggal Penerimaan Uang'}
             </label>
             <input
               type="date"
@@ -905,56 +1210,92 @@ export const UangMasukView: React.FC<Props> = ({
               className="w-full px-3 py-2 rounded-lg border border-zinc-300 font-mono tabular-nums text-zinc-900 focus:outline-none focus:border-emerald-600"
             />
           </div>
+        </div>
 
-          <div>
-            <label className="block text-[11px] font-bold text-zinc-800 mb-1">
-              Metode Uang Masuk
-            </label>
-            <div className="grid grid-cols-3 gap-2">
+        {/* Metode Uang Masuk / Status Penyelesaian */}
+        <div className="space-y-2">
+          <label className="block text-[11px] font-bold text-zinc-800">
+            Metode Penerimaan / Penyelesaian
+          </label>
+          <div
+            className={`grid gap-2 ${
+              jenisSumber === 'PENJUALAN_HASIL_BUMI'
+                ? 'grid-cols-2 sm:grid-cols-4'
+                : 'grid-cols-3'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setMetode('TUNAI');
+                setStepVerifikasi(false);
+              }}
+              className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                metode === 'TUNAI'
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
+              }`}
+            >
+              Tunai (KAS01)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMetode('TRANSFER');
+                setStepVerifikasi(false);
+              }}
+              className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                metode === 'TRANSFER'
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
+              }`}
+            >
+              Transfer Bank
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMetode('SINKRON');
+                setStepVerifikasi(false);
+              }}
+              className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                metode === 'SINKRON'
+                  ? 'bg-cyan-700 text-white border-cyan-700'
+                  : 'bg-cyan-50 text-cyan-900 border-cyan-300 hover:bg-cyan-100'
+              }`}
+            >
+              Sinkron (Non-Kas)
+            </button>
+            {jenisSumber === 'PENJUALAN_HASIL_BUMI' && (
               <button
                 type="button"
                 onClick={() => {
-                  setMetode('TUNAI');
+                  setMetode('PIUTANG');
+                  setModePengirim('MITRA');
+                  if (!idMitra && activeMitra.length > 0) {
+                    setIdMitra(activeMitra[0].id);
+                  }
                   setStepVerifikasi(false);
                 }}
                 className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
-                  metode === 'TUNAI'
-                    ? 'bg-emerald-700 text-white border-emerald-700'
-                    : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
+                  metode === 'PIUTANG'
+                    ? 'bg-amber-600 text-white border-amber-700'
+                    : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
                 }`}
               >
-                Tunai (KAS01)
+                Piutang Buyer / Mitra (BON01)
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMetode('TRANSFER');
-                  setStepVerifikasi(false);
-                }}
-                className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
-                  metode === 'TRANSFER'
-                    ? 'bg-emerald-700 text-white border-emerald-700'
-                    : 'bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50'
-                }`}
-              >
-                Transfer Bank
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMetode('SINKRON');
-                  setStepVerifikasi(false);
-                }}
-                className={`py-2 px-3 rounded-lg border font-semibold transition-colors cursor-pointer ${
-                  metode === 'SINKRON'
-                    ? 'bg-cyan-700 text-white border-cyan-700'
-                    : 'bg-cyan-50 text-cyan-900 border-cyan-300 hover:bg-cyan-100'
-                }`}
-              >
-                Sinkron (Non-Kas)
-              </button>
-            </div>
+            )}
           </div>
+
+          {metode === 'PIUTANG' && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] leading-relaxed">
+              <strong>Mode Putus Harga → Piutang Buyer / Mitra (Tempo):</strong> Tonase Akhir, Susut, &amp; Harga Kesepakatan/Kg akan dikunci pada Nota Muat{' '}
+              <strong>{selectedHb?.noPenjualan || 'JHB'}</strong>, sementara tagihan otomatis dicatat sebagai{' '}
+              <strong>Piutang Mitra (BON01)</strong> dan muncul di <strong>Rekening Koran Mitra</strong>. Pembayarannya nanti dilunasi kapan saja lewat menu{' '}
+              <strong>Bayar Bon Mitra</strong> atau <strong>Kliring Silang</strong>.
+            </div>
+          )}
         </div>
 
         {metode === 'TRANSFER' && (
@@ -984,14 +1325,19 @@ export const UangMasukView: React.FC<Props> = ({
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-[11px] font-bold text-zinc-800">
-                Pihak Pengirim / Pembayar
+                {metode === 'PIUTANG' ? 'Buyer / Mitra Penanggung Piutang *' : 'Pihak Pengirim / Pembayar'}
               </label>
               <div className="inline-flex rounded border border-zinc-200 bg-zinc-100 p-0.5 text-[10px]">
                 <button
                   type="button"
+                  disabled={metode === 'PIUTANG'}
                   onClick={() => setModePengirim('MANUAL')}
-                  className={`px-2 py-0.5 rounded font-semibold cursor-pointer ${
-                    modePengirim === 'MANUAL' ? 'bg-white text-zinc-900' : 'text-zinc-600'
+                  className={`px-2 py-0.5 rounded font-semibold ${
+                    metode === 'PIUTANG'
+                      ? 'text-zinc-400 cursor-not-allowed'
+                      : modePengirim === 'MANUAL'
+                      ? 'bg-white text-zinc-900 cursor-pointer'
+                      : 'text-zinc-600 cursor-pointer'
                   }`}
                 >
                   Ketik Nama
@@ -1007,7 +1353,7 @@ export const UangMasukView: React.FC<Props> = ({
                 </button>
               </div>
             </div>
-            {modePengirim === 'MANUAL' ? (
+            {modePengirim === 'MANUAL' && metode !== 'PIUTANG' ? (
               <input
                 type="text"
                 placeholder="Contoh: ARYA / PT Pabrik Kopi..."
@@ -1019,8 +1365,15 @@ export const UangMasukView: React.FC<Props> = ({
               <select
                 value={idMitra}
                 onChange={(e) => setIdMitra(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-zinc-300 bg-white text-zinc-900 font-medium focus:outline-none focus:border-emerald-600"
+                className={`w-full px-3 py-2 rounded-lg border bg-white text-zinc-900 font-medium focus:outline-none ${
+                  metode === 'PIUTANG'
+                    ? 'border-amber-400 focus:border-amber-600'
+                    : 'border-zinc-300 focus:border-emerald-600'
+                }`}
               >
+                {activeMitra.length === 0 && (
+                  <option value="">-- Belum ada Mitra aktif (buat di Master Mitra) --</option>
+                )}
                 {activeMitra.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.nama} ({m.role})
@@ -1123,10 +1476,20 @@ export const UangMasukView: React.FC<Props> = ({
                 type="button"
                 onClick={handleFinalSubmit}
                 disabled={submitting || !verifiedDoubleCheck}
-                className="px-5 py-2.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:bg-zinc-300 text-white font-semibold flex items-center space-x-2 cursor-pointer transition-colors"
+                className={`px-5 py-2.5 rounded-lg disabled:bg-zinc-300 text-white font-semibold flex items-center space-x-2 cursor-pointer transition-colors ${
+                  metode === 'PIUTANG'
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-emerald-700 hover:bg-emerald-800'
+                }`}
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>{submitting ? 'Menyimpan...' : 'Ya, Konfirmasi & Simpan Uang Masuk'}</span>
+                <span>
+                  {submitting
+                    ? 'Menyimpan...'
+                    : metode === 'PIUTANG'
+                    ? 'Ya, Kunci Harga & Jadikan Piutang Mitra'
+                    : 'Ya, Konfirmasi & Simpan Uang Masuk'}
+                </span>
               </button>
             </>
           ) : (
@@ -1225,12 +1588,49 @@ export const UangMasukView: React.FC<Props> = ({
                     <td className="py-3 px-4">
                       <div className="font-semibold text-zinc-900">{item.kategori}</div>
                       {item.noPenjualanHasilBumi && (
-                        <div className="text-[11px] font-mono text-sky-800">
-                          Ref: {item.noPenjualanHasilBumi}
-                          {item.komoditasNama ? ` · ${item.komoditasNama}` : ''}
-                          {item.beratMuatKg
-                            ? ` (${item.beratMuatKg.toLocaleString('id-ID')} Kg)`
-                            : ''}
+                        <div className="space-y-0.5 mt-0.5">
+                          <div className="text-[11px] font-mono text-sky-800">
+                            Ref: {item.noPenjualanHasilBumi}
+                            {item.komoditasNama ? ` · ${item.komoditasNama}` : ''}
+                            {item.beratMuatKg
+                              ? ` · Awal: ${formatKgSpreadsheet(item.beratMuatKg)} Kg`
+                              : ''}
+                          </div>
+                          {(Number(item.tonaseAkhirKg) > 0 ||
+                            Number(item.hargaDealPerKg) > 0 ||
+                            Number(item.hargaRealisasiPerKg) > 0) && (
+                            <div className="text-[11px] font-mono text-zinc-700 flex flex-wrap items-center gap-x-2">
+                              {Number(item.tonaseAkhirKg) > 0 && (
+                                <span className="font-semibold text-emerald-800">
+                                  Akhir: {formatKgSpreadsheet(Number(item.tonaseAkhirKg))} Kg
+                                </span>
+                              )}
+                              {item.susutKg !== undefined && (
+                                <span
+                                  className={`font-semibold ${
+                                    item.susutKg > 0
+                                      ? 'text-amber-700'
+                                      : item.susutKg < 0
+                                        ? 'text-emerald-700'
+                                        : 'text-zinc-500'
+                                  }`}
+                                >
+                                  ({item.susutKg > 0 ? 'Susut -' : item.susutKg < 0 ? 'Lebih +' : ''}
+                                  {formatKgSpreadsheet(Math.abs(item.susutKg))} Kg /{' '}
+                                  {Math.abs(Number(item.susutPersen) || 0)}%)
+                                </span>
+                              )}
+                              {(Number(item.hargaDealPerKg) || Number(item.hargaRealisasiPerKg)) > 0 && (
+                                <span className="font-bold text-zinc-900">
+                                  @{' '}
+                                  {formatRupiah(
+                                    Number(item.hargaDealPerKg) || Number(item.hargaRealisasiPerKg)
+                                  )}
+                                  /Kg
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                       {item.keterangan && (
@@ -1244,13 +1644,32 @@ export const UangMasukView: React.FC<Props> = ({
                     </td>
                     <td className="py-3 px-4 text-zinc-700">{item.divisi}</td>
                     <td className="py-3 px-4 font-mono text-zinc-700">
-                      {item.metode} · {item.rekeningTujuan}
+                      {item.metode === 'PIUTANG' || item.rekeningTujuan === 'BON01' ? (
+                        <span className="font-bold text-amber-800">PIUTANG · BON01</span>
+                      ) : (
+                        <>
+                          {item.metode} · {item.rekeningTujuan}
+                        </>
+                      )}
                     </td>
                     <td
-                      className="py-3 px-4 text-right font-mono tabular-nums font-bold text-emerald-700 whitespace-nowrap"
+                      className={`py-3 px-4 text-right font-mono tabular-nums font-bold whitespace-nowrap ${
+                        item.metode === 'PIUTANG' || item.rekeningTujuan === 'BON01'
+                          ? 'text-amber-700'
+                          : 'text-emerald-700'
+                      }`}
                       title={formatRupiah(item.nominal)}
                     >
-                      +{formatRupiah(item.nominal)}
+                      {item.metode === 'PIUTANG' || item.rekeningTujuan === 'BON01' ? (
+                        <div>
+                          <div>{formatRupiah(item.nominal)}</div>
+                          <div className="text-[10px] font-sans font-semibold text-amber-700">
+                            (Piutang BON01)
+                          </div>
+                        </div>
+                      ) : (
+                        <>+{formatRupiah(item.nominal)}</>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-center whitespace-nowrap">
                       {confirmVoidId === item.idTransaksi ? (

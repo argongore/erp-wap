@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useDeferredValue } from 'react';
-import { Mitra } from '../server/types.ts';
+import type { Mitra } from '../server/types.ts';
 
 /**
  * Advanced Indonesian Name Normalization & Fuzzy Similarity Engine

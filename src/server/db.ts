@@ -43,7 +43,11 @@ import type {
   ItemInventaris,
   MasterItemPengeluaran,
   InvoiceSuratJalanRecord,
+  AuditStokOpnameLog,
+  RekapCtrContract,
+  RekapCtrPartaiRow,
 } from './types.ts';
+import { getDefaultRekapCtrContracts } from '../utils/rekapCtrHelper.ts';
 import { supabaseSyncEngine } from './supabase.ts';
 import { calculateHbMovingAverage } from '../utils/hasilBumiMovingAverage.ts';
 
@@ -72,12 +76,15 @@ export interface DatabaseSchema {
   divisi?: ItemDivisi[];
   kategoriProduk?: ItemKategoriProduk[];
   cashOpnameLogs?: CatatanCashOpname[];
+  auditStokLogs?: AuditStokOpnameLog[];
   inventaris?: ItemInventaris[];
   masterItemPengeluaran?: MasterItemPengeluaran[];
   suratJalan?: InvoiceSuratJalanRecord[];
+  rekapCtr?: RekapCtrContract[];
   deletedHasilBumiKodes?: string[];
   deletedMasterPengeluaranNames?: string[];
   deletedProdukKodes?: string[];
+  dismissedRekapCtrRefs?: string[];
 }
 
 const RUNTIME_CACHE_DIR = path.join(os.tmpdir(), 'wijaya_agro_erp_runtime');
@@ -634,6 +641,9 @@ export function getDefaultDatabase(): DatabaseSchema {
     inventaris: [],
     masterItemPengeluaran: [],
     suratJalan: [],
+    rekapCtr: getDefaultRekapCtrContracts(),
+    dismissedRekapCtrRefs: [],
+    auditStokLogs: [],
     auditLogs: [
       {
         id: 'LOG-INIT',
@@ -700,15 +710,20 @@ class DatabaseManager {
           divisi: Array.isArray(parsed.divisi) ? parsed.divisi : [],
           kategoriProduk: Array.isArray(parsed.kategoriProduk) ? parsed.kategoriProduk : [],
           cashOpnameLogs: Array.isArray(parsed.cashOpnameLogs) ? parsed.cashOpnameLogs : [],
+          auditStokLogs: Array.isArray(parsed.auditStokLogs) ? parsed.auditStokLogs : [],
           inventaris: Array.isArray(parsed.inventaris) ? parsed.inventaris : [],
           masterItemPengeluaran: Array.isArray(parsed.masterItemPengeluaran) ? parsed.masterItemPengeluaran : [],
           suratJalan: Array.isArray(parsed.suratJalan) ? parsed.suratJalan : [],
+          rekapCtr: Array.isArray(parsed.rekapCtr) ? parsed.rekapCtr : [],
           deletedHasilBumiKodes: Array.isArray(parsed.deletedHasilBumiKodes) ? parsed.deletedHasilBumiKodes : [],
           deletedMasterPengeluaranNames: Array.isArray(parsed.deletedMasterPengeluaranNames)
             ? parsed.deletedMasterPengeluaranNames
             : [],
           deletedProdukKodes: Array.isArray(parsed.deletedProdukKodes)
             ? parsed.deletedProdukKodes
+            : [],
+          dismissedRekapCtrRefs: Array.isArray(parsed.dismissedRekapCtrRefs)
+            ? parsed.dismissedRekapCtrRefs
             : [],
         };
 
@@ -1093,6 +1108,7 @@ class DatabaseManager {
     this.db.auditLogs = this.mergeListById(this.db.auditLogs, incoming.auditLogs, (al) => al.id);
     this.db.divisi = this.mergeListById(this.db.divisi, incoming.divisi, (d) => (d as any).kode || d.id || d.nama);
     this.db.cashOpnameLogs = this.mergeListById(this.db.cashOpnameLogs, incoming.cashOpnameLogs, (co) => co.id);
+    this.db.auditStokLogs = this.mergeListById(this.db.auditStokLogs, incoming.auditStokLogs, (as) => as.id);
     this.db.inventaris = this.mergeListById(this.db.inventaris, incoming.inventaris, (inv) => inv.id || inv.kode);
     this.db.masterItemPengeluaran = this.mergeListById(
       this.db.masterItemPengeluaran,
@@ -1110,6 +1126,12 @@ class DatabaseManager {
       return timeB - timeA;
     });
 
+    this.db.rekapCtr = this.mergeListById(
+      this.db.rekapCtr,
+      incoming.rekapCtr,
+      (c) => c.id || `CTR-${c.noUrut}`
+    ).sort((a, b) => (a.noUrut || 0) - (b.noUrut || 0));
+
     this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes)
       ? incoming.deletedHasilBumiKodes
       : (this.db.deletedHasilBumiKodes || []);
@@ -1119,6 +1141,9 @@ class DatabaseManager {
     this.db.deletedProdukKodes = Array.isArray(incoming.deletedProdukKodes)
       ? incoming.deletedProdukKodes
       : (this.db.deletedProdukKodes || []);
+    this.db.dismissedRekapCtrRefs = Array.isArray(incoming.dismissedRekapCtrRefs)
+      ? incoming.dismissedRekapCtrRefs
+      : (this.db.dismissedRekapCtrRefs || []);
   }
 
   /**
@@ -1259,6 +1284,7 @@ class DatabaseManager {
     if (!Array.isArray(this.db.auditLogs)) this.db.auditLogs = [];
     if (!Array.isArray(this.db.divisi)) this.db.divisi = [];
     if (!Array.isArray(this.db.cashOpnameLogs)) this.db.cashOpnameLogs = [];
+    if (!Array.isArray(this.db.auditStokLogs)) this.db.auditStokLogs = [];
     if (!Array.isArray(this.db.inventaris)) this.db.inventaris = [];
     if (!Array.isArray(this.db.masterItemPengeluaran)) this.db.masterItemPengeluaran = [];
     if (!Array.isArray(this.db.suratJalan)) this.db.suratJalan = [];
@@ -1505,8 +1531,53 @@ class DatabaseManager {
       }
     }
 
+    // 0A. Rekening Titip Uang (Dana PT dititipkan ke Karyawan dipercaya untuk transaksi) <-> Karyawan & Mitra Terkait
+    for (const rek of this.db.rekening) {
+      if (rek.isRekeningTitip || rek.kategori === 'REKENING_TITIP') {
+        rek.kategori = 'REKENING_TITIP';
+        rek.isRekeningTitip = true;
+        rek.isAnakPerusahaan = false;
+        rek.isVirtual = false;
+        delete rek.rekeningIndukPenyimpan;
+
+        const linkedKry = (this.db.karyawan || []).find(
+          (k) =>
+            (rek.idKaryawanTerkait && k.id === rek.idKaryawanTerkait) ||
+            (rek.idMitraTerkait && k.idMitraTerkait === rek.idMitraTerkait)
+        );
+        if (linkedKry) {
+          rek.idKaryawanTerkait = linkedKry.id;
+          rek.namaKaryawanTerkait = linkedKry.nama;
+          const mtrId = linkedKry.idMitraTerkait || `MTR-${linkedKry.id}`;
+          const linkedMtr = (this.db.mitra || []).find(
+            (m) => m.id === mtrId || m.idKaryawanTerkait === linkedKry.id
+          );
+          if (linkedMtr) {
+            rek.idMitraTerkait = linkedMtr.id;
+            rek.namaMitraTerkait = linkedMtr.nama;
+          } else {
+            rek.idMitraTerkait = mtrId;
+            rek.namaMitraTerkait = linkedKry.nama;
+          }
+        } else if (rek.idMitraTerkait) {
+          const linkedMtr = (this.db.mitra || []).find((m) => m.id === rek.idMitraTerkait);
+          if (linkedMtr) {
+            rek.namaMitraTerkait = linkedMtr.nama;
+            if (linkedMtr.idKaryawanTerkait) {
+              const kryByMtr = (this.db.karyawan || []).find((k) => k.id === linkedMtr.idKaryawanTerkait);
+              if (kryByMtr) {
+                rek.idKaryawanTerkait = kryByMtr.id;
+                rek.namaKaryawanTerkait = kryByMtr.nama;
+              }
+            }
+          }
+        }
+      }
+    }
+
     // 0. Rekening Anak Perusahaan (DP Parabot, dll.) <-> Mitra Terafiliasi (1-to-1 Unified Entity)
     for (const rek of this.db.rekening) {
+      if (rek.isRekeningTitip || rek.kategori === 'REKENING_TITIP') continue;
       const isDpParabot =
         rek.kode === 'REK-DPPARABO' ||
         rek.kode === 'DPPARABOT' ||
@@ -1586,15 +1657,22 @@ class DatabaseManager {
       }
     }
 
-    // Enrich any transferRekening touching an Anak Perusahaan account with unified Mitra metadata
+    // Enrich any transferRekening touching an Anak Perusahaan or Rekening Titip account with unified metadata
     const anakRekMap = new Map(
       this.db.rekening
-        .filter((r) => r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN')
+        .filter((r) => !r.isRekeningTitip && r.kategori !== 'REKENING_TITIP' && (r.isAnakPerusahaan || r.kategori === 'ANAK_PERUSAHAAN'))
+        .map((r) => [r.kode, r])
+    );
+    const titipRekMap = new Map(
+      this.db.rekening
+        .filter((r) => r.isRekeningTitip || r.kategori === 'REKENING_TITIP')
         .map((r) => [r.kode, r])
     );
     for (const trf of this.db.transferRekening) {
       const srcAnak = anakRekMap.get(trf.rekeningSumber);
       const dstAnak = anakRekMap.get(trf.rekeningTujuan);
+      const srcTitip = titipRekMap.get(trf.rekeningSumber);
+      const dstTitip = titipRekMap.get(trf.rekeningTujuan);
       if (srcAnak && dstAnak) {
         trf.idMitraTerkait = dstAnak.idMitraTerkait;
         trf.namaMitraTerkait = `${srcAnak.namaMitraTerkait || srcAnak.nama} -> ${dstAnak.namaMitraTerkait || dstAnak.nama}`;
@@ -1607,6 +1685,24 @@ class DatabaseManager {
         trf.idMitraTerkait = srcAnak.idMitraTerkait;
         trf.namaMitraTerkait = srcAnak.namaMitraTerkait || srcAnak.nama;
         trf.tipeMutasiAfiliasi = 'TARIK_DARI_ANAK_PERUSAHAAN';
+      } else if (srcTitip && dstTitip) {
+        trf.idKaryawanTerkait = dstTitip.idKaryawanTerkait || srcTitip.idKaryawanTerkait;
+        trf.namaKaryawanTerkait = dstTitip.namaKaryawanTerkait || dstTitip.nama;
+        trf.idMitraTerkait = dstTitip.idMitraTerkait || srcTitip.idMitraTerkait;
+        trf.namaMitraTerkait = dstTitip.namaMitraTerkait || dstTitip.namaKaryawanTerkait || dstTitip.nama;
+        trf.tipeMutasiAfiliasi = 'ANTAR_REKENING_TITIP';
+      } else if (dstTitip) {
+        trf.idKaryawanTerkait = dstTitip.idKaryawanTerkait;
+        trf.namaKaryawanTerkait = dstTitip.namaKaryawanTerkait || dstTitip.atasNama;
+        trf.idMitraTerkait = dstTitip.idMitraTerkait;
+        trf.namaMitraTerkait = dstTitip.namaMitraTerkait || dstTitip.namaKaryawanTerkait || dstTitip.nama;
+        trf.tipeMutasiAfiliasi = 'TITIP_UANG_KARYAWAN';
+      } else if (srcTitip) {
+        trf.idKaryawanTerkait = srcTitip.idKaryawanTerkait;
+        trf.namaKaryawanTerkait = srcTitip.namaKaryawanTerkait || srcTitip.atasNama;
+        trf.idMitraTerkait = srcTitip.idMitraTerkait;
+        trf.namaMitraTerkait = srcTitip.namaMitraTerkait || srcTitip.namaKaryawanTerkait || srcTitip.nama;
+        trf.tipeMutasiAfiliasi = 'KEMBALIKAN_TITIP_KARYAWAN';
       }
     }
 
@@ -2707,6 +2803,409 @@ class DatabaseManager {
         existingSjInvoices.add('WAP20261106-351');
       }
     }
+
+    // Auto-sinkronkan Penjualan Hasil Bumi Kopi 04/11/2026 (BE 8206 AMN / SKA) ke Surat Jalan & Rekap CTR #27
+    const isNov4 = (rawDate?: string): boolean => {
+      const norm = toDmyIfIso(rawDate);
+      return norm === '04/11/2026' || norm === '06/11/2026';
+    };
+    const isPlate8206OrSka = (text?: string): boolean => {
+      const clean = String(text || '').replace(/\s+/g, '').toUpperCase();
+      return clean.includes('8206') || clean.includes('SKA');
+    };
+
+    const nov4KopiSales = (this.db.penjualanHasilBumi || []).filter((jhb) => {
+      if (!isNov4(jhb.tanggal)) return false;
+      const isKopi = /kopi/i.test(jhb.komoditasNama || '');
+      if (!isKopi) return false;
+      return (
+        isPlate8206OrSka(jhb.noSuratJalan) ||
+        isPlate8206OrSka(jhb.namaMitra) ||
+        isPlate8206OrSka(jhb.keterangan) ||
+        toDmyIfIso(jhb.tanggal) === '04/11/2026'
+      );
+    });
+
+    for (const jhb of nov4KopiSales) {
+      const alreadyInSj = this.db.suratJalan.some(
+        (s) => s.noPenjualanHasilBumi && s.noPenjualanHasilBumi === jhb.noPenjualan
+      );
+      if (!alreadyInSj) {
+        const qtyAkhir = Number(jhb.tonaseAkhir || jhb.beratBersih) || 0;
+        const qtyAwal = Number(jhb.beratBersih) || qtyAkhir;
+        const hargaPerKg =
+          Number(jhb.hargaJualPerKg) ||
+          (qtyAkhir > 0 && Number(jhb.totalNominal) > 0
+            ? Math.round((Number(jhb.totalNominal) / qtyAkhir) * 100) / 100
+            : 0);
+        const totalPenjualan =
+          Math.round(qtyAkhir * hargaPerKg) || Math.round(Number(jhb.totalNominal) || 0);
+        const susutKg =
+          qtyAwal > 0 && qtyAkhir > 0 ? Math.round((qtyAwal - qtyAkhir) * 10) / 10 : 0;
+        const platTruk = isPlate8206OrSka(jhb.noSuratJalan)
+          ? String(jhb.noSuratJalan || 'BE 8206 AMN')
+              .replace(/BR\s*8206/i, 'BE 8206')
+              .toUpperCase()
+          : 'BE 8206 AMN';
+        const buyerLabel = /ska/i.test(
+          `${jhb.namaMitra || ''} ${jhb.noSuratJalan || ''} ${jhb.keterangan || ''}`
+        )
+          ? 'SKA'
+          : (jhb.namaMitra || 'SKA').toUpperCase();
+
+        if (qtyAkhir > 0) {
+          this.db.suratJalan.push({
+            id: `SJ-HB-${jhb.noPenjualan}`,
+            noInvoice: `SJ-${jhb.noPenjualan}`,
+            tanggal: toDmyIfIso(jhb.tanggal) || '04/11/2026',
+            jam: jhb.jam || '12:00:00',
+            idMitra: 'STOK_HB_PT',
+            namaMitra: 'STOK BARANG HB (PT WAP)',
+            komoditasNama: (jhb.komoditasNama || 'KOPI').toUpperCase(),
+            kategoriKode: buyerLabel,
+            platTruk,
+            tonaseAwalKg: qtyAwal,
+            tonaseAkhirKg: qtyAkhir,
+            susutKg,
+            basisMitra: hargaPerKg,
+            basisBuyer: hargaPerKg,
+            rendemen: 100,
+            hargaPerKgMitra: hargaPerKg,
+            hargaPerKgBuyer: hargaPerKg,
+            totalPenjualanMitra: totalPenjualan,
+            totalPenjualanBuyer: totalPenjualan,
+            catatan: `Ref. Penjualan Stok HB ${jhb.noPenjualan} (${jhb.noSuratJalan || platTruk})`,
+            marginHargaPt: 0,
+            pajakNominal: 0,
+            komisiNominal: 0,
+            kasbonNominal: 0,
+            potongPiutang: false,
+            tambahanLabel: '',
+            tambahanNominal: 0,
+            potonganLainLabel: '',
+            potonganLainNominal: 0,
+            totalKeuntunganPt: 0,
+            totalPotongan: 0,
+            jumlahPembayaranMitra: totalPenjualan,
+            rekeningPtKode: 'SINKRON',
+            statusPembayaranMitra: 'LUNAS',
+            sumberBarang: 'STOK_HB_PT',
+            noPenjualanHasilBumi: jhb.noPenjualan,
+            catatArusKas: false,
+            tanggalBayarMitra: toDmyIfIso(jhb.tanggal) || '04/11/2026',
+            createdAt: jhb.createdAt || '2026-11-04T12:00:00.000Z',
+          });
+        }
+      }
+    }
+
+    // Reconcile Rekap CTR WAP (#21-#26 + #27 Roni Anggara & Penjualan Stok HB Kopi 04/11/2026)
+    if (!Array.isArray(this.db.rekapCtr) || this.db.rekapCtr.length === 0) {
+      this.db.rekapCtr = getDefaultRekapCtrContracts();
+    }
+    this.syncRekapCtrDefaultsAndNov4();
+  }
+
+  public syncRekapCtrDefaultsAndNov4(): number {
+    if (!Array.isArray(this.db.rekapCtr)) {
+      this.db.rekapCtr = getDefaultRekapCtrContracts();
+    }
+    const dismissedSet = new Set<string>(
+      (this.db.dismissedRekapCtrRefs || []).map((x) => String(x || '').trim()).filter(Boolean)
+    );
+    const isRefDismissed = (val?: string): boolean => {
+      const clean = String(val || '').trim();
+      if (!clean) return false;
+      if (dismissedSet.has(clean)) return true;
+      for (const d of dismissedSet) {
+        if (clean.startsWith(`${d}-`) || d.startsWith(`${clean}-`)) return true;
+      }
+      return false;
+    };
+
+    const defaults = getDefaultRekapCtrContracts();
+    const existingByNo = new Map<number, RekapCtrContract>();
+    for (const c of this.db.rekapCtr) {
+      existingByNo.set(c.noUrut, c);
+    }
+    for (const defC of defaults) {
+      if (!existingByNo.has(defC.noUrut) && !dismissedSet.has(defC.id)) {
+        const cloned: RekapCtrContract = {
+          ...defC,
+          rows: (defC.rows || []).filter(
+            (r) => !isRefDismissed(r.id) && !isRefDismissed(r.sourceRefId)
+          ),
+        };
+        this.db.rekapCtr.push(cloned);
+        existingByNo.set(defC.noUrut, cloned);
+      }
+    }
+    this.db.rekapCtr.sort((a, b) => a.noUrut - b.noUrut);
+
+    // Deduplikasi otomatis baris RONI ANGGARA (04/11/2026 · BE8206AMN · 1.416 Kg) di CTR #27 jika terlanjur ganda
+    const ctr27 = this.db.rekapCtr.find((c) => c.noUrut === 27);
+    if (ctr27 && Array.isArray(ctr27.rows) && ctr27.rows.length > 1) {
+      const isRoniNov4Row = (r: RekapCtrPartaiRow): boolean => {
+        const nm = String(r.namaSuplayer || '').toUpperCase();
+        const trk = String(r.truck || '').replace(/\s+/g, '').toUpperCase();
+        const tgl = String(r.tglMasuk || '').trim();
+        return (
+          nm.includes('RONI') &&
+          (trk.includes('8206') || Math.abs((Number(r.qtyAkhir) || 0) - 1416) < 0.5) &&
+          (tgl === '' || tgl === '04/11/2026' || tgl === '4/11/2026' || tgl === '06/11/2026')
+        );
+      };
+      const roniRows = ctr27.rows.filter(isRoniNov4Row);
+      if (roniRows.length > 1) {
+        // Prioritaskan baris yang punya sourceRefId dari live suratJalan (selain seed 351), atau baris pertama
+        const liveMatch = roniRows.find(
+          (r) =>
+            r.sourceRefId &&
+            r.sourceRefId !== 'WAP20261106-351' &&
+            (this.db.suratJalan || []).some((sj) => sj.noInvoice === r.sourceRefId)
+        );
+        const keepRow = liveMatch || roniRows[0];
+        let keptOnce = false;
+        ctr27.rows = ctr27.rows.filter((r) => {
+          if (!isRoniNov4Row(r)) return true;
+          if (!keptOnce && r === keepRow) {
+            keptOnce = true;
+            return true;
+          }
+          return false;
+        });
+      }
+    }
+
+    const formatTglCtrLabel = (dmy?: string): string => {
+      const clean = String(dmy || '').trim();
+      const m = clean.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+      if (!m) return clean || '-';
+      const months = [
+        'Januari',
+        'Februari',
+        'Maret',
+        'April',
+        'Mei',
+        'Juni',
+        'Juli',
+        'Agustus',
+        'September',
+        'Oktober',
+        'November',
+        'Desember',
+      ];
+      const day = Number(m[1]);
+      const monIdx = Number(m[2]) - 1;
+      if (monIdx >= 0 && monIdx < 12 && day > 0) {
+        return `${day} ${months[monIdx]}`;
+      }
+      return clean;
+    };
+
+    const matchRefKey = (rowRef: string | undefined, key: string | undefined): boolean => {
+      if (!rowRef || !key) return false;
+      return rowRef === key || rowRef.startsWith(`${key}-`);
+    };
+
+    let addedCount = 0;
+
+    // Urutkan Surat Jalan dari terlama ke terbaru agar penomoran CTR urut kronologis
+    const sortedSj = [...(this.db.suratJalan || [])].sort((a, b) => {
+      const ta = new Date(a.createdAt || 0).getTime();
+      const tb = new Date(b.createdAt || 0).getTime();
+      return ta - tb;
+    });
+
+    for (const sj of sortedSj) {
+      const isStokHb = sj.sumberBarang === 'STOK_HB_PT';
+      const invKey = sj.noInvoice;
+      const hbKey = sj.noPenjualanHasilBumi;
+      const plateClean = String(sj.platTruk || '').replace(/\s+/g, '').toUpperCase();
+      const tglClean = String(sj.tanggal || '').trim();
+      const isRoniSeed = invKey === 'WAP20261106-351';
+      const isRoniNov4Sj =
+        isRoniSeed ||
+        (/roni/i.test(sj.namaMitra || '') &&
+          (plateClean.includes('8206') || Math.abs((Number(sj.tonaseAkhirKg) || 0) - 1416) < 0.5) &&
+          (tglClean === '04/11/2026' || tglClean === '4/11/2026' || tglClean === '06/11/2026'));
+
+      // Lewati jika baris ini sudah sengaja dihapus user dari Rekap CTR
+      if (
+        isRefDismissed(invKey) ||
+        isRefDismissed(sj.id) ||
+        (hbKey && isRefDismissed(hbKey)) ||
+        (isRoniSeed && dismissedSet.has('CTR-27-RONI'))
+      ) {
+        continue;
+      }
+
+      // Cari baris yang sudah terhubung dengan Surat Jalan ini
+      const linkedRows: RekapCtrPartaiRow[] = [];
+      for (const c of this.db.rekapCtr) {
+        for (const r of c.rows || []) {
+          const isRoniRowIn27 =
+            isRoniNov4Sj &&
+            c.noUrut === 27 &&
+            /roni/i.test(r.namaSuplayer || '') &&
+            (String(r.truck || '').replace(/\s+/g, '').toUpperCase().includes('8206') ||
+              Math.abs((Number(r.qtyAkhir) || 0) - 1416) < 0.5);
+
+          if (
+            matchRefKey(r.sourceRefId, invKey) ||
+            (hbKey && matchRefKey(r.sourceRefId, hbKey)) ||
+            (isRoniSeed && c.noUrut === 27 && r.id === 'CTR-27-RONI') ||
+            isRoniRowIn27
+          ) {
+            if (isRoniRowIn27 && !r.sourceRefId) {
+              r.sourceRefId = invKey;
+            }
+            linkedRows.push(r);
+          }
+        }
+      }
+
+      const desiredStatus: 'PENDING' | 'LUNAS' = isRoniSeed
+        ? 'LUNAS'
+        : isStokHb
+        ? 'LUNAS'
+        : sj.statusPembayaranMitra === 'PENDING'
+        ? 'PENDING'
+        : 'LUNAS';
+
+      if (linkedRows.length > 0) {
+        // Sinkronkan status pencairan (BELUM CAIR -> hilang saat sudah CAIR) tanpa menimpa edit angka user
+        for (const r of linkedRows) {
+          r.statusPencairan = desiredStatus;
+          if (desiredStatus === 'PENDING') {
+            if (!r.keterangan || r.keterangan.startsWith('Sync ')) {
+              r.keterangan = 'BELUM CAIR';
+            }
+          } else {
+            if (
+              r.keterangan === 'BELUM CAIR' ||
+              r.keterangan?.startsWith('Sync ') ||
+              r.keterangan?.startsWith('Stok HB PT ·') ||
+              r.keterangan?.startsWith('Surat Jalan WAP20261106-351')
+            ) {
+              r.keterangan = '';
+            }
+          }
+        }
+        continue;
+      }
+
+      const isNov4Sj =
+        isRoniNov4Sj ||
+        tglClean === '04/11/2026' ||
+        tglClean === '4/11/2026' ||
+        tglClean === '06/11/2026' ||
+        plateClean.includes('8206');
+
+      let targetContract: RekapCtrContract | undefined;
+      if (isNov4Sj) {
+        targetContract = this.db.rekapCtr.find((c) => c.noUrut === 27);
+      } else {
+        const sjGudang = (sj.kategoriKode || 'SKA').trim().toUpperCase();
+        targetContract = this.db.rekapCtr.find(
+          (c) =>
+            c.noUrut >= 28 &&
+            (c.gudang || '').trim().toUpperCase() === sjGudang &&
+            (c.rows || []).some((r) => (r.tglMasuk || '').trim() === tglClean)
+        );
+      }
+
+      if (!targetContract) {
+        const maxNo = this.db.rekapCtr.reduce((m, c) => Math.max(m, c.noUrut || 0), 27);
+        const nextNo = maxNo + 1;
+        targetContract = {
+          id: `CTR-${nextNo}`,
+          noUrut: nextNo,
+          tglCtr: formatTglCtrLabel(tglClean),
+          gudang: (sj.kategoriKode || 'SKA').trim().toUpperCase(),
+          qtyCtr: 0,
+          rows: [],
+        };
+        this.db.rekapCtr.push(targetContract);
+      }
+
+      if (!Array.isArray(targetContract.rows)) targetContract.rows = [];
+      const ketBaru = desiredStatus === 'PENDING' ? 'BELUM CAIR' : '';
+      const refBase = invKey || hbKey || sj.id;
+      const details =
+        Array.isArray(sj.detailItems) && sj.detailItems.length > 0 ? sj.detailItems : null;
+
+      if (details) {
+        details.forEach((d, idx) => {
+          const basisWapVal = d.basisBuyer || d.basisMitra || d.hargaPerKgMitra || 0;
+          const basisSupVal = isStokHb
+            ? basisWapVal
+            : d.basisMitra || d.hargaPerKgMitra || 0;
+          targetContract!.rows.push({
+            id: `CTR-${targetContract!.noUrut}-${sj.id}-${idx + 1}`,
+            basisWap: basisWapVal,
+            basisSuplayer: basisSupVal,
+            namaSuplayer: isStokHb
+              ? 'STOK HB (PT WAP)'
+              : (sj.namaMitra || '').toUpperCase(),
+            idMitra: sj.idMitra,
+            qtySuplayer: d.tonaseAkhirKg,
+            tglMasuk: sj.tanggal || tglClean,
+            truck: (d.platTruk || sj.platTruk || '').replace(/\s+/g, '').toUpperCase(),
+            qtyAwal: d.tonaseAwalKg > 0 ? d.tonaseAwalKg : d.tonaseAkhirKg,
+            qtyAkhir: d.tonaseAkhirKg,
+            rendemen: d.rendemen || 100,
+            pajakNominal: isStokHb
+              ? 0
+              : details.length === 1
+              ? sj.pajakNominal
+              : sj.pajakNominal === 0
+              ? 0
+              : null,
+            komisiNominal: isStokHb ? 0 : idx === 0 ? sj.komisiNominal || 0 : 0,
+            cekList: false,
+            statusPencairan: desiredStatus,
+            sourceType: isStokHb && sj.noPenjualanHasilBumi ? 'PENJUALAN_HB' : 'SURAT_JALAN',
+            sourceRefId: idx === 0 ? refBase : `${refBase}-${idx + 1}`,
+            isStokHbPt: isStokHb,
+            keterangan: ketBaru,
+          });
+          addedCount += 1;
+        });
+      } else {
+        const basisWapVal = sj.basisBuyer || sj.basisMitra || sj.hargaPerKgMitra || 0;
+        const basisSupVal = isStokHb
+          ? basisWapVal
+          : sj.basisMitra || sj.hargaPerKgMitra || 0;
+        targetContract.rows.push({
+          id: `CTR-${targetContract.noUrut}-${sj.id}`,
+          basisWap: basisWapVal,
+          basisSuplayer: basisSupVal,
+          namaSuplayer: isStokHb
+            ? 'STOK HB (PT WAP)'
+            : (sj.namaMitra || '').toUpperCase(),
+          idMitra: sj.idMitra,
+          qtySuplayer: sj.tonaseAkhirKg,
+          tglMasuk: sj.tanggal || tglClean,
+          truck: (sj.platTruk || '').replace(/\s+/g, '').toUpperCase(),
+          qtyAwal: sj.tonaseAwalKg > 0 ? sj.tonaseAwalKg : sj.tonaseAkhirKg,
+          qtyAkhir: sj.tonaseAkhirKg,
+          rendemen: sj.rendemen || 100,
+          pajakNominal: isStokHb ? 0 : sj.pajakNominal,
+          komisiNominal: isStokHb ? 0 : sj.komisiNominal || 0,
+          cekList: false,
+          statusPencairan: desiredStatus,
+          sourceType: isStokHb && sj.noPenjualanHasilBumi ? 'PENJUALAN_HB' : 'SURAT_JALAN',
+          sourceRefId: refBase,
+          isStokHbPt: isStokHb,
+          keterangan: ketBaru,
+        });
+        addedCount += 1;
+      }
+    }
+
+    this.db.rekapCtr.sort((a, b) => (a.noUrut || 0) - (b.noUrut || 0));
+    return addedCount;
   }
 
   /**
@@ -2743,7 +3242,7 @@ class DatabaseManager {
     }
     for (const b of this.db.bayarBon || []) {
       if (!inRange(b.tanggal)) continue;
-      if (b.metode === 'SINKRON' || b.metode === 'KOMPENSASI_TITIP' || b.metode === 'POTONG_GAJI' || b.isKompensasiTitipan || b.isPotongGaji) continue;
+      if (b.metode === 'SINKRON' || b.metode === 'KOMPENSASI_TITIP' || b.metode === 'POTONG_GAJI' || b.isKompensasiTitipan || b.isPotongGaji || b.isSuratJalanPotongBon) continue;
       if (b.rekeningTujuan === 'KAS01' || (!b.rekeningTujuan && b.metode === 'TUNAI')) netKasir += Math.round(Number(b.nominalBayar) || 0);
     }
     for (const b of this.db.pembelianHasilBumi || []) {
@@ -2775,12 +3274,7 @@ class DatabaseManager {
       if (p.isNonKas || p.rekeningSumber === 'SINKRON' || p.rekeningSumber === 'STOK_INTERNAL') continue;
       if (p.rekeningSumber === 'KAS01' || !p.rekeningSumber) netKasir -= Math.round(Number(p.nominal) || 0);
     }
-    for (const sj of this.db.suratJalan || []) {
-      if (sj.statusPembayaranMitra !== 'LUNAS' || sj.idPengeluaranBayarMitra) continue;
-      if (sj.rekeningPtKode !== 'KAS01') continue;
-      if (!inRange(sj.tanggalBayarMitra || sj.tanggal)) continue;
-      netKasir -= Math.round(Number(sj.jumlahPembayaranMitra) || 0);
-    }
+    // Surat Jalan bersifat pencatatan administrasi & Rekap CTR — tidak mempengaruhi saldo kas/rekening berjalan
     for (const k of this.db.kasbonUang || []) {
       if (!inRange(k.tanggal)) continue;
       if (k.isNotaLalu || k.rekeningSumber === 'BON01' || k.rekeningSumber === 'SINKRON' || k.metode === 'SINKRON') continue;
@@ -3183,7 +3677,7 @@ class DatabaseManager {
       let masukPelunasanPiutangDivisi = 0;
       for (const b of this.db.bayarBon || []) {
         if (b.metode !== 'TUNAI' && b.metode !== 'TRANSFER') continue;
-        if (b.isKompensasiTitipan || b.isPotongGaji) continue;
+        if (b.isKompensasiTitipan || b.isPotongGaji || b.isSuratJalanPotongBon) continue;
         for (const alok of b.alokasi || []) {
           if (alok.jenis === 'KASBON_BARANG' && (alok.nominalDibayar || 0) > 0) {
             const shares = penjualanNotaSharesMap.get(alok.refId) || [];

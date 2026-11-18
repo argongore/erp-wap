@@ -378,12 +378,27 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
     () =>
       safeRekening.filter(
         (r) =>
-          (r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !r.kode.startsWith('REK-'))) &&
+          (r.kategori === 'PERUSAHAAN' ||
+            (!r.kategori && !r.isVirtual && !r.kode.startsWith('REK-'))) &&
+          !r.isRekeningTitip &&
+          !r.isAnakPerusahaan &&
           r.kode !== 'KAS01' &&
           r.kode !== berangkasRek?.kode &&
           r.status === 'AKTIF'
       ),
     [safeRekening, berangkasRek]
+  );
+
+  const rekeningTitipList = useMemo(
+    () =>
+      safeRekening.filter(
+        (r) =>
+          !r.isVirtual &&
+          !r.isAnakPerusahaan &&
+          (r.kategori === 'REKENING_TITIP' || r.isRekeningTitip) &&
+          r.status === 'AKTIF'
+      ),
+    [safeRekening]
   );
 
   const anakPerusahaanList = useMemo(
@@ -394,6 +409,10 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   const totalKasTunai = Number(kas01?.saldoSaatIni) || 0;
   const totalBerangkas = Number(berangkasRek?.saldoSaatIni) || 0;
   const totalBankPerusahaan = bankPerusahaanList.reduce(
+    (sum, r) => sum + (Number(r.saldoSaatIni) || 0),
+    0
+  );
+  const totalRekeningTitip = rekeningTitipList.reduce(
     (sum, r) => sum + (Number(r.saldoSaatIni) || 0),
     0
   );
@@ -434,11 +453,12 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
   }, [stokHasilBumiList, ringkasanHbKas]);
 
   // Rumus Kas & Saldo PT:
-  // Kas Utama Kasir + Saldo Berangkas + Total Rekening Bank PT + Piutang Bon Mitra + Nilai Stok Barang Penjualan + Nilai Modal Hasil Bumi - Hutang/Titipan Hasil Bumi
+  // Kas Utama Kasir + Saldo Berangkas + Total Rekening Bank PT + Saldo Rekening Titip Karyawan + Piutang Bon Mitra + Nilai Stok Barang Penjualan + Nilai Modal Hasil Bumi - Hutang/Titipan Hasil Bumi
   const totalKasDanSaldoPt =
     totalKasTunai +
     totalBerangkas +
     totalBankPerusahaan +
+    totalRekeningTitip +
     totalPiutangBon +
     totalNilaiStokBarang +
     totalNilaiModalHb -
@@ -795,6 +815,11 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                   <div className="text-[11px] text-slate-400">
                     {bankPerusahaanList.length} rekening bank aktif
                   </div>
+                  {rekeningTitipList.length > 0 && (
+                    <div className="text-[11px] text-sky-700 font-semibold pt-0.5">
+                      + Titip Uang Karyawan: {formatRupiah(totalRekeningTitip)}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-1 sm:border-l sm:border-slate-100 sm:pl-4">
@@ -891,6 +916,23 @@ const PortalEksekutifBosViewInner: React.FC<PortalEksekutifBosViewProps> = ({
                           {rek.atasNama} · {rek.nomorRekening}
                         </td>
                         <td className="py-3.5 px-5 text-right font-mono font-bold text-slate-900 tabular-nums">
+                          {formatRupiah(rek.saldoSaatIni)}
+                        </td>
+                      </tr>
+                    ))}
+                    {rekeningTitipList.map((rek) => (
+                      <tr key={rek.kode} className="bg-sky-50/50 hover:bg-sky-50">
+                        <td className="py-3.5 px-5 font-mono font-semibold text-sky-800">{rek.kode}</td>
+                        <td className="py-3.5 px-4 font-medium text-slate-900">
+                          {rek.nama}{' '}
+                          <span className="text-xs font-semibold text-sky-700">
+                            · Rekening Titip Uang (Pemegang: {rek.namaKaryawanTerkait || rek.atasNama || '-'})
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-500 hidden md:table-cell">
+                          {rek.atasNama} · {rek.nomorRekening}
+                        </td>
+                        <td className="py-3.5 px-5 text-right font-mono font-bold text-sky-900 tabular-nums">
                           {formatRupiah(rek.saldoSaatIni)}
                         </td>
                       </tr>

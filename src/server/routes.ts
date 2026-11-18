@@ -15,7 +15,7 @@ import {
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
 import { generateFullBackupXlsxBuffer } from '../utils/fullBackupSpreadsheet.ts';
-import { normalizeDateToDmy } from '../utils/format.ts';
+import { formatHariTanggalLabel, normalizeDateToDmy } from '../utils/format.ts';
 import { calculateHbMovingAverage } from '../utils/hasilBumiMovingAverage.ts';
 
 export const apiRouter = Router();
@@ -167,13 +167,14 @@ apiRouter.post('/rekening', async (req, res) => {
       kategori,
       rekeningIndukPenyimpan,
       idMitraTerkait,
+      idKaryawanTerkait,
     } = req.body;
     if (!kode || !nama || !atasNama) {
       return res.status(400).json({ success: false, message: 'Kode, Nama, dan Atas Nama wajib diisi' });
     }
     const cleanKode = String(kode).toUpperCase().trim();
-    if (cleanKode === 'BON01' || cleanKode === 'TIT01') {
-      return res.status(400).json({ success: false, message: 'Kode BON01 dan TIT01 adalah reserved kode sistem' });
+    if (cleanKode === 'BON01' || cleanKode === 'TIT01' || cleanKode === 'SINKRON') {
+      return res.status(400).json({ success: false, message: 'Kode BON01, TIT01, dan SINKRON adalah reserved kode sistem' });
     }
 
     const created = await dbManager.executeTransaction((db) => {
@@ -183,10 +184,55 @@ apiRouter.post('/rekening', async (req, res) => {
       const parsedSaldo = parseNominalInput(saldoAwal);
       const saldo = parsedSaldo !== null ? parsedSaldo : 0;
       const finalKategori =
-        kategori === 'ANAK_PERUSAHAAN' || kategori === 'OPERASIONAL_DIVISI' || kategori === 'PERUSAHAAN'
+        kategori === 'REKENING_TITIP' ||
+        kategori === 'ANAK_PERUSAHAAN' ||
+        kategori === 'OPERASIONAL_DIVISI' ||
+        kategori === 'PERUSAHAAN'
           ? kategori
           : 'PERUSAHAAN';
       const isAnak = finalKategori === 'ANAK_PERUSAHAAN';
+      const isTitip = finalKategori === 'REKENING_TITIP';
+
+      let resolvedKryId: string | undefined;
+      let resolvedKryNama: string | undefined;
+      let resolvedMitraId: string | undefined = isAnak ? idMitraTerkait : undefined;
+      let resolvedMitraNama: string | undefined;
+
+      if (isTitip) {
+        if (!idKaryawanTerkait) {
+          throw new Error('Pilih Karyawan yang dipercaya memegang Rekening Titip Uang');
+        }
+        const kry = (db.karyawan || []).find((k) => k.id === String(idKaryawanTerkait).trim());
+        if (!kry) {
+          throw new Error('Karyawan pemegang Rekening Titip tidak ditemukan');
+        }
+        resolvedKryId = kry.id;
+        resolvedKryNama = kry.nama;
+        const mtrId = kry.idMitraTerkait || `MTR-${kry.id}`;
+        let mtr = (db.mitra || []).find(
+          (m) => m.id === mtrId || m.idKaryawanTerkait === kry.id
+        );
+        if (!mtr) {
+          mtr = {
+            id: mtrId,
+            kode: kry.nik || kry.id,
+            nama: kry.nama,
+            role: 'KARYAWAN',
+            telepon: kry.telepon || '-',
+            alamat: kry.alamat || '-',
+            status: kry.status || 'AKTIF',
+            fotoUrl: kry.fotoUrl,
+            isKaryawan: true,
+            idKaryawanTerkait: kry.id,
+            catatan: `Karyawan: ${kry.jabatan || 'Staff'} (${kry.divisi || kry.departemen || 'Gudang Wijaya Agro'})`,
+          };
+          db.mitra.push(mtr);
+          kry.idMitraTerkait = mtr.id;
+        }
+        resolvedMitraId = mtr.id;
+        resolvedMitraNama = mtr.nama;
+      }
+
       const newRek: any = {
         kode: cleanKode,
         nama: String(nama).trim(),
@@ -196,13 +242,19 @@ apiRouter.post('/rekening', async (req, res) => {
         saldoSaatIni: saldo,
         status: 'AKTIF',
         isVirtual: false,
+        isRekeningTitip: isTitip,
         isAnakPerusahaan: isAnak,
-        idMitraTerkait: isAnak ? idMitraTerkait : undefined,
+        ...(resolvedKryId ? { idKaryawanTerkait: resolvedKryId } : {}),
+        ...(resolvedKryNama ? { namaKaryawanTerkait: resolvedKryNama } : {}),
+        ...(resolvedMitraId ? { idMitraTerkait: resolvedMitraId } : {}),
+        ...(resolvedMitraNama ? { namaMitraTerkait: resolvedMitraNama } : {}),
         kategori: finalKategori,
         rekeningIndukPenyimpan: finalKategori === 'OPERASIONAL_DIVISI' ? (rekeningIndukPenyimpan || 'KAS01') : undefined,
         keterangan:
           keterangan ||
-          (isAnak
+          (isTitip
+            ? `Rekening Titip Uang Perusahaan (Amanah Transaksi Karyawan: ${resolvedKryNama}) — Terhubung langsung ke Rekening Koran Karyawan`
+            : isAnak
             ? 'Anak Perusahaan PT. Wijaya Agro Perkasa (Bukan Bank) — Terintegrasi otomatis sebagai Mitra dalam 1 transaksi terpadu'
             : ''),
       };
@@ -211,6 +263,31 @@ apiRouter.post('/rekening', async (req, res) => {
     });
 
     res.json({ success: true, data: created });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/rekening-titip/audit', (req, res) => {
+  try {
+    const kodeRekening = req.query.kode ? String(req.query.kode) : undefined;
+    const idKaryawan = req.query.idKaryawan ? String(req.query.idKaryawan) : undefined;
+    const idMitra = req.query.idMitra ? String(req.query.idMitra) : undefined;
+    const data = TransactionService.getRekeningTitipAudit({ kodeRekening, idKaryawan, idMitra });
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/rekening-titip/:kode/audit', (req, res) => {
+  try {
+    const kode = decodeURIComponent(String(req.params.kode || '')).toUpperCase().trim();
+    const list = TransactionService.getRekeningTitipAudit({ kodeRekening: kode });
+    if (list.length === 0) {
+      return res.status(404).json({ success: false, message: `Rekening Titip ${kode} tidak ditemukan` });
+    }
+    res.json({ success: true, data: list[0] });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -230,6 +307,7 @@ async function handleUpdateRekeningRequest(rawKode: string, body: any) {
     keterangan,
     kategori,
     rekeningIndukPenyimpan,
+    idKaryawanTerkait,
     saldoSaatIni,
     saldoAwal,
     alasanPenyesuaian,
@@ -248,12 +326,56 @@ async function handleUpdateRekeningRequest(rawKode: string, body: any) {
     if (keterangan !== undefined) rek.keterangan = keterangan;
     if (!rek.isVirtual && kategori) {
       rek.kategori = kategori;
+      rek.isRekeningTitip = kategori === 'REKENING_TITIP';
       rek.isAnakPerusahaan = kategori === 'ANAK_PERUSAHAAN';
       if (kategori === 'OPERASIONAL_DIVISI') {
         rek.rekeningIndukPenyimpan = rekeningIndukPenyimpan || rek.rekeningIndukPenyimpan || 'KAS01';
       } else {
         delete rek.rekeningIndukPenyimpan;
       }
+      if (!rek.isRekeningTitip) {
+        delete rek.idKaryawanTerkait;
+        delete rek.namaKaryawanTerkait;
+        if (!rek.isAnakPerusahaan) {
+          delete rek.idMitraTerkait;
+          delete rek.namaMitraTerkait;
+        }
+      }
+    }
+
+    if (rek.isRekeningTitip || rek.kategori === 'REKENING_TITIP') {
+      const targetKryId =
+        idKaryawanTerkait !== undefined ? String(idKaryawanTerkait || '').trim() : rek.idKaryawanTerkait;
+      if (!targetKryId) {
+        throw new Error('Pilih Karyawan yang dipercaya memegang Rekening Titip Uang');
+      }
+      const kry = (db.karyawan || []).find((k) => k.id === targetKryId);
+      if (!kry) {
+        throw new Error('Karyawan pemegang Rekening Titip tidak ditemukan');
+      }
+      rek.idKaryawanTerkait = kry.id;
+      rek.namaKaryawanTerkait = kry.nama;
+      const mtrId = kry.idMitraTerkait || `MTR-${kry.id}`;
+      let mtr = (db.mitra || []).find((m) => m.id === mtrId || m.idKaryawanTerkait === kry.id);
+      if (!mtr) {
+        mtr = {
+          id: mtrId,
+          kode: kry.nik || kry.id,
+          nama: kry.nama,
+          role: 'KARYAWAN',
+          telepon: kry.telepon || '-',
+          alamat: kry.alamat || '-',
+          status: kry.status || 'AKTIF',
+          fotoUrl: kry.fotoUrl,
+          isKaryawan: true,
+          idKaryawanTerkait: kry.id,
+          catatan: `Karyawan: ${kry.jabatan || 'Staff'} (${kry.divisi || kry.departemen || 'Gudang Wijaya Agro'})`,
+        };
+        db.mitra.push(mtr);
+        kry.idMitraTerkait = mtr.id;
+      }
+      rek.idMitraTerkait = mtr.id;
+      rek.namaMitraTerkait = mtr.nama;
     }
 
     // Sinkronkan nama ke Mitra terkait apabila rekening adalah Anak Perusahaan
@@ -1204,12 +1326,15 @@ apiRouter.post('/produk', async (req, res) => {
       };
       db.produk.push(newProd);
 
+      const initialStokVal = effectiveTanpaStok ? 0 : Math.max(0, Number(stokAwal) || 0);
       const newStok: any = {
         kode: cleanKode,
         namaProduk: newProd.nama,
         satuan: newProd.satuan,
         kategori: cleanKategori,
-        stok: effectiveTanpaStok ? 0 : Math.max(0, Number(stokAwal) || 0),
+        stok: initialStokVal,
+        stokAwal: initialStokVal,
+        keteranganStokAwal: initialStokVal > 0 ? 'Stok Awal saat pendaftaran master produk' : undefined,
         minimum: effectiveTanpaStok ? 0 : minimum !== undefined ? Math.max(0, Number(minimum) || 0) : 5,
         tanpaStok: effectiveTanpaStok,
         updateTerakhir: iso,
@@ -1450,6 +1575,36 @@ apiRouter.post('/stok/adjust', async (req, res) => {
     res.json({ success: true, data: result });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Audit Stok Barang Toko (Traceability Kulakan -> Opname -> Penjualan -> Stok Riil)
+apiRouter.get('/stok/audit', (req, res) => {
+  try {
+    const tanggalDari = req.query.tanggalDari ? String(req.query.tanggalDari) : undefined;
+    const tanggalSampai = req.query.tanggalSampai ? String(req.query.tanggalSampai) : undefined;
+    const data = TransactionService.getAuditStokBarang({ tanggalDari, tanggalSampai });
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message || 'Gagal memuat data audit stok barang' });
+  }
+});
+
+apiRouter.post('/stok/audit/stok-awal', async (req, res) => {
+  try {
+    const data = await TransactionService.updateStokAwalAudit(req.body);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message || 'Gagal memperbarui stok awal audit' });
+  }
+});
+
+apiRouter.post('/stok/audit/opname', async (req, res) => {
+  try {
+    const data = await TransactionService.applyOpnameAuditStok(req.body);
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message || 'Gagal menyimpan hasil audit / opname stok riil' });
   }
 });
 
@@ -1976,6 +2131,15 @@ apiRouter.post('/surat-jalan', async (req, res) => {
   }
 });
 
+apiRouter.put('/surat-jalan/:id', async (req, res) => {
+  try {
+    const record = await TransactionService.updateInvoiceSuratJalan(req.params.id, req.body);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.post('/surat-jalan/cairkan', async (req, res) => {
   try {
     const { idInvoice, rekeningSumber, tanggal } = req.body;
@@ -1992,6 +2156,35 @@ apiRouter.post('/surat-jalan/cairkan', async (req, res) => {
 apiRouter.delete('/surat-jalan/:id', async (req, res) => {
   try {
     const result = await TransactionService.deleteInvoiceSuratJalan(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+// Rekap CTR Surat Jalan (REKAP CTR WAP)
+apiRouter.get('/rekap-ctr', async (_req, res) => {
+  try {
+    const list = await TransactionService.getRekapCtrList();
+    res.json({ success: true, data: list });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.put('/rekap-ctr', async (req, res) => {
+  try {
+    const contracts = Array.isArray(req.body?.contracts) ? req.body.contracts : [];
+    const saved = await TransactionService.saveRekapCtrList(contracts);
+    res.json({ success: true, data: saved });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/rekap-ctr/sync', async (_req, res) => {
+  try {
+    const result = await TransactionService.syncRekapCtrFromErp();
     res.json({ success: true, data: result });
   } catch (err: any) {
     res.status(400).json({ success: false, message: err.message });
@@ -3227,7 +3420,14 @@ apiRouter.get('/transaksi/penggajian', (req, res) => {
 apiRouter.get('/transaksi/upah-harian', (req, res) => {
   try {
     const db = dbManager.get();
-    let list = db.upahHarian || [];
+    let list = (db.upahHarian || []).map((u) => {
+      const tglNorm = normalizeDateToDmy(u.tanggalKerja, u.tanggalKerja);
+      return {
+        ...u,
+        tanggalKerja: tglNorm,
+        hariTanggal: formatHariTanggalLabel(tglNorm) || u.hariTanggal,
+      };
+    });
     const { idKaryawan, divisi, bulan, tahun } = req.query;
     if (idKaryawan) {
       list = list.filter((u) => u.idKaryawan === idKaryawan);

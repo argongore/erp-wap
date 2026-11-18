@@ -2084,6 +2084,11 @@ export const StokHasilBumiView: React.FC<Props> = ({
                               >
                                 {j.metodePembayaran} ({j.rekeningTujuan})
                               </span>
+                              {j.metodePembayaran === 'PIUTANG' && (Number(j.sisaPiutang) || 0) > 0 && (
+                                <div className="text-[10px] font-mono font-bold text-amber-700 mt-0.5">
+                                  Sisa Piutang: {formatRupiah(Number(j.sisaPiutang) || 0)}
+                                </div>
+                              )}
                               {j.divisi && (
                                 <div className="text-[10px] text-sky-800 font-semibold mt-0.5">
                                   {j.divisi}

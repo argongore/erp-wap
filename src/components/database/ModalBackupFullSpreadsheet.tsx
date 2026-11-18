@@ -227,8 +227,20 @@ export const ModalBackupFullSpreadsheet: React.FC<ModalBackupFullSpreadsheetProp
       .filter(
         (r) =>
           r &&
-          (r.kategori === 'PERUSAHAAN' || (!r.isVirtual && !String(r.kode || '').startsWith('REK-'))) &&
+          (r.kategori === 'PERUSAHAAN' ||
+            (!r.kategori && !r.isVirtual && !String(r.kode || '').startsWith('REK-'))) &&
+          !r.isRekeningTitip &&
+          !r.isAnakPerusahaan &&
           r.kode !== 'KAS01' &&
+          r.status === 'AKTIF'
+      )
+      .reduce((s, r) => s + (Number(r.saldoSaatIni) || 0), 0);
+    const titipKaryawanPt = rekArr
+      .filter(
+        (r) =>
+          r &&
+          !r.isVirtual &&
+          (r.kategori === 'REKENING_TITIP' || r.isRekeningTitip) &&
           r.status === 'AKTIF'
       )
       .reduce((s, r) => s + (Number(r.saldoSaatIni) || 0), 0);
@@ -250,7 +262,7 @@ export const ModalBackupFullSpreadsheet: React.FC<ModalBackupFullSpreadsheetProp
     const notaKunci = Number(activeBundle.rekapMitra?.totalNominalNotaNgunci || 0);
 
     return {
-      likuiditasKasBank: kas01 + bankPt,
+      likuiditasKasBank: kas01 + bankPt + titipKaryawanPt,
       uangKitaDiMitra: uangKita,
       nominalNotaKunci: notaKunci,
     };
