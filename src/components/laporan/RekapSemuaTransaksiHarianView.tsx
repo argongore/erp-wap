@@ -41,6 +41,7 @@ import { ShareLinkModal } from '../public/ShareLinkModal.tsx';
 import { ExportLaporanPdfModal } from './ExportLaporanPdfModal.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import { extractDateParts, NAMA_BULAN_INDO } from '../../utils/exportRekapTransaksiPdf.ts';
+import type { ReceiptData } from '../common/PrintReceiptModal.tsx';
 
 function getTodayDmy(): string {
   const d = new Date();
@@ -81,11 +82,13 @@ function fromIsoInputDate(ymd: string): string {
 interface Props {
   onRefreshParent?: () => void;
   readOnly?: boolean;
+  onPrintReceipt?: (receipt: ReceiptData) => void;
 }
 
 export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
   onRefreshParent,
   readOnly = false,
+  onPrintReceipt,
 }) => {
   const nowInit = new Date();
   const defaultMonth = String(nowInit.getMonth() + 1).padStart(2, '0');
@@ -1650,10 +1653,71 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                         </span>
                       </td>
 
-                      {/* Aksi Edit & Hapus (Hanya Kasir) */}
+                      {/* Aksi Cetak Struk, Edit & Hapus (Hanya Kasir) */}
                       {!readOnly && (
                         <td className="py-3 px-3.5 text-center whitespace-nowrap">
                           <div className="inline-flex items-center gap-1.5 justify-center">
+                            {onPrintReceipt && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const baseReceipt: ReceiptData = {
+                                    title: tx.jenisLabel || tx.jenis.replace(/_/g, ' '),
+                                    subtitle: tx.divisi ? `Divisi ${tx.divisi}` : undefined,
+                                    nomorTransaksi: tx.id,
+                                    tanggal: tx.tanggal,
+                                    jam: tx.jam,
+                                    mitra: tx.pihakTerkait,
+                                    rekening: tx.rekening,
+                                    total: tx.nominal,
+                                    detailRows: [
+                                      { label: 'Pihak / Mitra', value: tx.pihakTerkait || '-' },
+                                      { label: 'Metode / Rekening', value: `${tx.metode || '-'} (${tx.rekening || '-'})` },
+                                      ...(tx.divisi ? [{ label: 'Divisi', value: tx.divisi }] : []),
+                                      { label: 'Status', value: tx.status || '-' },
+                                      { label: 'TOTAL TRANSAKSI', value: tx.nominal, isTotal: true },
+                                    ],
+                                    catatan: tx.deskripsi || undefined,
+                                    fotoNota: tx.fotoBukti || undefined,
+                                  };
+                                  try {
+                                    const detail = await api.getTransactionDetail(tx.id, tx.jenis);
+                                    const rec: any = detail?.record;
+                                    if (rec && Array.isArray(rec.items) && rec.items.length > 0) {
+                                      baseReceipt.items = rec.items.map((it: any) => ({
+                                        nama: it.namaProduk || it.namaBarang || it.nama || '-',
+                                        qty: Number(it.qty) || 1,
+                                        satuan: it.satuan || 'Pcs',
+                                        harga: Number(it.harga) || 0,
+                                        subtotal: Number(it.subtotal) || 0,
+                                      }));
+                                    }
+                                    if (rec?.komoditasNama && rec?.beratBersih) {
+                                      baseReceipt.items = [
+                                        {
+                                          nama: `${rec.komoditasNama}${rec.jenisTransaksi ? ` (${rec.jenisTransaksi})` : ''}`,
+                                          qty: Number(rec.beratBersih) || 0,
+                                          satuan: 'Kg',
+                                          harga: Number(rec.hargaPerKg) || 0,
+                                          subtotal: Number(rec.totalNominal) || tx.nominal,
+                                        },
+                                      ];
+                                    }
+                                    if (rec?.keterangan) {
+                                      baseReceipt.catatan = rec.keterangan;
+                                    }
+                                  } catch {
+                                    // Fallback cleanly to summary receipt
+                                  }
+                                  onPrintReceipt(baseReceipt);
+                                }}
+                                className="inline-flex items-center space-x-1 px-2 py-1 bg-amber-50 hover:bg-amber-600 text-amber-800 hover:text-white border border-amber-300 hover:border-amber-600 rounded-md font-semibold text-[11px] transition-colors cursor-pointer"
+                                title="Cetak ulang struk thermal 80mm untuk transaksi ini"
+                              >
+                                <Printer className="w-3 h-3" />
+                                <span>Struk</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => setEditModalTarget({ id: tx.id, jenis: tx.jenis })}

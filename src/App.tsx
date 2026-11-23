@@ -53,9 +53,17 @@ import {
   ArrowUpRight,
   ArrowLeftRight,
   Building2,
+  Printer,
+  CheckCircle2,
+  Receipt,
 } from 'lucide-react';
 import { BillboardMonitoringView } from './components/billboard/BillboardMonitoringView.tsx';
 import { PrintReceiptModal, ReceiptData } from './components/common/PrintReceiptModal.tsx';
+import {
+  getThermalSettings,
+  printThermalReceiptBrowser,
+  type ThermalReceiptSettings,
+} from './utils/thermalPrint.ts';
 import { api, DashboardStatsResponse } from './api/client.ts';
 import { BayarTitipanHasilBumiView } from './components/kasir/BayarTitipanHasilBumiView.tsx';
 import { NotaSilangView } from './components/kasir/NotaSilangView.tsx';
@@ -189,6 +197,20 @@ export default function App() {
     mitraId?: string;
   }>({ subTab: 'kliring' });
   const [activeReceipt, setActiveReceipt] = useState<ReceiptData | null>(null);
+  const [thermalSettings, setThermalSettings] = useState<ThermalReceiptSettings>(() =>
+    getThermalSettings()
+  );
+  const [quickReceiptToast, setQuickReceiptToast] = useState<ReceiptData | null>(null);
+  const [quickToastPrinting, setQuickToastPrinting] = useState<boolean>(false);
+  const quickToastTimerRef = useRef<number | null>(null);
+
+  const dismissQuickToast = useCallback(() => {
+    if (quickToastTimerRef.current !== null) {
+      window.clearTimeout(quickToastTimerRef.current);
+      quickToastTimerRef.current = null;
+    }
+    setQuickReceiptToast(null);
+  }, []);
 
   const handleNavigateToBayarGaji = useCallback((idKaryawan?: string) => {
     setSelectedKaryawanForBayarGaji(idKaryawan);
@@ -651,7 +673,22 @@ export default function App() {
   const handleTransactionSuccess = (receipt: ReceiptData) => {
     try {
       if (receipt && typeof receipt === 'object') {
-        setActiveReceipt(receipt);
+        const latestSettings = getThermalSettings();
+        setThermalSettings(latestSettings);
+        if (latestSettings.fastModeSkipPopup) {
+          // Mode Cepat Kasir: tidak membuka modal agar input transaksi berikutnya langsung siap,
+          // cukup tampilkan notif mengambang di pojok bawah dengan tombol opsional Cetak 80mm.
+          if (quickToastTimerRef.current !== null) {
+            window.clearTimeout(quickToastTimerRef.current);
+          }
+          setQuickReceiptToast(receipt);
+          quickToastTimerRef.current = window.setTimeout(() => {
+            setQuickReceiptToast(null);
+            quickToastTimerRef.current = null;
+          }, 12000);
+        } else {
+          setActiveReceipt(receipt);
+        }
       }
     } catch (e) {
       console.warn('Error activating receipt modal:', e);
@@ -1459,7 +1496,10 @@ export default function App() {
               )}
 
               {(activeTab === 'rekap-semua-transaksi' || activeTab === 'laporan-transaksi') && (
-                <RekapSemuaTransaksiHarianView onRefreshParent={loadAllData} />
+                <RekapSemuaTransaksiHarianView
+                  onRefreshParent={loadAllData}
+                  onPrintReceipt={(receipt) => setActiveReceipt(receipt)}
+                />
               )}
 
               {activeTab === 'audit-log' && (
@@ -1530,8 +1570,66 @@ export default function App() {
           onClose={() => setActiveReceipt(null)}
           onRefresh={loadAllData}
           profilPerusahaan={profilPerusahaan}
+          onSettingsChanged={(next) => setThermalSettings(next)}
         />
       </ErrorBoundary>
+
+      {/* Non-blocking Quick Receipt Toast for Fast Cashier Mode (Optional 1-click 80mm print) */}
+      {quickReceiptToast && !activeReceipt && (
+        <div className="fixed bottom-4 right-4 z-50 max-w-md w-[calc(100vw-2rem)] sm:w-auto bg-slate-900 text-white rounded-xl shadow-2xl border border-emerald-500/40 px-4 py-3 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-2 duration-150">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-white truncate">
+                Tersimpan · {quickReceiptToast.nomorTransaksi || quickReceiptToast.nomorNota || 'Transaksi'}
+              </div>
+              <div className="text-[11px] text-slate-300 truncate">
+                {quickReceiptToast.mitra || quickReceiptToast.namaMitra || quickReceiptToast.title || 'Bukti transaksi siap'}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              disabled={quickToastPrinting}
+              onClick={async () => {
+                setQuickToastPrinting(true);
+                try {
+                  await printThermalReceiptBrowser(quickReceiptToast, profilPerusahaan, thermalSettings);
+                } finally {
+                  setQuickToastPrinting(false);
+                }
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[11px] transition-colors cursor-pointer disabled:opacity-50"
+              title={`Cetak langsung struk thermal ${thermalSettings.paperWidthMm}mm`}
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>{quickToastPrinting ? '...' : `Cetak ${thermalSettings.paperWidthMm}mm`}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const rec = quickReceiptToast;
+                dismissQuickToast();
+                setActiveReceipt(rec);
+              }}
+              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-[11px] transition-colors cursor-pointer"
+              title="Buka pratinjau struk & opsi Bluetooth/WA"
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Lihat</span>
+            </button>
+            <button
+              type="button"
+              onClick={dismissQuickToast}
+              className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              title="Tutup"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Cloud Supabase Sync Modal */}
       <SupabaseSyncModal
