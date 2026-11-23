@@ -954,6 +954,9 @@ export const api = {
     metodePembayaran: 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'BELUM_PUTUS_HARGA' | 'SINKRON';
     rekeningTujuan?: string;
     noSuratJalan?: string;
+    rekapCtrId?: string;
+    rekapCtrNoUrut?: number;
+    rekapCtrNoKontrak?: string;
     tanggal?: string;
     keterangan?: string;
     allowOverStockMuat?: boolean;
@@ -1413,6 +1416,9 @@ export const api = {
     statusPembayaranMitra?: 'PENDING' | 'LUNAS';
     sumberBarang?: 'MITRA' | 'STOK_HB_PT';
     noPenjualanHasilBumi?: string;
+    rekapCtrId?: string;
+    rekapCtrNoUrut?: number;
+    rekapCtrNoKontrak?: string;
     catatArusKas?: boolean;
   }): Promise<InvoiceSuratJalanRecord> => {
     const data = await requestJson('/api/surat-jalan', {
@@ -1467,6 +1473,9 @@ export const api = {
       statusPembayaranMitra?: 'PENDING' | 'LUNAS';
       sumberBarang?: 'MITRA' | 'STOK_HB_PT';
       noPenjualanHasilBumi?: string;
+      rekapCtrId?: string;
+      rekapCtrNoUrut?: number;
+      rekapCtrNoKontrak?: string;
     }
   ): Promise<InvoiceSuratJalanRecord> => {
     const data = await requestJson(`/api/surat-jalan/${encodeURIComponent(id)}`, {
@@ -1478,10 +1487,37 @@ export const api = {
     return data.data;
   },
 
+  terimaUangBuyerSuratJalan: async (payload: {
+    idInvoice: string;
+    rekeningTujuan?: string;
+    tanggal?: string;
+    nominalMasuk?: number;
+    catatan?: string;
+  }): Promise<InvoiceSuratJalanRecord> => {
+    const data = await requestJson('/api/surat-jalan/terima-uang-buyer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal mencatat uang masuk buyer surat jalan');
+    return data.data;
+  },
+
+  batalTerimaUangBuyerSuratJalan: async (idInvoice: string): Promise<InvoiceSuratJalanRecord> => {
+    const data = await requestJson('/api/surat-jalan/batal-terima-uang-buyer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idInvoice }),
+    });
+    if (!data.success) throw new Error(data.message || 'Gagal membatalkan penerimaan uang buyer');
+    return data.data;
+  },
+
   cairkanInvoiceSuratJalan: async (payload: {
     idInvoice: string;
     rekeningSumber?: string;
     tanggal?: string;
+    catatArusKas?: boolean;
   }): Promise<InvoiceSuratJalanRecord> => {
     const data = await requestJson('/api/surat-jalan/cairkan', {
       method: 'POST',
@@ -2196,6 +2232,8 @@ export const api = {
     hargaSatuanUpah?: number;
     uangMakanLembur?: number;
     catatanKerja?: string;
+    ket?: 'BON' | 'LUNAS';
+    statusUpah?: 'TERCATAT' | 'SUDAH_DIBAYAR';
     gajiPokok?: number;
     tunjangan?: number;
     bonus?: number;

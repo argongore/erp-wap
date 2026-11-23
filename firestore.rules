@@ -1,0 +1,255 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: default deny everything not explicitly allowed below
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // GLOBAL PRIMITIVES
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'kasirwap@gmail.com';
+    }
+
+    // =========================================================================
+    // VALIDATION BLUEPRINTS (SYNCHRONIZED WITH firebase-blueprint.json)
+    // =========================================================================
+    function isValidWeeklyBackup(data) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'ownerEmail', 'weekKey', 'label', 'triggerMode', 'status',
+          'companyName', 'totalParts', 'totalTransactions', 'totalMitra', 'totalKaryawan',
+          'totalProduk', 'totalRekening', 'estimatedBytes', 'tanggalWib', 'jamWib', 'note',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'ownerEmail', 'weekKey', 'label', 'triggerMode', 'status',
+          'companyName', 'totalParts', 'totalTransactions', 'totalMitra', 'totalKaryawan',
+          'totalProduk', 'totalRekening', 'estimatedBytes', 'tanggalWib', 'jamWib', 'note',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() >= 3 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 160 &&
+        data.weekKey is string && data.weekKey.size() >= 4 && data.weekKey.size() <= 32 && data.weekKey.matches('^[0-9]{4}-W[0-9]{2}$') &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 200 &&
+        data.triggerMode in ['AUTO_WEEKLY', 'MANUAL', 'PRE_RESTORE_SAFETY'] &&
+        data.status in ['UPLOADING', 'COMPLETED'] &&
+        data.companyName is string && data.companyName.size() <= 160 &&
+        data.totalParts is number && data.totalParts >= 0 && data.totalParts <= 500 &&
+        data.totalTransactions is number && data.totalTransactions >= 0 && data.totalTransactions <= 10000000 &&
+        data.totalMitra is number && data.totalMitra >= 0 && data.totalMitra <= 1000000 &&
+        data.totalKaryawan is number && data.totalKaryawan >= 0 && data.totalKaryawan <= 1000000 &&
+        data.totalProduk is number && data.totalProduk >= 0 && data.totalProduk <= 1000000 &&
+        data.totalRekening is number && data.totalRekening >= 0 && data.totalRekening <= 100000 &&
+        data.estimatedBytes is number && data.estimatedBytes >= 0 && data.estimatedBytes <= 1000000000 &&
+        data.tanggalWib is string && data.tanggalWib.size() <= 32 &&
+        data.jamWib is string && data.jamWib.size() <= 16 &&
+        data.note is string && data.note.size() <= 400 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBackupPart(data) {
+      return data.keys().hasAll([
+          'partId', 'backupId', 'ownerId', 'sectionKey', 'chunkIndex', 'totalChunks',
+          'isObjectSection', 'records', 'objectData', 'itemCount', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'partId', 'backupId', 'ownerId', 'sectionKey', 'chunkIndex', 'totalChunks',
+          'isObjectSection', 'records', 'objectData', 'itemCount', 'createdAt'
+        ]) &&
+        data.partId is string && data.partId.size() >= 2 && data.partId.size() <= 128 && data.partId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.backupId is string && data.backupId.size() >= 3 && data.backupId.size() <= 128 && data.backupId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.sectionKey is string && data.sectionKey.size() >= 1 && data.sectionKey.size() <= 64 && data.sectionKey.matches('^[a-zA-Z0-9_]+$') &&
+        data.chunkIndex is number && data.chunkIndex >= 0 && data.chunkIndex <= 500 &&
+        data.totalChunks is number && data.totalChunks >= 1 && data.totalChunks <= 500 &&
+        data.isObjectSection is bool &&
+        data.records is list && data.records.size() <= 200 &&
+        (data.records.size() == 0 || data.records[0] is map || data.records[0] is string) &&
+        data.objectData is map &&
+        data.itemCount is number && data.itemCount >= 0 && data.itemCount <= 200 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidBackupSetting(data) {
+      return data.keys().hasAll([
+          'ownerId', 'ownerEmail', 'autoWeeklyEnabled', 'intervalDays', 'preferredDayOfWeek',
+          'retentionWeeks', 'lastBackupId', 'lastBackupWeekKey', 'lastBackupAtIso',
+          'lastBackupLabel', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'ownerEmail', 'autoWeeklyEnabled', 'intervalDays', 'preferredDayOfWeek',
+          'retentionWeeks', 'lastBackupId', 'lastBackupWeekKey', 'lastBackupAtIso',
+          'lastBackupLabel', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 160 &&
+        data.autoWeeklyEnabled is bool &&
+        data.intervalDays is number && data.intervalDays >= 1 && data.intervalDays <= 30 &&
+        data.preferredDayOfWeek is number && data.preferredDayOfWeek >= 0 && data.preferredDayOfWeek <= 6 &&
+        data.retentionWeeks is number && data.retentionWeeks >= 2 && data.retentionWeeks <= 52 &&
+        data.lastBackupId is string && data.lastBackupId.size() <= 128 &&
+        data.lastBackupWeekKey is string && data.lastBackupWeekKey.size() <= 32 &&
+        data.lastBackupAtIso is string && data.lastBackupAtIso.size() <= 64 &&
+        data.lastBackupLabel is string && data.lastBackupLabel.size() <= 200 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // COLLECTION: /weeklyBackups/{backupId}
+    // =========================================================================
+    match /weeklyBackups/{backupId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(backupId) &&
+        (existing().ownerId == request.auth.uid || isAdmin());
+
+      allow list: if isVerifiedUser() &&
+        (existing().ownerId == request.auth.uid || isAdmin());
+
+      allow create: if isVerifiedUser() &&
+        isValidId(backupId) &&
+        isValidWeeklyBackup(incoming()) &&
+        incoming().id == backupId &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().ownerEmail == request.auth.token.email &&
+        incoming().status == 'UPLOADING' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(backupId) &&
+        isValidWeeklyBackup(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().ownerEmail == existing().ownerEmail &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Finalize snapshot upload (UPLOADING -> COMPLETED, locked thereafter)
+          (
+            existing().ownerId == request.auth.uid &&
+            existing().status == 'UPLOADING' &&
+            incoming().status == 'COMPLETED' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'totalParts', 'estimatedBytes', 'updatedAt'])
+          ) ||
+          // Action 2: Admin maintenance override (edit label/note or finalize)
+          (
+            isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['label', 'note', 'status', 'totalParts', 'estimatedBytes', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(backupId) &&
+        (existing().ownerId == request.auth.uid || isAdmin());
+
+      // =======================================================================
+      // SUBCOLLECTION: /weeklyBackups/{backupId}/parts/{partId}
+      // =======================================================================
+      match /parts/{partId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(backupId) &&
+          isValidId(partId) &&
+          (
+            get(/databases/$(database)/documents/weeklyBackups/$(backupId)).data.ownerId == request.auth.uid ||
+            isAdmin()
+          );
+
+        allow list: if isVerifiedUser() &&
+          (existing().ownerId == request.auth.uid || isAdmin());
+
+        allow create: if isVerifiedUser() &&
+          isValidId(backupId) &&
+          isValidId(partId) &&
+          isValidBackupPart(incoming()) &&
+          incoming().partId == partId &&
+          incoming().backupId == backupId &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/weeklyBackups/$(backupId)) &&
+          get(/databases/$(database)/documents/weeklyBackups/$(backupId)).data.ownerId == request.auth.uid &&
+          get(/databases/$(database)/documents/weeklyBackups/$(backupId)).data.status == 'UPLOADING';
+
+        // Backup parts are immutable once saved
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(backupId) &&
+          isValidId(partId) &&
+          (existing().ownerId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // =========================================================================
+    // COLLECTION: /backupSettings/{settingId}
+    // =========================================================================
+    match /backupSettings/{settingId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        (settingId == request.auth.uid || isAdmin());
+
+      allow list: if isVerifiedUser() &&
+        (existing().ownerId == request.auth.uid || isAdmin());
+
+      allow create: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        isValidBackupSetting(incoming()) &&
+        settingId == request.auth.uid &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().ownerEmail == request.auth.token.email &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        isValidBackupSetting(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().ownerEmail == existing().ownerEmail &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        ((settingId == request.auth.uid && existing().ownerId == request.auth.uid) || isAdmin()) && (
+          // Action 1: Update schedule & retention settings
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'autoWeeklyEnabled', 'intervalDays', 'preferredDayOfWeek', 'retentionWeeks', 'updatedAt'
+          ]) ||
+          // Action 2: Record latest completed backup pointer
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'lastBackupId', 'lastBackupWeekKey', 'lastBackupAtIso', 'lastBackupLabel', 'updatedAt'
+          ]) ||
+          // Action 3: Combined schedule + latest backup update
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'autoWeeklyEnabled', 'intervalDays', 'preferredDayOfWeek', 'retentionWeeks',
+            'lastBackupId', 'lastBackupWeekKey', 'lastBackupAtIso', 'lastBackupLabel', 'updatedAt'
+          ])
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        (existing().ownerId == request.auth.uid || isAdmin());
+    }
+  }
+}

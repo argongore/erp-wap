@@ -11,6 +11,7 @@ import {
   isExcludedFromDivisi,
   normalizeRoleMitra,
   getRoleMitraLabel,
+  sortTransactionsByDateDesc,
   type RiwayatDivisiKaryawan,
 } from './types.ts';
 import { supabaseSyncEngine } from './supabase.ts';
@@ -1886,7 +1887,7 @@ apiRouter.post('/transaksi/penjualan', async (req, res) => {
 apiRouter.get('/transaksi/penjualan', (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.penjualan });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.penjualan) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -1906,7 +1907,7 @@ apiRouter.post('/transaksi/pembelian-barang', async (req, res) => {
 apiRouter.get('/transaksi/pembelian-barang', (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.pembelianBarang || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.pembelianBarang) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -1954,7 +1955,7 @@ apiRouter.post('/transaksi/pembelian-hasil-bumi', async (req, res) => {
 apiRouter.get('/transaksi/pembelian-hasil-bumi', (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.pembelianHasilBumi });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.pembelianHasilBumi) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -2140,12 +2141,38 @@ apiRouter.put('/surat-jalan/:id', async (req, res) => {
   }
 });
 
+apiRouter.post('/surat-jalan/terima-uang-buyer', async (req, res) => {
+  try {
+    const { idInvoice, rekeningTujuan, tanggal, nominalMasuk, catatan } = req.body;
+    const record = await TransactionService.terimaUangBuyerSuratJalan(idInvoice, {
+      rekeningTujuan,
+      tanggal,
+      nominalMasuk,
+      catatan,
+    });
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/surat-jalan/batal-terima-uang-buyer', async (req, res) => {
+  try {
+    const { idInvoice } = req.body;
+    const record = await TransactionService.batalTerimaUangBuyerSuratJalan(idInvoice);
+    res.json({ success: true, data: record });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+
 apiRouter.post('/surat-jalan/cairkan', async (req, res) => {
   try {
-    const { idInvoice, rekeningSumber, tanggal } = req.body;
+    const { idInvoice, rekeningSumber, tanggal, catatArusKas } = req.body;
     const record = await TransactionService.cairkanInvoiceSuratJalan(idInvoice, {
       rekeningSumber,
       tanggal,
+      catatArusKas,
     });
     res.json({ success: true, data: record });
   } catch (err: any) {
@@ -2195,7 +2222,7 @@ apiRouter.post('/rekap-ctr/sync', async (_req, res) => {
 apiRouter.get('/transaksi/penjualan-hasil-bumi', (_req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.penjualanHasilBumi || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.penjualanHasilBumi) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -2246,7 +2273,7 @@ apiRouter.post('/transaksi/kasbon-uang', async (req, res) => {
 apiRouter.get('/transaksi/kasbon-uang', (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.kasbonUang });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.kasbonUang) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -2336,7 +2363,7 @@ apiRouter.post('/transaksi/bayar-bon', async (req, res) => {
 apiRouter.get('/transaksi/bayar-bon', (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.bayarBon });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.bayarBon) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -2354,7 +2381,7 @@ apiRouter.post('/transaksi/transfer-rekening', async (req, res) => {
 apiRouter.get('/transaksi/transfer-rekening', (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.transferRekening });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.transferRekening) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -2939,7 +2966,7 @@ apiRouter.get('/karyawan/rekap', (_req, res) => {
 apiRouter.get('/karyawan/upah-harian', (_req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.upahHarian || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.upahHarian) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -3411,7 +3438,7 @@ apiRouter.post('/transaksi/penggajian/batch', async (req, res) => {
 apiRouter.get('/transaksi/penggajian', (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.penggajian || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.penggajian) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -3443,7 +3470,7 @@ apiRouter.get('/transaksi/upah-harian', (req, res) => {
         return parts.length >= 3 && Number(parts[1]) === bNum && Number(parts[2]) === tNum;
       });
     }
-    res.json({ success: true, data: list });
+    res.json({ success: true, data: sortTransactionsByDateDesc(list) });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -3831,7 +3858,7 @@ apiRouter.post('/supabase/test', async (_req, res) => {
 apiRouter.post('/supabase/sync-push', async (_req, res) => {
   try {
     const db = dbManager.get();
-    const result = await supabaseSyncEngine.pushToSupabase(db);
+    const result = await supabaseSyncEngine.pushToSupabase(db, { allowOverwrite: true });
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
@@ -4050,7 +4077,7 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
         rekening: db.rekening || [],
         mitra: db.mitra || [],
         karyawan: karyawanEnriched,
-        upahHarian: db.upahHarian || [],
+        upahHarian: sortTransactionsByDateDesc(db.upahHarian),
         produk: db.produk || [],
         kategoriProduk,
         stokBarang: (db.stokBarang || []).map((s) => {
@@ -4062,20 +4089,20 @@ apiRouter.get('/erp-snapshot', (_req, res) => {
           };
         }),
         stokHasilBumi: db.stokHasilBumi || [],
-        penjualan: db.penjualan || [],
-        pembelianHasilBumi: db.pembelianHasilBumi || [],
-        penjualanHasilBumi: db.penjualanHasilBumi || [],
-        pembelianBarang: db.pembelianBarang || [],
+        penjualan: sortTransactionsByDateDesc(db.penjualan),
+        pembelianHasilBumi: sortTransactionsByDateDesc(db.pembelianHasilBumi),
+        penjualanHasilBumi: sortTransactionsByDateDesc(db.penjualanHasilBumi),
+        pembelianBarang: sortTransactionsByDateDesc(db.pembelianBarang),
         brilink: TransactionService.getBrilinkList(),
         uangMasuk: TransactionService.getUangMasukList(),
         pencairanTitipan: TransactionService.getPencairanTitipanList(),
-        kasbonUang: db.kasbonUang || [],
-        bayarBon: db.bayarBon || [],
+        kasbonUang: sortTransactionsByDateDesc(db.kasbonUang),
+        bayarBon: sortTransactionsByDateDesc(db.bayarBon),
         pengeluaran: TransactionService.getPengeluaranList(),
         masterItemPengeluaran: TransactionService.getMasterItemPengeluaran(),
         notaSilang: TransactionService.getNotaSilangList(),
-        transferRekening: db.transferRekening || [],
-        penggajian: db.penggajian || [],
+        transferRekening: sortTransactionsByDateDesc(db.transferRekening),
+        penggajian: sortTransactionsByDateDesc(db.penggajian),
         auditLogs: db.auditLogs || [],
         profilPerusahaan: TransactionService.getProfilPerusahaan(),
         inventaris: db.inventaris || [],

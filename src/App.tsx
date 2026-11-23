@@ -29,8 +29,16 @@ import { RekapTransaksiView } from './components/laporan/RekapTransaksiView.tsx'
 import { RekapSemuaTransaksiHarianView } from './components/laporan/RekapSemuaTransaksiHarianView.tsx';
 import { AuditLogView } from './components/laporan/AuditLogView.tsx';
 import { DatabaseExplorerView } from './components/database/DatabaseExplorerView.tsx';
+import { BackupMingguanView } from './components/database/BackupMingguanView.tsx';
 import { SupabaseSyncModal } from './components/database/SupabaseSyncModal.tsx';
 import { ModalBackupFullSpreadsheet } from './components/database/ModalBackupFullSpreadsheet.tsx';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth as firebaseBackupAuth } from './lib/firebase.ts';
+import {
+  getOrCreateBackupSettings,
+  evaluateWeeklySchedule,
+  createWeeklyBackupSnapshot,
+} from './services/weeklyBackupService.ts';
 import {
   convertErpSnapshotToRawDb,
   saveEmergencyLocalSnapshot,
@@ -302,6 +310,7 @@ export default function App() {
   const lastFocusRefreshRef = useRef<number>(0);
   const retryTimerRef = useRef<number | null>(null);
   const lastInteractionCheckRef = useRef<number>(0);
+  const autoWeeklyCheckedUidRef = useRef<string | null>(null);
 
   const applySnapshot = useCallback((snap: Awaited<ReturnType<typeof api.getErpSnapshot>>) => {
     if (snap.dashboard) setStats(snap.dashboard);
@@ -750,6 +759,35 @@ export default function App() {
       auditLogs,
     ]
   );
+
+  // Silent, non-blocking background check for automatic weekly backup when Google backup session is active
+  useEffect(() => {
+    if (authRole !== 'KASIR' || loading) return;
+    const unsub = onAuthStateChanged(firebaseBackupAuth, (gUser) => {
+      if (!gUser || !gUser.emailVerified) return;
+      if (autoWeeklyCheckedUidRef.current === gUser.uid) return;
+      autoWeeklyCheckedUidRef.current = gUser.uid;
+
+      void (async () => {
+        try {
+          const cfg = await getOrCreateBackupSettings(gUser);
+          const evalRes = evaluateWeeklySchedule(cfg);
+          if (evalRes.isDue) {
+            await createWeeklyBackupSnapshot(gUser, {
+              triggerMode: 'AUTO_WEEKLY',
+              note: `Backup otomatis mingguan (${evalRes.reason})`,
+              fallbackClientDb: fallbackClientDbForBackup,
+              companyName: profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA',
+            });
+          }
+        } catch (err) {
+          // Non-blocking: never interrupt active Supabase cashier operations
+          console.warn('Auto weekly backup check skipped:', err);
+        }
+      })();
+    });
+    return () => unsub();
+  }, [authRole, loading, fallbackClientDbForBackup, profilPerusahaan?.namaPerusahaan]);
 
   // If URL has public share parameters, render the secure Read-Only Public Portal
   if (publicShareConfig) {
@@ -1374,6 +1412,7 @@ export default function App() {
                   stokList={stokHasilBumiList}
                   pembelianList={pembelianList}
                   penjualanHasilBumiList={penjualanHasilBumiList}
+                  uangMasukList={uangMasukList}
                   mitraList={mitraList}
                   rekeningList={rekeningList}
                   onRefresh={loadAllData}
@@ -1433,6 +1472,18 @@ export default function App() {
                   onRefreshAll={loadAllData}
                   onNavigateToTab={(t) => setActiveTab(t as ActiveTab)}
                   onOpenBackupSpreadsheet={() => setShowBackupSpreadsheetModal(true)}
+                />
+              )}
+
+              {activeTab === 'backup-mingguan' && (
+                <BackupMingguanView
+                  fallbackClientDb={fallbackClientDbForBackup}
+                  companyName={profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
+                  supabaseConfigured={Boolean(supabaseStatus?.configured)}
+                  onAfterRestore={() => {
+                    void loadAllData();
+                    void checkAndSyncSupabase();
+                  }}
                 />
               )}
             </ErrorBoundary>

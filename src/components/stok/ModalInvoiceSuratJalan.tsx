@@ -22,6 +22,7 @@ import {
   StokHasilBumi,
   InvoiceSuratJalanRecord,
   InvoiceSuratJalanDetailItem,
+  RekapCtrContract,
   TransaksiPenjualanHasilBumi,
 } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
@@ -122,6 +123,16 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
   const [kategoriKode, setKategoriKode] = useState<string>('');
   const [catatan, setCatatan] = useState<string>('Pembayaran Via Transfer');
 
+  // Pilihan Nomor Kontrak CTR (mencegah salah masuk kontrak saat kontrak berdekatan)
+  const [rekapCtrList, setRekapCtrList] = useState<RekapCtrContract[]>([]);
+  const [selectedCtrId, setSelectedCtrId] = useState<string>('');
+  const [showQuickAddCtr, setShowQuickAddCtr] = useState<boolean>(false);
+  const [quickCtrNoKontrak, setQuickCtrNoKontrak] = useState<string>('');
+  const [quickCtrTgl, setQuickCtrTgl] = useState<string>('');
+  const [quickCtrGudang, setQuickCtrGudang] = useState<string>('');
+  const [quickCtrQty, setQuickCtrQty] = useState<string>('');
+  const [quickCtrSaving, setQuickCtrSaving] = useState<boolean>(false);
+
   // Dynamic multi-partai detail rows
   const [detailRows, setDetailRows] = useState<DetailDraftRow[]>(() => [
     createEmptyDetailRow(1, { rendemenStr: '90,05' }),
@@ -174,7 +185,8 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
       api.getRekapMitra().catch(() => null),
       api.getInvoiceSuratJalan().catch(() => [] as InvoiceSuratJalanRecord[]),
       api.getPenjualanHasilBumi().catch(() => [] as TransaksiPenjualanHasilBumi[]),
-    ]).then(([mRes, rekapRes, invRes, jhbRes]) => {
+      api.getRekapCtr().catch(() => [] as RekapCtrContract[]),
+    ]).then(([mRes, rekapRes, invRes, jhbRes, ctrRes]) => {
       if (Array.isArray(mRes)) setMitraList(mRes);
       const map = new Map<string, number>();
       for (const it of rekapRes?.items || []) {
@@ -188,6 +200,7 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
       setPiutangMap(map);
       if (Array.isArray(invRes)) setInvoiceHistory(invRes);
       if (Array.isArray(jhbRes)) setPenjualanHbList(jhbRes);
+      if (Array.isArray(ctrRes)) setRekapCtrList(ctrRes);
     });
   };
 
@@ -206,6 +219,8 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     setNoInvoice(`WAP${y}${m}${d}-${Math.floor(100 + Math.random() * 900)}`);
     setTanggal(`${d}/${m}/${y}`);
     setKategoriKode('');
+    setSelectedCtrId('');
+    setShowQuickAddCtr(false);
     setCatatan('Pembayaran Via Transfer');
     setDetailRows([createEmptyDetailRow(1, { rendemenStr: '90,05' })]);
     setPajakAuto(true);
@@ -242,6 +257,8 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     setNoInvoice(inv.noInvoice);
     setTanggal(inv.tanggal);
     setKategoriKode(inv.kategoriKode || '');
+    setSelectedCtrId(inv.rekapCtrId || '');
+    setShowQuickAddCtr(false);
     setCatatan(inv.catatan || 'Pembayaran Via Transfer');
 
     const srcDetails = getSuratJalanDetails(inv);
@@ -610,6 +627,112 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
     setDetailRows((prev) => prev.filter((r) => r.id !== id));
   };
 
+  const ctrOptionsWithMetrics = useMemo(() => {
+    const editingInvNo = editingInvoice?.noInvoice || '';
+    const editingInvId = editingInvoice?.id || '';
+    return [...rekapCtrList]
+      .sort((a, b) => (b.noUrut || 0) - (a.noUrut || 0))
+      .map((ctr) => {
+        const rows = Array.isArray(ctr.rows) ? ctr.rows : [];
+        const usedKg = rows.reduce((sum, r) => {
+          // Saat edit invoice yang sudah ada di kontrak ini, jangan hitung dobel baris lamanya
+          if (
+            editingInvoice &&
+            r.sourceRefId &&
+            ((editingInvNo &&
+              (r.sourceRefId === editingInvNo || r.sourceRefId.startsWith(`${editingInvNo}-`))) ||
+              (editingInvId &&
+                (r.sourceRefId === editingInvId || r.sourceRefId.startsWith(`${editingInvId}-`))))
+          ) {
+            return sum;
+          }
+          return sum + (Number(r.qtyAkhir) || 0);
+        }, 0);
+        const targetKg = Number(ctr.qtyCtr) || 0;
+        const sisaKg = targetKg > 0 ? Math.round((targetKg - usedKg) * 10) / 10 : null;
+        const isSelesai =
+          ctr.statusKontrak === 'SELESAI' ||
+          (ctr.statusKontrak === undefined && ctr.noUrut <= 26);
+        return {
+          ctr,
+          usedKg: Math.round(usedKg * 10) / 10,
+          targetKg,
+          sisaKg,
+          isSelesai,
+        };
+      });
+  }, [rekapCtrList, editingInvoice]);
+
+  const selectedCtrSummary = useMemo(
+    () => ctrOptionsWithMetrics.find((x) => x.ctr.id === selectedCtrId) || null,
+    [ctrOptionsWithMetrics, selectedCtrId]
+  );
+
+  const handleSelectCtr = (ctrId: string) => {
+    setSelectedCtrId(ctrId);
+    const found = rekapCtrList.find((c) => c.id === ctrId);
+    if (found && found.gudang) {
+      setKategoriKode(found.gudang.trim().toUpperCase());
+    }
+  };
+
+  const handleQuickCreateCtr = async () => {
+    const gudangUpper = (quickCtrGudang || kategoriKode || 'SKA').trim().toUpperCase();
+    const noKontrakUpper = quickCtrNoKontrak.trim().toUpperCase();
+    const qtyNum = parseIndoNumber(quickCtrQty);
+    if (!gudangUpper) {
+      setErrorMsg('Isi Buyer / Eksportir untuk kontrak baru (mis. LDC atau SKA).');
+      return;
+    }
+    setQuickCtrSaving(true);
+    setErrorMsg(null);
+    try {
+      const currentList = await api.getRekapCtr().catch(() => rekapCtrList);
+      const maxNo = (currentList || []).reduce((m, c) => Math.max(m, c.noUrut || 0), 27);
+      const nextNo = maxNo + 1;
+      const newCtrId = `CTR-${nextNo}-${Date.now()}`;
+      const newCtr: RekapCtrContract = {
+        id: newCtrId,
+        noUrut: nextNo,
+        noKontrak: noKontrakUpper || undefined,
+        tglCtr: quickCtrTgl.trim() || tanggal || '-',
+        gudang: gudangUpper,
+        qtyCtr: qtyNum > 0 ? qtyNum : 0,
+        statusKontrak: 'AKTIF',
+        rows: [
+          {
+            id: `CTR-${nextNo}-1-${Date.now()}`,
+            basisWap: 62000,
+            basisSuplayer: 62000,
+            namaSuplayer: '',
+            qtySuplayer: null,
+            tglMasuk: '',
+            truck: '',
+            qtyAwal: null,
+            qtyAkhir: 0,
+            rendemen: 0,
+            komisiNominal: 0,
+            cekList: false,
+            sourceType: 'MANUAL',
+          },
+        ],
+      };
+      const saved = await api.saveRekapCtr([...(currentList || []), newCtr]);
+      setRekapCtrList(Array.isArray(saved) ? saved : [...(currentList || []), newCtr]);
+      setSelectedCtrId(newCtrId);
+      setKategoriKode(gudangUpper);
+      setShowQuickAddCtr(false);
+      setQuickCtrNoKontrak('');
+      setQuickCtrTgl('');
+      setQuickCtrGudang('');
+      setQuickCtrQty('');
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal membuat kontrak CTR baru.');
+    } finally {
+      setQuickCtrSaving(false);
+    }
+  };
+
   const buildCurrentPrintableInvoice = (): PrintableInvoiceSuratJalan | null => {
     const resolvedNamaMitra =
       selectedMitra?.nama ||
@@ -752,6 +875,9 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
         statusPembayaranMitra: isStokHb ? ('LUNAS' as const) : statusPembayaranMitra,
         sumberBarang,
         noPenjualanHasilBumi: isStokHb && noPenjualanHasilBumi ? noPenjualanHasilBumi : undefined,
+        rekapCtrId: selectedCtrId || undefined,
+        rekapCtrNoUrut: selectedCtrSummary?.ctr.noUrut,
+        rekapCtrNoKontrak: selectedCtrSummary?.ctr.noKontrak,
       };
 
       if (editingInvoice) {
@@ -1093,6 +1219,209 @@ export const ModalInvoiceSuratJalan: React.FC<ModalInvoiceSuratJalanProps> = ({
                     className="w-full px-3 py-2 rounded-lg border border-zinc-300 text-xs font-mono"
                   />
                 </div>
+              </div>
+
+              {/* Pilihan Nomor Kontrak CTR (Pembeda Kontrak Berdekatan) */}
+              <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/40 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-950">
+                      Masuk ke Nomor Kontrak CTR (Rekap CTR)
+                    </label>
+                    <p className="text-[11px] text-indigo-700">
+                      Pilih kontrak tujuan agar pengiriman yang datang berbarengan tidak tertukar antar kontrak.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowQuickAddCtr((v) => !v);
+                      if (!showQuickAddCtr) {
+                        setQuickCtrGudang((kategoriKode || 'LDC').trim().toUpperCase());
+                        setQuickCtrTgl('');
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-[11px] font-bold cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{showQuickAddCtr ? 'Tutup Form Kontrak' : 'Buat Kontrak Baru'}</span>
+                  </button>
+                </div>
+
+                <select
+                  value={selectedCtrId}
+                  onChange={(e) => handleSelectCtr(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-indigo-300 bg-white text-xs font-semibold text-slate-900"
+                >
+                  <option value="">
+                    -- Otomatis (Ikuti Buyer &amp; Tanggal Invoice) --
+                  </option>
+                  {ctrOptionsWithMetrics.some((x) => !x.isSelesai) && (
+                    <optgroup label="Kontrak Aktif / Sedang Berjalan">
+                      {ctrOptionsWithMetrics
+                        .filter((x) => !x.isSelesai)
+                        .map(({ ctr, usedKg, targetKg, sisaKg }) => (
+                          <option key={ctr.id} value={ctr.id}>
+                            CTR #{ctr.noUrut}
+                            {ctr.noKontrak ? ` · ${ctr.noKontrak}` : ''} · {ctr.gudang} · {ctr.tglCtr}
+                            {targetKg > 0
+                              ? ` · Sisa ${(sisaKg ?? 0).toLocaleString('id-ID')} / ${targetKg.toLocaleString('id-ID')} Kg`
+                              : usedKg > 0
+                              ? ` · Masuk ${usedKg.toLocaleString('id-ID')} Kg`
+                              : ' · Kontrak Baru'}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                  {ctrOptionsWithMetrics.some((x) => x.isSelesai) && (
+                    <optgroup label="Kontrak Selesai / Arsip Lama">
+                      {ctrOptionsWithMetrics
+                        .filter((x) => x.isSelesai)
+                        .map(({ ctr, usedKg, targetKg }) => (
+                          <option key={ctr.id} value={ctr.id}>
+                            [SELESAI] CTR #{ctr.noUrut}
+                            {ctr.noKontrak ? ` · ${ctr.noKontrak}` : ''} · {ctr.gudang} · {ctr.tglCtr} (
+                            {usedKg.toLocaleString('id-ID')}
+                            {targetKg > 0 ? ` / ${targetKg.toLocaleString('id-ID')}` : ''} Kg)
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                </select>
+
+                {/* Inline Quick Add Kontrak Baru */}
+                {showQuickAddCtr && (
+                  <div className="p-3 rounded-lg bg-white border border-indigo-200 space-y-2.5">
+                    <div className="text-[11px] font-bold text-indigo-950">
+                      Input Kontrak Baru (Langsung Tersimpan ke Rekap CTR &amp; Terpilih)
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                          No. / Kode Kontrak *
+                        </label>
+                        <input
+                          type="text"
+                          value={quickCtrNoKontrak}
+                          onChange={(e) => setQuickCtrNoKontrak(e.target.value.toUpperCase())}
+                          placeholder="mis. LDC-08/11"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-mono text-xs uppercase font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                          Tanggal Kontrak
+                        </label>
+                        <input
+                          type="text"
+                          value={quickCtrTgl}
+                          onChange={(e) => setQuickCtrTgl(e.target.value)}
+                          placeholder="mis. 8 November"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                          Buyer / Eksportir *
+                        </label>
+                        <input
+                          type="text"
+                          value={quickCtrGudang}
+                          onChange={(e) => setQuickCtrGudang(e.target.value.toUpperCase())}
+                          placeholder="LDC / SKA"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs uppercase font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                          Target Tonase (Kg)
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={quickCtrQty}
+                          onChange={(e) => setQuickCtrQty(sanitizeDecimalInput(e.target.value))}
+                          placeholder="mis. 35000"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-mono text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowQuickAddCtr(false)}
+                        className="px-2.5 py-1 rounded-lg border border-slate-300 text-slate-600 text-[11px] font-semibold cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                      <button
+                        type="button"
+                        disabled={quickCtrSaving}
+                        onClick={handleQuickCreateCtr}
+                        className="px-3 py-1 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                      >
+                        {quickCtrSaving ? 'Menyimpan...' : 'Simpan & Pilih Kontrak'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Live Quota Monitor untuk Kontrak Terpilih */}
+                {selectedCtrSummary && (() => {
+                  const { ctr, usedKg, targetKg } = selectedCtrSummary;
+                  const sisaSetelah =
+                    targetKg > 0
+                      ? Math.round((targetKg - usedKg - totalTonaseAkhirKg) * 10) / 10
+                      : null;
+                  const isOver = sisaSetelah !== null && sisaSetelah < 0;
+                  return (
+                    <div
+                      className={`p-2.5 rounded-lg border text-[11px] tabular-nums space-y-1 ${
+                        isOver
+                          ? 'bg-amber-50 border-amber-300 text-amber-950'
+                          : 'bg-white border-indigo-200 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-indigo-950">
+                          CTR #{ctr.noUrut}
+                          {ctr.noKontrak ? ` · ${ctr.noKontrak}` : ''} ({ctr.gudang} · {ctr.tglCtr})
+                        </span>
+                        <div className="flex flex-wrap items-center gap-3 font-mono">
+                          {targetKg > 0 && (
+                            <span>
+                              Target: <strong>{targetKg.toLocaleString('id-ID')} Kg</strong>
+                            </span>
+                          )}
+                          <span>
+                            Terkirim: <strong>{usedKg.toLocaleString('id-ID')} Kg</strong>
+                          </span>
+                          <span className="text-sky-800">
+                            Invoice ini: <strong>+{totalTonaseAkhirKg.toLocaleString('id-ID')} Kg</strong>
+                          </span>
+                          {sisaSetelah !== null && (
+                            <span
+                              className={
+                                isOver
+                                  ? 'text-rose-700 font-extrabold'
+                                  : 'text-emerald-700 font-extrabold'
+                              }
+                            >
+                              Sisa: {sisaSetelah.toLocaleString('id-ID')} Kg
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {isOver && (
+                        <div className="text-[10px] text-amber-800 font-semibold">
+                          Perhatian: Total tonase melebihi target kontrak ini sebesar{' '}
+                          {Math.abs(sisaSetelah || 0).toLocaleString('id-ID')} Kg. Pastikan truk ini memang untuk kontrak{' '}
+                          {ctr.noKontrak || `CTR #${ctr.noUrut}`} atau pindahkan ke kontrak berikutnya.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Detail Barang / Multi-Partai */}

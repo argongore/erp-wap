@@ -15,13 +15,17 @@ import {
   AlertCircle,
   X,
   Pencil,
+  ArrowDownLeft,
+  RotateCcw,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import {
   InvoiceSuratJalanRecord,
   Mitra,
+  RekapCtrContract,
   Rekening,
   StokHasilBumi,
+  isInternalMilikSendiriSuratJalan,
 } from '../../server/types.ts';
 import { formatRupiah } from '../../utils/format.ts';
 import {
@@ -47,38 +51,74 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
 }) => {
   const [activeSubView, setActiveSubView] = useState<'INVOICE' | 'REKAP_CTR'>('INVOICE');
   const [invoices, setInvoices] = useState<InvoiceSuratJalanRecord[]>([]);
+  const [rekapCtrList, setRekapCtrList] = useState<RekapCtrContract[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showModalInput, setShowModalInput] = useState<boolean>(false);
   const [editingInvoice, setEditingInvoice] = useState<InvoiceSuratJalanRecord | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<'SEMUA' | 'PENDING' | 'LUNAS'>('SEMUA');
+  const [statusFilter, setStatusFilter] = useState<'SEMUA' | 'PENDING' | 'SIAP_BAYAR' | 'LUNAS'>('SEMUA');
+  const [ctrFilter, setCtrFilter] = useState<string>('SEMUA');
 
-  // Preview Detail Modal
-  const [previewTarget, setPreviewTarget] = useState<InvoiceSuratJalanRecord | null>(null);
-
-  // Modal Pencairan
-  const [cairkanTarget, setCairkanTarget] = useState<InvoiceSuratJalanRecord | null>(null);
-  const [cairkanTanggal, setCairkanTanggal] = useState<string>(() => {
+  const getTodayDmy = () => {
     const now = new Date();
     const d = String(now.getDate()).padStart(2, '0');
     const m = String(now.getMonth() + 1).padStart(2, '0');
     const y = now.getFullYear();
     return `${d}/${m}/${y}`;
-  });
+  };
+
+  // Preview Detail Modal
+  const [previewTarget, setPreviewTarget] = useState<InvoiceSuratJalanRecord | null>(null);
+
+  // Modal Tahap 1: Terima Uang Masuk Buyer
+  const [terimaBuyerTarget, setTerimaBuyerTarget] = useState<InvoiceSuratJalanRecord | null>(null);
+  const [terimaBuyerTanggal, setTerimaBuyerTanggal] = useState<string>(getTodayDmy);
+  const [terimaBuyerRekening, setTerimaBuyerRekening] = useState<string>('BNI01');
+  const [terimaBuyerNominal, setTerimaBuyerNominal] = useState<string>('');
+  const [terimaBuyerCatatan, setTerimaBuyerCatatan] = useState<string>('');
+  const [terimaBuyerLoading, setTerimaBuyerLoading] = useState<boolean>(false);
+
+  // Modal Konfirmasi Batalkan Tahap 1
+  const [batalBuyerTarget, setBatalBuyerTarget] = useState<InvoiceSuratJalanRecord | null>(null);
+  const [batalBuyerLoading, setBatalBuyerLoading] = useState<boolean>(false);
+
+  // Modal Tahap 2: Pencairan / Bayar Hak Mitra
+  const [cairkanTarget, setCairkanTarget] = useState<InvoiceSuratJalanRecord | null>(null);
+  const [cairkanTanggal, setCairkanTanggal] = useState<string>(getTodayDmy);
   const [cairkanRekening, setCairkanRekening] = useState<string>('BNI01');
+  const [cairkanCatatKas, setCairkanCatatKas] = useState<boolean>(true);
   const [cairkanLoading, setCairkanLoading] = useState<boolean>(false);
 
   // Modal Konfirmasi Hapus
   const [deleteTarget, setDeleteTarget] = useState<InvoiceSuratJalanRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState<boolean>(false);
 
+  const activeRealRekeningList = useMemo(
+    () => rekeningList.filter((r) => !r.isVirtual && r.status === 'AKTIF'),
+    [rekeningList]
+  );
+
+  const getRekDisplayLabel = (r: Rekening) =>
+    r.kode === 'BNI01' && !/direct/i.test(r.nama || '') ? 'BNI DIRECT' : r.nama;
+
+  const getDefaultBniKode = () => {
+    const bni = activeRealRekeningList.find(
+      (r) => r.kode === 'BNI01' || /bni\s*direct/i.test(r.nama || '')
+    );
+    return bni?.kode || activeRealRekeningList[0]?.kode || 'BNI01';
+  };
+
   const loadData = async () => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const data = await api.getInvoiceSuratJalan();
+      const [data, ctrData] = await Promise.all([
+        api.getInvoiceSuratJalan(),
+        api.getRekapCtr().catch(() => [] as RekapCtrContract[]),
+      ]);
       setInvoices(Array.isArray(data) ? data : []);
+      setRekapCtrList(Array.isArray(ctrData) ? ctrData : []);
     } catch (err: any) {
       setErrorMsg(err?.message || 'Gagal memuat rekapitulasi invoice surat jalan');
     } finally {
@@ -86,12 +126,19 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
     }
   };
 
+  const ctrByIdMap = useMemo(() => {
+    const map = new Map<string, RekapCtrContract>();
+    for (const c of rekapCtrList) {
+      map.set(c.id, c);
+    }
+    return map;
+  }, [rekapCtrList]);
+
   useEffect(() => {
     loadData();
-    const bni = rekeningList.find(
-      (r) => r.kode === 'BNI01' || /bni\s*direct/i.test(r.nama || '')
-    );
-    if (bni) setCairkanRekening(bni.kode);
+    const defKode = getDefaultBniKode();
+    setCairkanRekening(defKode);
+    setTerimaBuyerRekening(defKode);
   }, [rekeningList]);
 
   const summary = useMemo(() => {
@@ -103,6 +150,9 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
     let totalKomisi = 0;
     let stokHbCount = 0;
     let stokHbOmzet = 0;
+    let siapBayarCount = 0;
+    let danaBuyerMenungguTransfer = 0;
+    let hakSiapBayar = 0;
 
     for (const inv of invoices) {
       const valBuyer = inv.totalPenjualanBuyer || inv.totalPenjualanMitra || 0;
@@ -110,13 +160,18 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
       untungPt += inv.totalKeuntunganPt || 0;
       totalTonaseKg += inv.tonaseAkhirKg || 0;
       totalKomisi += inv.komisiNominal || 0;
-      if (inv.sumberBarang === 'STOK_HB_PT') {
+      if (isInternalMilikSendiriSuratJalan(inv)) {
         stokHbCount += 1;
         stokHbOmzet += valBuyer;
         continue;
       }
       if (inv.statusPembayaranMitra === 'PENDING') {
         pendingHak += inv.jumlahPembayaranMitra || 0;
+        if (inv.statusUangBuyer === 'DITERIMA') {
+          siapBayarCount += 1;
+          danaBuyerMenungguTransfer += inv.nominalUangBuyerMasuk || valBuyer;
+          hakSiapBayar += inv.jumlahPembayaranMitra || 0;
+        }
       } else {
         lunasHak += inv.jumlahPembayaranMitra || 0;
       }
@@ -131,19 +186,37 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
       totalKomisi,
       stokHbCount,
       stokHbOmzet,
+      siapBayarCount,
+      danaBuyerMenungguTransfer,
+      hakSiapBayar,
       pendingCount: invoices.filter(
-        (i) => i.sumberBarang !== 'STOK_HB_PT' && i.statusPembayaranMitra === 'PENDING'
+        (i) => !isInternalMilikSendiriSuratJalan(i) && i.statusPembayaranMitra === 'PENDING'
       ).length,
     };
   }, [invoices]);
 
   const filteredInvoices = useMemo(() => {
     return invoices.filter((inv) => {
-      const isStokHb = inv.sumberBarang === 'STOK_HB_PT';
-      if (statusFilter === 'PENDING' && (isStokHb || inv.statusPembayaranMitra !== 'PENDING')) {
+      const isOwnSale = isInternalMilikSendiriSuratJalan(inv);
+      const isOwnSettled =
+        isOwnSale && (inv.statusUangBuyer === 'DITERIMA' || inv.statusPembayaranMitra === 'LUNAS');
+      if (statusFilter === 'PENDING') {
+        if (isOwnSale ? isOwnSettled : inv.statusPembayaranMitra !== 'PENDING') {
+          return false;
+        }
+      }
+      if (
+        statusFilter === 'SIAP_BAYAR' &&
+        (isOwnSale || inv.statusPembayaranMitra !== 'PENDING' || inv.statusUangBuyer !== 'DITERIMA')
+      ) {
         return false;
       }
-      if (statusFilter === 'LUNAS' && !isStokHb && inv.statusPembayaranMitra !== 'LUNAS') {
+      if (statusFilter === 'LUNAS') {
+        if (isOwnSale ? !isOwnSettled : inv.statusPembayaranMitra !== 'LUNAS') {
+          return false;
+        }
+      }
+      if (ctrFilter !== 'SEMUA' && inv.rekapCtrId !== ctrFilter) {
         return false;
       }
 
@@ -156,6 +229,14 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
           (d.platTruk && d.platTruk.toLowerCase().includes(q)) ||
           (d.keterangan && d.keterangan.toLowerCase().includes(q))
       );
+      const linkedCtr = inv.rekapCtrId ? ctrByIdMap.get(inv.rekapCtrId) : undefined;
+      const ctrSearchText = [
+        linkedCtr ? `ctr #${linkedCtr.noUrut}` : inv.rekapCtrNoUrut ? `ctr #${inv.rekapCtrNoUrut}` : '',
+        linkedCtr?.noKontrak || inv.rekapCtrNoKontrak || '',
+        linkedCtr?.tglCtr || '',
+      ]
+        .join(' ')
+        .toLowerCase();
 
       return (
         inv.noInvoice.toLowerCase().includes(q) ||
@@ -165,10 +246,73 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
         (inv.platTruk && inv.platTruk.toLowerCase().includes(q)) ||
         (inv.noPenjualanHasilBumi && inv.noPenjualanHasilBumi.toLowerCase().includes(q)) ||
         inv.tanggal.toLowerCase().includes(q) ||
+        ctrSearchText.includes(q) ||
         matchDetail
       );
     });
-  }, [invoices, statusFilter, searchQuery]);
+  }, [invoices, statusFilter, ctrFilter, searchQuery, ctrByIdMap]);
+
+  const openTerimaBuyerModal = (inv: InvoiceSuratJalanRecord) => {
+    const defaultNom = Math.round(Number(inv.totalPenjualanBuyer || inv.totalPenjualanMitra) || 0);
+    setTerimaBuyerTarget(inv);
+    setTerimaBuyerTanggal(getTodayDmy());
+    setTerimaBuyerRekening(inv.rekeningPtKode || getDefaultBniKode());
+    setTerimaBuyerNominal(String(defaultNom));
+    setTerimaBuyerCatatan('');
+  };
+
+  const handleTerimaBuyer = async () => {
+    if (!terimaBuyerTarget) return;
+    const parsedNominal = Math.round(Number(terimaBuyerNominal.replace(/[^\d]/g, '')) || 0);
+    if (parsedNominal <= 0) {
+      setErrorMsg('Nominal uang masuk buyer harus lebih dari Rp 0');
+      return;
+    }
+    setTerimaBuyerLoading(true);
+    setErrorMsg(null);
+    try {
+      await api.terimaUangBuyerSuratJalan({
+        idInvoice: terimaBuyerTarget.id,
+        rekeningTujuan: terimaBuyerRekening,
+        tanggal: terimaBuyerTanggal,
+        nominalMasuk: parsedNominal,
+        catatan: terimaBuyerCatatan.trim() || undefined,
+      });
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      onRefreshParent?.();
+      loadData();
+      setTerimaBuyerTarget(null);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal mencatat uang masuk buyer');
+    } finally {
+      setTerimaBuyerLoading(false);
+    }
+  };
+
+  const handleBatalTerimaBuyer = async () => {
+    if (!batalBuyerTarget) return;
+    setBatalBuyerLoading(true);
+    setErrorMsg(null);
+    try {
+      await api.batalTerimaUangBuyerSuratJalan(batalBuyerTarget.id);
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+      onRefreshParent?.();
+      loadData();
+      setBatalBuyerTarget(null);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal membatalkan penerimaan uang buyer');
+    } finally {
+      setBatalBuyerLoading(false);
+    }
+  };
+
+  const openCairkanModal = (inv: InvoiceSuratJalanRecord) => {
+    setCairkanTarget(inv);
+    setCairkanTanggal(getTodayDmy());
+    setCairkanRekening(inv.rekeningTerimaBuyerKode || inv.rekeningPtKode || getDefaultBniKode());
+    // Default Kas Riil jika Tahap 1 sudah masuk ke rekening PT, agar saldo bank otomatis klop
+    setCairkanCatatKas(inv.statusUangBuyer === 'DITERIMA');
+  };
 
   const handleCairkanInvoice = async () => {
     if (!cairkanTarget) return;
@@ -179,6 +323,7 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
         idInvoice: cairkanTarget.id,
         rekeningSumber: cairkanRekening,
         tanggal: cairkanTanggal,
+        catatArusKas: cairkanCatatKas,
       });
       window.dispatchEvent(new CustomEvent('erp:data-updated'));
       onRefreshParent?.();
@@ -341,7 +486,7 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
               {formatRupiah(summary.untungPt)}
             </div>
             <div className="text-[10px] text-indigo-700 mt-0.5 tabular-nums">
-              Komisi Jasa: {formatRupiah(summary.totalKomisi)}
+              Komisi Jasa: {formatRupiah(summary.totalKomisi)} · Otomatis masuk Arus Kas PT WAP (REK-WAP)
             </div>
           </div>
         </div>
@@ -360,7 +505,9 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
               {formatRupiah(summary.pendingHak)}
             </div>
             <div className="text-[10px] text-amber-700 mt-0.5 tabular-nums">
-              {summary.pendingCount} Nota Pending di BNI DIRECT
+              {summary.siapBayarCount > 0
+                ? `${summary.siapBayarCount} siap bayar (${formatRupiah(summary.hakSiapBayar)}) · ${summary.pendingCount} total pending`
+                : `${summary.pendingCount} Nota Pending Order`}
             </div>
           </div>
         </div>
@@ -389,8 +536,8 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
 
       {/* Filter & Search Bar */}
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5">
-          {(['SEMUA', 'PENDING', 'LUNAS'] as const).map((st) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(['SEMUA', 'PENDING', 'SIAP_BAYAR', 'LUNAS'] as const).map((st) => (
             <button
               key={st}
               type="button"
@@ -405,20 +552,42 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
                 ? 'Semua Status'
                 : st === 'PENDING'
                 ? `Pending Order${summary.pendingCount > 0 ? ` (${summary.pendingCount})` : ''}`
+                : st === 'SIAP_BAYAR'
+                ? `Buyer Masuk · Siap Bayar${summary.siapBayarCount > 0 ? ` (${summary.siapBayarCount})` : ''}`
                 : 'Lunas'}
             </button>
           ))}
         </div>
 
-        <div className="relative w-full sm:w-72">
-          <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari Invoice, Mitra, Truk..."
-            className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs focus:outline-sky-600"
-          />
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          {rekapCtrList.length > 0 && (
+            <select
+              value={ctrFilter}
+              onChange={(e) => setCtrFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 max-w-[240px]"
+              title="Filter berdasarkan Nomor Kontrak CTR"
+            >
+              <option value="SEMUA">Semua Kontrak CTR</option>
+              {[...rekapCtrList]
+                .sort((a, b) => (b.noUrut || 0) - (a.noUrut || 0))
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    CTR #{c.noUrut}
+                    {c.noKontrak ? ` · ${c.noKontrak}` : ''} ({c.gudang} · {c.tglCtr})
+                  </option>
+                ))}
+            </select>
+          )}
+          <div className="relative flex-1 sm:w-64">
+            <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Cari Invoice, Kontrak, Mitra, Truk..."
+              className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs focus:outline-sky-600"
+            />
+          </div>
         </div>
       </div>
 
@@ -467,6 +636,19 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
                             {inv.kategoriKode || 'SKA'}
                           </span>
                         </div>
+                        {(() => {
+                          const linkedCtr = inv.rekapCtrId ? ctrByIdMap.get(inv.rekapCtrId) : undefined;
+                          const ctrNo = linkedCtr?.noUrut ?? inv.rekapCtrNoUrut;
+                          const ctrCode = linkedCtr?.noKontrak || inv.rekapCtrNoKontrak;
+                          if (!ctrNo && !ctrCode) return null;
+                          return (
+                            <div className="text-[10px] font-mono font-bold text-indigo-700 mt-0.5">
+                              {ctrNo ? `CTR #${ctrNo}` : 'CTR'}
+                              {ctrCode ? ` · ${ctrCode}` : ''}
+                              {linkedCtr?.tglCtr ? ` (${linkedCtr.tglCtr})` : ''}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-3.5 py-3 align-top">
                         <div className="font-bold text-slate-900">{inv.namaMitra}</div>
@@ -476,6 +658,11 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
                             ? ` · ${inv.noPenjualanHasilBumi}`
                             : ''}
                         </div>
+                        {isInternalMilikSendiriSuratJalan(inv) && (
+                          <div className="text-[10px] font-semibold text-sky-700 mt-0.5">
+                            Penjualan Milik Sendiri
+                          </div>
+                        )}
                       </td>
                       <td className="px-3.5 py-3 align-top">
                         <div className="font-semibold text-slate-800">
@@ -525,26 +712,41 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
                       </td>
                       <td className="px-3.5 py-3 text-right font-mono font-bold text-cyan-900 align-top tabular-nums">
                         <div>{formatRupiah(inv.totalPenjualanBuyer || inv.totalPenjualanMitra)}</div>
-                        {inv.sumberBarang === 'STOK_HB_PT' && inv.catatArusKas === false && (
-                          <div className="text-[10px] font-sans font-normal text-slate-500">
-                            Rekap SJ · Non-Kas
+                        {inv.statusUangBuyer === 'DITERIMA' ? (
+                          <div className="text-[10px] font-sans font-semibold text-sky-700 mt-0.5">
+                            Masuk {inv.rekeningTerimaBuyerKode || inv.rekeningPtKode} ·{' '}
+                            {inv.tanggalUangBuyerMasuk || inv.tanggal}
+                            {inv.nominalUangBuyerMasuk &&
+                              Math.round(inv.nominalUangBuyerMasuk) !==
+                                Math.round(inv.totalPenjualanBuyer || inv.totalPenjualanMitra) && (
+                                <div className="font-mono text-slate-500">
+                                  Aktual: {formatRupiah(inv.nominalUangBuyerMasuk)}
+                                </div>
+                              )}
                           </div>
+                        ) : (
+                          inv.sumberBarang === 'STOK_HB_PT' &&
+                          inv.catatArusKas === false && (
+                            <div className="text-[10px] font-sans font-normal text-slate-500">
+                              Rekap SJ · Non-Kas
+                            </div>
+                          )
                         )}
                       </td>
                       <td className="px-3.5 py-3 text-right font-mono text-indigo-900 align-top tabular-nums">
                         <div className="font-bold">{formatRupiah(inv.totalKeuntunganPt)}</div>
                         <div className="text-[10px] text-slate-400">
-                          {inv.sumberBarang === 'STOK_HB_PT'
+                          {isInternalMilikSendiriSuratJalan(inv)
                             ? `Pajak ${formatRupiah(inv.pajakNominal)} · Komisi ${formatRupiah(inv.komisiNominal)}`
                             : `Margin ${formatRupiah(inv.marginHargaPt)} + Komisi ${formatRupiah(inv.komisiNominal)}`}
                         </div>
                       </td>
                       <td className="px-3.5 py-3 text-right font-mono font-bold text-emerald-900 align-top tabular-nums">
-                        {inv.sumberBarang === 'STOK_HB_PT' ? (
+                        {isInternalMilikSendiriSuratJalan(inv) ? (
                           <div>
-                            <div className="text-sky-800 font-sans">Milik PT</div>
+                            <div className="text-sky-800 font-sans">Milik Sendiri</div>
                             <div className="text-[10px] font-sans font-normal text-slate-500">
-                              Stok HB Sendiri
+                              Tanpa bayar mitra
                             </div>
                           </div>
                         ) : (
@@ -559,56 +761,153 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
                         )}
                       </td>
                       <td className="px-3.5 py-3 text-center align-top">
-                        {inv.sumberBarang === 'STOK_HB_PT' ? (
-                          <div className="text-[11px] font-bold text-sky-700">
-                            <div>Stok HB PT</div>
-                            <div className="text-[10px] font-normal text-slate-500">
-                              {inv.catatArusKas === false ? 'Rekap SJ' : 'Masuk BNI'}
+                        {isInternalMilikSendiriSuratJalan(inv) ? (
+                          inv.statusUangBuyer === 'DITERIMA' ? (
+                            <div className="text-[11px]">
+                              <div className="font-bold text-emerald-700">Dana Masuk (Lunas)</div>
+                              <div className="text-[10px] text-slate-500">
+                                Milik Sendiri · {inv.rekeningTerimaBuyerKode || inv.rekeningPtKode}
+                              </div>
+                            </div>
+                          ) : inv.sumberBarang === 'STOK_HB_PT' &&
+                            inv.statusPembayaranMitra === 'LUNAS' ? (
+                            <div className="text-[11px] font-bold text-sky-700">
+                              <div>Stok HB PT</div>
+                              <div className="text-[10px] font-normal text-slate-500">
+                                {inv.catatArusKas === false ? 'Rekap SJ' : 'Masuk BNI'}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-[11px]">
+                              <div className="font-bold text-amber-700">Menunggu Buyer</div>
+                              <div className="text-[10px] text-slate-400">Penjualan Sendiri</div>
+                            </div>
+                          )
+                        ) : inv.statusPembayaranMitra === 'LUNAS' ? (
+                          <div className="text-[11px]">
+                            <div className="font-bold text-emerald-700">Lunas Ditransfer</div>
+                            <div className="text-[10px] text-slate-500 tabular-nums">
+                              {inv.catatArusKasBayarMitra
+                                ? `Kas Riil · ${inv.rekeningBayarMitraKode || inv.rekeningPtKode}`
+                                : `Non-Kas · ${inv.rekeningPtKode || 'BNI01'}`}
+                            </div>
+                            {inv.statusUangBuyer === 'DITERIMA' && (
+                              <div className="text-[10px] font-mono text-indigo-700 tabular-nums">
+                                Sisa PT:{' '}
+                                {formatRupiah(
+                                  Math.round(
+                                    (inv.nominalUangBuyerMasuk ||
+                                      inv.totalPenjualanBuyer ||
+                                      inv.totalPenjualanMitra ||
+                                      0) -
+                                      (inv.nominalBayarMitraAktual ?? inv.jumlahPembayaranMitra ?? 0)
+                                  )
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : inv.statusUangBuyer === 'DITERIMA' ? (
+                          <div className="text-[11px]">
+                            <div className="font-bold text-sky-700">Siap Bayar Mitra</div>
+                            <div className="text-[10px] text-slate-500">
+                              Dana di {inv.rekeningTerimaBuyerKode || inv.rekeningPtKode}
                             </div>
                           </div>
                         ) : (
-                          <span
-                            className={`text-[11px] font-bold ${
-                              inv.statusPembayaranMitra === 'PENDING'
-                                ? 'text-amber-700'
-                                : 'text-emerald-700'
-                            }`}
-                          >
-                            {inv.statusPembayaranMitra === 'PENDING'
-                              ? 'Pending Order'
-                              : 'Lunas Ditransfer'}
-                          </span>
+                          <div className="text-[11px]">
+                            <div className="font-bold text-amber-700">Menunggu Buyer</div>
+                            <div className="text-[10px] text-slate-400">Pending Order</div>
+                          </div>
                         )}
                       </td>
                       <td className="px-3.5 py-3 text-center align-top">
-                        <div className="flex items-center justify-center gap-1">
-                          {inv.sumberBarang !== 'STOK_HB_PT' &&
-                            inv.statusPembayaranMitra === 'PENDING' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCairkanTarget(inv);
-                                setCairkanRekening(inv.rekeningPtKode || 'BNI01');
-                              }}
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold cursor-pointer shadow-xs whitespace-nowrap shrink-0"
-                              title="Cairkan Hak Mitra Sekarang"
-                            >
-                              Bayar
-                            </button>
+                        <div className="flex items-center justify-center gap-1 flex-wrap">
+                          {isInternalMilikSendiriSuratJalan(inv) ? (
+                            <>
+                              {inv.statusUangBuyer !== 'DITERIMA' &&
+                                inv.statusPembayaranMitra === 'PENDING' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openTerimaBuyerModal(inv)}
+                                    className="px-2.5 py-1 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-[10px] font-bold cursor-pointer shadow-xs whitespace-nowrap shrink-0 flex items-center gap-1"
+                                    title="Catat Uang Masuk dari Buyer (Langsung Selesai — Milik Sendiri)"
+                                  >
+                                    <ArrowDownLeft className="w-3 h-3" />
+                                    <span>Terima Dana Buyer</span>
+                                  </button>
+                                )}
+                              {inv.statusUangBuyer === 'DITERIMA' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setBatalBuyerTarget(inv)}
+                                  className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-700 cursor-pointer"
+                                  title="Batalkan Penerimaan Dana Buyer (jika salah bank/tanggal atau perlu edit)"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {inv.statusPembayaranMitra === 'PENDING' &&
+                                inv.statusUangBuyer !== 'DITERIMA' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => openTerimaBuyerModal(inv)}
+                                      className="px-2 py-1 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-[10px] font-bold cursor-pointer shadow-xs whitespace-nowrap shrink-0 flex items-center gap-1"
+                                      title="Tahap 1: Catat Uang Masuk dari Buyer ke Rekening PT"
+                                    >
+                                      <ArrowDownLeft className="w-3 h-3" />
+                                      <span>1. Terima Buyer</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openCairkanModal(inv)}
+                                      className="px-2 py-1 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-lg text-[10px] font-bold cursor-pointer whitespace-nowrap shrink-0"
+                                      title="Bayar Hak Mitra Langsung (Kas Riil / Non-Kas)"
+                                    >
+                                      Bayar
+                                    </button>
+                                  </>
+                                )}
+                              {inv.statusPembayaranMitra === 'PENDING' &&
+                                inv.statusUangBuyer === 'DITERIMA' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => openCairkanModal(inv)}
+                                      className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-bold cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                                      title="Tahap 2: Transfer Hak Bersih ke Mitra (Potong Saldo Rekening)"
+                                    >
+                                      2. Bayar Mitra
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setBatalBuyerTarget(inv)}
+                                      className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-700 cursor-pointer"
+                                      title="Batalkan Tahap 1 (Terima Uang Buyer) jika salah bank/tanggal atau perlu edit invoice"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
+                                )}
+                            </>
                           )}
-                          {inv.statusPembayaranMitra === 'PENDING' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingInvoice(inv);
-                                setShowModalInput(true);
-                              }}
-                              className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-700 cursor-pointer"
-                              title="Edit Invoice Surat Jalan (Belum Cair)"
-                            >
-                              <Pencil className="w-4 h-4" />
-                            </button>
-                          )}
+                          {inv.statusPembayaranMitra === 'PENDING' &&
+                            inv.statusUangBuyer !== 'DITERIMA' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingInvoice(inv);
+                                  setShowModalInput(true);
+                                }}
+                                className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-700 cursor-pointer"
+                                title="Edit Invoice Surat Jalan (Belum Cair)"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                            )}
                           <button
                             type="button"
                             onClick={() => setPreviewTarget(inv)}
@@ -935,102 +1234,430 @@ export const InvoiceSuratJalanView: React.FC<InvoiceSuratJalanViewProps> = ({
         );
       })()}
 
-      {/* Modal Konfirmasi Pencairan Pending */}
-      {cairkanTarget && (
+      {/* Modal Tahap 1: Terima Uang Masuk Buyer ke Rekening PT */}
+      {terimaBuyerTarget && (() => {
+        const nominalParsed = Math.round(Number(terimaBuyerNominal.replace(/[^\d]/g, '')) || 0);
+        const hakMitra = Math.round(Number(terimaBuyerTarget.jumlahPembayaranMitra) || 0);
+        const estimasiSisaPt = nominalParsed - hakMitra;
+        const isOwnSaleModal = isInternalMilikSendiriSuratJalan(terimaBuyerTarget);
+        const selectedAcc = activeRealRekeningList.find((r) => r.kode === terimaBuyerRekening);
+        const saldoSebelum = Math.round(Number(selectedAcc?.saldoSaatIni) || 0);
+        const saldoSesudah = saldoSebelum + nominalParsed;
+        return (
+          <div className="fixed inset-0 z-60 bg-black/50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <ArrowDownLeft className="w-4 h-4 text-sky-700" />
+                  <span>
+                    {isOwnSaleModal
+                      ? 'Terima Dana Buyer · Penjualan Milik Sendiri'
+                      : 'Tahap 1 · Terima Uang Masuk Buyer'}
+                  </span>
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setTerimaBuyerTarget(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">No. Invoice</span>
+                  <span className="font-mono font-bold text-sky-900">{terimaBuyerTarget.noInvoice}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Buyer / Eksportir</span>
+                  <span className="font-bold text-slate-900">{terimaBuyerTarget.kategoriKode || 'BUYER'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Pemilik Barang (Mitra)</span>
+                  <span className="font-bold text-slate-900">{terimaBuyerTarget.namaMitra}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Komoditas &amp; Tonase</span>
+                  <span className="font-mono text-slate-800 tabular-nums">
+                    {terimaBuyerTarget.komoditasNama} · {terimaBuyerTarget.tonaseAkhirKg.toLocaleString('id-ID')} Kg
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Tanggal Uang Masuk
+                    </label>
+                    <input
+                      type="text"
+                      value={terimaBuyerTanggal}
+                      onChange={(e) => setTerimaBuyerTanggal(e.target.value)}
+                      placeholder="DD/MM/YYYY"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nominal Masuk dari Buyer (Rp)
+                    </label>
+                    <input
+                      type="text"
+                      value={terimaBuyerNominal}
+                      onChange={(e) => setTerimaBuyerNominal(e.target.value.replace(/[^\d]/g, ''))}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold text-sky-950 tabular-nums"
+                    />
+                    <div className="text-[10px] text-slate-500 mt-0.5 tabular-nums">
+                      Tagihan Invoice Buyer: {formatRupiah(terimaBuyerTarget.totalPenjualanBuyer || terimaBuyerTarget.totalPenjualanMitra)}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Masuk ke Rekening PT / Bank Penerima
+                  </label>
+                  <select
+                    value={terimaBuyerRekening}
+                    onChange={(e) => setTerimaBuyerRekening(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold bg-white"
+                  >
+                    {activeRealRekeningList.map((r) => (
+                      <option key={r.kode} value={r.kode}>
+                        {r.kode} - {getRekDisplayLabel(r)} (Saldo: {formatRupiah(r.saldoSaatIni)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Catatan / Ref Transfer Buyer (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={terimaBuyerCatatan}
+                    onChange={(e) => setTerimaBuyerCatatan(e.target.value)}
+                    placeholder="Contoh: Transfer masuk LDC via BNI Direct"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Simulasi Arus Kas 2 Tahap */}
+              <div className="bg-sky-50/70 border border-sky-200 rounded-xl p-3.5 text-xs space-y-1.5 tabular-nums">
+                <div className="font-bold text-sky-900">Ringkasan Dampak Saldo Bank &amp; Settlement</div>
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>Saldo {selectedAcc ? getRekDisplayLabel(selectedAcc) : terimaBuyerRekening} Saat Ini</span>
+                  <span className="font-mono">{formatRupiah(saldoSebelum)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sky-800 font-semibold">
+                  <span>
+                    + Uang Masuk Buyer {isOwnSaleModal ? '(Milik Sendiri)' : '(Tahap 1)'}
+                  </span>
+                  <span className="font-mono">+{formatRupiah(nominalParsed)}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-900 font-bold border-t border-sky-200 pt-1">
+                  <span>Saldo Bank Setelah Masuk</span>
+                  <span className="font-mono">{formatRupiah(saldoSesudah)}</span>
+                </div>
+                {isOwnSaleModal ? (
+                  <div className="pt-1.5 border-t border-dashed border-sky-200 text-emerald-800 font-semibold">
+                    Penjualan milik sendiri ({terimaBuyerTarget.namaMitra}): 100% dana langsung masuk milik perusahaan &amp; status otomatis LUNAS tanpa tahap Bayar ke Mitra.
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-slate-600 pt-1 border-t border-dashed border-sky-200">
+                      <span>Hak Bersih {terimaBuyerTarget.namaMitra} (Tahap 2 nanti)</span>
+                      <span className="font-mono">−{formatRupiah(hakMitra)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-indigo-900 font-bold">
+                      <span>Estimasi Sisa Bersih di PT (Spread + Fee + Bon)</span>
+                      <span className="font-mono">{formatRupiah(estimasiSisaPt)}</span>
+                    </div>
+                  </>
+                )}
+                <p className="text-[10px] text-slate-500 pt-1 leading-relaxed">
+                  Dicatat agar saldo rekening klop dengan mutasi bank riil, tanpa mengotori Laba Rugi operasional maupun analisa profit stok gudang.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setTerimaBuyerTarget(null)}
+                  className="px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={terimaBuyerLoading || nominalParsed <= 0}
+                  onClick={handleTerimaBuyer}
+                  className="px-4 py-2 rounded-xl bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold cursor-pointer disabled:opacity-50 shadow-xs"
+                >
+                  {terimaBuyerLoading ? 'Menyimpan...' : 'Simpan Uang Masuk Buyer'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Modal Konfirmasi Batalkan Tahap 1 */}
+      {batalBuyerTarget && (
         <div className="fixed inset-0 z-60 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <CreditCard className="w-4 h-4 text-emerald-600" />
-                <span>Cairkan Hak Supplier / Mitra</span>
+              <h4 className="text-sm font-bold text-amber-900 flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-amber-700" />
+                <span>Batalkan Penerimaan Uang Buyer</span>
               </h4>
               <button
                 type="button"
-                onClick={() => setCairkanTarget(null)}
+                onClick={() => setBatalBuyerTarget(null)}
                 className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-
-            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-1.5">
-              <div>
-                No. Invoice: <span className="font-mono font-bold text-sky-900">{cairkanTarget.noInvoice}</span>
-              </div>
-              <div>
-                Mitra: <span className="font-bold text-slate-900">{cairkanTarget.namaMitra}</span>
-              </div>
-              <div>
-                Komoditas: {cairkanTarget.komoditasNama} ({cairkanTarget.tonaseAkhirKg.toLocaleString('id-ID')} Kg)
-              </div>
-              <div className="text-emerald-800 font-bold text-sm pt-1 border-t border-slate-200 tabular-nums">
-                Hak Bersih yang Ditransfer: {formatRupiah(cairkanTarget.jumlahPembayaranMitra)}
-              </div>
-              {cairkanTarget.potongPiutang && cairkanTarget.kasbonNominal > 0 && (
-                <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900 tabular-nums">
-                  Potong Piutang{' '}
-                  <span className="font-bold">{formatRupiah(cairkanTarget.kasbonNominal)}</span>{' '}
-                  otomatis dicatat sebagai <strong>Bayar Bon</strong> di Rekening Koran{' '}
-                  {cairkanTarget.namaMitra} dengan keterangan{' '}
-                  <strong>Bayar via {cairkanRekening === 'BNI01' ? 'BNI DIRECT' : cairkanRekening}</strong>{' '}
-                  (tanpa mengubah saldo kas/rekening berjalan).
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Tanggal Pencairan
-                </label>
-                <input
-                  type="text"
-                  value={cairkanTanggal}
-                  onChange={(e) => setCairkanTanggal(e.target.value)}
-                  placeholder="DD/MM/YYYY"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Rekening Keterangan Pencairan (Non-Kas · Tidak Memotong Saldo)
-                </label>
-                <select
-                  value={cairkanRekening}
-                  onChange={(e) => setCairkanRekening(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold bg-white"
-                >
-                  {rekeningList
-                    .filter((r) => !r.isVirtual && r.status === 'AKTIF')
-                    .map((r) => (
-                      <option key={r.kode} value={r.kode}>
-                        {r.kode} - {r.kode === 'BNI01' && !/direct/i.test(r.nama || '') ? 'BNI DIRECT' : r.nama}
-                      </option>
-                    ))}
-                </select>
-              </div>
-            </div>
-
+            <p className="text-xs text-slate-600 leading-relaxed tabular-nums">
+              Batalkan catatan Tahap 1 untuk Invoice{' '}
+              <strong className="font-mono text-slate-900">{batalBuyerTarget.noInvoice}</strong> (
+              <strong>{batalBuyerTarget.namaMitra}</strong>)? Saldo rekening{' '}
+              <strong className="font-mono text-slate-900">
+                {batalBuyerTarget.rekeningTerimaBuyerKode || batalBuyerTarget.rekeningPtKode}
+              </strong>{' '}
+              akan dikurangi kembali sebesar{' '}
+              <strong className="font-mono text-slate-900">
+                {formatRupiah(
+                  batalBuyerTarget.nominalUangBuyerMasuk ||
+                    batalBuyerTarget.totalPenjualanBuyer ||
+                    batalBuyerTarget.totalPenjualanMitra
+                )}
+              </strong>{' '}
+              dan invoice kembali bisa diedit.
+            </p>
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
               <button
                 type="button"
-                onClick={() => setCairkanTarget(null)}
+                onClick={() => setBatalBuyerTarget(null)}
                 className="px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold cursor-pointer"
               >
-                Batal
+                Tutup
               </button>
               <button
                 type="button"
-                disabled={cairkanLoading}
-                onClick={handleCairkanInvoice}
-                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold cursor-pointer disabled:opacity-50 shadow-xs"
+                disabled={batalBuyerLoading}
+                onClick={handleBatalTerimaBuyer}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
               >
-                {cairkanLoading ? 'Memproses...' : 'Konfirmasi Pencairan Surat Jalan'}
+                {batalBuyerLoading ? 'Membatalkan...' : 'Ya, Batalkan Terima Buyer'}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Modal Tahap 2: Pencairan / Bayar Hak Mitra */}
+      {cairkanTarget && (() => {
+        const selectedAcc = activeRealRekeningList.find((r) => r.kode === cairkanRekening);
+        const saldoSebelum = Math.round(Number(selectedAcc?.saldoSaatIni) || 0);
+        const hakMitra = Math.round(Number(cairkanTarget.jumlahPembayaranMitra) || 0);
+        const saldoSesudah = cairkanCatatKas ? saldoSebelum - hakMitra : saldoSebelum;
+        const uangBuyerMasuk = Math.round(
+          Number(
+            cairkanTarget.nominalUangBuyerMasuk ||
+              cairkanTarget.totalPenjualanBuyer ||
+              cairkanTarget.totalPenjualanMitra
+          ) || 0
+        );
+        const sisaDiPt = uangBuyerMasuk - hakMitra;
+        const rekDisplay = selectedAcc ? getRekDisplayLabel(selectedAcc) : cairkanRekening;
+
+        return (
+          <div className="fixed inset-0 z-60 bg-black/50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-emerald-700" />
+                  <span>Tahap 2 · Bayar / Cairkan Hak Mitra</span>
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setCairkanTarget(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Status Tahap 1 */}
+              {cairkanTarget.statusUangBuyer === 'DITERIMA' ? (
+                <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs space-y-1 tabular-nums">
+                  <div className="font-bold text-sky-900">
+                    Tahap 1 Selesai · Uang Buyer Sudah Masuk Rekening
+                  </div>
+                  <div className="text-sky-800">
+                    Masuk <strong className="font-mono">{formatRupiah(uangBuyerMasuk)}</strong> ke{' '}
+                    <strong className="font-mono">
+                      {cairkanTarget.rekeningTerimaBuyerKode || cairkanTarget.rekeningPtKode}
+                    </strong>{' '}
+                    pada {cairkanTarget.tanggalUangBuyerMasuk || cairkanTarget.tanggal}.
+                  </div>
+                  <div className="text-indigo-900 font-semibold">
+                    Sisa Bersih Tertinggal di PT setelah bayar mitra:{' '}
+                    <span className="font-mono font-bold">{formatRupiah(sisaDiPt)}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] text-amber-900 leading-relaxed">
+                  Uang masuk dari buyer (Tahap 1) belum dicatat pada invoice ini. Jika uang buyer sudah masuk ke rekening PT, sebaiknya klik{' '}
+                  <strong>1. Terima Buyer</strong> dulu agar mutasi masuk &amp; keluar bank 100% klop.
+                </div>
+              )}
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">No. Invoice</span>
+                  <span className="font-mono font-bold text-sky-900">{cairkanTarget.noInvoice}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Mitra Penerima</span>
+                  <span className="font-bold text-slate-900">{cairkanTarget.namaMitra}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Komoditas</span>
+                  <span className="font-mono text-slate-800 tabular-nums">
+                    {cairkanTarget.komoditasNama} ({cairkanTarget.tonaseAkhirKg.toLocaleString('id-ID')} Kg)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-emerald-800 font-bold text-sm pt-1.5 border-t border-slate-200 tabular-nums">
+                  <span>Hak Bersih Ditransfer</span>
+                  <span className="font-mono">{formatRupiah(hakMitra)}</span>
+                </div>
+                {cairkanTarget.potongPiutang && cairkanTarget.kasbonNominal > 0 && (
+                  <div className="mt-1.5 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900 tabular-nums">
+                    Potong Piutang{' '}
+                    <span className="font-bold">{formatRupiah(cairkanTarget.kasbonNominal)}</span>{' '}
+                    otomatis dicatat sebagai <strong>Bayar Bon</strong> di Rekening Koran{' '}
+                    {cairkanTarget.namaMitra} (Bayar via <strong>{rekDisplay}</strong>).
+                  </div>
+                )}
+              </div>
+
+              {/* Pilihan Mode Pencatatan Kas */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Mode Pencatatan Saldo Bank
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCairkanCatatKas(true)}
+                    className={`p-3 rounded-xl border text-left transition-colors cursor-pointer ${
+                      cairkanCatatKas
+                        ? 'border-emerald-600 bg-emerald-50/70 text-emerald-950'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="text-xs font-bold">Potong Saldo Rekening (Kas Riil)</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Rekomendasi · Mengurangi saldo bank sumber &amp; tercatat di mutasi bank tanpa mengotori Beban Operasional.
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCairkanCatatKas(false)}
+                    className={`p-3 rounded-xl border text-left transition-colors cursor-pointer ${
+                      !cairkanCatatKas
+                        ? 'border-slate-700 bg-slate-100 text-slate-950'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="text-xs font-bold">Non-Kas / Administrasi Saja</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Tandai LUNAS saja tanpa mengubah saldo rekening bank berjalan.
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Tanggal Pencairan
+                  </label>
+                  <input
+                    type="text"
+                    value={cairkanTanggal}
+                    onChange={(e) => setCairkanTanggal(e.target.value)}
+                    placeholder="DD/MM/YYYY"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {cairkanCatatKas ? 'Rekening Sumber Pembayaran' : 'Rekening Keterangan (Non-Kas)'}
+                  </label>
+                  <select
+                    value={cairkanRekening}
+                    onChange={(e) => setCairkanRekening(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold bg-white"
+                  >
+                    {activeRealRekeningList.map((r) => (
+                      <option key={r.kode} value={r.kode}>
+                        {r.kode} - {getRekDisplayLabel(r)} ({formatRupiah(r.saldoSaatIni)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {cairkanCatatKas && (
+                <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3 text-xs space-y-1 tabular-nums">
+                  <div className="flex items-center justify-between text-slate-700">
+                    <span>Saldo {rekDisplay} Saat Ini</span>
+                    <span className="font-mono">{formatRupiah(saldoSebelum)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-rose-700 font-semibold">
+                    <span>− Transfer Hak {cairkanTarget.namaMitra}</span>
+                    <span className="font-mono">−{formatRupiah(hakMitra)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-900 font-bold border-t border-emerald-200 pt-1">
+                    <span>Saldo {rekDisplay} Setelah Transfer</span>
+                    <span className="font-mono">{formatRupiah(saldoSesudah)}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setCairkanTarget(null)}
+                  className="px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={cairkanLoading}
+                  onClick={handleCairkanInvoice}
+                  className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold cursor-pointer disabled:opacity-50 shadow-xs"
+                >
+                  {cairkanLoading
+                    ? 'Memproses...'
+                    : cairkanCatatKas
+                    ? 'Bayar Mitra & Potong Saldo Bank'
+                    : 'Konfirmasi Lunas (Non-Kas)'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Modal Konfirmasi Hapus Transaksi */}
       {deleteTarget && (

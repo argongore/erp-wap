@@ -34,6 +34,7 @@ import {
   FileSpreadsheet,
   CreditCard,
   ClipboardCheck,
+  CalendarClock,
 } from 'lucide-react';
 
 export type ActiveTab =
@@ -68,7 +69,8 @@ export type ActiveTab =
   | 'rekening-koran-mitra'
   | 'laporan-transaksi'
   | 'audit-log'
-  | 'google-sheets-sync';
+  | 'google-sheets-sync'
+  | 'backup-mingguan';
 
 export type CashFlowDirection = 'MASUK' | 'KELUAR' | 'MUTASI' | null;
 
@@ -105,6 +107,7 @@ export const ACTIVE_TAB_LABELS: Record<ActiveTab, string> = {
   'laporan-transaksi': 'Rekap Arus Kas Kasir Harian',
   'audit-log': 'Audit Log Transaksi',
   'google-sheets-sync': 'Studio Database Master',
+  'backup-mingguan': 'Backup Mingguan (DB Cadangan)',
 };
 
 export const ACTIVE_TAB_CASH_FLOW: Record<ActiveTab, CashFlowDirection> = {
@@ -140,6 +143,7 @@ export const ACTIVE_TAB_CASH_FLOW: Record<ActiveTab, CashFlowDirection> = {
   'laporan-transaksi': null,
   'audit-log': null,
   'google-sheets-sync': null,
+  'backup-mingguan': null,
 };
 
 interface SidebarProps {
@@ -539,6 +543,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             keywords: 'database tabel ekspor impor backup excel json',
             icon: Database,
             tab: 'google-sheets-sync',
+          },
+          {
+            id: 'backup-mingguan',
+            label: 'Backup Mingguan',
+            sublabel: 'Arsip mingguan DB cadangan & restore',
+            keywords: 'backup mingguan database cadangan ganda snapshot otomatis restore arsip minggu',
+            icon: CalendarClock,
+            tab: 'backup-mingguan',
           },
           ...(onOpenBackupSpreadsheet
             ? [

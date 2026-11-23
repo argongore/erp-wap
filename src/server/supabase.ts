@@ -99,6 +99,7 @@ class SupabaseSyncEngine {
   private lastCloudCheckAt = 0;
   private activeFreshCheckPromise: Promise<void> | null = null;
   private hasUnsyncedLocalChanges = false;
+  private pendingAllowOverwrite = false;
   private lastLocalMutationAt = 0;
   private lastMirrorFingerprint = '';
   private retryTimer: NodeJS.Timeout | null = null;
@@ -295,10 +296,17 @@ class SupabaseSyncEngine {
     }
   }
 
-  public markLocalMutation(data: DatabaseSchema) {
+  public isCloudStateVerified(): boolean {
+    return this.hasVerifiedCloudState;
+  }
+
+  public markLocalMutation(data: DatabaseSchema, options?: { allowOverwrite?: boolean }) {
     this.hasUnsyncedLocalChanges = true;
     this.lastLocalMutationAt = Date.now();
     this.queuedData = data;
+    if (options?.allowOverwrite) {
+      this.pendingAllowOverwrite = true;
+    }
   }
 
   public hasPendingLocalChanges(): boolean {
@@ -320,21 +328,36 @@ class SupabaseSyncEngine {
 
   /**
    * Compacts JSONB state before upserting to Supabase so wijaya_agro_erp_state never hits Postgres statement_timeout:
-   * 1. Caps auditLogs to latest 250 entries.
+   * 1. Caps auditLogs to latest 200 entries.
    * 2. Deduplicates identical base64 strings between fotoNota and fotoNotaList.
    * 3. Offloads heavy inline base64 images (>25KB) to Supabase Storage bucket ('erp-bukti-nota') incrementally.
+   *    In fastMode (interactive create/edit/delete flush), enforces a strict 1.5s budget so Supabase state upsert
+   *    always completes immediately before the HTTP response returns.
    */
-  private async prepareCompactCloudData(data: DatabaseSchema): Promise<void> {
+  private async prepareCompactCloudData(
+    data: DatabaseSchema,
+    options?: { fastMode?: boolean }
+  ): Promise<void> {
     if (Array.isArray(data.auditLogs) && data.auditLogs.length > 200) {
       data.auditLogs = data.auditLogs.slice(0, 200);
     }
 
-    let uploadsRemaining = 15;
+    const fastMode = Boolean(options?.fastMode);
+    const storageSkipped = Date.now() < this.storageUnavailableUntil;
+    const deadlineAt = fastMode ? Date.now() + 1500 : Date.now() + 12000;
+    let uploadsRemaining = storageSkipped ? 0 : fastMode ? 2 : 15;
+    const perUploadTimeoutMs = fastMode ? 1200 : 4500;
+
     const uploadWithFastTimeout = async (base64: string, prefix: string): Promise<string | null> => {
+      if (Date.now() >= deadlineAt || Date.now() < this.storageUnavailableUntil) {
+        uploadsRemaining = 0;
+        return null;
+      }
+      const remainingBudget = Math.max(250, Math.min(perUploadTimeoutMs, deadlineAt - Date.now()));
       try {
         return await Promise.race([
           this.uploadBuktiImage(base64, prefix),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 4500)),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), remainingBudget)),
         ]);
       } catch {
         return null;
@@ -512,7 +535,7 @@ class SupabaseSyncEngine {
    */
   public async pushToSupabase(
     data: DatabaseSchema,
-    options?: { allowOverwrite?: boolean; awaitMirrors?: boolean }
+    options?: { allowOverwrite?: boolean; awaitMirrors?: boolean; fastMode?: boolean }
   ): Promise<{ success: boolean; message: string }> {
     if (!this.client) {
       return { success: false, message: 'Supabase belum dikonfigurasi' };
@@ -526,8 +549,10 @@ class SupabaseSyncEngine {
       const mitraCount = data.mitra?.length || 0;
 
       // Safety guard for Cloud Run / AI Studio cold-container restarts:
-      // Never allow an unverified cold container to overwrite richer Cloud Supabase state
-      const latestAuditId = data.auditLogs?.[0]?.idTransaksi || '';
+      // Never allow an unverified EMPTY cold container to wipe out populated Cloud Supabase state,
+      // while NEVER blocking genuine user deletions (which reduce localScore by 1 or a few rows).
+      const latestAudit = data.auditLogs?.[0];
+      const latestAuditId = latestAudit?.idTransaksi || '';
       const isExplicitAdminResetOrRestore =
         options?.allowOverwrite ||
         latestAuditId === 'SYS-RESET' ||
@@ -547,13 +572,17 @@ class SupabaseSyncEngine {
             (remoteMeta.karyawan_count || 0) +
             (remoteMeta.transaksi_count || 0);
           const localScore = mitraCount + karyawanCount + txCount;
-          if (cloudScore > localScore) {
+          const isCatastrophicColdWipe =
+            (localScore === 0 && cloudScore > 0) ||
+            (cloudScore >= 20 && localScore < Math.floor(cloudScore * 0.5));
+          if (isCatastrophicColdWipe) {
             console.warn(
-              `[SupabaseSyncEngine] Menahan timpaan dari container baru (Cloud=${cloudScore} > Lokal=${localScore}).`
+              `[SupabaseSyncEngine] Menahan timpaan dari container baru (Cloud=${cloudScore} >> Lokal=${localScore}).`
             );
+            this.hasUnsyncedLocalChanges = true;
             return {
               success: false,
-              message: 'Proteksi aktif: Mencegah penimpaan data Cloud yang lebih lengkap.',
+              message: 'Proteksi aktif: Mencegah penimpaan data Cloud oleh container kosong.',
             };
           }
         }
@@ -562,7 +591,7 @@ class SupabaseSyncEngine {
 
       // Deep clone before stripping so local in-memory DB keeps physical nota captures intact
       const dataCopy: DatabaseSchema = JSON.parse(JSON.stringify(data));
-      await this.prepareCompactCloudData(dataCopy);
+      await this.prepareCompactCloudData(dataCopy, { fastMode: options?.fastMode });
       const compactData = this.deepStripImagesForCloud(dataCopy);
       if (Array.isArray(compactData.auditLogs) && compactData.auditLogs.length > 100) {
         compactData.auditLogs = compactData.auditLogs.slice(0, 100);
@@ -632,6 +661,7 @@ class SupabaseSyncEngine {
       this.hasVerifiedCloudState = true;
       if (this.queuedData === null) {
         this.hasUnsyncedLocalChanges = false;
+        this.pendingAllowOverwrite = false;
       }
       if (this.retryTimer) {
         clearTimeout(this.retryTimer);
@@ -851,10 +881,14 @@ class SupabaseSyncEngine {
       try {
         while (this.queuedData) {
           const snapshot = this.queuedData;
+          const allowOverwrite = this.pendingAllowOverwrite || this.hasVerifiedCloudState;
           this.queuedData = null;
           let pushed = false;
           for (let attempt = 0; attempt < 3; attempt++) {
-            const res = await this.pushToSupabase(snapshot);
+            const res = await this.pushToSupabase(snapshot, {
+              allowOverwrite,
+              fastMode: true,
+            });
             if (res.success) {
               pushed = true;
               break;
@@ -865,9 +899,17 @@ class SupabaseSyncEngine {
             }
           }
           if (!pushed) {
-            // Keep latest snapshot queued for background exponential backoff retry
+            // Keep latest snapshot queued and preserve unsynced flag so background polling NEVER overwrites local deletes/edits
+            this.hasUnsyncedLocalChanges = true;
+            this.pendingAllowOverwrite = this.pendingAllowOverwrite || allowOverwrite;
             if (!this.queuedData) {
               this.queuedData = snapshot;
+            }
+            if (!this.retryTimer && !IS_SERVERLESS) {
+              this.retryTimer = setTimeout(() => {
+                this.retryTimer = null;
+                void this.drainQueue();
+              }, 3000);
             }
             break;
           }
@@ -883,11 +925,15 @@ class SupabaseSyncEngine {
   }
 
   /**
-   * Immediate write-through flush to Supabase with bounded wait so mutations persist to Supabase right away
+   * Immediate write-through flush to Supabase with bounded wait so mutations (create/edit/delete) persist right away
    */
-  public async flushSync(data: DatabaseSchema, maxWaitMs = 4500): Promise<void> {
+  public async flushSync(
+    data: DatabaseSchema,
+    maxWaitMs = 4500,
+    options?: { allowOverwrite?: boolean }
+  ): Promise<void> {
     if (!this.config.autoSync || !this.client) return;
-    this.markLocalMutation(data);
+    this.markLocalMutation(data, { allowOverwrite: options?.allowOverwrite ?? true });
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
       this.syncTimer = null;
@@ -905,7 +951,7 @@ class SupabaseSyncEngine {
    */
   public triggerAutoSync(data: DatabaseSchema) {
     if (!this.config.autoSync || !this.client) return;
-    this.markLocalMutation(data);
+    this.markLocalMutation(data, { allowOverwrite: true });
 
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
@@ -918,8 +964,10 @@ class SupabaseSyncEngine {
 
   /**
    * Safe Cloud-First Reconnection:
-   * Always pulls existing cloud data from Supabase FIRST so ephemeral container restarts NEVER overwrite cloud data.
-   * Only pushes local data if Supabase has no MAIN_DATABASE row yet, OR if local clearly has richer active data than an empty cloud row.
+   * Always pulls existing cloud data from Supabase FIRST so ephemeral container restarts NEVER overwrite cloud data
+   * or resurrect deleted transactions from a stale local JSON cache.
+   * Only pushes local data if Supabase has no MAIN_DATABASE row yet, Cloud is empty, OR this live process explicitly
+   * has unsynced local mutations waiting to be flushed.
    */
   public async syncSmartWithCloud(dbManager: any): Promise<{
     direction: 'PULLED_FROM_SUPABASE' | 'PUSHED_TO_SUPABASE' | 'SKIPPED';
@@ -943,11 +991,11 @@ class SupabaseSyncEngine {
         (local.karyawan?.length || 0) +
         countAllTransactions(local);
 
-      if (localScore > cloudScore) {
+      if ((cloudScore === 0 && localScore > 0) || this.hasUnsyncedLocalChanges) {
         console.log(
-          `[SupabaseSyncEngine] Data lokal memiliki lebih banyak entitas (${localScore} > ${cloudScore}), memprioritaskan penyimpanan lokal ke Cloud Supabase.`
+          `[SupabaseSyncEngine] Memprioritaskan push lokal ke Cloud Supabase (cloudScore=${cloudScore}, localScore=${localScore}, unsynced=${this.hasUnsyncedLocalChanges}).`
         );
-        const pushRes = await this.pushToSupabase(local, { allowOverwrite: true });
+        const pushRes = await this.pushToSupabase(local, { allowOverwrite: true, fastMode: true });
         return {
           direction: 'PUSHED_TO_SUPABASE',
           message: `Data lokal (${localScore} entitas) berhasil disimpan ke Cloud Supabase: ${pushRes.message}`,
@@ -956,7 +1004,8 @@ class SupabaseSyncEngine {
 
       await dbManager.hydrateFromSupabase(cloud);
 
-      // Pastikan jika ada rekonsiliasi data lokal (seperti Surat Jalan, pembersihan sweep sintetis KAS01, atau pembersihan PEMBAYARAN_SUPPLIER_SJ), Cloud langsung diperbarui
+      // Hanya dorong balik ke Cloud jika pembersihan sistem tertentu memang mengubah record lama di Cloud
+      // (JANGAN pernah dorong balik hanya karena jumlah transaksi lokal lebih banyak — itu penyebab data hapus bangkit lagi!)
       const mergedLocal = dbManager.get();
       const cloudHadSweep = (cloud.transferRekening || []).some((t: any) => t.noTransfer === 'TRF2611099999');
       const cloudHadSupplierSj =
@@ -964,15 +1013,8 @@ class SupabaseSyncEngine {
         (cloud.masterItemPengeluaran || []).some((m: any) => String(m.nama || '').trim().toUpperCase() === 'PEMBAYARAN_SUPPLIER_SJ');
       const cloudKas01Saldo = (cloud.rekening || []).find((r: any) => r.kode === 'KAS01')?.saldoSaatIni;
       const mergedKas01Saldo = (mergedLocal.rekening || []).find((r: any) => r.kode === 'KAS01')?.saldoSaatIni;
-      if (
-        cloudHadSweep ||
-        cloudHadSupplierSj ||
-        cloudKas01Saldo !== mergedKas01Saldo ||
-        (mergedLocal.suratJalan?.length || 0) > (cloud.suratJalan?.length || 0) ||
-        (mergedLocal.rekapCtr?.length || 0) > (cloud.rekapCtr?.length || 0) ||
-        countAllTransactions(mergedLocal) > countAllTransactions(cloud)
-      ) {
-        void this.pushToSupabase(mergedLocal, { allowOverwrite: true }).catch((err) =>
+      if (cloudHadSweep || cloudHadSupplierSj || cloudKas01Saldo !== mergedKas01Saldo) {
+        void this.pushToSupabase(mergedLocal, { allowOverwrite: true, fastMode: true }).catch((err) =>
           console.warn('[SupabaseSyncEngine] Push merged state warning:', err)
         );
       }

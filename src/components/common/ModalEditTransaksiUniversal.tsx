@@ -242,6 +242,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
   const [hargaSatuanUpahInput, setHargaSatuanUpahInput] = useState('');
   const [uangMakanLemburInput, setUangMakanLemburInput] = useState('');
   const [catatanKerja, setCatatanKerja] = useState('');
+  const [ketUpah, setKetUpah] = useState<'BON' | 'LUNAS'>('BON');
   const [gajiPokokInput, setGajiPokokInput] = useState('');
   const [tunjanganInput, setTunjanganInput] = useState('');
   const [bonusInput, setBonusInput] = useState('');
@@ -498,6 +499,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
             r.harga !== undefined
               ? Number(r.harga)
               : Number(r.upahHarian || r.totalUpahHarian || 0);
+          const isBonInit = r.ket === 'BON' || r.status === 'TERCATAT';
           setIdKaryawan(r.idKaryawan || '');
           setNamaKaryawanManual(r.namaKaryawan || '');
           setDivisi(r.divisi || 'Gudang Wijaya Agro');
@@ -506,6 +508,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           setHargaSatuanUpahInput(String(harga));
           setUangMakanLemburInput(String(Number(r.uangMakanLembur) || 0));
           setCatatanKerja(r.catatan || '');
+          setKetUpah(isBonInit ? 'BON' : 'LUNAS');
         } else if (j === 'PENGGAJIAN') {
           setIdKaryawan(r.idKaryawan || '');
           setNamaKaryawanManual(r.namaKaryawan || '');
@@ -1051,6 +1054,8 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
         payload.hargaSatuanUpah = Math.round(Number(hargaSatuanUpahInput) || 0);
         payload.uangMakanLembur = Math.round(Number(uangMakanLemburInput) || 0);
         payload.catatanKerja = catatanKerja;
+        payload.ket = ketUpah;
+        payload.statusUpah = ketUpah === 'LUNAS' ? 'SUDAH_DIBAYAR' : 'TERCATAT';
       } else if (jenis === 'PENGGAJIAN') {
         if (idKaryawan) payload.idKaryawan = idKaryawan;
         if (namaKaryawanManual.trim()) payload.namaKaryawanManual = namaKaryawanManual.trim();
@@ -2823,6 +2828,33 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
               ================================================================= */}
               {jenis === 'UPAH_HARIAN' && (
                 <div className="p-4 rounded-xl border border-zinc-200 bg-white space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-zinc-100">
+                    <div>
+                      <span className="text-xs font-bold text-zinc-800">Rincian Upah &amp; Status Kehadiran</span>
+                      {record?.idPayrollSettlement && (
+                        <span className="ml-2 text-[10px] font-mono text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded">
+                          Slip: {record.idPayrollSettlement}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemKerja('LIBUR');
+                        setKuantitiUpahInput('1');
+                        setHargaSatuanUpahInput('0');
+                        setUangMakanLemburInput('0');
+                        setCatatanKerja('LIBUR');
+                        setKeterangan('LIBUR');
+                        setKetUpah('LUNAS');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-600 text-sky-700 hover:text-white border border-sky-200 hover:border-sky-600 text-[11px] font-bold transition-colors cursor-pointer"
+                      title="Otomatis ubah menjadi LIBUR (Rp 0) dan status LUNAS agar tidak terhitung BON"
+                    >
+                      Tandai Tidak Masuk / Libur (Rp 0 &amp; LUNAS)
+                    </button>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-zinc-700 mb-1">Divisi Kerja</label>
@@ -2856,7 +2888,16 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         type="text"
                         inputMode="decimal"
                         value={kuantitiUpahInput}
-                        onChange={(e) => setKuantitiUpahInput(sanitizeDecimalTypingEdit(e.target.value))}
+                        onChange={(e) => {
+                          const nextVal = sanitizeDecimalTypingEdit(e.target.value);
+                          setKuantitiUpahInput(nextVal);
+                          const qNext = Math.max(0, parseDecimalEdit(nextVal));
+                          const hNow = Math.max(0, Number(hargaSatuanUpahInput) || 0);
+                          const mNow = Math.max(0, Number(uangMakanLemburInput) || 0);
+                          if (Math.round(qNext * hNow) + Math.round(mNow) === 0 && liveNominalBaru > 0) {
+                            setKetUpah('LUNAS');
+                          }
+                        }}
                         placeholder="Contoh: 1 atau 1,5"
                         className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold"
                       />
@@ -2867,7 +2908,16 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         type="number"
                         min="0"
                         value={hargaSatuanUpahInput}
-                        onChange={(e) => setHargaSatuanUpahInput(e.target.value)}
+                        onChange={(e) => {
+                          const nextVal = e.target.value;
+                          setHargaSatuanUpahInput(nextVal);
+                          const qNow = Math.max(0, parseDecimalEdit(kuantitiUpahInput));
+                          const hNext = Math.max(0, Number(nextVal) || 0);
+                          const mNow = Math.max(0, Number(uangMakanLemburInput) || 0);
+                          if (Math.round(qNow * hNext) + Math.round(mNow) === 0 && liveNominalBaru > 0) {
+                            setKetUpah('LUNAS');
+                          }
+                        }}
                         className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold"
                       />
                     </div>
@@ -2877,10 +2927,61 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         type="number"
                         min="0"
                         value={uangMakanLemburInput}
-                        onChange={(e) => setUangMakanLemburInput(e.target.value)}
+                        onChange={(e) => {
+                          const nextVal = e.target.value;
+                          setUangMakanLemburInput(nextVal);
+                          const qNow = Math.max(0, parseDecimalEdit(kuantitiUpahInput));
+                          const hNow = Math.max(0, Number(hargaSatuanUpahInput) || 0);
+                          const mNext = Math.max(0, Number(nextVal) || 0);
+                          if (Math.round(qNow * hNow) + Math.round(mNext) === 0 && liveNominalBaru > 0) {
+                            setKetUpah('LUNAS');
+                          }
+                        }}
                         className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold"
                       />
                     </div>
+                  </div>
+
+                  {/* Status KET (BON vs LUNAS) */}
+                  <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
+                    <label className="block font-semibold text-zinc-700">
+                      Status Pembayaran / KET (Rekap Gaji)
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setKetUpah('BON')}
+                        className={`px-3 py-2 rounded-lg border text-xs font-bold transition-all cursor-pointer text-left ${
+                          ketUpah === 'BON'
+                            ? 'bg-amber-500 text-zinc-950 border-amber-600 shadow-xs'
+                            : 'bg-white text-zinc-600 border-zinc-300 hover:bg-amber-50'
+                        }`}
+                      >
+                        <div>BON (Belum Cair)</div>
+                        <div className={`text-[10px] font-normal mt-0.5 ${ketUpah === 'BON' ? 'text-zinc-900' : 'text-zinc-500'}`}>
+                          Masuk akumulasi hak upah berjalan
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setKetUpah('LUNAS')}
+                        className={`px-3 py-2 rounded-lg border text-xs font-bold transition-all cursor-pointer text-left ${
+                          ketUpah === 'LUNAS'
+                            ? 'bg-sky-600 text-white border-sky-700 shadow-xs'
+                            : 'bg-white text-zinc-600 border-zinc-300 hover:bg-sky-50'
+                        }`}
+                      >
+                        <div>LUNAS (Sudah Cair / Libur Rp 0)</div>
+                        <div className={`text-[10px] font-normal mt-0.5 ${ketUpah === 'LUNAS' ? 'text-sky-100' : 'text-zinc-500'}`}>
+                          Tidak dihitung BON / sudah selesai
+                        </div>
+                      </button>
+                    </div>
+                    {liveNominalBaru === 0 && ketUpah === 'BON' && (
+                      <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5 font-medium">
+                        Total upah bernilai Rp 0 namun status masih <strong>BON</strong>. Pilih <strong>LUNAS</strong> jika karyawan libur / tidak masuk agar tidak terhitung BON.
+                      </div>
+                    )}
                   </div>
 
                   <div>

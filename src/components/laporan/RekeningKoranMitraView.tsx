@@ -743,12 +743,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     const raw = Array.isArray(statement.historySaldoBerjalan)
       ? statement.historySaldoBerjalan
       : (statement.history || []).filter((h) => h.isSaldoBerjalan !== false);
-    return [...raw].sort((a, b) => {
-      const aBayar = a.isBayarBonSiklusBerjalan ? 1 : 0;
-      const bBayar = b.isBayarBonSiklusBerjalan ? 1 : 0;
-      if (aBayar !== bBayar) return aBayar - bBayar;
-      return parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam);
-    });
+    return [...raw].sort((a, b) => parseDateMs(a.tanggal, a.jam) - parseDateMs(b.tanggal, b.jam));
   }, [statement]);
 
   // Tab 2: History Transaksi Mitra — tampilkan SELURUH transaksi mitra (Sinkron, Transfer, Tunai, Kliring Silang,

@@ -142,7 +142,8 @@ export interface AuditMutasiRekeningTitipItem {
     | 'UANG_MASUK'
     | 'PENJUALAN'
     | 'BAYAR_BON'
-    | 'BRILINK';
+    | 'BRILINK'
+    | 'SURAT_JALAN_BAYAR_MITRA';
   pihakAtauRekeningLawan: string; // e.g. "Bank BCA (BCA01)", "Suplayer Kopi - Roni", "Divisi Gudang"
   uraian: string;
   catatan?: string;
@@ -945,6 +946,9 @@ export interface TransaksiPenjualanHasilBumi {
   tanggalNgunci?: string;
   catatanNgunci?: string;
   noSuratJalan?: string; // Nomor DO / Surat Jalan / Plat Truk
+  rekapCtrId?: string; // Opsional: ID kontrak di Rekap CTR (khusus penjualan masuk kuota kontrak ekspor)
+  rekapCtrNoUrut?: number; // Opsional: Nomor urut kontrak CTR terkait
+  rekapCtrNoKontrak?: string; // Opsional: Nomor / kode kontrak resmi CTR terkait
   stokGudangSebelum: number;
   stokGudangSetelah: number;
   keterangan: string;
@@ -1834,7 +1838,8 @@ export interface UnifiedTransactionItem {
     | 'PENGGAJIAN'
     | 'TRANSFER_REKENING'
     | 'BRILINK'
-    | 'NOTA_SILANG';
+    | 'NOTA_SILANG'
+    | 'SURAT_JALAN_BAYAR_MITRA';
   jenisLabel: string;
   arusUang: ArusUangType;
   arusUangLabel: string;
@@ -2239,8 +2244,23 @@ export interface InvoiceSuratJalanRecord {
   statusPembayaranMitra: 'PENDING' | 'LUNAS'; // Pending Order vs Langsung Bayar
   sumberBarang?: 'MITRA' | 'STOK_HB_PT'; // Titip jual mitra vs penjualan stok barang HB sendiri (PT)
   noPenjualanHasilBumi?: string; // Referensi JHB jika ditarik dari penjualan stok HB
+  rekapCtrId?: string; // ID kontrak CTR di Rekap CTR WAP (mencegah salah masuk kontrak saat kontrak berdekatan)
+  rekapCtrNoUrut?: number; // No urut kontrak CTR (misal 28, 29)
+  rekapCtrNoKontrak?: string; // Nomor/kode kontrak resmi (misal LDC-08/11)
   catatArusKas?: boolean; // false jika hanya arsip administrasi surat jalan tanpa menggandakan kas
+  // Tahap 1: Terima Uang Buyer ke Rekening PT (Pass-Through)
+  statusUangBuyer?: 'BELUM_DITERIMA' | 'DITERIMA';
+  tanggalUangBuyerMasuk?: string;
+  jamUangBuyerMasuk?: string;
+  nominalUangBuyerMasuk?: number;
+  rekeningTerimaBuyerKode?: string;
+  catatanUangBuyer?: string;
+  // Tahap 2: Pembayaran / Pencairan Hak Bersih ke Mitra
   tanggalBayarMitra?: string;
+  jamBayarMitra?: string;
+  catatArusKasBayarMitra?: boolean; // true jika pencairan ke mitra memotong saldo rekening bank riil
+  rekeningBayarMitraKode?: string;
+  nominalBayarMitraAktual?: number;
   idUangMasukBuyer?: string;
   idUangMasukKomisi?: string;
   idPengeluaranBayarMitra?: string;
@@ -2389,9 +2409,240 @@ export interface RekapCtrPartaiRow {
 export interface RekapCtrContract {
   id: string;
   noUrut: number;
+  noKontrak?: string; // Nomor / kode kontrak resmi pembeda antar kontrak berdekatan (misal LDC-08/11)
   tglCtr: string;
   gudang: string;
   qtyCtr: number;
+  statusKontrak?: 'AKTIF' | 'SELESAI'; // Penanda kontrak masih berjalan vs sudah tutup
   openingCumulativeLr?: number;
   rows: RekapCtrPartaiRow[];
 }
+
+export function isInternalMilikSendiriSuratJalan(inv?: {
+  sumberBarang?: 'MITRA' | 'STOK_HB_PT';
+  idMitra?: string;
+  namaMitra?: string;
+} | null): boolean {
+  if (!inv) return false;
+  if (inv.sumberBarang === 'STOK_HB_PT' || inv.idMitra === 'STOK_HB_PT') return true;
+  const nama = String(inv.namaMitra || '').trim().toUpperCase();
+  if (!nama) return false;
+  return (
+    nama === 'GUDANG WIJAYA AGRO' ||
+    nama === 'GWA' ||
+    nama === 'PT WIJAYA AGRO PERKASA' ||
+    nama === 'PT WAP' ||
+    nama === 'CV WIJAYA AGRO' ||
+    nama.includes('GUDANG WIJAYA AGRO') ||
+    nama.includes('STOK HB (PT WAP)') ||
+    nama.includes('STOK HB PT')
+  );
+}
+
+export interface SuratJalanKeuntunganPtEntry {
+  id: string;
+  noInvoice: string;
+  tanggal: string;
+  jam: string;
+  namaMitra: string;
+  buyerKode: string;
+  marginHargaPt: number;
+  komisiNominal: number;
+  nominal: number;
+  rekeningFisik: string;
+  statusLabel: string;
+  keterangan: string;
+  createdAt?: string;
+}
+
+/**
+ * Menentukan apakah entri db.uangMasuk harus dikecualikan dari pencatatan Arus Kas Divisi & Laba Rugi Divisi:
+ * - Mutasi non-riil (SINKRON / PIUTANG / BON01)
+ * - Dana titipan pass-through buyer Surat Jalan (SETTLEMENT_BUYER_SJ / PENJUALAN_SURAT_JALAN)
+ * - Potongan / Pelunasan Bon Mitra (PELUNASAN_BON / Potong Kasbon dari Invoice) karena bukan pendapatan/arus kas PT
+ */
+export function isExcludedUangMasukFromDivisiCashflow(um?: {
+  kategori?: string;
+  metode?: string;
+  rekeningTujuan?: string;
+  keterangan?: string;
+} | null): boolean {
+  if (!um) return true;
+  if (
+    um.metode === 'SINKRON' ||
+    um.rekeningTujuan === 'SINKRON' ||
+    um.metode === 'PIUTANG' ||
+    um.rekeningTujuan === 'BON01'
+  ) {
+    return true;
+  }
+  const kat = String(um.kategori || '').trim().toUpperCase();
+  if (
+    kat === 'SETTLEMENT_BUYER_SJ' ||
+    kat === 'PENJUALAN_SURAT_JALAN' ||
+    kat === 'PELUNASAN_BON'
+  ) {
+    return true;
+  }
+  const ket = String(um.keterangan || '').trim().toLowerCase();
+  if (ket.startsWith('potong kasbon dari inv') || ket.startsWith('potong piutang dari')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Menghitung pencatatan Arus Kas Divisi PT Wijaya Agro Perkasa (REK-WAP)
+ * yang berasal dari Keuntungan Surat Jalan: Selisih Basis (Margin PT) + Komisi PT.
+ * Otomatis mencegah double-count jika keuntungan/komisi invoice tersebut sudah tercatat di db.uangMasuk.
+ */
+export function computeSuratJalanKeuntunganPtEntries(
+  suratJalan?: InvoiceSuratJalanRecord[],
+  uangMasuk?: TransaksiUangMasuk[]
+): SuratJalanKeuntunganPtEntry[] {
+  const entries: SuratJalanKeuntunganPtEntry[] = [];
+  const umList = Array.isArray(uangMasuk) ? uangMasuk : [];
+
+  for (const sj of suratJalan || []) {
+    const isOwn = isInternalMilikSendiriSuratJalan(sj);
+    const rawMargin = Math.max(
+      0,
+      Math.round(
+        Number(sj.marginHargaPt) ||
+          Math.max(
+            0,
+            (Number(sj.totalPenjualanBuyer) || 0) - (Number(sj.totalPenjualanMitra) || 0)
+          )
+      )
+    );
+    const marginPt = isOwn ? 0 : rawMargin;
+    const komisiTotal = Math.max(0, Math.round(Number(sj.komisiNominal) || 0));
+    const grossKeuntunganPt = marginPt + komisiTotal;
+    if (grossKeuntunganPt <= 0) continue;
+
+    // Cek apakah keuntungan/komisi untuk invoice ini sudah pernah dicatat di db.uangMasuk
+    // (mis. entri lama KOMISI_SURAT_JALAN yang sudah mencakup gabungan Selisih Basis + Komisi)
+    let alreadyInUangMasuk = 0;
+    for (const um of umList) {
+      if (isExcludedUangMasukFromDivisiCashflow(um)) continue;
+      const matchById = Boolean(sj.idUangMasukKomisi && um.idTransaksi === sj.idUangMasukKomisi);
+      const matchByInvKomisi = Boolean(
+        sj.noInvoice &&
+          (um.kategori === 'KOMISI_SURAT_JALAN' || um.kategori === 'JASA_PENJUALAN_PT') &&
+          String(um.keterangan || '').includes(sj.noInvoice)
+      );
+      if (matchById || matchByInvKomisi) {
+        alreadyInUangMasuk += Math.max(0, Math.round(Number(um.nominal) || 0));
+      }
+    }
+
+    const totalNominal = Math.max(0, grossKeuntunganPt - alreadyInUangMasuk);
+    if (totalNominal <= 0) continue;
+
+    // Pecah sisa nominal yang belum tercatat menjadi porsi Selisih Basis & Komisi untuk uraian yang akurat
+    const komisiCovered = Math.min(komisiTotal, alreadyInUangMasuk);
+    const marginCovered = Math.min(marginPt, Math.max(0, alreadyInUangMasuk - komisiCovered));
+    const marginNet = Math.max(0, marginPt - marginCovered);
+    const komisiNet = Math.max(0, komisiTotal - komisiCovered);
+
+    const rincianParts: string[] = [];
+    if (marginNet > 0) {
+      rincianParts.push(`Selisih Basis Rp ${marginNet.toLocaleString('id-ID')}`);
+    }
+    if (komisiNet > 0) {
+      rincianParts.push(`Komisi Rp ${komisiNet.toLocaleString('id-ID')}`);
+    }
+
+    const statusLabel =
+      sj.statusPembayaranMitra === 'LUNAS'
+        ? 'Lunas'
+        : sj.statusUangBuyer === 'DITERIMA'
+        ? 'Dana Buyer Masuk'
+        : 'Pending Buyer';
+
+    const buyerKode = (sj.kategoriKode || '').trim().toUpperCase();
+    entries.push({
+      id: `SJ-PT-${sj.noInvoice || sj.id}`,
+      noInvoice: sj.noInvoice || sj.id,
+      tanggal: sj.tanggalUangBuyerMasuk || sj.tanggalBayarMitra || sj.tanggal,
+      jam: sj.jamUangBuyerMasuk || sj.jamBayarMitra || sj.jam || '00:00:00',
+      namaMitra: sj.namaMitra || 'Mitra',
+      buyerKode,
+      marginHargaPt: marginNet,
+      komisiNominal: komisiNet,
+      nominal: totalNominal,
+      rekeningFisik:
+        sj.rekeningTerimaBuyerKode || sj.rekeningBayarMitraKode || sj.rekeningPtKode || 'BNI01',
+      statusLabel,
+      keterangan: `Keuntungan Surat Jalan ${sj.noInvoice} (${sj.namaMitra}${
+        buyerKode ? ` · ${buyerKode}` : ''
+      }): ${rincianParts.join(' + ')} [${statusLabel}]`,
+      createdAt: sj.createdAt,
+    });
+  }
+
+  return entries;
+}
+
+/**
+ * Mengubah tanggal transaksi bisnis (DD/MM/YYYY, DD-MM-YYYY, atau YYYY-MM-DD) + jam (HH:mm:ss)
+ * menjadi epoch milliseconds untuk pengurutan kronologis yang konsisten di seluruh aplikasi.
+ */
+export function parseTransactionDateTimeMs(item?: {
+  tanggal?: string;
+  tanggalKerja?: string;
+  jam?: string;
+  createdAt?: string;
+} | null): number {
+  if (!item) return 0;
+  const rawDate = String(item.tanggal || item.tanggalKerja || '').trim();
+  const rawJam = String(item.jam || '00:00:00').trim();
+  const [hh, min, ss] = rawJam.split(':').map(Number);
+
+  if (rawDate) {
+    const sep = rawDate.includes('/') ? '/' : rawDate.includes('-') ? '-' : '';
+    if (sep) {
+      const strParts = rawDate.split(sep);
+      const numParts = strParts.map(Number);
+      if (numParts.length === 3 && numParts.every((n) => !Number.isNaN(n))) {
+        if (strParts[0].length === 4) {
+          const [yyyy, mm, dd] = numParts;
+          return new Date(yyyy, mm - 1, dd, hh || 0, min || 0, ss || 0).getTime();
+        }
+        const [dd, mm, yyyy] = numParts;
+        return new Date(yyyy, mm - 1, dd, hh || 0, min || 0, ss || 0).getTime();
+      }
+    }
+  }
+  if (item.createdAt) {
+    const ms = new Date(item.createdAt).getTime();
+    if (!Number.isNaN(ms)) return ms;
+  }
+  return 0;
+}
+
+/** Mengurutkan daftar transaksi berdasarkan tanggal & jam terbaru terlebih dahulu (descending). */
+export function sortTransactionsByDateDesc<
+  T extends { tanggal?: string; tanggalKerja?: string; jam?: string; createdAt?: string }
+>(list?: T[] | null): T[] {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => {
+    const diff = parseTransactionDateTimeMs(b) - parseTransactionDateTimeMs(a);
+    if (diff !== 0) return diff;
+    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  });
+}
+
+/** Mengurutkan daftar transaksi secara kronologis dari tanggal & jam terlama ke terbaru (ascending). */
+export function sortTransactionsByDateAsc<
+  T extends { tanggal?: string; tanggalKerja?: string; jam?: string; createdAt?: string }
+>(list?: T[] | null): T[] {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => {
+    const diff = parseTransactionDateTimeMs(a) - parseTransactionDateTimeMs(b);
+    if (diff !== 0) return diff;
+    return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  });
+}
+
+

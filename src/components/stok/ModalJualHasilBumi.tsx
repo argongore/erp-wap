@@ -8,9 +8,12 @@ import {
   ArrowDownLeft,
   ShieldCheck,
   Trash2,
+  Plus,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   Mitra,
+  RekapCtrContract,
   Rekening,
   StokHasilBumi,
   TransaksiPembelianHasilBumi,
@@ -115,6 +118,18 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const [pakaiPtKomisi, setPakaiPtKomisi] = useState<boolean>(false);
   const [komisiPtNominal, setKomisiPtNominal] = useState<number>(0);
   const [rekeningKomisiPt, setRekeningKomisiPt] = useState<string>('BNI01');
+
+  // Opsional: Masukkan penjualan gudang (terutama Kopi) langsung ke Rekap Kontrak CTR
+  const [masukRekapCtr, setMasukRekapCtr] = useState<boolean>(false);
+  const [rekapCtrList, setRekapCtrList] = useState<RekapCtrContract[]>([]);
+  const [selectedCtrId, setSelectedCtrId] = useState<string>('');
+  const [showQuickAddCtr, setShowQuickAddCtr] = useState<boolean>(false);
+  const [quickCtrNoKontrak, setQuickCtrNoKontrak] = useState<string>('');
+  const [quickCtrTgl, setQuickCtrTgl] = useState<string>('');
+  const [quickCtrGudang, setQuickCtrGudang] = useState<string>('LDC');
+  const [quickCtrQty, setQuickCtrQty] = useState<string>('');
+  const [quickCtrSaving, setQuickCtrSaving] = useState<boolean>(false);
+
   const [divisi, setDivisi] = useState<string>('Gudang Wijaya Agro');
   const [noSuratJalan, setNoSuratJalan] = useState<string>('');
   const [tanggalInput, setTanggalInput] = useState<string>(getTodayIsoDate());
@@ -154,9 +169,22 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
       setNoSuratJalan('');
       setTanggalInput(getTodayIsoDate());
       setKeterangan('');
+      setMasukRekapCtr(false);
+      setSelectedCtrId('');
+      setShowQuickAddCtr(false);
+      setQuickCtrNoKontrak('');
+      setQuickCtrTgl('');
+      setQuickCtrGudang('LDC');
+      setQuickCtrQty('');
       setStepVerifikasi(false);
       setVerifiedDoubleCheck(false);
       setErrorMsg('');
+      api
+        .getRekapCtr()
+        .then((res) => {
+          if (Array.isArray(res)) setRekapCtrList(res);
+        })
+        .catch(() => {});
     } else if (!isOpen) {
       wasOpenRef.current = false;
     }
@@ -234,6 +262,116 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
     return namaPembeliManual.trim() || noSuratJalan.trim() || 'PEMBELI';
   }, [modePembeli, activeMitra, idMitra, namaPembeliManual, noSuratJalan]);
 
+  const isKomoditasKopi = useMemo(
+    () => Boolean(selectedKomoditas?.nama && /kopi/i.test(selectedKomoditas.nama)),
+    [selectedKomoditas]
+  );
+
+  // Daftar kontrak CTR beserta progres tonase & status Aktif/Selesai
+  const ctrOptionsWithMetrics = useMemo(() => {
+    return [...rekapCtrList]
+      .sort((a, b) => {
+        const aDone = a.statusKontrak === 'SELESAI' ? 1 : 0;
+        const bDone = b.statusKontrak === 'SELESAI' ? 1 : 0;
+        if (aDone !== bDone) return aDone - bDone;
+        return (b.noUrut || 0) - (a.noUrut || 0);
+      })
+      .map((ctr) => {
+        const usedKg = Math.round(
+          (ctr.rows || []).reduce((s, r) => s + (Number(r.qtyAkhir) || 0), 0) * 10
+        ) / 10;
+        const targetKg = Number(ctr.qtyCtr) || 0;
+        const sisaKg = targetKg > 0 ? Math.round((targetKg - usedKg) * 10) / 10 : null;
+        return {
+          ctr,
+          usedKg,
+          targetKg,
+          sisaKg,
+          isSelesai: ctr.statusKontrak === 'SELESAI',
+        };
+      });
+  }, [rekapCtrList]);
+
+  const selectedCtrSummary = useMemo(
+    () => ctrOptionsWithMetrics.find((x) => x.ctr.id === selectedCtrId) || null,
+    [ctrOptionsWithMetrics, selectedCtrId]
+  );
+
+  const handleSelectCtr = (ctrId: string) => {
+    setSelectedCtrId(ctrId);
+    setVerifiedDoubleCheck(false);
+    const found = rekapCtrList.find((c) => c.id === ctrId);
+    if (found && modePembeli === 'MANUAL' && !namaPembeliManual.trim() && found.gudang?.trim()) {
+      setNamaPembeliManual(found.gudang.trim().toUpperCase());
+    }
+  };
+
+  const handleQuickCreateCtr = async () => {
+    const cleanNoKontrak = quickCtrNoKontrak.trim().toUpperCase();
+    const cleanGudang = quickCtrGudang.trim().toUpperCase();
+    if (!cleanNoKontrak) {
+      setErrorMsg('Isi Nomor / Kode Kontrak baru terlebih dahulu (contoh: LDC-08/11).');
+      return;
+    }
+    if (!cleanGudang) {
+      setErrorMsg('Isi nama Buyer / Eksportir kontrak baru (contoh: LDC atau SKA).');
+      return;
+    }
+    setQuickCtrSaving(true);
+    setErrorMsg('');
+    try {
+      const nextNo =
+        rekapCtrList.length > 0
+          ? Math.max(...rekapCtrList.map((c) => Number(c.noUrut) || 0)) + 1
+          : 1;
+      const qtyNum = Number(quickCtrQty.replace(',', '.')) || 0;
+      const now = new Date();
+      const defaultTgl = `${now.getDate()} ${now.toLocaleString('id-ID', { month: 'long' })}`;
+      const newCtr: RekapCtrContract = {
+        id: `CTR-${nextNo}-${Date.now()}`,
+        noUrut: nextNo,
+        noKontrak: cleanNoKontrak,
+        tglCtr: quickCtrTgl.trim() || defaultTgl,
+        gudang: cleanGudang,
+        qtyCtr: qtyNum,
+        statusKontrak: 'AKTIF',
+        rows: [
+          {
+            id: `CTR-${nextNo}-R1-${Date.now()}`,
+            basisWap: 0,
+            basisSuplayer: 0,
+            namaSuplayer: '',
+            qtySuplayer: null,
+            tglMasuk: '',
+            truck: '',
+            qtyAwal: null,
+            qtyAkhir: 0,
+            rendemen: 0,
+            pajakNominal: null,
+            komisiNominal: 0,
+            cekList: false,
+            sourceType: 'MANUAL',
+          },
+        ],
+      };
+      const saved = await api.saveRekapCtr([...rekapCtrList, newCtr]);
+      setRekapCtrList(saved);
+      setSelectedCtrId(newCtr.id);
+      if (modePembeli === 'MANUAL' && !namaPembeliManual.trim()) {
+        setNamaPembeliManual(cleanGudang);
+      }
+      setShowQuickAddCtr(false);
+      setQuickCtrNoKontrak('');
+      setQuickCtrTgl('');
+      setQuickCtrQty('');
+      window.dispatchEvent(new CustomEvent('erp:data-updated'));
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal membuat kontrak CTR baru.');
+    } finally {
+      setQuickCtrSaving(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const handleDeleteSelectedKomoditas = async () => {
@@ -296,6 +434,12 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
         return false;
       }
     }
+    if (masukRekapCtr && !selectedCtrId) {
+      setErrorMsg(
+        'Pilih Nomor Kontrak CTR tujuan atau klik "+ Buat Kontrak Baru", atau hapus centang "Masukkan ke Rekap Kontrak CTR".'
+      );
+      return false;
+    }
     return true;
   };
 
@@ -334,6 +478,13 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
         metodePembayaran,
         rekeningTujuan: metodePembayaran === 'TRANSFER' ? rekeningTujuan : undefined,
         noSuratJalan: noSuratJalan.trim() || undefined,
+        ...(masukRekapCtr && selectedCtrSummary
+          ? {
+              rekapCtrId: selectedCtrSummary.ctr.id,
+              rekapCtrNoUrut: selectedCtrSummary.ctr.noUrut,
+              rekapCtrNoKontrak: selectedCtrSummary.ctr.noKontrak || undefined,
+            }
+          : {}),
         tanggal: tanggalInput,
         keterangan:
           [
@@ -400,6 +551,17 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
         detailRows: isRecordBelumPutus
           ? [
               { label: 'Divisi Terkait', value: record.divisi || divisi },
+              ...(record.rekapCtrNoUrut
+                ? [
+                    {
+                      label: 'Masuk Kontrak CTR',
+                      value: `CTR #${record.rekapCtrNoUrut}${
+                        record.rekapCtrNoKontrak ? ` · ${record.rekapCtrNoKontrak}` : ''
+                      }`,
+                      highlight: true,
+                    },
+                  ]
+                : []),
               {
                 label: 'STOK Gudang Sebelum Muat',
                 value: `${record.stokGudangSebelum.toLocaleString('id-ID')} Kg × ${formatRupiah(record.modalRataRataPerKg)}`,
@@ -435,6 +597,17 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             ]
           : [
               { label: 'Divisi Terkait', value: record.divisi || divisi },
+              ...(record.rekapCtrNoUrut
+                ? [
+                    {
+                      label: 'Masuk Kontrak CTR',
+                      value: `CTR #${record.rekapCtrNoUrut}${
+                        record.rekapCtrNoKontrak ? ` · ${record.rekapCtrNoKontrak}` : ''
+                      }`,
+                      highlight: true,
+                    },
+                  ]
+                : []),
               {
                 label: 'Rekening Uang Riil',
                 value: `${record.metodePembayaran} (${record.rekeningTujuan})`,
@@ -1148,6 +1321,248 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             )}
           </div>
 
+          {/* Opsi Masukkan ke Rekap Kontrak CTR (REKAP CTR WAP) */}
+          <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/50 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="flex items-center gap-2 text-xs font-bold text-indigo-950 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={masukRekapCtr}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setMasukRekapCtr(checked);
+                    setVerifiedDoubleCheck(false);
+                    if (!checked) {
+                      setShowQuickAddCtr(false);
+                    } else if (!selectedCtrId) {
+                      const firstActive = ctrOptionsWithMetrics.find((x) => !x.isSelesai);
+                      if (firstActive) handleSelectCtr(firstActive.ctr.id);
+                    }
+                  }}
+                  className="rounded border-indigo-400 text-indigo-700 focus:ring-indigo-600"
+                />
+                <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+                <span>Masukkan ke Rekap Kontrak CTR (REKAP CTR WAP)</span>
+              </label>
+              {masukRekapCtr && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowQuickAddCtr((v) => !v);
+                    if (!showQuickAddCtr) {
+                      setQuickCtrGudang(
+                        (namaPembeliManual.trim() || 'LDC').toUpperCase().slice(0, 16)
+                      );
+                      setQuickCtrTgl('');
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-[11px] font-bold cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>{showQuickAddCtr ? 'Tutup Form Kontrak' : 'Buat Kontrak Baru'}</span>
+                </button>
+              )}
+            </div>
+
+            <p className="text-[11px] text-indigo-800 leading-relaxed">
+              {isKomoditasKopi ? (
+                <>
+                  Direkomendasikan untuk pengiriman <strong>Kopi Gudang</strong> ke eksportir (LDC/SKA) agar langsung masuk baris <strong>STOK HB (PT WAP)</strong> di nomor kontrak CTR terpilih — dan saat putus harga / cair lewat <strong>Uang Masuk (+)</strong>, tonase akhir &amp; harga otomatis ikut tersinkron ke CTR.
+                </>
+              ) : (
+                <>
+                  Opsional — centang jika pengiriman stok gudang ini mengisi kuota kontrak ekspor (<strong>REKAP CTR</strong>) agar tidak perlu input manual lagi.
+                </>
+              )}
+            </p>
+
+            {masukRekapCtr && (
+              <div className="space-y-2.5 pt-0.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-indigo-950 mb-1">
+                    Pilih Nomor Kontrak CTR Tujuan *
+                  </label>
+                  <select
+                    value={selectedCtrId}
+                    onChange={(e) => handleSelectCtr(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-indigo-300 bg-white text-xs font-semibold text-zinc-900 focus:outline-none focus:border-indigo-600"
+                  >
+                    <option value="">-- Pilih Kontrak CTR --</option>
+                    {ctrOptionsWithMetrics.some((x) => !x.isSelesai) && (
+                      <optgroup label="Kontrak Aktif / Sedang Berjalan">
+                        {ctrOptionsWithMetrics
+                          .filter((x) => !x.isSelesai)
+                          .map(({ ctr, usedKg, targetKg, sisaKg }) => (
+                            <option key={ctr.id} value={ctr.id}>
+                              CTR #{ctr.noUrut}
+                              {ctr.noKontrak ? ` · ${ctr.noKontrak}` : ''} · {ctr.gudang} · {ctr.tglCtr}
+                              {targetKg > 0
+                                ? ` · Sisa ${(sisaKg ?? 0).toLocaleString('id-ID')} / ${targetKg.toLocaleString('id-ID')} Kg`
+                                : usedKg > 0
+                                ? ` · Masuk ${usedKg.toLocaleString('id-ID')} Kg`
+                                : ' · Kontrak Baru'}
+                            </option>
+                          ))}
+                      </optgroup>
+                    )}
+                    {ctrOptionsWithMetrics.some((x) => x.isSelesai) && (
+                      <optgroup label="Kontrak Selesai / Arsip Lama">
+                        {ctrOptionsWithMetrics
+                          .filter((x) => x.isSelesai)
+                          .map(({ ctr, usedKg, targetKg }) => (
+                            <option key={ctr.id} value={ctr.id}>
+                              [SELESAI] CTR #{ctr.noUrut}
+                              {ctr.noKontrak ? ` · ${ctr.noKontrak}` : ''} · {ctr.gudang} · {ctr.tglCtr} (
+                              {usedKg.toLocaleString('id-ID')}
+                              {targetKg > 0 ? ` / ${targetKg.toLocaleString('id-ID')}` : ''} Kg)
+                            </option>
+                          ))}
+                      </optgroup>
+                    )}
+                  </select>
+                </div>
+
+                {/* Inline Quick Add Kontrak Baru */}
+                {showQuickAddCtr && (
+                  <div className="p-3 rounded-lg bg-white border border-indigo-200 space-y-2.5">
+                    <div className="text-[11px] font-bold text-indigo-950">
+                      Input Kontrak Baru (Langsung Tersimpan ke Rekap CTR &amp; Terpilih)
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-zinc-600 mb-0.5">
+                          No. / Kode Kontrak *
+                        </label>
+                        <input
+                          type="text"
+                          value={quickCtrNoKontrak}
+                          onChange={(e) => setQuickCtrNoKontrak(e.target.value.toUpperCase())}
+                          placeholder="mis. LDC-08/11"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-xs uppercase font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-zinc-600 mb-0.5">
+                          Tanggal Kontrak
+                        </label>
+                        <input
+                          type="text"
+                          value={quickCtrTgl}
+                          onChange={(e) => setQuickCtrTgl(e.target.value)}
+                          placeholder="mis. 8 November"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-zinc-600 mb-0.5">
+                          Buyer / Eksportir *
+                        </label>
+                        <input
+                          type="text"
+                          value={quickCtrGudang}
+                          onChange={(e) => setQuickCtrGudang(e.target.value.toUpperCase())}
+                          placeholder="LDC / SKA"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs uppercase font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-zinc-600 mb-0.5">
+                          Target Tonase (Kg)
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={quickCtrQty}
+                          onChange={(e) =>
+                            setQuickCtrQty(e.target.value.replace(/[^0-9.,]/g, ''))
+                          }
+                          placeholder="mis. 35000"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowQuickAddCtr(false)}
+                        className="px-2.5 py-1 rounded-lg border border-zinc-300 text-zinc-600 text-[11px] font-semibold cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                      <button
+                        type="button"
+                        disabled={quickCtrSaving}
+                        onClick={handleQuickCreateCtr}
+                        className="px-3 py-1 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                      >
+                        {quickCtrSaving ? 'Menyimpan...' : 'Simpan & Pilih Kontrak'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Pantauan Kuota Kontrak Terpilih */}
+                {selectedCtrSummary &&
+                  (() => {
+                    const { ctr, usedKg, targetKg } = selectedCtrSummary;
+                    const tonaseMasukCtr = tonaseAkhir > 0 ? tonaseAkhir : beratBersih;
+                    const sisaSetelah =
+                      targetKg > 0
+                        ? Math.round((targetKg - usedKg - tonaseMasukCtr) * 10) / 10
+                        : null;
+                    const isOver = sisaSetelah !== null && sisaSetelah < 0;
+                    return (
+                      <div
+                        className={`p-2.5 rounded-lg border text-[11px] tabular-nums space-y-1 ${
+                          isOver
+                            ? 'bg-amber-50 border-amber-300 text-amber-950'
+                            : 'bg-white border-indigo-200 text-zinc-700'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-bold text-indigo-950">
+                            CTR #{ctr.noUrut}
+                            {ctr.noKontrak ? ` · ${ctr.noKontrak}` : ''} ({ctr.gudang} · {ctr.tglCtr})
+                          </span>
+                          <div className="flex flex-wrap items-center gap-3 font-mono">
+                            {targetKg > 0 && (
+                              <span>
+                                Target: <strong>{targetKg.toLocaleString('id-ID')} Kg</strong>
+                              </span>
+                            )}
+                            <span>
+                              Terkirim: <strong>{usedKg.toLocaleString('id-ID')} Kg</strong>
+                            </span>
+                            <span className="text-sky-800">
+                              Muat ini: <strong>+{tonaseMasukCtr.toLocaleString('id-ID')} Kg</strong>
+                            </span>
+                            {sisaSetelah !== null && (
+                              <span
+                                className={
+                                  isOver
+                                    ? 'text-rose-700 font-extrabold'
+                                    : 'text-emerald-700 font-extrabold'
+                                }
+                              >
+                                Sisa: {sisaSetelah.toLocaleString('id-ID')} Kg
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {isOver && (
+                          <div className="text-[10px] text-amber-800 font-semibold">
+                            Perhatian: Total tonase melebihi target kontrak ini sebesar{' '}
+                            {Math.abs(sisaSetelah || 0).toLocaleString('id-ID')} Kg. Pastikan muat ini memang untuk kontrak{' '}
+                            {ctr.noKontrak || `CTR #${ctr.noUrut}`} atau pindahkan ke kontrak berikutnya.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+              </div>
+            )}
+          </div>
+
           {/* No Surat Jalan & Catatan */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -1261,6 +1676,18 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                       {formatRupiah(nilaiPengurangStokMuatRp)} ({formatRupiah(hargaRataPengurangStokPerKg)}/Kg)
                     </span>
                   </div>
+                  {masukRekapCtr && selectedCtrSummary && (
+                    <div className="sm:col-span-2 pt-1.5 border-t border-sky-100">
+                      <span className="text-zinc-500 block">Masuk Rekap Kontrak CTR:</span>
+                      <span className="font-bold text-indigo-900">
+                        CTR #{selectedCtrSummary.ctr.noUrut}
+                        {selectedCtrSummary.ctr.noKontrak
+                          ? ` · ${selectedCtrSummary.ctr.noKontrak}`
+                          : ''}{' '}
+                        ({selectedCtrSummary.ctr.gudang} · {selectedCtrSummary.ctr.tglCtr}) — Baris STOK HB (PT WAP)
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <label className="flex items-start space-x-2.5 cursor-pointer select-none pt-1">
                   <input
@@ -1270,25 +1697,45 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                     className="mt-0.5 w-4 h-4 rounded border-sky-400 text-sky-700 focus:ring-sky-600"
                   />
                   <span className="text-xs font-semibold text-zinc-900 leading-snug">
-                    Saya sudah memeriksa tonase muat <strong>{formatKgSpreadsheet(beratBersih)} Kg</strong> &amp; harga rata-rata beli pengurang stok <strong>{formatRupiah(hargaRataPengurangStokPerKg)}/Kg</strong>. Uang hasil penjualan akan diinput menyusul lewat menu <strong>Uang Masuk (+)</strong>.
+                    Saya sudah memeriksa tonase muat <strong>{formatKgSpreadsheet(beratBersih)} Kg</strong> &amp; harga rata-rata beli pengurang stok <strong>{formatRupiah(hargaRataPengurangStokPerKg)}/Kg</strong>
+                    {masukRekapCtr && selectedCtrSummary ? (
+                      <>
+                        {' '}serta penempatan ke <strong>CTR #{selectedCtrSummary.ctr.noUrut}{selectedCtrSummary.ctr.noKontrak ? ` (${selectedCtrSummary.ctr.noKontrak})` : ''}</strong>
+                      </>
+                    ) : null}
+                    . Uang hasil penjualan akan diinput menyusul lewat menu <strong>Uang Masuk (+)</strong>.
                   </span>
                 </label>
               </div>
             ) : (
-              <DoubleCheckVerifikasiPanel
-                direction="MASUK"
-                metode={metodePembayaran}
-                nominal={totalOmzetPutus}
-                rekeningList={rekeningList}
-                selectedTransferKode={rekeningTujuan}
-                onChangeTransferKode={setRekeningTujuan}
-                divisi={divisi}
-                divisiOptions={divisiOptions}
-                onChangeDivisi={setDivisi}
-                verified={verifiedDoubleCheck}
-                onToggleVerified={setVerifiedDoubleCheck}
-                theme="light"
-              />
+              <div className="space-y-2.5">
+                {masukRekapCtr && selectedCtrSummary && (
+                  <div className="px-3.5 py-2.5 rounded-xl border border-indigo-200 bg-indigo-50/70 text-xs text-indigo-950 flex items-center justify-between gap-2">
+                    <span className="font-semibold">Akan tercatat otomatis ke Rekap CTR:</span>
+                    <span className="font-mono font-bold">
+                      CTR #{selectedCtrSummary.ctr.noUrut}
+                      {selectedCtrSummary.ctr.noKontrak
+                        ? ` · ${selectedCtrSummary.ctr.noKontrak}`
+                        : ''}{' '}
+                      ({selectedCtrSummary.ctr.gudang})
+                    </span>
+                  </div>
+                )}
+                <DoubleCheckVerifikasiPanel
+                  direction="MASUK"
+                  metode={metodePembayaran}
+                  nominal={totalOmzetPutus}
+                  rekeningList={rekeningList}
+                  selectedTransferKode={rekeningTujuan}
+                  onChangeTransferKode={setRekeningTujuan}
+                  divisi={divisi}
+                  divisiOptions={divisiOptions}
+                  onChangeDivisi={setDivisi}
+                  verified={verifiedDoubleCheck}
+                  onToggleVerified={setVerifiedDoubleCheck}
+                  theme="light"
+                />
+              </div>
             ))}
 
           {/* Actions */}
@@ -1334,8 +1781,8 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting || blokirKarenaStok || beratBersih <= 0 || tonaseAkhir <= 0}
-                  className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:bg-zinc-300 text-white font-semibold flex items-center space-x-2 cursor-pointer transition-colors"
+                  disabled={submitting || blokirKarenaStok || beratBersih <= 0}
+                  className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:bg-zinc-300 disabled:cursor-not-allowed text-white font-semibold flex items-center space-x-2 cursor-pointer transition-colors"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>

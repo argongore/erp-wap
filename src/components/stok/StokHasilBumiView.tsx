@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   X,
   FileSpreadsheet,
+  TrendingUp,
 } from 'lucide-react';
 import {
   Mitra,
@@ -25,6 +26,7 @@ import {
   StokHasilBumi,
   TransaksiPembelianHasilBumi,
   TransaksiPenjualanHasilBumi,
+  TransaksiUangMasuk,
 } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
 import {
@@ -38,11 +40,13 @@ import { ModalInvoiceSuratJalan } from './ModalInvoiceSuratJalan.tsx';
 import { ModalTambahHasilBumi } from './ModalTambahHasilBumi.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { AnalisaProfitHasilBumiPanel } from './AnalisaProfitHasilBumiPanel.tsx';
 
 interface Props {
   stokList: StokHasilBumi[];
   pembelianList: TransaksiPembelianHasilBumi[];
   penjualanHasilBumiList?: TransaksiPenjualanHasilBumi[];
+  uangMasukList?: TransaksiUangMasuk[];
   mitraList?: Mitra[];
   rekeningList?: Rekening[];
   onRefresh: () => void;
@@ -168,6 +172,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
   stokList,
   pembelianList,
   penjualanHasilBumiList = [],
+  uangMasukList = [],
   mitraList = [],
   rekeningList = [],
   onRefresh,
@@ -211,6 +216,9 @@ export const StokHasilBumiView: React.FC<Props> = ({
   const [showInvoiceSjModal, setShowInvoiceSjModal] = useState<boolean>(false);
   const [jualInitialKode, setJualInitialKode] = useState<string | undefined>(undefined);
 
+  const [activePageView, setActivePageView] = useState<'STOK_MUTASI' | 'ANALISA_PROFIT'>(
+    'STOK_MUTASI'
+  );
   const [selectedCardKode, setSelectedCardKode] = useState<string>('');
   const [activeHistoryTab, setActiveHistoryTab] = useState<
     'MUTASI_KOMODITAS' | 'PENJUALAN' | 'PEMBELIAN'
@@ -870,6 +878,54 @@ export const StokHasilBumiView: React.FC<Props> = ({
         </div>
       )}
 
+      {/* Segmented Switcher: Stok & Buku Mutasi vs Analisa Profit & Modal Komoditas */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white rounded-xl border border-zinc-200 p-2">
+        <div className="inline-flex items-center p-1 bg-zinc-100 rounded-lg gap-1">
+          <button
+            type="button"
+            onClick={() => setActivePageView('STOK_MUTASI')}
+            className={`px-4 py-2 rounded-md text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              activePageView === 'STOK_MUTASI'
+                ? 'bg-white text-zinc-900 shadow-2xs'
+                : 'text-zinc-600 hover:text-zinc-900'
+            }`}
+          >
+            <Warehouse className="w-3.5 h-3.5" />
+            <span>Stok &amp; Buku Mutasi Gudang</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActivePageView('ANALISA_PROFIT')}
+            className={`px-4 py-2 rounded-md text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              activePageView === 'ANALISA_PROFIT'
+                ? 'bg-zinc-900 text-white shadow-2xs'
+                : 'text-zinc-700 hover:text-zinc-900'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+            <span>Analisa Modal vs Penjualan (Profit / Junam)</span>
+          </button>
+        </div>
+        <div className="text-[11px] text-zinc-500 px-2">
+          Terhubung otomatis dengan Pembelian, Muat Keluar &amp; Uang Masuk Penjualan
+        </div>
+      </div>
+
+      {activePageView === 'ANALISA_PROFIT' ? (
+        <AnalisaProfitHasilBumiPanel
+          stokList={stokList}
+          pembelianList={pembelianList}
+          penjualanHasilBumiList={penjualanHasilBumiList}
+          uangMasukList={uangMasukList}
+          onInputUangMasuk={onInputUangMasuk}
+          onSelectKomoditas={(kode) => {
+            setSelectedCardKode(kode);
+            setActiveHistoryTab('MUTASI_KOMODITAS');
+            setActivePageView('STOK_MUTASI');
+          }}
+        />
+      ) : (
+        <>
       {/* ========================================================================= */}
       {/* PANEL UTAMA: RINGKASAN STOK HASIL BUMI PER BULAN (TERJUAL VS READY GUDANG) */}
       {/* ========================================================================= */}
@@ -2280,6 +2336,8 @@ export const StokHasilBumiView: React.FC<Props> = ({
           </div>
         )}
       </div>
+        </>
+      )}
 
       {/* Modal Input Stok Awal & Modal Rekap Manual */}
       <ModalInputStokAwalHasilBumi

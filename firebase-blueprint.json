@@ -1,0 +1,305 @@
+{
+  "entities": {
+    "WeeklyBackup": {
+      "title": "WeeklyBackup",
+      "description": "Metadata arsip snapshot backup mingguan database ERP (menyimpan ringkasan hitungan entitas dan status penyelesaian upload bagian).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "ID unik snapshot backup mingguan."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID pemilik/pembuat snapshot."
+        },
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160,
+          "description": "Email Google terverifikasi pembuat snapshot."
+        },
+        "weekKey": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32,
+          "pattern": "^[0-9]{4}-W[0-9]{2}$",
+          "description": "Kunci minggu ISO (mis. 2026-W47)."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Label deskriptif snapshot backup."
+        },
+        "triggerMode": {
+          "type": "string",
+          "enum": ["AUTO_WEEKLY", "MANUAL", "PRE_RESTORE_SAFETY"],
+          "description": "Pemicu pembuatan backup."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["UPLOADING", "COMPLETED"],
+          "description": "Status integritas proses penyimpanan seluruh chunk backup."
+        },
+        "companyName": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "Nama perusahaan saat snapshot diambil."
+        },
+        "totalParts": {
+          "type": "number",
+          "description": "Jumlah dokumen bagian (subcollection parts) yang tergabung dalam snapshot ini."
+        },
+        "totalTransactions": {
+          "type": "number",
+          "description": "Total seluruh transaksi keuangan & operasional yang tercakup."
+        },
+        "totalMitra": {
+          "type": "number",
+          "description": "Jumlah data master mitra saat backup."
+        },
+        "totalKaryawan": {
+          "type": "number",
+          "description": "Jumlah data master karyawan saat backup."
+        },
+        "totalProduk": {
+          "type": "number",
+          "description": "Jumlah data master produk saat backup."
+        },
+        "totalRekening": {
+          "type": "number",
+          "description": "Jumlah data master rekening saat backup."
+        },
+        "estimatedBytes": {
+          "type": "number",
+          "description": "Estimasi ukuran total data snapshot dalam byte."
+        },
+        "tanggalWib": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Tanggal lokal WIB format DD/MM/YYYY."
+        },
+        "jamWib": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "Jam lokal WIB format HH:mm:ss."
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "Catatan tambahan opsional untuk snapshot."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp saat snapshot mulai dibuat."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp saat snapshot terakhir diperbarui/diselesaikan."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "ownerEmail",
+        "weekKey",
+        "label",
+        "triggerMode",
+        "status",
+        "companyName",
+        "totalParts",
+        "totalTransactions",
+        "totalMitra",
+        "totalKaryawan",
+        "totalProduk",
+        "totalRekening",
+        "estimatedBytes",
+        "tanggalWib",
+        "jamWib",
+        "note",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BackupPart": {
+      "title": "BackupPart",
+      "description": "Potongan data native (Map/List) dari satu bagian koleksi database ERP dalam satu snapshot mingguan agar selalu jauh di bawah batas 1 MB per dokumen.",
+      "type": "object",
+      "properties": {
+        "partId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "ID unik dokumen bagian."
+        },
+        "backupId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Referensi ke ID dokumen induk WeeklyBackup."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID pemilik snapshot."
+        },
+        "sectionKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_]+$",
+          "description": "Nama properti koleksi ERP pada DatabaseSchema (mis. penjualan, mitra, profilPerusahaan)."
+        },
+        "chunkIndex": {
+          "type": "number",
+          "description": "Indeks potongan mulai dari 0."
+        },
+        "totalChunks": {
+          "type": "number",
+          "description": "Total potongan untuk sectionKey tersebut."
+        },
+        "isObjectSection": {
+          "type": "boolean",
+          "description": "Bernilai true jika section berbentuk objek tunggal (mis. profilPerusahaan), false jika berupa daftar/array."
+        },
+        "records": {
+          "type": "array",
+          "description": "Daftar entri native untuk potongan koleksi (maksimal 200 item per dokumen)."
+        },
+        "objectData": {
+          "type": "object",
+          "description": "Data map native untuk section berbentuk objek tunggal."
+        },
+        "itemCount": {
+          "type": "number",
+          "description": "Jumlah item dalam potongan ini."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp pembuatan dokumen bagian."
+        }
+      },
+      "required": [
+        "partId",
+        "backupId",
+        "ownerId",
+        "sectionKey",
+        "chunkIndex",
+        "totalChunks",
+        "isObjectSection",
+        "records",
+        "objectData",
+        "itemCount",
+        "createdAt"
+      ]
+    },
+    "BackupSetting": {
+      "title": "BackupSetting",
+      "description": "Konfigurasi jadwal backup mingguan otomatis dan retensi riwayat snapshot.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID pemilik pengaturan."
+        },
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160,
+          "description": "Email Google pemilik pengaturan."
+        },
+        "autoWeeklyEnabled": {
+          "type": "boolean",
+          "description": "Aktifkan pengecekan backup mingguan otomatis."
+        },
+        "intervalDays": {
+          "type": "number",
+          "description": "Jeda hari antar backup otomatis (default 7 hari)."
+        },
+        "preferredDayOfWeek": {
+          "type": "number",
+          "description": "Hari target mingguan (0 = Minggu s.d. 6 = Sabtu)."
+        },
+        "retentionWeeks": {
+          "type": "number",
+          "description": "Jumlah maksimal arsip mingguan yang disimpan sebelum arsip terlama dibersihkan."
+        },
+        "lastBackupId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "ID snapshot backup terakhir."
+        },
+        "lastBackupWeekKey": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Kunci minggu ISO terakhir yang berhasil di-backup."
+        },
+        "lastBackupAtIso": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Waktu ISO backup terakhir."
+        },
+        "lastBackupLabel": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Label snapshot backup terakhir."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp saat pengaturan dibuat."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp saat pengaturan terakhir diperbarui."
+        }
+      },
+      "required": [
+        "ownerId",
+        "ownerEmail",
+        "autoWeeklyEnabled",
+        "intervalDays",
+        "preferredDayOfWeek",
+        "retentionWeeks",
+        "lastBackupId",
+        "lastBackupWeekKey",
+        "lastBackupAtIso",
+        "lastBackupLabel",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/weeklyBackups/{backupId}": {
+      "schema": { "$ref": "#/entities/WeeklyBackup" },
+      "description": "Daftar metadata arsip snapshot backup mingguan database ERP."
+    },
+    "/weeklyBackups/{backupId}/parts/{partId}": {
+      "schema": { "$ref": "#/entities/BackupPart" },
+      "description": "Subkoleksi potongan data native (Map/List) dari tiap snapshot backup mingguan."
+    },
+    "/backupSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/BackupSetting" },
+      "description": "Pengaturan jadwal backup mingguan otomatis dan retensi per akun admin."
+    }
+  }
+}

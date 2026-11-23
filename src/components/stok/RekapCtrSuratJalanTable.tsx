@@ -147,6 +147,7 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
   // Modal tambah CTR baru
   const [showAddCtrModal, setShowAddCtrModal] = useState(false);
   const [newCtrNo, setNewCtrNo] = useState('');
+  const [newCtrNoKontrak, setNewCtrNoKontrak] = useState('');
   const [newCtrTgl, setNewCtrTgl] = useState('');
   const [newCtrGudang, setNewCtrGudang] = useState('SKA');
   const [newCtrQty, setNewCtrQty] = useState('');
@@ -269,7 +270,9 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
 
   const updateContractField = (
     ctrId: string,
-    patch: Partial<Pick<RekapCtrContract, 'noUrut' | 'tglCtr' | 'gudang' | 'qtyCtr'>>
+    patch: Partial<
+      Pick<RekapCtrContract, 'noUrut' | 'noKontrak' | 'tglCtr' | 'gudang' | 'qtyCtr' | 'statusKontrak'>
+    >
   ) => {
     const next = contracts.map((c) => (c.id === ctrId ? { ...c, ...patch } : c));
     scheduleUpdate(next);
@@ -331,12 +334,16 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
     const maxNo = contracts.reduce((m, c) => Math.max(m, c.noUrut), 27);
     const parsedNo = Number(newCtrNo) || maxNo + 1;
     const qty = parseDecimal(newCtrQty) || 0;
+    const gudangUpper = (newCtrGudang || 'SKA').trim().toUpperCase();
+    const noKontrakClean = newCtrNoKontrak.trim().toUpperCase();
     const newCtr: RekapCtrContract = {
       id: `CTR-${parsedNo}-${Date.now()}`,
       noUrut: parsedNo,
+      noKontrak: noKontrakClean || undefined,
       tglCtr: newCtrTgl.trim() || '-',
-      gudang: (newCtrGudang || 'SKA').trim().toUpperCase(),
+      gudang: gudangUpper,
       qtyCtr: qty,
+      statusKontrak: 'AKTIF',
       rows: [
         {
           id: `CTR-${parsedNo}-1-${Date.now()}`,
@@ -345,7 +352,7 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
           namaSuplayer: '',
           qtySuplayer: null,
           tglMasuk: '',
-          truck: 'BE8206AMN',
+          truck: '',
           qtyAwal: null,
           qtyAkhir: 0,
           rendemen: 0,
@@ -359,8 +366,13 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
     scheduleUpdate(next, true);
     setShowAddCtrModal(false);
     setNewCtrNo('');
+    setNewCtrNoKontrak('');
     setNewCtrTgl('');
     setNewCtrQty('');
+    setStatusMessage({
+      type: 'ok',
+      text: `Kontrak CTR #${parsedNo}${noKontrakClean ? ` (${noKontrakClean})` : ''} · ${gudangUpper} berhasil dibuat dan langsung siap dipilih saat input Invoice Surat Jalan.`,
+    });
   };
 
   const handleImportPenjualanHb = (jhb: TransaksiPenjualanHasilBumi) => {
@@ -560,6 +572,7 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
             onClick={() => {
               const maxNo = contracts.reduce((m, c) => Math.max(m, c.noUrut), 27);
               setNewCtrNo(String(maxNo + 1));
+              setNewCtrNoKontrak('');
               setNewCtrTgl('');
               setNewCtrGudang('SKA');
               setNewCtrQty('');
@@ -1130,11 +1143,40 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
                         {/* Baris Biru Summary Kontrak + Akumulasi Running Total */}
                         <tr className="bg-[#1d70d8] text-white font-bold tabular-nums">
                           <td colSpan={22} className="border border-blue-700 px-2 py-1 text-left">
-                            <div className="flex items-center justify-between gap-2 text-[10px]">
-                              <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <span className="font-extrabold">
                                   CTR #{contract.noUrut} ({contract.tglCtr || '-'} · {contract.gudang || '-'})
                                 </span>
+                                <input
+                                  type="text"
+                                  value={contract.noKontrak || ''}
+                                  onChange={(e) =>
+                                    updateContractField(contract.id, {
+                                      noKontrak: e.target.value.toUpperCase(),
+                                    })
+                                  }
+                                  placeholder="No. Kontrak (mis. LDC-08/11)"
+                                  title="Nomor / Kode Kontrak pembeda saat pilih kontrak di Invoice Surat Jalan"
+                                  className="px-1.5 py-0.5 rounded bg-white/15 focus:bg-white focus:text-slate-900 placeholder:text-blue-200/80 text-white font-mono text-[10px] w-36 focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateContractField(contract.id, {
+                                      statusKontrak:
+                                        contract.statusKontrak === 'SELESAI' ? 'AKTIF' : 'SELESAI',
+                                    })
+                                  }
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                                    contract.statusKontrak === 'SELESAI'
+                                      ? 'bg-slate-900/50 text-blue-100 hover:bg-slate-900/70'
+                                      : 'bg-emerald-500/90 text-white hover:bg-emerald-600'
+                                  }`}
+                                  title="Klik untuk ubah status kontrak Aktif / Selesai"
+                                >
+                                  {contract.statusKontrak === 'SELESAI' ? 'Selesai' : 'Aktif'}
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => handleAddEmptyRow(contract.id)}
@@ -1161,7 +1203,7 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
                                       setDeletePrompt({
                                         kind: 'CTR',
                                         ctrId: contract.id,
-                                        label: `CTR #${contract.noUrut} (${contract.tglCtr})`,
+                                        label: `CTR #${contract.noUrut}${contract.noKontrak ? ` (${contract.noKontrak})` : ''} (${contract.tglCtr})`,
                                       })
                                     }
                                     className="px-1.5 py-0.5 rounded bg-rose-500/80 hover:bg-rose-600 text-white font-semibold cursor-pointer"
@@ -1170,8 +1212,24 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
                                   </button>
                                 )}
                               </div>
-                              <div className="hidden sm:flex items-center gap-4 text-blue-100 font-mono">
-                                <span>Akhir: {fmtIdNumber(item.totalQtyAkhir, 1)} Kg</span>
+                              <div className="hidden sm:flex items-center gap-3 text-blue-100 font-mono">
+                                <span>
+                                  Terkirim: {fmtIdNumber(item.totalQtyAkhir, 1)}
+                                  {contract.qtyCtr > 0 ? ` / ${fmtIdNumber(contract.qtyCtr, 1)} Kg` : ' Kg'}
+                                </span>
+                                {contract.qtyCtr > 0 && (
+                                  <span
+                                    className={
+                                      item.sisaCtr < 0
+                                        ? 'text-amber-200 font-extrabold'
+                                        : item.sisaCtr === 0
+                                        ? 'text-emerald-200 font-extrabold'
+                                        : 'text-white font-extrabold'
+                                    }
+                                  >
+                                    Sisa: {fmtIdNumber(item.sisaCtr, 1)} Kg
+                                  </span>
+                                )}
                                 <span>Dana Msk: {fmtRp(item.totalDanaMasuk)}</span>
                                 <span>Pajak: {fmtRp(item.totalPajak)}</span>
                                 <span>Komisi: {fmtRp(item.totalKomisi)}</span>
@@ -1213,7 +1271,7 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Nomor CTR</label>
+                <label className="block font-semibold text-slate-700 mb-1">No. Urut CTR</label>
                 <input
                   type="number"
                   value={newCtrNo}
@@ -1222,17 +1280,29 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
                 />
               </div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Tanggal CTR</label>
+                <label className="block font-semibold text-sky-900 mb-1">
+                  Nomor / Kode Kontrak *
+                </label>
+                <input
+                  type="text"
+                  value={newCtrNoKontrak}
+                  onChange={(e) => setNewCtrNoKontrak(e.target.value.toUpperCase())}
+                  placeholder="mis. LDC-08/11 atau CTR-001"
+                  className="w-full px-3 py-2 rounded-xl border border-sky-300 bg-sky-50/40 font-mono font-bold uppercase text-sky-950"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Tanggal Kontrak</label>
                 <input
                   type="text"
                   value={newCtrTgl}
                   onChange={(e) => setNewCtrTgl(e.target.value)}
-                  placeholder="mis. 5 November"
+                  placeholder="mis. 8 November"
                   className="w-full px-3 py-2 rounded-xl border border-slate-300"
                 />
               </div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Gudang / Buyer</label>
+                <label className="block font-semibold text-slate-700 mb-1">Buyer / Eksportir</label>
                 <input
                   type="text"
                   value={newCtrGudang}
@@ -1241,16 +1311,21 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 uppercase font-semibold"
                 />
               </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Target Qty CTR (Kg)</label>
+              <div className="col-span-2">
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Target Kuota / Tonase Kontrak (Kg)
+                </label>
                 <input
                   type="text"
                   inputMode="decimal"
                   value={newCtrQty}
                   onChange={(e) => setNewCtrQty(e.target.value)}
-                  placeholder="mis. 8500"
+                  placeholder="mis. 35000 (untuk 35 Ton) atau 55200 (untuk 55,2 Ton)"
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
                 />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Kontrak yang dibuat di sini langsung muncul di pilihan <strong>Nomor Kontrak CTR</strong> saat input Invoice Surat Jalan beserta pantauan sisa tonasenya.
+                </p>
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
@@ -1266,7 +1341,7 @@ export const RekapCtrSuratJalanTable: React.FC<RekapCtrSuratJalanTableProps> = (
                 onClick={handleCreateCtr}
                 className="px-4 py-2 rounded-xl bg-sky-800 hover:bg-sky-900 text-white text-xs font-bold cursor-pointer"
               >
-                Buat CTR
+                Simpan Kontrak CTR
               </button>
             </div>
           </div>

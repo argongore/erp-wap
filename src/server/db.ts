@@ -11,6 +11,9 @@ import {
   isProdukTanpaStok,
   isExcludedFromDivisi,
   isTanpaDivisi,
+  isInternalMilikSendiriSuratJalan,
+  isExcludedUangMasukFromDivisiCashflow,
+  computeSuratJalanKeuntunganPtEntries,
   normalizeRoleMitra,
   resolveKelompokItemPengeluaran,
 } from './types.ts';
@@ -85,6 +88,7 @@ export interface DatabaseSchema {
   deletedMasterPengeluaranNames?: string[];
   deletedProdukKodes?: string[];
   dismissedRekapCtrRefs?: string[];
+  deletedTransactionIds?: string[];
 }
 
 const RUNTIME_CACHE_DIR = path.join(os.tmpdir(), 'wijaya_agro_erp_runtime');
@@ -643,6 +647,7 @@ export function getDefaultDatabase(): DatabaseSchema {
     suratJalan: [],
     rekapCtr: getDefaultRekapCtrContracts(),
     dismissedRekapCtrRefs: [],
+    deletedTransactionIds: [],
     auditStokLogs: [],
     auditLogs: [
       {
@@ -724,6 +729,9 @@ class DatabaseManager {
             : [],
           dismissedRekapCtrRefs: Array.isArray(parsed.dismissedRekapCtrRefs)
             ? parsed.dismissedRekapCtrRefs
+            : [],
+          deletedTransactionIds: Array.isArray(parsed.deletedTransactionIds)
+            ? parsed.deletedTransactionIds
             : [],
         };
 
@@ -940,14 +948,86 @@ class DatabaseManager {
     return this.db;
   }
 
+  private normalizeTombstoneId(raw: unknown): string {
+    return String(raw || '').trim().toUpperCase();
+  }
+
+  private collectTrackedTransactionIds(db: DatabaseSchema): Set<string> {
+    const ids = new Set<string>();
+    const pushId = (raw: unknown) => {
+      const norm = this.normalizeTombstoneId(raw);
+      if (norm) ids.add(norm);
+    };
+    for (const p of db.penjualan || []) pushId(p?.noPenjualan || (p as any)?.id);
+    for (const pb of db.pembelianBarang || []) pushId(pb?.noPembelian || (pb as any)?.id);
+    for (const ph of db.pembelianHasilBumi || []) pushId(ph?.noPembelian || (ph as any)?.id);
+    for (const pjh of db.penjualanHasilBumi || []) pushId(pjh?.noPenjualan || (pjh as any)?.id);
+    for (const kb of db.kasbonUang || []) pushId(kb?.idTransaksi || (kb as any)?.id);
+    for (const bb of db.bayarBon || []) pushId(bb?.idTransaksi || (bb as any)?.id);
+    for (const tr of db.transferRekening || []) pushId(tr?.noTransfer || (tr as any)?.id);
+    for (const pe of db.pengeluaran || []) pushId(pe?.idTransaksi || (pe as any)?.id);
+    for (const pt of db.pencairanTitipan || []) pushId(pt?.idPencairan || (pt as any)?.id);
+    for (const br of db.brilink || []) pushId(br?.idTransaksi || (br as any)?.id);
+    for (const um of db.uangMasuk || []) pushId(um?.idTransaksi || (um as any)?.id);
+    for (const u of db.upahHarian || []) pushId(u?.id);
+    for (const g of db.penggajian || []) pushId(g?.id);
+    for (const sj of db.suratJalan || []) pushId(sj?.noInvoice || sj?.id);
+    for (const ctr of db.rekapCtr || []) pushId(ctr?.id || (ctr?.noUrut ? `CTR-${ctr.noUrut}` : ''));
+    for (const inv of db.inventaris || []) pushId(inv?.id || inv?.kode);
+    return ids;
+  }
+
+  private purgeDeletedTransactions(db: DatabaseSchema) {
+    if (!Array.isArray(db.deletedTransactionIds) || db.deletedTransactionIds.length === 0) {
+      return;
+    }
+    const deletedSet = new Set(
+      db.deletedTransactionIds.map((id) => this.normalizeTombstoneId(id)).filter(Boolean)
+    );
+    if (deletedSet.size === 0) return;
+
+    const keepIfNotDeleted = <T,>(list: T[] | undefined, getId: (item: T) => unknown): T[] => {
+      if (!Array.isArray(list)) return [];
+      return list.filter((item) => {
+        const id = this.normalizeTombstoneId(getId(item));
+        return !id || !deletedSet.has(id);
+      });
+    };
+
+    db.penjualan = keepIfNotDeleted(db.penjualan, (p) => p?.noPenjualan || (p as any)?.id);
+    db.pembelianBarang = keepIfNotDeleted(db.pembelianBarang, (pb) => pb?.noPembelian || (pb as any)?.id);
+    db.pembelianHasilBumi = keepIfNotDeleted(db.pembelianHasilBumi, (ph) => ph?.noPembelian || (ph as any)?.id);
+    db.penjualanHasilBumi = keepIfNotDeleted(db.penjualanHasilBumi, (pjh) => pjh?.noPenjualan || (pjh as any)?.id);
+    db.kasbonUang = keepIfNotDeleted(db.kasbonUang, (kb) => kb?.idTransaksi || (kb as any)?.id);
+    db.bayarBon = keepIfNotDeleted(db.bayarBon, (bb) => bb?.idTransaksi || (bb as any)?.id);
+    db.transferRekening = keepIfNotDeleted(db.transferRekening, (tr) => tr?.noTransfer || (tr as any)?.id);
+    db.pengeluaran = keepIfNotDeleted(db.pengeluaran, (pe) => pe?.idTransaksi || (pe as any)?.id);
+    db.pencairanTitipan = keepIfNotDeleted(db.pencairanTitipan, (pt) => pt?.idPencairan || (pt as any)?.id);
+    db.brilink = keepIfNotDeleted(db.brilink, (br) => br?.idTransaksi || (br as any)?.id);
+    db.uangMasuk = keepIfNotDeleted(db.uangMasuk, (um) => um?.idTransaksi || (um as any)?.id);
+    db.upahHarian = keepIfNotDeleted(db.upahHarian, (u) => u?.id);
+    db.penggajian = keepIfNotDeleted(db.penggajian, (g) => g?.id);
+    db.suratJalan = keepIfNotDeleted(db.suratJalan, (sj) => sj?.noInvoice || sj?.id);
+    db.rekapCtr = keepIfNotDeleted(db.rekapCtr, (ctr) => ctr?.id || (ctr?.noUrut ? `CTR-${ctr.noUrut}` : ''));
+    db.inventaris = keepIfNotDeleted(db.inventaris, (inv) => inv?.id || inv?.kode);
+  }
+
   private mergeListById<T>(
     localList: T[] | undefined,
     incomingList: T[] | undefined,
-    getId: (item: T) => string
+    getId: (item: T) => string,
+    options?: { authoritativeCloud?: boolean; deletedSet?: Set<string> }
   ): T[] {
     const local = Array.isArray(localList) ? localList : [];
     const incoming = Array.isArray(incomingList) ? incomingList : [];
+    const authoritativeCloud = Boolean(options?.authoritativeCloud);
+    const deletedSet = options?.deletedSet;
     const map = new Map<string, T>();
+
+    const isTombstoned = (rawId: string): boolean => {
+      if (!deletedSet || deletedSet.size === 0) return false;
+      return deletedSet.has(this.normalizeTombstoneId(rawId));
+    };
 
     const getItemTime = (it: any): number => {
       if (!it) return 0;
@@ -961,7 +1041,23 @@ class DatabaseManager {
       return new Date(raw).getTime() || 0;
     };
 
-    // Helper to merge images & critical stock/price fields bidirectionally
+    // Helper to preserve local physical nota captures (stripped from Cloud JSONB) without resurrecting deleted rows
+    const preservePhotosOnly = (cloudItem: any, localItem: any) => {
+      if (!cloudItem || !localItem) return;
+      const photoFields = ['fotoNota', 'fotoBukti', 'fotoKuitansi', 'fotoItem', 'fotoStnk', 'fotoTimbangan'];
+      for (const pf of photoFields) {
+        if (!cloudItem[pf] && localItem[pf]) cloudItem[pf] = localItem[pf];
+      }
+      if (
+        (!cloudItem.fotoNotaList || cloudItem.fotoNotaList.length === 0) &&
+        Array.isArray(localItem.fotoNotaList) &&
+        localItem.fotoNotaList.length > 0
+      ) {
+        cloudItem.fotoNotaList = [...localItem.fotoNotaList];
+      }
+    };
+
+    // Helper to merge images & critical stock/price fields bidirectionally (non-authoritative merge only)
     const reconcilePair = (a: any, b: any) => {
       if (!a || !b) return;
       // 1. Photo guard: never lose image captures from physical notas
@@ -988,11 +1084,10 @@ class DatabaseManager {
       if (a.stokAwal !== undefined && b.stokAwal === undefined) {
         b.stokAwal = a.stokAwal;
         b.modalAwalTotal = b.modalAwalTotal ?? a.modalAwalTotal;
-        b.rataRataModalAwal = b.rataRataModalAwal ?? a.modalAwalTotal;
+        b.rataRataModalAwal = b.rataRataModalAwal ?? a.rataRataModalAwal;
         b.keteranganStokAwal = b.keteranganStokAwal ?? a.keteranganStokAwal;
         b.tanggalInputStokAwal = b.tanggalInputStokAwal ?? a.tanggalInputStokAwal;
       }
-      // 2. Stock guard: if one side has positive stock and the other has 0, always preserve the positive stock!
       if ((b.stok || 0) > 0 && (a.stok || 0) === 0) {
         a.stok = b.stok;
       }
@@ -1019,29 +1114,35 @@ class DatabaseManager {
       }
     };
 
-    // 1. First put incoming items from cloud
+    // 1. First put incoming items from cloud (filtering out any tombstoned IDs)
     for (const item of incoming) {
       if (item) {
         const id = getId(item);
-        if (id) {
+        if (id && !isTombstoned(id)) {
           map.set(id, item);
         }
       }
     }
 
-    // 2. Put local items: if an item exists locally but not in incoming, PRESERVE IT!
+    // 2. Reconcile with local items
     for (const item of local) {
       if (item) {
         const id = getId(item);
-        if (id) {
+        if (id && !isTombstoned(id)) {
           const existing = map.get(id);
-          if (!existing) {
+          if (authoritativeCloud) {
+            // Cloud is Single Source of Truth: NEVER resurrect rows deleted in Cloud and NEVER overwrite Cloud edits with stale local copies.
+            // Only carry over local inline nota photos stripped from Cloud JSONB.
+            if (existing) {
+              preservePhotosOnly(existing, item);
+            }
+          } else if (!existing) {
             map.set(id, item);
           } else {
             reconcilePair(existing, item);
             const incomingTime = getItemTime(existing);
             const localTime = getItemTime(item);
-            if (localTime >= incomingTime) {
+            if (localTime > incomingTime) {
               map.set(id, item);
             }
           }
@@ -1052,74 +1153,174 @@ class DatabaseManager {
     return Array.from(map.values());
   }
 
-  private applyIncomingSnapshot(incoming: DatabaseSchema) {
+  private mergeTombstoneArrays(
+    localArr: string[] | undefined,
+    incomingArr: string[] | undefined,
+    options?: { skipLocalUnion?: boolean; maxItems?: number }
+  ): string[] {
+    const incoming = Array.isArray(incomingArr) ? incomingArr : [];
+    const local = options?.skipLocalUnion ? [] : Array.isArray(localArr) ? localArr : [];
+    const merged: string[] = [];
+    const seen = new Set<string>();
+    // Preserve incoming first, then any local tombstones so deletions never vanish across syncs
+    for (const raw of [...incoming, ...local]) {
+      const clean = String(raw || '').trim();
+      const key = clean.toUpperCase();
+      if (clean && !seen.has(key)) {
+        seen.add(key);
+        merged.push(clean);
+      }
+    }
+    const maxItems = options?.maxItems || 2500;
+    return merged.length > maxItems ? merged.slice(merged.length - maxItems) : merged;
+  }
+
+  private applyIncomingSnapshot(
+    incoming: DatabaseSchema,
+    options?: { authoritativeCloud?: boolean; skipLocalTombstoneUnion?: boolean }
+  ) {
+    const authoritativeCloud = Boolean(options?.authoritativeCloud);
+    const skipLocalUnion = Boolean(options?.skipLocalTombstoneUnion);
+
+    // 1. Merge tombstones FIRST so deleted items are never resurrected during list hydration
+    this.db.deletedHasilBumiKodes = this.mergeTombstoneArrays(
+      this.db.deletedHasilBumiKodes,
+      incoming.deletedHasilBumiKodes,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.deletedMasterPengeluaranNames = this.mergeTombstoneArrays(
+      this.db.deletedMasterPengeluaranNames,
+      incoming.deletedMasterPengeluaranNames,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.deletedProdukKodes = this.mergeTombstoneArrays(
+      this.db.deletedProdukKodes,
+      incoming.deletedProdukKodes,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.dismissedRekapCtrRefs = this.mergeTombstoneArrays(
+      this.db.dismissedRekapCtrRefs,
+      incoming.dismissedRekapCtrRefs,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.deletedTransactionIds = this.mergeTombstoneArrays(
+      this.db.deletedTransactionIds,
+      incoming.deletedTransactionIds,
+      { skipLocalUnion, maxItems: 2500 }
+    );
+
+    const deletedTxSet = new Set(
+      (this.db.deletedTransactionIds || []).map((id) => this.normalizeTombstoneId(id)).filter(Boolean)
+    );
+    const txMergeOpts = { authoritativeCloud, deletedSet: deletedTxSet };
+    const masterMergeOpts = { authoritativeCloud };
+
     this.db.profilPerusahaan = incoming.profilPerusahaan || this.db.profilPerusahaan;
     this.db.rekening =
       Array.isArray(incoming.rekening) && incoming.rekening.length > 0 ? incoming.rekening : this.db.rekening;
 
-    this.db.mitra = this.mergeListById(this.db.mitra, incoming.mitra, (m) => m.kode || m.id);
-    this.db.karyawan = this.mergeListById(this.db.karyawan, incoming.karyawan, (k) => k.nik || k.id);
-    this.db.upahHarian = this.mergeListById(this.db.upahHarian, incoming.upahHarian, (u) => u.id);
-    this.db.penggajian = this.mergeListById(this.db.penggajian, incoming.penggajian, (p) => p.id);
-    this.db.produk = this.mergeListById(this.db.produk, incoming.produk, (pr) => pr.kode);
+    this.db.mitra = this.mergeListById(this.db.mitra, incoming.mitra, (m) => m.kode || m.id, masterMergeOpts);
+    this.db.karyawan = this.mergeListById(this.db.karyawan, incoming.karyawan, (k) => k.nik || k.id, masterMergeOpts);
+    this.db.upahHarian = this.mergeListById(this.db.upahHarian, incoming.upahHarian, (u) => u.id, txMergeOpts);
+    this.db.penggajian = this.mergeListById(this.db.penggajian, incoming.penggajian, (p) => p.id, txMergeOpts);
+    this.db.produk = this.mergeListById(this.db.produk, incoming.produk, (pr) => pr.kode, masterMergeOpts);
     this.db.kategoriProduk = this.mergeListById(
       this.db.kategoriProduk,
       incoming.kategoriProduk,
-      (kp) => (kp as any).kode || (kp as any).id || kp.nama
+      (kp) => (kp as any).kode || (kp as any).id || kp.nama,
+      masterMergeOpts
     );
-    this.db.stokBarang = this.mergeListById(this.db.stokBarang, incoming.stokBarang, (sb) => sb.kode);
+    this.db.stokBarang = this.mergeListById(this.db.stokBarang, incoming.stokBarang, (sb) => sb.kode, masterMergeOpts);
     this.db.stokHasilBumi = this.mergeListById(
       this.db.stokHasilBumi,
       incoming.stokHasilBumi,
-      (sh) => sh.kode
+      (sh) => sh.kode,
+      masterMergeOpts
     );
 
-    this.db.penjualan = this.mergeListById(this.db.penjualan, incoming.penjualan, (p) => p.noPenjualan || (p as any).id);
+    this.db.penjualan = this.mergeListById(
+      this.db.penjualan,
+      incoming.penjualan,
+      (p) => p.noPenjualan || (p as any).id,
+      txMergeOpts
+    );
     this.db.pembelianBarang = this.mergeListById(
       this.db.pembelianBarang,
       incoming.pembelianBarang,
-      (pb) => pb.noPembelian || (pb as any).id
+      (pb) => pb.noPembelian || (pb as any).id,
+      txMergeOpts
     );
     this.db.pembelianHasilBumi = this.mergeListById(
       this.db.pembelianHasilBumi,
       incoming.pembelianHasilBumi,
-      (ph) => ph.noPembelian || (ph as any).id
+      (ph) => ph.noPembelian || (ph as any).id,
+      txMergeOpts
     );
     this.db.penjualanHasilBumi = this.mergeListById(
       this.db.penjualanHasilBumi,
       incoming.penjualanHasilBumi,
-      (pjh) => pjh.noPenjualan || (pjh as any).id
+      (pjh) => pjh.noPenjualan || (pjh as any).id,
+      txMergeOpts
     );
-    this.db.kasbonUang = this.mergeListById(this.db.kasbonUang, incoming.kasbonUang, (kb) => kb.idTransaksi || (kb as any).id);
-    this.db.bayarBon = this.mergeListById(this.db.bayarBon, incoming.bayarBon, (bb) => bb.idTransaksi || (bb as any).id);
+    this.db.kasbonUang = this.mergeListById(
+      this.db.kasbonUang,
+      incoming.kasbonUang,
+      (kb) => kb.idTransaksi || (kb as any).id,
+      txMergeOpts
+    );
+    this.db.bayarBon = this.mergeListById(
+      this.db.bayarBon,
+      incoming.bayarBon,
+      (bb) => bb.idTransaksi || (bb as any).id,
+      txMergeOpts
+    );
     this.db.transferRekening = this.mergeListById(
       this.db.transferRekening,
       incoming.transferRekening,
-      (tr) => tr.noTransfer || (tr as any).id
+      (tr) => tr.noTransfer || (tr as any).id,
+      txMergeOpts
     );
-    this.db.pengeluaran = this.mergeListById(this.db.pengeluaran, incoming.pengeluaran, (pe) => pe.idTransaksi || (pe as any).id);
+    this.db.pengeluaran = this.mergeListById(
+      this.db.pengeluaran,
+      incoming.pengeluaran,
+      (pe) => pe.idTransaksi || (pe as any).id,
+      txMergeOpts
+    );
     this.db.pencairanTitipan = this.mergeListById(
       this.db.pencairanTitipan,
       incoming.pencairanTitipan,
-      (pt) => pt.idPencairan || (pt as any).id
+      (pt) => pt.idPencairan || (pt as any).id,
+      txMergeOpts
     );
-    this.db.brilink = this.mergeListById(this.db.brilink, incoming.brilink, (br) => br.idTransaksi || (br as any).id);
-    this.db.uangMasuk = this.mergeListById(this.db.uangMasuk, incoming.uangMasuk, (um) => um.idTransaksi || (um as any).id);
-    this.db.auditLogs = this.mergeListById(this.db.auditLogs, incoming.auditLogs, (al) => al.id);
-    this.db.divisi = this.mergeListById(this.db.divisi, incoming.divisi, (d) => (d as any).kode || d.id || d.nama);
-    this.db.cashOpnameLogs = this.mergeListById(this.db.cashOpnameLogs, incoming.cashOpnameLogs, (co) => co.id);
-    this.db.auditStokLogs = this.mergeListById(this.db.auditStokLogs, incoming.auditStokLogs, (as) => as.id);
-    this.db.inventaris = this.mergeListById(this.db.inventaris, incoming.inventaris, (inv) => inv.id || inv.kode);
+    this.db.brilink = this.mergeListById(
+      this.db.brilink,
+      incoming.brilink,
+      (br) => br.idTransaksi || (br as any).id,
+      txMergeOpts
+    );
+    this.db.uangMasuk = this.mergeListById(
+      this.db.uangMasuk,
+      incoming.uangMasuk,
+      (um) => um.idTransaksi || (um as any).id,
+      txMergeOpts
+    );
+    this.db.auditLogs = this.mergeListById(this.db.auditLogs, incoming.auditLogs, (al) => al.id, masterMergeOpts);
+    this.db.divisi = this.mergeListById(this.db.divisi, incoming.divisi, (d) => (d as any).kode || d.id || d.nama, masterMergeOpts);
+    this.db.cashOpnameLogs = this.mergeListById(this.db.cashOpnameLogs, incoming.cashOpnameLogs, (co) => co.id, masterMergeOpts);
+    this.db.auditStokLogs = this.mergeListById(this.db.auditStokLogs, incoming.auditStokLogs, (as) => as.id, masterMergeOpts);
+    this.db.inventaris = this.mergeListById(this.db.inventaris, incoming.inventaris, (inv) => inv.id || inv.kode, txMergeOpts);
     this.db.masterItemPengeluaran = this.mergeListById(
       this.db.masterItemPengeluaran,
       incoming.masterItemPengeluaran,
-      (mi) => mi.id || mi.nama
+      (mi) => mi.id || mi.nama,
+      masterMergeOpts
     );
 
     this.db.suratJalan = this.mergeListById(
       this.db.suratJalan,
       incoming.suratJalan,
-      (sj) => sj.noInvoice || sj.id
+      (sj) => sj.noInvoice || sj.id,
+      txMergeOpts
     ).sort((a, b) => {
       const timeA = new Date(a.createdAt || 0).getTime();
       const timeB = new Date(b.createdAt || 0).getTime();
@@ -1129,21 +1330,9 @@ class DatabaseManager {
     this.db.rekapCtr = this.mergeListById(
       this.db.rekapCtr,
       incoming.rekapCtr,
-      (c) => c.id || `CTR-${c.noUrut}`
+      (c) => c.id || `CTR-${c.noUrut}`,
+      txMergeOpts
     ).sort((a, b) => (a.noUrut || 0) - (b.noUrut || 0));
-
-    this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes)
-      ? incoming.deletedHasilBumiKodes
-      : (this.db.deletedHasilBumiKodes || []);
-    this.db.deletedMasterPengeluaranNames = Array.isArray(incoming.deletedMasterPengeluaranNames)
-      ? incoming.deletedMasterPengeluaranNames
-      : (this.db.deletedMasterPengeluaranNames || []);
-    this.db.deletedProdukKodes = Array.isArray(incoming.deletedProdukKodes)
-      ? incoming.deletedProdukKodes
-      : (this.db.deletedProdukKodes || []);
-    this.db.dismissedRekapCtrRefs = Array.isArray(incoming.dismissedRekapCtrRefs)
-      ? incoming.dismissedRekapCtrRefs
-      : (this.db.dismissedRekapCtrRefs || []);
   }
 
   /**
@@ -1156,7 +1345,7 @@ class DatabaseManager {
     }
     this.isWriting = true;
     try {
-      this.applyIncomingSnapshot(incoming);
+      this.applyIncomingSnapshot(incoming, { authoritativeCloud: true });
       this.reconcileRelationalIntegrity();
       this.synchronizeVirtualAccounts();
       this.saveDirect(this.db);
@@ -1175,7 +1364,10 @@ class DatabaseManager {
       const emergencyFile = path.join(TEMP_BACKUP_DIR, `pre_restore_emergency_${Date.now()}.json`);
       fs.writeFileSync(emergencyFile, JSON.stringify(this.db), 'utf-8');
 
-      this.applyIncomingSnapshot(incoming);
+      this.applyIncomingSnapshot(incoming, {
+        authoritativeCloud: true,
+        skipLocalTombstoneUnion: true,
+      });
 
       const { tanggal, jam, iso } = getWIBDateTime();
       this.db.auditLogs.unshift({
@@ -1288,6 +1480,10 @@ class DatabaseManager {
     if (!Array.isArray(this.db.inventaris)) this.db.inventaris = [];
     if (!Array.isArray(this.db.masterItemPengeluaran)) this.db.masterItemPengeluaran = [];
     if (!Array.isArray(this.db.suratJalan)) this.db.suratJalan = [];
+    if (!Array.isArray(this.db.deletedTransactionIds)) this.db.deletedTransactionIds = [];
+
+    // Pastikan transaksi yang sudah resmi dihapus pengguna (tombstone) tidak pernah bangkit kembali
+    this.purgeDeletedTransactions(this.db);
 
     // Bersihkan transaksi & master item auto-generated PEMBAYARAN_SUPPLIER_SJ yang tidak termasuk dalam pencatatan Pengeluaran
     const removedSjExpenseIds = new Set<string>();
@@ -3018,7 +3214,14 @@ class DatabaseManager {
     });
 
     for (const sj of sortedSj) {
-      const isStokHb = sj.sumberBarang === 'STOK_HB_PT';
+      const isStokHb = isInternalMilikSendiriSuratJalan(sj);
+      if (isStokHb && sj.statusUangBuyer === 'DITERIMA' && sj.statusPembayaranMitra === 'PENDING') {
+        sj.statusPembayaranMitra = 'LUNAS';
+        sj.tanggalBayarMitra = sj.tanggalUangBuyerMasuk || sj.tanggal;
+        sj.catatArusKasBayarMitra = false;
+        sj.nominalBayarMitraAktual = 0;
+        addedCount++;
+      }
       const invKey = sj.noInvoice;
       const hbKey = sj.noPenjualanHasilBumi;
       const plateClean = String(sj.platTruk || '').replace(/\s+/g, '').toUpperCase();
@@ -3103,16 +3306,25 @@ class DatabaseManager {
         plateClean.includes('8206');
 
       let targetContract: RekapCtrContract | undefined;
-      if (isNov4Sj) {
-        targetContract = this.db.rekapCtr.find((c) => c.noUrut === 27);
-      } else {
-        const sjGudang = (sj.kategoriKode || 'SKA').trim().toUpperCase();
-        targetContract = this.db.rekapCtr.find(
-          (c) =>
-            c.noUrut >= 28 &&
-            (c.gudang || '').trim().toUpperCase() === sjGudang &&
-            (c.rows || []).some((r) => (r.tglMasuk || '').trim() === tglClean)
-        );
+      // Prioritas 1: Jika user sudah memilih Nomor Kontrak CTR secara eksplisit saat input/edit invoice
+      if (sj.rekapCtrId) {
+        targetContract = this.db.rekapCtr.find((c) => c.id === sj.rekapCtrId);
+      }
+      if (!targetContract && sj.rekapCtrNoUrut) {
+        targetContract = this.db.rekapCtr.find((c) => c.noUrut === sj.rekapCtrNoUrut);
+      }
+      if (!targetContract) {
+        if (isNov4Sj) {
+          targetContract = this.db.rekapCtr.find((c) => c.noUrut === 27);
+        } else {
+          const sjGudang = (sj.kategoriKode || 'SKA').trim().toUpperCase();
+          targetContract = this.db.rekapCtr.find(
+            (c) =>
+              c.noUrut >= 28 &&
+              (c.gudang || '').trim().toUpperCase() === sjGudang &&
+              (c.rows || []).some((r) => (r.tglMasuk || '').trim() === tglClean)
+          );
+        }
       }
 
       if (!targetContract) {
@@ -3121,15 +3333,26 @@ class DatabaseManager {
         targetContract = {
           id: `CTR-${nextNo}`,
           noUrut: nextNo,
+          noKontrak: sj.rekapCtrNoKontrak || undefined,
           tglCtr: formatTglCtrLabel(tglClean),
           gudang: (sj.kategoriKode || 'SKA').trim().toUpperCase(),
           qtyCtr: 0,
+          statusKontrak: 'AKTIF',
           rows: [],
         };
         this.db.rekapCtr.push(targetContract);
       }
 
       if (!Array.isArray(targetContract.rows)) targetContract.rows = [];
+      // Bersihkan baris kosong bawaan "Tambah CTR" jika ini transaksi nyata pertama yang masuk ke kontrak
+      if (
+        targetContract.rows.length === 1 &&
+        targetContract.rows[0].sourceType === 'MANUAL' &&
+        !(targetContract.rows[0].namaSuplayer || '').trim() &&
+        (Number(targetContract.rows[0].qtyAkhir) || 0) === 0
+      ) {
+        targetContract.rows = [];
+      }
       const ketBaru = desiredStatus === 'PENDING' ? 'BELUM CAIR' : '';
       const refBase = invKey || hbKey || sj.id;
       const details =
@@ -3709,16 +3932,26 @@ class DatabaseManager {
           (um) =>
             !isTanpaDivisi(um.divisi) &&
             norm(um.divisi || 'Gudang Wijaya Agro') === targetNorm &&
+            !isExcludedUangMasukFromDivisiCashflow(um) &&
             (Number(um.nominal) || 0) > 0
         )
         .reduce((sum, um) => sum + (Number(um.nominal) || 0), 0);
+
+      const masukKeuntunganSuratJalanPt =
+        targetNorm === norm('PT Wijaya Agro Perkasa')
+          ? computeSuratJalanKeuntunganPtEntries(this.db.suratJalan, this.db.uangMasuk).reduce(
+              (sum, e) => sum + e.nominal,
+              0
+            )
+          : 0;
 
       const masukPenjualanKas =
         masukPenjualanToko +
         masukPenjualanHasilBumi +
         masukPelunasanPiutangDivisi +
         masukAdminBrilink +
-        masukUangMasukDivisi;
+        masukUangMasukDivisi +
+        masukKeuntunganSuratJalanPt;
 
       const masukDropping = (this.db.transferRekening || [])
         .filter((t) => t.status === 'BERHASIL' && t.rekeningTujuan === div.kodeRekening)
@@ -4159,27 +4392,80 @@ class DatabaseManager {
   }
 
   /**
-   * Transactional lock execution wrapper with automatic relational reconciliation & non-blocking background sync to Supabase
+   * Transactional lock execution wrapper with automatic relational reconciliation,
+   * automatic deletion tombstone capture, and immediate write-through sync to Supabase.
    */
   public async executeTransaction<T>(action: (db: DatabaseSchema) => T): Promise<T> {
+    // Pastikan container yang baru menyala sudah menarik state Cloud Supabase terlebih dahulu sebelum memodifikasi data
+    if (supabaseSyncEngine.isConfigured() && !supabaseSyncEngine.isCloudStateVerified()) {
+      try {
+        await supabaseSyncEngine.ensureInitializedOnce(this);
+      } catch {}
+    }
+
     while (this.isWriting) {
       await new Promise((res) => setTimeout(res, 5));
     }
     this.isWriting = true;
     let result!: T;
     try {
+      const beforeIds = this.collectTrackedTransactionIds(this.db);
       result = action(this.db);
+
+      const latestAuditId = this.db.auditLogs?.[0]?.idTransaksi || '';
+      const isBulkResetOrRestore =
+        latestAuditId === 'SYS-RESTORE' ||
+        latestAuditId === 'SYS-RESET' ||
+        latestAuditId === 'SYS-CLEAN-DATA';
+
+      if (!isBulkResetOrRestore) {
+        const afterIds = this.collectTrackedTransactionIds(this.db);
+        if (!Array.isArray(this.db.deletedTransactionIds)) {
+          this.db.deletedTransactionIds = [];
+        }
+        const tombstoneSet = new Set(
+          this.db.deletedTransactionIds.map((id) => this.normalizeTombstoneId(id)).filter(Boolean)
+        );
+        let tombstonesChanged = false;
+
+        // Rekam otomatis setiap ID transaksi/dokumen yang baru saja dihapus user
+        for (const id of beforeIds) {
+          if (!afterIds.has(id) && !tombstoneSet.has(id)) {
+            tombstoneSet.add(id);
+            this.db.deletedTransactionIds.push(id);
+            tombstonesChanged = true;
+          }
+        }
+
+        // Jika ID tertentu baru saja dibuat ulang secara eksplisit, lepaskan dari daftar tombstone
+        for (const id of afterIds) {
+          if (!beforeIds.has(id) && tombstoneSet.has(id)) {
+            tombstoneSet.delete(id);
+            this.db.deletedTransactionIds = this.db.deletedTransactionIds.filter(
+              (existing) => this.normalizeTombstoneId(existing) !== id
+            );
+            tombstonesChanged = true;
+          }
+        }
+
+        if (tombstonesChanged && this.db.deletedTransactionIds.length > 2500) {
+          this.db.deletedTransactionIds = this.db.deletedTransactionIds.slice(
+            this.db.deletedTransactionIds.length - 2500
+          );
+        }
+      }
+
       this.reconcileRelationalIntegrity();
       this.synchronizeVirtualAccounts();
       this.saveDirect(this.db);
-      supabaseSyncEngine.markLocalMutation(this.db);
+      supabaseSyncEngine.markLocalMutation(this.db, { allowOverwrite: true });
     } finally {
       this.isWriting = false;
     }
-    // Pastikan transaksi LANGSUNG dan PASTI tersimpan ke Cloud Supabase sebelum respon API selesai
-    const syncWaitMs = 10000;
+    // Pastikan transaksi (termasuk HAPUS & EDIT) LANGSUNG dan PASTI tersimpan ke Cloud Supabase sebelum respon API selesai
+    const syncWaitMs = 15000;
     try {
-      await supabaseSyncEngine.flushSync(this.db, syncWaitMs);
+      await supabaseSyncEngine.flushSync(this.db, syncWaitMs, { allowOverwrite: true });
     } catch (syncErr) {
       console.warn('[DB] Supabase immediate flush warning:', syncErr);
     }
