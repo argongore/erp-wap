@@ -41,6 +41,10 @@ import { ModalTambahHasilBumi } from './ModalTambahHasilBumi.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { AnalisaProfitHasilBumiPanel } from './AnalisaProfitHasilBumiPanel.tsx';
+import {
+  calculateHbMovingAverage,
+  RollingStokHbResult,
+} from '../../utils/hasilBumiMovingAverage.ts';
 
 interface Props {
   stokList: StokHasilBumi[];
@@ -130,6 +134,7 @@ type BukuMutasiRow =
       jumlahRp: number;
       showRpPrefix: boolean;
       isBelumPutus?: boolean;
+      isTitipNonFisik?: boolean;
       isStokAwal?: boolean;
       txPurchase?: TransaksiPembelianHasilBumi;
     }
@@ -144,6 +149,8 @@ type BukuMutasiRow =
       beratKg: number;
       rataHargaPerKg: number;
       jumlahRp: number;
+      isNonFisikSummary?: boolean;
+      isMinusSummary?: boolean;
     }
   | {
       kind: 'MUAT';
@@ -158,14 +165,19 @@ type BukuMutasiRow =
   | {
       kind: 'SISA';
       key: string;
+      label?: string;
       beratKg: number;
       rataHargaPerKg?: number;
       jumlahRp: number;
+      isMinus?: boolean;
+      isSisaFisikAktual?: boolean;
     }
   | {
       kind: 'SUSUT';
       key: string;
+      label?: string;
       beratKg: number;
+      isLebihMuat?: boolean;
     };
 
 export const StokHasilBumiView: React.FC<Props> = ({
@@ -192,6 +204,80 @@ export const StokHasilBumiView: React.FC<Props> = ({
     () => pembelianList.filter((p) => isPhysicalPurchase(p)),
     [pembelianList]
   );
+
+  // Hitung moving average & akumulasi susut/lebih muat per komoditas untuk Card & Rekapan Saling Melengkapi
+  const movingAvgByKode = useMemo(() => {
+    const map = new Map<string, RollingStokHbResult>();
+    for (const hb of activeStokList) {
+      map.set(
+        hb.kode,
+        calculateHbMovingAverage(hb, physicalPembelianList, penjualanHasilBumiList)
+      );
+    }
+    return map;
+  }, [activeStokList, physicalPembelianList, penjualanHasilBumiList]);
+
+  const rekapanSelisihAntarKomoditas = useMemo(() => {
+    const isKkm = (hb: StokHasilBumi) => {
+      const up = `${hb.kode} ${hb.nama}`.toUpperCase();
+      return (
+        up.includes('KULIT KAYU MANIS') ||
+        up.includes('KAYU MANIS') ||
+        hb.kode === 'HB-02' ||
+        hb.kode === 'HB-03' ||
+        hb.kode === 'HB-04' ||
+        hb.kode === 'HB-09'
+      );
+    };
+
+    const kkmRows = activeStokList
+      .filter(isKkm)
+      .map((hb) => {
+        const mv = movingAvgByKode.get(hb.kode);
+        return {
+          hb,
+          stokReadyKg: mv?.stokReadyKg ?? (Number(hb.stok) || 0),
+          totalSusutKurangKg: mv?.totalSusutKurangKg ?? 0,
+          totalLebihMuatKg: mv?.totalLebihMuatKg ?? 0,
+          netSelisihStokKg: mv?.netSelisihStokKg ?? 0,
+        };
+      });
+
+    const otherVarianceRows = activeStokList
+      .filter((hb) => !isKkm(hb))
+      .map((hb) => {
+        const mv = movingAvgByKode.get(hb.kode);
+        return {
+          hb,
+          stokReadyKg: mv?.stokReadyKg ?? (Number(hb.stok) || 0),
+          totalSusutKurangKg: mv?.totalSusutKurangKg ?? 0,
+          totalLebihMuatKg: mv?.totalLebihMuatKg ?? 0,
+          netSelisihStokKg: mv?.netSelisihStokKg ?? 0,
+        };
+      })
+      .filter(
+        (r) =>
+          r.totalSusutKurangKg > 0 || r.totalLebihMuatKg > 0 || r.stokReadyKg < 0
+      );
+
+    const kkmTotalStokReady =
+      Math.round(kkmRows.reduce((s, r) => s + r.stokReadyKg, 0) * 100) / 100;
+    const kkmTotalSusut =
+      Math.round(kkmRows.reduce((s, r) => s + r.totalSusutKurangKg, 0) * 100) / 100;
+    const kkmTotalLebihMuat =
+      Math.round(kkmRows.reduce((s, r) => s + r.totalLebihMuatKg, 0) * 100) / 100;
+    const kkmNetSelisih =
+      Math.round((kkmTotalLebihMuat - kkmTotalSusut) * 100) / 100;
+
+    return {
+      kkmRows,
+      otherVarianceRows,
+      kkmTotalStokReady,
+      kkmTotalSusut,
+      kkmTotalLebihMuat,
+      kkmNetSelisih,
+    };
+  }, [activeStokList, movingAvgByKode]);
 
   const now = new Date();
   const [bulan, setBulan] = useState<number>(now.getMonth() + 1);
@@ -505,6 +591,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
     const rows: BukuMutasiRow[] = [];
     let batchKg = 0;
     let batchRp = 0;
+    let nonFisikAktifKg = 0;
     let lastDateShownInBatch = '';
     let hasClosedAtLeastOneBatch = false;
 
@@ -523,7 +610,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
       }
     }
 
-    if (stokAwalKg > 0 && modalAwalRp > 0) {
+    if (stokAwalKg > 0) {
       rows.push({
         kind: 'PURCHASE',
         key: `STOK-AWAL-${selectedCardHb.kode}`,
@@ -531,13 +618,13 @@ export const StokHasilBumiView: React.FC<Props> = ({
         tanggalDisplay: formatTanggalIndo(selectedCardHb.updateTerakhir),
         tanggalAsli: formatTanggalIndo(selectedCardHb.updateTerakhir),
         beratKg: stokAwalKg,
-        hargaPerKg: rataModalAwal > 0 ? rataModalAwal : Math.round(modalAwalRp / stokAwalKg),
-        jumlahRp: modalAwalRp,
+        hargaPerKg: modalAwalRp > 0 ? (rataModalAwal > 0 ? rataModalAwal : Math.round(modalAwalRp / stokAwalKg)) : 0,
+        jumlahRp: modalAwalRp > 0 ? modalAwalRp : 0,
         showRpPrefix: false,
         isStokAwal: true,
       });
       batchKg = Math.round((batchKg + stokAwalKg) * 100) / 100;
-      batchRp += modalAwalRp;
+      batchRp += modalAwalRp > 0 ? modalAwalRp : 0;
     }
 
     for (const ev of events) {
@@ -550,6 +637,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
         const harga = Number(p.hargaPerKg) || 0;
         const jumlah = Number(p.totalNominal) || 0;
         const isBelumPutus = Boolean(p.isBelumPutusHarga || p.status === 'BELUM_PUTUS_HARGA');
+        const isTitipNonFisik = Boolean(p.isTitipNonFisik);
 
         rows.push({
           kind: 'PURCHASE',
@@ -562,24 +650,33 @@ export const StokHasilBumiView: React.FC<Props> = ({
           jumlahRp: jumlah,
           showRpPrefix: hasClosedAtLeastOneBatch,
           isBelumPutus,
+          isTitipNonFisik,
           txPurchase: p,
         });
 
-        batchKg = Math.round((batchKg + berat) * 100) / 100;
-        batchRp += jumlah;
+        if (isTitipNonFisik) {
+          if (isBelumPutus) {
+            nonFisikAktifKg = Math.round((nonFisikAktifKg + berat) * 100) / 100;
+          }
+        } else {
+          batchKg = Math.round((batchKg + berat) * 100) / 100;
+          batchRp += jumlah;
+        }
       } else {
         const j = ev.record;
         lastDateShownInBatch = '';
 
         const jumlahKg =
-          batchKg > 0 ? batchKg : Math.max(0, Number(j.stokGudangSebelum) || 0);
+          batchKg !== 0 ? batchKg : Number(j.stokGudangSebelum) || 0;
         const exactAvgRate =
           jumlahKg > 0 && batchRp > 0
             ? batchRp / jumlahKg
             : Number(j.modalRataRataPerKg) || Number(j.hargaJualPerKg) || 0;
         const rataHargaPerKg = Math.round(exactAvgRate);
         const jumlahRp =
-          batchKg > 0 ? Math.round(batchRp) : Math.round(jumlahKg * exactAvgRate);
+          jumlahKg > 0
+            ? Math.round(batchRp > 0 ? batchRp : jumlahKg * exactAvgRate)
+            : 0;
 
         const muatKg = Number(j.beratBersih) || 0;
         const muatRp =
@@ -587,19 +684,56 @@ export const StokHasilBumiView: React.FC<Props> = ({
             ? Math.round(muatKg * exactAvgRate)
             : Number(j.nilaiModalPengurangStok) || Number(j.totalNominal) || 0;
 
-        const diffKg = Math.round(Math.abs(jumlahKg - muatKg) * 100) / 100;
-        const diffRp = Math.abs(jumlahRp - muatRp);
+        const hasSisaFisikAktual =
+          j.sisaFisikAktualKg !== undefined &&
+          j.sisaFisikAktualKg !== null &&
+          Number.isFinite(Number(j.sisaFisikAktualKg)) &&
+          Number(j.sisaFisikAktualKg) >= 0;
+        const keepMinus = Boolean(j.biarkanStokMinus);
 
-        const isClosedHabis = Boolean(
-          j.isHabisMuatSusut ||
-            muatKg >= jumlahKg ||
-            (Number(j.stokGudangSetelah) === 0 && jumlahKg > 0)
-        );
-        const susutKg = isClosedHabis
-          ? j.beratSusutKg !== undefined && Number(j.beratSusutKg) > 0
-            ? Number(j.beratSusutKg)
-            : diffKg
-          : 0;
+        let isClosedHabis = false;
+        let sisaKg = 0;
+        let sisaRp = 0;
+        let susutKurangKg = 0;
+        let selisihLebihMuatKg = 0;
+
+        if (hasSisaFisikAktual) {
+          sisaKg = Math.round(Number(j.sisaFisikAktualKg) * 100) / 100;
+          const expectedSisaBuku = Math.round((jumlahKg - muatKg) * 100) / 100;
+          const varianceKg = Math.round((sisaKg - expectedSisaBuku) * 100) / 100;
+          if (varianceKg > 0) {
+            selisihLebihMuatKg = varianceKg;
+          } else if (varianceKg < 0) {
+            susutKurangKg = Math.abs(varianceKg);
+          }
+          isClosedHabis = sisaKg === 0;
+          sisaRp = sisaKg > 0 ? Math.round(sisaKg * exactAvgRate) : 0;
+        } else if (keepMinus) {
+          sisaKg = Math.round((jumlahKg - muatKg) * 100) / 100;
+          isClosedHabis = false;
+          if (muatKg > jumlahKg) {
+            selisihLebihMuatKg = Math.round((muatKg - jumlahKg) * 100) / 100;
+          }
+          sisaRp = sisaKg > 0 ? Math.max(0, jumlahRp - muatRp) : 0;
+        } else {
+          isClosedHabis = Boolean(
+            j.isHabisMuatSusut ||
+              muatKg >= jumlahKg ||
+              (Number(j.stokGudangSetelah) === 0 && jumlahKg > 0)
+          );
+          sisaKg = isClosedHabis
+            ? 0
+            : Math.max(0, Math.round((jumlahKg - muatKg) * 100) / 100);
+          sisaRp = isClosedHabis ? 0 : Math.max(0, jumlahRp - muatRp);
+          if (muatKg > jumlahKg) {
+            selisihLebihMuatKg = Math.round((muatKg - jumlahKg) * 100) / 100;
+          } else if (isClosedHabis && jumlahKg > muatKg) {
+            susutKurangKg =
+              j.beratSusutKg !== undefined && Number(j.beratSusutKg) > 0
+                ? Number(j.beratSusutKg)
+                : Math.round((jumlahKg - muatKg) * 100) / 100;
+          }
+        }
 
         const cleanBuyer = (j.namaMitra || '').trim();
         const cleanDo = (j.noSuratJalan || '').trim();
@@ -645,41 +779,75 @@ export const StokHasilBumiView: React.FC<Props> = ({
         rows.push({
           kind: 'SISA',
           key: `SISA-${j.noPenjualan}`,
-          beratKg: diffKg,
-          rataHargaPerKg,
-          jumlahRp: diffRp,
+          label: hasSisaFisikAktual
+            ? 'SISA FISIK GUDANG (AKTUAL)'
+            : sisaKg < 0
+            ? 'SISA STOK (MINUS BUKU)'
+            : 'SISA STOK',
+          beratKg: sisaKg,
+          rataHargaPerKg: sisaKg > 0 ? rataHargaPerKg : 0,
+          jumlahRp: sisaRp,
+          isMinus: sisaKg < 0,
+          isSisaFisikAktual: hasSisaFisikAktual,
         });
-        rows.push({
-          kind: 'SUSUT',
-          key: `SUSUT-${j.noPenjualan}`,
-          beratKg: susutKg,
-        });
+        if (selisihLebihMuatKg > 0) {
+          rows.push({
+            kind: 'SUSUT',
+            key: `LEBIH-${j.noPenjualan}`,
+            label: 'LEBIH MUAT / MINUS BUKU (INDIKASI GRADE LAIN)',
+            beratKg: selisihLebihMuatKg,
+            isLebihMuat: true,
+          });
+        } else {
+          rows.push({
+            kind: 'SUSUT',
+            key: `SUSUT-${j.noPenjualan}`,
+            label: 'SUSUT',
+            beratKg: susutKurangKg,
+            isLebihMuat: false,
+          });
+        }
 
         hasClosedAtLeastOneBatch = true;
-        if (isClosedHabis) {
-          batchKg = 0;
-          batchRp = 0;
-        } else {
-          batchKg = diffKg;
-          batchRp = Math.max(0, jumlahRp - muatRp);
-        }
+        batchKg = sisaKg;
+        batchRp = sisaRp;
       }
     }
 
     const lastEvent = events.length > 0 ? events[events.length - 1] : null;
     const hasUnclosedBuysAfterLastSale = lastEvent ? lastEvent.type === 'BUY' : false;
 
-    if (batchKg > 0 && (hasUnclosedBuysAfterLastSale || events.length === 0)) {
+    if (
+      (batchKg !== 0 || nonFisikAktifKg > 0) &&
+      (hasUnclosedBuysAfterLastSale || events.length === 0 || batchKg < 0)
+    ) {
       const avgOpen = batchKg > 0 && batchRp > 0 ? Math.round(batchRp / batchKg) : 0;
       rows.push({ kind: 'SPACER', key: 'SPC-OPEN-END' });
       rows.push({
         kind: 'JUMLAH',
         key: 'JML-OPEN-END',
-        label: 'SISA READY GUDANG SAAT INI',
+        label:
+          batchKg < 0
+            ? 'SISA STOK BUKU SAAT INI (MINUS)'
+            : nonFisikAktifKg > 0
+            ? 'SISA FISIK READY GUDANG SAAT INI'
+            : 'SISA READY GUDANG SAAT INI',
         beratKg: batchKg,
         rataHargaPerKg: avgOpen,
-        jumlahRp: Math.round(batchRp),
+        jumlahRp: batchKg > 0 ? Math.round(batchRp) : 0,
+        isMinusSummary: batchKg < 0,
       });
+      if (nonFisikAktifKg > 0) {
+        rows.push({
+          kind: 'JUMLAH',
+          key: 'JML-NON-FISIK-END',
+          label: 'TITIP LAMA (NON-FISIK / TIDAK DI GUDANG)',
+          beratKg: nonFisikAktifKg,
+          rataHargaPerKg: 0,
+          jumlahRp: 0,
+          isNonFisikSummary: true,
+        });
+      }
     }
 
     return rows;
@@ -751,9 +919,15 @@ export const StokHasilBumiView: React.FC<Props> = ({
       } else if (r.kind === 'MUAT') {
         csvRows.push([r.label, r.tanggalDisplay, String(r.beratKg), '', String(r.jumlahRp)]);
       } else if (r.kind === 'SISA') {
-        csvRows.push(['SISA', '', String(r.beratKg), '', String(r.jumlahRp)]);
+        csvRows.push([r.label || 'SISA STOK', '', String(r.beratKg), '', String(r.jumlahRp)]);
       } else if (r.kind === 'SUSUT') {
-        csvRows.push(['SUSUT', '', String(r.beratKg), '', '']);
+        csvRows.push([
+          r.label || (r.isLebihMuat ? 'LEBIH MUAT / MINUS BUKU' : 'SUSUT'),
+          '',
+          r.isLebihMuat ? `+${r.beratKg}` : String(r.beratKg),
+          '',
+          '',
+        ]);
       }
     }
     const content = csvRows
@@ -1423,20 +1597,38 @@ export const StokHasilBumiView: React.FC<Props> = ({
                 j.komoditasNama.toUpperCase().trim() === hb.nama.toUpperCase().trim()
             );
 
-            const totalUangKeluarBaru = purchases.reduce((sum, p) => sum + (p.totalNominal || 0), 0);
-            const totalKgBeliBaru = purchases.reduce((sum, p) => sum + (p.beratBersih || 0), 0);
+            const physicalOnlyPurchases = purchases.filter((p) => !p.isTitipNonFisik);
+            const nonFisikAktifPurchases = purchases.filter(
+              (p) => Boolean(p.isTitipNonFisik) && Boolean(p.isBelumPutusHarga || p.status === 'BELUM_PUTUS_HARGA')
+            );
+
+            const totalUangKeluarBaru = physicalOnlyPurchases.reduce((sum, p) => sum + (p.totalNominal || 0), 0);
+            const totalKgBeliBaru = Math.round(physicalOnlyPurchases.reduce((sum, p) => sum + (p.beratBersih || 0), 0) * 100) / 100;
+            const totalKgNonFisikAktif =
+              Math.round(nonFisikAktifPurchases.reduce((sum, p) => sum + (p.beratBersih || 0), 0) * 100) / 100;
+            const totalKgBeliBaruPriced = physicalOnlyPurchases
+              .filter((p) => !p.isBelumPutusHarga && p.status !== 'BELUM_PUTUS_HARGA' && (p.totalNominal || 0) > 0)
+              .reduce((sum, p) => sum + (p.beratBersih || 0), 0);
             const totalKgTerjual = sales.reduce((sum, j) => sum + (j.beratBersih || 0), 0);
 
             const stokAwalKg = hb.stokAwal || 0;
             const modalAwalUang = hb.modalAwalTotal || stokAwalKg * (hb.rataRataModalAwal || 0);
 
             const totalUangKeluar = modalAwalUang + totalUangKeluarBaru;
-            const totalKgBeli = stokAwalKg + totalKgBeliBaru;
+            const totalKgBeli = Math.round((stokAwalKg + totalKgBeliBaru) * 100) / 100;
+            const totalKgPriced = (modalAwalUang > 0 ? stokAwalKg : 0) + totalKgBeliBaruPriced;
+            const showDualTitipTonnage = isKopiTitip || totalKgNonFisikAktif > 0;
+            const totalKewajibanTitipKg = Math.round(((hb.stok || 0) + totalKgNonFisikAktif) * 100) / 100;
 
             const rataRataModalPerKg =
-              totalKgBeli > 0 && totalUangKeluar > 0
-                ? Math.round(totalUangKeluar / totalKgBeli)
+              totalKgPriced > 0 && totalUangKeluar > 0
+                ? Math.round(totalUangKeluar / totalKgPriced)
                 : hb.rataRataModalAwal || 0;
+
+            const mvCard = movingAvgByKode.get(hb.kode);
+            const cardLebihMuatKg = mvCard?.totalLebihMuatKg ?? 0;
+            const cardSusutKg = mvCard?.totalSusutKurangKg ?? 0;
+            const isStokMinus = (hb.stok || 0) < 0;
 
             return (
               <div
@@ -1445,6 +1637,8 @@ export const StokHasilBumiView: React.FC<Props> = ({
                 className={`bg-white rounded-xl border p-4 space-y-2.5 flex flex-col justify-between min-w-0 overflow-hidden cursor-pointer transition-all ${
                   isSelectedCard
                     ? 'border-emerald-700 ring-2 ring-emerald-700/80 shadow-sm'
+                    : isStokMinus
+                    ? 'border-rose-300 bg-rose-50/20 hover:border-rose-500'
                     : isKopiTitip
                     ? 'border-amber-300 bg-amber-50/20 hover:border-amber-500'
                     : 'border-zinc-200 hover:border-emerald-500'
@@ -1477,16 +1671,63 @@ export const StokHasilBumiView: React.FC<Props> = ({
 
                   <div className="font-bold text-zinc-900 text-sm truncate">{hb.nama}</div>
 
-                  {/* Ready di Gudang */}
-                  <div className="min-w-0">
-                    <span className="text-[10px] text-zinc-500 uppercase font-semibold block">
-                      Ready di Gudang:
-                    </span>
-                    <div className="text-2xl font-bold font-mono tabular-nums text-emerald-800 tracking-tight truncate whitespace-nowrap">
-                      {hb.stok.toLocaleString('id-ID')}{' '}
-                      <span className="text-xs font-medium text-zinc-500">{hb.satuan}</span>
+                  {/* Ready di Gudang (Dual Tonase Sama Besar untuk Kopi Titip: Fisik Gudang vs Titip Lama Non-Fisik) */}
+                  {showDualTitipTonnage ? (
+                    <div className="grid grid-cols-2 gap-2 min-w-0">
+                      <div
+                        className="p-2 rounded-lg bg-emerald-50/80 border border-emerald-200 min-w-0"
+                        title="Stok kopi titip yang barang fisiknya ADA di gudang kita saat ini"
+                      >
+                        <span className="text-[9px] text-emerald-800 uppercase font-extrabold tracking-tight block truncate">
+                          Fisik di Gudang
+                        </span>
+                        <div className="text-xl font-bold font-mono tabular-nums text-emerald-900 tracking-tight truncate whitespace-nowrap leading-tight mt-0.5">
+                          {(hb.stok || 0).toLocaleString('id-ID')}{' '}
+                          <span className="text-[10px] font-semibold text-emerald-700">{hb.satuan}</span>
+                        </div>
+                        <span className="text-[9px] text-emerald-700/90 font-medium block truncate mt-0.5">
+                          Ada di gudang
+                        </span>
+                      </div>
+
+                      <div
+                        className="p-2 rounded-lg bg-amber-50/90 border border-amber-300 min-w-0"
+                        title="Catatan kopi titip lama yang barang fisiknya SUDAH TIDAK ADA di gudang (tidak masuk hitungan stok fisik gudang)"
+                      >
+                        <span className="text-[9px] text-amber-900 uppercase font-extrabold tracking-tight block truncate">
+                          Titip Non-Fisik
+                        </span>
+                        <div className="text-xl font-bold font-mono tabular-nums text-amber-900 tracking-tight truncate whitespace-nowrap leading-tight mt-0.5">
+                          {totalKgNonFisikAktif.toLocaleString('id-ID')}{' '}
+                          <span className="text-[10px] font-semibold text-amber-700">{hb.satuan}</span>
+                        </div>
+                        <span className="text-[9px] text-amber-800/90 font-medium block truncate mt-0.5">
+                          Lama / tdk di gudang
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-zinc-500 uppercase font-semibold block">
+                          {isStokMinus ? 'Stok Buku (Minus):' : 'Ready di Gudang:'}
+                        </span>
+                        {isStokMinus && (
+                          <span className="text-[9px] font-extrabold uppercase text-rose-700 bg-rose-100 border border-rose-200 px-1.5 py-0.5 rounded">
+                            Minus Buku
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        className={`text-2xl font-bold font-mono tabular-nums tracking-tight truncate whitespace-nowrap ${
+                          isStokMinus ? 'text-rose-700' : 'text-emerald-800'
+                        }`}
+                      >
+                        {hb.stok.toLocaleString('id-ID')}{' '}
+                        <span className="text-xs font-medium text-zinc-500">{hb.satuan}</span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Ringkasan Masuk vs Terjual & Modal Rata-rata */}
                   <div className="p-2.5 bg-zinc-50 rounded-lg border border-zinc-200 space-y-1.5 text-xs min-w-0 overflow-hidden">
@@ -1509,11 +1750,20 @@ export const StokHasilBumiView: React.FC<Props> = ({
                     </div>
 
                     <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 pt-1 border-t border-zinc-200/80 min-w-0">
-                      <span className="shrink-0">Total Masuk:</span>
+                      <span className="shrink-0">{showDualTitipTonnage ? 'Masuk Fisik Gudang:' : 'Total Masuk:'}</span>
                       <span className="font-mono tabular-nums font-semibold text-zinc-800 truncate">
                         {totalKgBeli.toLocaleString('id-ID')} Kg
                       </span>
                     </div>
+
+                    {showDualTitipTonnage && (
+                      <div className="flex items-center justify-between gap-2 text-[10px] text-amber-800 min-w-0">
+                        <span className="shrink-0 font-medium">Total Catatan Titip:</span>
+                        <span className="font-mono tabular-nums font-bold text-amber-900 truncate">
+                          {totalKewajibanTitipKg.toLocaleString('id-ID')} Kg
+                        </span>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500 min-w-0">
                       <span className="shrink-0">Total Terjual:</span>
@@ -1531,6 +1781,24 @@ export const StokHasilBumiView: React.FC<Props> = ({
                         {formatRupiahSingkat(totalUangKeluar)}
                       </span>
                     </div>
+
+                    {cardLebihMuatKg > 0 && (
+                      <div className="flex items-center justify-between gap-2 text-[10px] text-amber-800 pt-1 border-t border-amber-200/80 min-w-0">
+                        <span className="shrink-0 font-semibold">Lebih Muat / Minus Buku:</span>
+                        <span className="font-mono tabular-nums font-bold text-amber-900 truncate">
+                          +{cardLebihMuatKg.toLocaleString('id-ID')} Kg
+                        </span>
+                      </div>
+                    )}
+
+                    {cardSusutKg > 0 && (
+                      <div className="flex items-center justify-between gap-2 text-[10px] text-rose-700 pt-1 border-t border-rose-200/80 min-w-0">
+                        <span className="shrink-0 font-semibold">Susut / Kurang Muat:</span>
+                        <span className="font-mono tabular-nums font-bold text-rose-800 truncate">
+                          -{cardSusutKg.toLocaleString('id-ID')} Kg
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1567,6 +1835,257 @@ export const StokHasilBumiView: React.FC<Props> = ({
       </div>
 
       {/* ========================================================================= */}
+      {/* REKAPAN SELISIH STOK & SUSUT ANTAR KOMODITAS (INDIKASI SALING MELENGKAPI) */}
+      {/* ========================================================================= */}
+      {rekapanSelisihAntarKomoditas.kkmRows.length > 0 && (
+        <div className="bg-white rounded-xl border border-amber-300/90 overflow-hidden shadow-2xs">
+          <div className="px-4 py-3 bg-amber-50/80 border-b border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-start sm:items-center gap-2">
+              <Scale className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
+              <div>
+                <h2 className="text-sm font-bold text-zinc-900">
+                  Rekapan Selisih Stok &amp; Susut Antar Komoditas (Indikasi Saling Melengkapi)
+                </h2>
+                <p className="text-[11px] text-zinc-600">
+                  Membandingkan <strong>Lebih Muat / Minus Buku (+Kg)</strong> dengan <strong>Susut / Kurang Muat (-Kg)</strong> lintas grade Kulit Kayu Manis (STIK · KA · KB · KF) tanpa perlu memecah stok manual saat barang masih berjalan.
+                </p>
+              </div>
+            </div>
+            <div className="text-right shrink-0">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 block">
+                Net Gabungan Kulit Kayu Manis
+              </span>
+              <span
+                className={`text-sm font-extrabold font-mono tabular-nums ${
+                  rekapanSelisihAntarKomoditas.kkmNetSelisih > 0
+                    ? 'text-amber-800'
+                    : rekapanSelisihAntarKomoditas.kkmNetSelisih < 0
+                    ? 'text-rose-700'
+                    : 'text-emerald-700'
+                }`}
+              >
+                {rekapanSelisihAntarKomoditas.kkmNetSelisih > 0 ? '+' : ''}
+                {rekapanSelisihAntarKomoditas.kkmNetSelisih.toLocaleString('id-ID', {
+                  minimumFractionDigits: 1,
+                  maximumFractionDigits: 2,
+                })}{' '}
+                Kg
+              </span>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-zinc-50 border-b border-zinc-200 text-[10px] font-bold uppercase text-zinc-600">
+                  <th className="py-2.5 px-4 text-left">Komoditas / Grade</th>
+                  <th className="py-2.5 px-3 text-right">Stok Ready Saat Ini</th>
+                  <th className="py-2.5 px-3 text-right">Susut / Kurang (- Kg)</th>
+                  <th className="py-2.5 px-3 text-right">Lebih Muat / Minus Buku (+ Kg)</th>
+                  <th className="py-2.5 px-3 text-right">Net Selisih (+/- Kg)</th>
+                  <th className="py-2.5 px-4 text-left">Status / Indikasi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 font-mono tabular-nums">
+                {rekapanSelisihAntarKomoditas.kkmRows.map((row) => (
+                  <tr
+                    key={row.hb.kode}
+                    onClick={() => handleSelectCardKomoditas(row.hb.kode)}
+                    className="hover:bg-amber-50/40 cursor-pointer transition-colors"
+                  >
+                    <td className="py-2 px-4 font-sans font-semibold text-zinc-900">
+                      <span className="font-mono text-[10px] text-zinc-500 mr-1.5">
+                        {row.hb.kode}
+                      </span>
+                      {row.hb.nama}
+                    </td>
+                    <td
+                      className={`py-2 px-3 text-right font-bold ${
+                        row.stokReadyKg < 0 ? 'text-rose-700' : 'text-zinc-900'
+                      }`}
+                    >
+                      {row.stokReadyKg.toLocaleString('id-ID', {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 2,
+                      })}{' '}
+                      Kg
+                    </td>
+                    <td className="py-2 px-3 text-right text-rose-700 font-semibold">
+                      {row.totalSusutKurangKg > 0
+                        ? `-${row.totalSusutKurangKg.toLocaleString('id-ID', {
+                            minimumFractionDigits: 1,
+                            maximumFractionDigits: 2,
+                          })} Kg`
+                        : '0,0 Kg'}
+                    </td>
+                    <td className="py-2 px-3 text-right text-amber-800 font-semibold">
+                      {row.totalLebihMuatKg > 0
+                        ? `+${row.totalLebihMuatKg.toLocaleString('id-ID', {
+                            minimumFractionDigits: 1,
+                            maximumFractionDigits: 2,
+                          })} Kg`
+                        : '0,0 Kg'}
+                    </td>
+                    <td
+                      className={`py-2 px-3 text-right font-bold ${
+                        row.netSelisihStokKg > 0
+                          ? 'text-amber-800'
+                          : row.netSelisihStokKg < 0
+                          ? 'text-rose-700'
+                          : 'text-zinc-500'
+                      }`}
+                    >
+                      {row.netSelisihStokKg > 0 ? '+' : ''}
+                      {row.netSelisihStokKg.toLocaleString('id-ID', {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 2,
+                      })}{' '}
+                      Kg
+                    </td>
+                    <td className="py-2 px-4 font-sans text-[11px]">
+                      {row.totalLebihMuatKg > 0 ? (
+                        <span className="text-amber-900 font-semibold">
+                          Surplus Fisik / Buku Minus (Indikasi masuk dari grade lain)
+                        </span>
+                      ) : row.totalSusutKurangKg > 0 ? (
+                        <span className="text-rose-700 font-semibold">
+                          Susut / Kurang Muat (Bisa jadi pindah ke grade lain)
+                        </span>
+                      ) : (
+                        <span className="text-zinc-500">
+                          Stok berjalan (belum ada selisih susut/lebih muat)
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+
+                {/* Baris Total Gabungan Keluarga Kulit Kayu Manis */}
+                <tr className="bg-amber-100/80 border-t-2 border-amber-400 font-bold text-zinc-950">
+                  <td className="py-2.5 px-4 font-sans font-extrabold">
+                    TOTAL GABUNGAN KULIT KAYU MANIS (STIK + KA + KB + KF)
+                  </td>
+                  <td className="py-2.5 px-3 text-right font-extrabold">
+                    {rekapanSelisihAntarKomoditas.kkmTotalStokReady.toLocaleString('id-ID', {
+                      minimumFractionDigits: 1,
+                      maximumFractionDigits: 2,
+                    })}{' '}
+                    Kg
+                  </td>
+                  <td className="py-2.5 px-3 text-right text-rose-800 font-extrabold">
+                    {rekapanSelisihAntarKomoditas.kkmTotalSusut > 0
+                      ? `-${rekapanSelisihAntarKomoditas.kkmTotalSusut.toLocaleString('id-ID', {
+                          minimumFractionDigits: 1,
+                          maximumFractionDigits: 2,
+                        })} Kg`
+                      : '0,0 Kg'}
+                  </td>
+                  <td className="py-2.5 px-3 text-right text-amber-900 font-extrabold">
+                    {rekapanSelisihAntarKomoditas.kkmTotalLebihMuat > 0
+                      ? `+${rekapanSelisihAntarKomoditas.kkmTotalLebihMuat.toLocaleString('id-ID', {
+                          minimumFractionDigits: 1,
+                          maximumFractionDigits: 2,
+                        })} Kg`
+                      : '0,0 Kg'}
+                  </td>
+                  <td
+                    className={`py-2.5 px-3 text-right font-extrabold ${
+                      rekapanSelisihAntarKomoditas.kkmNetSelisih > 0
+                        ? 'text-amber-900'
+                        : rekapanSelisihAntarKomoditas.kkmNetSelisih < 0
+                        ? 'text-rose-800'
+                        : 'text-emerald-800'
+                    }`}
+                  >
+                    {rekapanSelisihAntarKomoditas.kkmNetSelisih > 0 ? '+' : ''}
+                    {rekapanSelisihAntarKomoditas.kkmNetSelisih.toLocaleString('id-ID', {
+                      minimumFractionDigits: 1,
+                      maximumFractionDigits: 2,
+                    })}{' '}
+                    Kg
+                  </td>
+                  <td className="py-2.5 px-4 font-sans text-[11px] font-bold">
+                    {rekapanSelisihAntarKomoditas.kkmTotalLebihMuat > 0 &&
+                    rekapanSelisihAntarKomoditas.kkmTotalSusut > 0 ? (
+                      <span className="text-emerald-900">
+                        Saling Melengkapi! Surplus (+{rekapanSelisihAntarKomoditas.kkmTotalLebihMuat.toLocaleString('id-ID')} Kg) mengimbangi Susut (-{rekapanSelisihAntarKomoditas.kkmTotalSusut.toLocaleString('id-ID')} Kg)
+                      </span>
+                    ) : rekapanSelisihAntarKomoditas.kkmTotalLebihMuat > 0 ? (
+                      <span className="text-amber-950">
+                        Menunggu STIK / KA selesai habis muat untuk pembanding susut lintas grade
+                      </span>
+                    ) : rekapanSelisihAntarKomoditas.kkmTotalSusut > 0 ? (
+                      <span className="text-rose-800">
+                        Tercatat susut gabungan -{rekapanSelisihAntarKomoditas.kkmTotalSusut.toLocaleString('id-ID')} Kg
+                      </span>
+                    ) : (
+                      <span className="text-zinc-600 font-medium">
+                        Belum ada selisih susut maupun lebih muat yang tercatat
+                      </span>
+                    )}
+                  </td>
+                </tr>
+
+                {/* Komoditas Lain jika Ada Selisih */}
+                {rekapanSelisihAntarKomoditas.otherVarianceRows.map((row) => (
+                  <tr
+                    key={row.hb.kode}
+                    onClick={() => handleSelectCardKomoditas(row.hb.kode)}
+                    className="bg-zinc-50/70 hover:bg-zinc-100/70 cursor-pointer transition-colors"
+                  >
+                    <td className="py-2 px-4 font-sans font-semibold text-zinc-800">
+                      <span className="font-mono text-[10px] text-zinc-500 mr-1.5">
+                        {row.hb.kode}
+                      </span>
+                      {row.hb.nama}
+                    </td>
+                    <td
+                      className={`py-2 px-3 text-right font-bold ${
+                        row.stokReadyKg < 0 ? 'text-rose-700' : 'text-zinc-800'
+                      }`}
+                    >
+                      {row.stokReadyKg.toLocaleString('id-ID', {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 2,
+                      })}{' '}
+                      Kg
+                    </td>
+                    <td className="py-2 px-3 text-right text-rose-700 font-semibold">
+                      {row.totalSusutKurangKg > 0
+                        ? `-${row.totalSusutKurangKg.toLocaleString('id-ID', {
+                            minimumFractionDigits: 1,
+                            maximumFractionDigits: 2,
+                          })} Kg`
+                        : '0,0 Kg'}
+                    </td>
+                    <td className="py-2 px-3 text-right text-amber-800 font-semibold">
+                      {row.totalLebihMuatKg > 0
+                        ? `+${row.totalLebihMuatKg.toLocaleString('id-ID', {
+                            minimumFractionDigits: 1,
+                            maximumFractionDigits: 2,
+                          })} Kg`
+                        : '0,0 Kg'}
+                    </td>
+                    <td className="py-2 px-3 text-right font-bold text-zinc-800">
+                      {row.netSelisihStokKg > 0 ? '+' : ''}
+                      {row.netSelisihStokKg.toLocaleString('id-ID', {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 2,
+                      })}{' '}
+                      Kg
+                    </td>
+                    <td className="py-2 px-4 font-sans text-[11px] text-zinc-600">
+                      Komoditas di luar Kulit Kayu Manis
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
       {/* RIWAYAT MUTASI GUDANG HASIL BUMI (FORMAT SPREADSHEET BUKU MUTASI GAMBAR 2) */}
       {/* ========================================================================= */}
       <div
@@ -1586,11 +2105,26 @@ export const StokHasilBumiView: React.FC<Props> = ({
                   onChange={(e) => setSelectedCardKode(e.target.value)}
                   className="px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50/70 text-xs font-bold text-emerald-950 focus:outline-none cursor-pointer"
                 >
-                  {activeStokList.map((hb) => (
-                    <option key={hb.kode} value={hb.kode}>
-                      {hb.kode} — {hb.nama} (Ready: {(hb.stok || 0).toLocaleString('id-ID')} {hb.satuan})
-                    </option>
-                  ))}
+                  {activeStokList.map((hb) => {
+                    const nonFisikKgOpt =
+                      Math.round(
+                        physicalPembelianList
+                          .filter(
+                            (p) =>
+                              (p.komoditasKode === hb.kode ||
+                                p.komoditasNama.toUpperCase().trim() === hb.nama.toUpperCase().trim()) &&
+                              Boolean(p.isTitipNonFisik) &&
+                              Boolean(p.isBelumPutusHarga || p.status === 'BELUM_PUTUS_HARGA')
+                          )
+                          .reduce((s, p) => s + (Number(p.beratBersih) || 0), 0) * 100
+                      ) / 100;
+                    const isTitipOpt = hb.kode === 'HB-08' || hb.isBelumPutusHarga || nonFisikKgOpt > 0;
+                    return (
+                      <option key={hb.kode} value={hb.kode}>
+                        {hb.kode} — {hb.nama} ({isTitipOpt ? `Fisik: ${(hb.stok || 0).toLocaleString('id-ID')} ${hb.satuan} · Non-Fisik: ${nonFisikKgOpt.toLocaleString('id-ID')} ${hb.satuan}` : `Ready: ${(hb.stok || 0).toLocaleString('id-ID')} ${hb.satuan}`})
+                      </option>
+                    );
+                  })}
                 </select>
                 <button
                   type="button"
@@ -1714,14 +2248,29 @@ export const StokHasilBumiView: React.FC<Props> = ({
                       return (
                         <tr
                           key={row.key}
-                          className="bg-white hover:bg-zinc-50 border-b border-zinc-300"
+                          className={
+                            row.isTitipNonFisik
+                              ? 'bg-amber-50/70 hover:bg-amber-50 border-b border-zinc-300'
+                              : 'bg-white hover:bg-zinc-50 border-b border-zinc-300'
+                          }
                         >
                           <td
                             className={`py-1.5 px-3 font-sans font-medium text-zinc-950 border-r border-zinc-400 ${
                               row.showRpPrefix ? 'text-center uppercase' : 'text-left'
                             }`}
                           >
-                            {row.nama}
+                            <div className={`flex items-center gap-1.5 flex-wrap ${row.showRpPrefix ? 'justify-center' : ''}`}>
+                              <span>{row.nama}</span>
+                              {row.isTitipNonFisik ? (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-900 text-[9px] font-bold uppercase tracking-tight">
+                                  Titip Lama · Non-Fisik
+                                </span>
+                              ) : row.isBelumPutus ? (
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-900 text-[9px] font-bold uppercase tracking-tight">
+                                  Fisik Gudang
+                                </span>
+                              ) : null}
+                            </div>
                           </td>
                           <td className="py-1.5 px-3 text-right border-r border-zinc-400 text-zinc-900 whitespace-nowrap">
                             {row.tanggalDisplay}
@@ -1732,7 +2281,7 @@ export const StokHasilBumiView: React.FC<Props> = ({
                           <td className="py-1.5 px-3 border-r border-zinc-400 text-zinc-950 whitespace-nowrap">
                             {row.isBelumPutus && row.hargaPerKg === 0 ? (
                               <span className="block text-right text-amber-800 font-sans text-[11px] font-semibold">
-                                Titip
+                                {row.isTitipNonFisik ? 'Titip Lama' : 'Titip'}
                               </span>
                             ) : row.showRpPrefix ? (
                               <div className="flex items-center justify-between gap-2">
@@ -1800,7 +2349,13 @@ export const StokHasilBumiView: React.FC<Props> = ({
                       return (
                         <tr
                           key={row.key}
-                          className="bg-[#6AA84F] text-zinc-950 font-bold border-b border-zinc-700"
+                          className={
+                            row.isMinusSummary
+                              ? 'bg-rose-200 text-rose-950 font-bold border-b border-rose-700'
+                              : row.isNonFisikSummary
+                              ? 'bg-amber-200 text-amber-950 font-bold border-b border-amber-700'
+                              : 'bg-[#6AA84F] text-zinc-950 font-bold border-b border-zinc-700'
+                          }
                         >
                           <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
                             {row.label}
@@ -1810,16 +2365,24 @@ export const StokHasilBumiView: React.FC<Props> = ({
                             {formatKgBukuMutasi(row.beratKg)}
                           </td>
                           <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
-                            <div className="flex items-center justify-between gap-2">
-                              <span>Rp</span>
-                              <span>{formatAngkaBukuMutasi(row.rataHargaPerKg)}</span>
-                            </div>
+                            {row.isNonFisikSummary ? (
+                              <div className="text-right font-sans text-[11px]">Non-Fisik</div>
+                            ) : (
+                              <div className="flex items-center justify-between gap-2">
+                                <span>Rp</span>
+                                <span>{formatAngkaBukuMutasi(row.rataHargaPerKg)}</span>
+                              </div>
+                            )}
                           </td>
                           <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
-                            <div className="flex items-center justify-between gap-2">
-                              <span>Rp</span>
-                              <span>{formatAngkaBukuMutasi(row.jumlahRp)}</span>
-                            </div>
+                            {row.isNonFisikSummary ? (
+                              <div className="text-right font-sans text-[11px]">Belum Putus</div>
+                            ) : (
+                              <div className="flex items-center justify-between gap-2">
+                                <span>Rp</span>
+                                <span>{formatAngkaBukuMutasi(row.jumlahRp)}</span>
+                              </div>
+                            )}
                           </td>
                           <td className="bg-white border-b border-zinc-200" />
                         </tr>
@@ -1932,20 +2495,30 @@ export const StokHasilBumiView: React.FC<Props> = ({
                       return (
                         <tr
                           key={row.key}
-                          className="bg-[#00B0F0] text-zinc-950 font-bold border-b border-zinc-700"
+                          className={`${
+                            row.isMinus
+                              ? 'bg-rose-200 text-rose-950'
+                              : 'bg-[#00B0F0] text-zinc-950'
+                          } font-bold border-b border-zinc-700`}
                         >
                           <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
-                            SISA STOK
+                            {row.label || 'SISA STOK'}
                           </td>
-                          <td className="py-1.5 px-3 border-r border-zinc-700" />
+                          <td className="py-1.5 px-3 border-r border-zinc-700 text-center font-sans text-[10px]">
+                            {row.isSisaFisikAktual ? 'Aktual Gudang' : ''}
+                          </td>
                           <td className="py-1.5 px-3 text-right border-r border-zinc-700">
                             {formatKgBukuMutasi(row.beratKg)}
                           </td>
                           <td className="py-1.5 px-3 text-right border-r border-zinc-700 whitespace-nowrap">
-                            <div className="flex items-center justify-between gap-1">
-                              <span>Rp</span>
-                              <span>{formatAngkaBukuMutasi(row.rataHargaPerKg || 0)}</span>
-                            </div>
+                            {row.beratKg > 0 ? (
+                              <div className="flex items-center justify-between gap-1">
+                                <span>Rp</span>
+                                <span>{formatAngkaBukuMutasi(row.rataHargaPerKg || 0)}</span>
+                              </div>
+                            ) : (
+                              <div className="text-right">-</div>
+                            )}
                           </td>
                           <td className="py-1.5 px-3 border-r border-zinc-700 whitespace-nowrap">
                             <div className="flex items-center justify-between gap-2">
@@ -1958,13 +2531,39 @@ export const StokHasilBumiView: React.FC<Props> = ({
                       );
                     }
 
+                    if (row.isLebihMuat) {
+                      return (
+                        <tr
+                          key={row.key}
+                          className="bg-amber-300 text-amber-950 font-bold border-b border-zinc-700"
+                        >
+                          <td className="py-1.5 px-3 font-sans font-extrabold text-center border-r border-zinc-700">
+                            {row.label || 'LEBIH MUAT / MINUS BUKU (INDIKASI GRADE LAIN)'}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700 text-center font-sans text-[10px]">
+                            Surplus Fisik
+                          </td>
+                          <td className="py-1.5 px-3 text-right border-r border-zinc-700">
+                            +{formatKgBukuMutasi(row.beratKg)}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700 text-right font-sans text-[10px]">
+                            Buku Minus
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-zinc-700 text-right">
+                            -{formatKgBukuMutasi(row.beratKg)} Kg
+                          </td>
+                          <td className="bg-white border-b border-zinc-200" />
+                        </tr>
+                      );
+                    }
+
                     return (
                       <tr
                         key={row.key}
                         className="bg-[#FF0000] text-zinc-950 font-bold border-b border-zinc-700"
                       >
                         <td className="py-1.5 px-3 font-sans font-bold text-center border-r border-zinc-700">
-                          SUSUT
+                          {row.label || 'SUSUT'}
                         </td>
                         <td className="py-1.5 px-3 border-r border-zinc-700" />
                         <td className="py-1.5 px-3 text-right border-r border-zinc-700">

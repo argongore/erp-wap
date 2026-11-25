@@ -32,6 +32,11 @@ import {
 export interface ReceiptData {
   title?: string;
   subtitle?: string;
+  modalHeaderTitle?: string;
+  mitraLabel?: string;
+  itemsHeaderLeft?: string;
+  itemsHeaderRight?: string;
+  signatureRightLabel?: string;
   nomorTransaksi?: string;
   nomorNota?: string;
   tanggal?: string;
@@ -43,7 +48,15 @@ export interface ReceiptData {
   kategori?: string;
   total?: number;
   terbilang?: string;
-  items?: Array<{ nama?: string; qty?: number; satuan?: string; harga?: number; subtotal?: number }>;
+  items?: Array<{
+    nama?: string;
+    qty?: number;
+    satuan?: string;
+    harga?: number;
+    subtotal?: number;
+    detailLine?: string;
+    subtotalText?: string;
+  }>;
   detailRows?: Array<{ label?: string; value?: string | number; isTotal?: boolean; highlight?: boolean }>;
   catatan?: string;
   kasir?: string;
@@ -203,8 +216,13 @@ export const PrintReceiptModal: React.FC<Props> = ({
   const pihak = receipt.mitra || receipt.namaMitra || '';
   const kasir = receipt.kasir || 'Kasir PT Wijaya Agro';
 
+  const mitraLabel = receipt.mitraLabel || 'Mitra/Pihak';
+  const itemsHeaderLeft = receipt.itemsHeaderLeft || 'ITEM / RINCIAN';
+  const itemsHeaderRight = receipt.itemsHeaderRight || 'SUBTOTAL';
+  const signatureRightLabel = receipt.signatureRightLabel || 'Mitra / Penerima';
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
       <div className="bg-white text-zinc-900 w-full max-w-md rounded-xl shadow-2xl overflow-hidden border border-zinc-200 animate-in fade-in zoom-in duration-150 my-auto">
         {/* Header Bar */}
         <div className="flex items-center justify-between px-4 py-3 bg-emerald-800 text-white">
@@ -212,7 +230,7 @@ export const PrintReceiptModal: React.FC<Props> = ({
             <CheckCircle2 className="w-5 h-5 text-emerald-300 shrink-0" />
             <div className="min-w-0">
               <div className="font-semibold text-sm tracking-wide truncate">
-                Transaksi Berhasil Disimpan
+                {receipt.modalHeaderTitle || 'Transaksi Berhasil Disimpan'}
               </div>
               <div className="text-[10px] text-emerald-200">
                 Format Thermal {settings.paperWidthMm}mm · Cetak bersifat opsional
@@ -284,7 +302,7 @@ export const PrintReceiptModal: React.FC<Props> = ({
               </div>
               {pihak && (
                 <div className="flex justify-between gap-2">
-                  <span className="text-zinc-600">Mitra/Pihak</span>
+                  <span className="text-zinc-600">{mitraLabel}</span>
                   <span className="font-bold text-black text-right truncate max-w-[180px]">
                     {pihak}
                   </span>
@@ -296,26 +314,35 @@ export const PrintReceiptModal: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Table Items if available (Penjualan / Kulakan) */}
+            {/* Table Items if available (Penjualan / Kulakan / Rincian Harian Gaji) */}
             {itemsList.length > 0 && (
               <div className="border-t border-dashed border-zinc-800 pt-2 space-y-1.5">
                 <div className="flex justify-between text-[10px] font-bold text-black border-b border-dotted border-zinc-500 pb-1">
-                  <span>ITEM / RINCIAN</span>
-                  <span>SUBTOTAL</span>
+                  <span>{itemsHeaderLeft}</span>
+                  <span>{itemsHeaderRight}</span>
                 </div>
                 {itemsList.map((it, idx) => {
                   const hrg = Number(it.harga) || 0;
                   const subtot = Number(it.subtotal) || 0;
+                  const leftDetail =
+                    it.detailLine !== undefined
+                      ? it.detailLine
+                      : `${it.qty || 1} ${it.satuan || 'Pcs'} x ${
+                          hrg === 0 ? 'Rp 0' : hrg.toLocaleString('id-ID')
+                        }`;
+                  const rightSubtotal =
+                    it.subtotalText !== undefined
+                      ? it.subtotalText
+                      : subtot === 0
+                      ? 'Rp 0 (PT)'
+                      : formatRupiah(subtot);
                   return (
                     <div key={idx} className="space-y-0.5">
                       <div className="font-bold text-black break-words">{it.nama || '-'}</div>
                       <div className="flex justify-between gap-2 text-[10px] text-zinc-800">
-                        <span>
-                          {it.qty || 1} {it.satuan || 'Pcs'} x{' '}
-                          {hrg === 0 ? 'Rp 0' : hrg.toLocaleString('id-ID')}
-                        </span>
+                        <span className="break-words">{leftDetail}</span>
                         <span className="font-bold text-black whitespace-nowrap">
-                          {subtot === 0 ? 'Rp 0 (PT)' : formatRupiah(subtot)}
+                          {rightSubtotal}
                         </span>
                       </div>
                     </div>
@@ -396,7 +423,7 @@ export const PrintReceiptModal: React.FC<Props> = ({
                   <p className="font-bold text-black truncate">({kasir})</p>
                 </div>
                 <div>
-                  <p>Mitra / Penerima</p>
+                  <p>{signatureRightLabel}</p>
                   <div className="h-9" />
                   <p className="font-bold text-black truncate">({pihak || 'Tanda Tangan'})</p>
                 </div>
@@ -535,7 +562,7 @@ export const PrintReceiptModal: React.FC<Props> = ({
         {showPhotoModal && receipt.fotoNota && (
           <div
             onClick={() => setShowPhotoModal(false)}
-            className="fixed inset-0 z-60 bg-black/90 flex items-center justify-center p-4 cursor-zoom-out"
+            className="fixed inset-0 z-70 bg-black/90 flex items-center justify-center p-4 cursor-zoom-out"
           >
             <div
               onClick={(e) => e.stopPropagation()}

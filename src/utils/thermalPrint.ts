@@ -91,11 +91,13 @@ export function buildReceiptTextForWa(
   profilPerusahaan?: ProfilPerusahaan | null
 ): string {
   const { companyName } = resolveCompanyMeta(profilPerusahaan);
+  const mitraLabel = receipt.mitraLabel || 'Mitra/Pihak';
   const lines = [
-    `*BUKTI TRANSAKSI ${companyName.toUpperCase()}*`,
-    `${receipt.title || 'BUKTI TRANSAKSI'} - ${receipt.nomorTransaksi || receipt.nomorNota || '-'}`,
+    `*${(receipt.title || 'BUKTI TRANSAKSI').toUpperCase()} - ${companyName.toUpperCase()}*`,
+    `No: ${receipt.nomorTransaksi || receipt.nomorNota || '-'}`,
+    ...(receipt.subtitle ? [`${receipt.subtitle}`] : []),
     `Waktu: ${receipt.tanggal || '-'} ${receipt.jam || ''} WIB`,
-    `Mitra/Pihak: ${receipt.mitra || receipt.namaMitra || '-'}`,
+    `${mitraLabel}: ${receipt.mitra || receipt.namaMitra || '-'}`,
     `---------------------------------`,
   ];
 
@@ -104,11 +106,21 @@ export function buildReceiptTextForWa(
     itemsList.forEach((it) => {
       const hrg = Number(it.harga) || 0;
       const subtot = Number(it.subtotal) || 0;
-      lines.push(
-        `• ${it.nama || 'Item'} (${it.qty || 1} ${it.satuan || 'Pcs'} x Rp ${hrg.toLocaleString(
-          'id-ID'
-        )}) = Rp ${subtot.toLocaleString('id-ID')}`
-      );
+      const subStr =
+        it.subtotalText !== undefined
+          ? it.subtotalText
+          : `Rp ${subtot.toLocaleString('id-ID')}`;
+      if (it.detailLine !== undefined) {
+        lines.push(
+          `• ${it.nama || 'Item'}${it.detailLine ? ` [${it.detailLine}]` : ''} = ${subStr}`
+        );
+      } else {
+        lines.push(
+          `• ${it.nama || 'Item'} (${it.qty || 1} ${it.satuan || 'Pcs'} x Rp ${hrg.toLocaleString(
+            'id-ID'
+          )}) = ${subStr}`
+        );
+      }
     });
     lines.push(`---------------------------------`);
   }
@@ -156,13 +168,18 @@ export function buildThermalReceiptHtml(
   const pihak = receipt.mitra || receipt.namaMitra || '';
   const kasir = receipt.kasir || 'Kasir PT Wijaya Agro';
 
+  const mitraLabel = receipt.mitraLabel || 'Mitra/Pihak';
+  const itemsHeaderLeft = receipt.itemsHeaderLeft || 'ITEM / RINCIAN';
+  const itemsHeaderRight = receipt.itemsHeaderRight || 'SUBTOTAL';
+  const signatureRightLabel = receipt.signatureRightLabel || 'Mitra / Penerima';
+
   const itemsHtml =
     itemsList.length > 0
       ? `
       <div class="divider"></div>
       <div class="section-head">
-        <span>ITEM / RINCIAN</span>
-        <span>SUBTOTAL</span>
+        <span>${escapeHtml(itemsHeaderLeft)}</span>
+        <span>${escapeHtml(itemsHeaderRight)}</span>
       </div>
       <div class="divider-thin"></div>
       ${itemsList
@@ -171,12 +188,21 @@ export function buildThermalReceiptHtml(
           const satuan = it.satuan || 'Pcs';
           const hrg = Number(it.harga) || 0;
           const subtot = Number(it.subtotal) || 0;
-          const subStr = subtot === 0 ? 'Rp 0 (PT)' : formatRupiah(subtot);
+          const leftDetail =
+            it.detailLine !== undefined
+              ? it.detailLine
+              : `${qty} ${satuan} x ${hrg.toLocaleString('id-ID')}`;
+          const subStr =
+            it.subtotalText !== undefined
+              ? it.subtotalText
+              : subtot === 0
+              ? 'Rp 0 (PT)'
+              : formatRupiah(subtot);
           return `
             <div class="item-block">
               <div class="item-name">${escapeHtml(it.nama || '-')}</div>
               <div class="item-calc">
-                <span>${escapeHtml(`${qty} ${satuan} x ${hrg.toLocaleString('id-ID')}`)}</span>
+                <span>${escapeHtml(leftDetail)}</span>
                 <span class="bold">${escapeHtml(subStr)}</span>
               </div>
             </div>
@@ -246,7 +272,7 @@ export function buildThermalReceiptHtml(
           <div class="bold">(${escapeHtml(kasir)})</div>
         </div>
         <div class="sig-col">
-          <div>Mitra / Penerima</div>
+          <div>${escapeHtml(signatureRightLabel)}</div>
           <div class="sig-space"></div>
           <div class="bold">(${escapeHtml(pihak || 'Tanda Tangan')})</div>
         </div>
@@ -415,7 +441,7 @@ export function buildThermalReceiptHtml(
     </div>
     ${
       pihak
-        ? `<div class="meta-row"><span>Mitra/Pihak</span><span class="bold">${escapeHtml(pihak)}</span></div>`
+        ? `<div class="meta-row"><span>${escapeHtml(mitraLabel)}</span><span class="bold">${escapeHtml(pihak)}</span></div>`
         : ''
     }
     <div class="meta-row">
@@ -613,19 +639,24 @@ export function buildEscPosReceiptBytes(
   }
   pushLine(dashLine);
 
+  const mitraLabel = receipt.mitraLabel || 'Mitra/Pihak';
+  const itemsHeaderLeft = receipt.itemsHeaderLeft || 'ITEM / RINCIAN';
+  const itemsHeaderRight = receipt.itemsHeaderRight || 'SUBTOTAL';
+  const signatureRightLabel = receipt.signatureRightLabel || 'Mitra / Penerima';
+
   // Left align metadata
   pushBytes(0x1b, 0x61, 0x00);
   pushLine(formatTwoColLine('No. Trx', noTx, cols));
   pushLine(formatTwoColLine('Waktu', `${receipt.tanggal || '-'} ${receipt.jam || ''} WIB`.trim(), cols));
   if (pihak) {
-    pushLine(formatTwoColLine('Mitra/Pihak', pihak, cols));
+    pushLine(formatTwoColLine(mitraLabel, pihak, cols));
   }
   pushLine(formatTwoColLine('Kasir', kasir, cols));
 
   if (itemsList.length > 0) {
     pushLine(dashLine);
     pushBytes(0x1b, 0x45, 0x01);
-    pushLine(formatTwoColLine('ITEM / RINCIAN', 'SUBTOTAL', cols));
+    pushLine(formatTwoColLine(itemsHeaderLeft, itemsHeaderRight, cols));
     pushBytes(0x1b, 0x45, 0x00);
     pushLine(dashLine);
     for (const it of itemsList) {
@@ -633,13 +664,22 @@ export function buildEscPosReceiptBytes(
       const satuan = it.satuan || 'Pcs';
       const hrg = Number(it.harga) || 0;
       const subtot = Number(it.subtotal) || 0;
-      const subStr = subtot === 0 ? 'Rp 0 (PT)' : formatRupiah(subtot);
+      const leftDetail =
+        it.detailLine !== undefined
+          ? it.detailLine
+          : `${qty} ${satuan} x ${hrg.toLocaleString('id-ID')}`;
+      const subStr =
+        it.subtotalText !== undefined
+          ? it.subtotalText
+          : subtot === 0
+          ? 'Rp 0 (PT)'
+          : formatRupiah(subtot);
       pushBytes(0x1b, 0x45, 0x01);
       for (const l of wrapTextLines(it.nama || '-', cols)) {
         pushLine(l);
       }
       pushBytes(0x1b, 0x45, 0x00);
-      pushLine(formatTwoColLine(`${qty} ${satuan} x ${hrg.toLocaleString('id-ID')}`, subStr, cols));
+      pushLine(formatTwoColLine(leftDetail, subStr, cols));
     }
   }
 
@@ -682,7 +722,7 @@ export function buildEscPosReceiptBytes(
 
   if (settings.includeSignatures) {
     pushLine(dashLine);
-    pushLine(formatTwoColLine('Kasir', 'Mitra / Penerima', cols));
+    pushLine(formatTwoColLine('Kasir', signatureRightLabel, cols));
     pushLine('');
     pushLine('');
     pushLine(formatTwoColLine(`(${kasir.slice(0, 18)})`, `(${(pihak || 'Tanda Tangan').slice(0, 18)})`, cols));

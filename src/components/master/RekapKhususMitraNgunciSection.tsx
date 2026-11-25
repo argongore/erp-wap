@@ -39,6 +39,13 @@ interface RekapMitraViewProps {
   onOpenKliringSilang?: (mitra: RekapMitraItem) => void;
   onPreviewFotoMitra?: (payload: { nama: string; roleLabel?: string; fotoUrl: string }) => void;
   onOpenCetakList?: (preset?: InitialCetakMitraPreset) => void;
+  onPrintThermalMitra?: (idMitra: string, namaMitra: string) => void;
+  onPrintThermalList?: (
+    targetItems?: RekapMitraItem[],
+    customLabel?: string,
+    modeOverride?: 'PIUTANG' | 'HUTANG' | 'SEMUA' | 'NGUNCI'
+  ) => void;
+  printingThermalMitraId?: string | null;
 }
 
 export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
@@ -50,6 +57,9 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
   onOpenKliringSilang,
   onPreviewFotoMitra,
   onOpenCetakList,
+  onPrintThermalMitra,
+  onPrintThermalList,
+  printingThermalMitraId,
 }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<
@@ -152,6 +162,40 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onPrintThermalList && (
+              <button
+                type="button"
+                onClick={() => {
+                  const mode =
+                    statusFilter === 'PIUTANG'
+                      ? 'PIUTANG'
+                      : statusFilter === 'HUTANG'
+                      ? 'HUTANG'
+                      : statusFilter === 'NGUNCI'
+                      ? 'NGUNCI'
+                      : 'SEMUA';
+                  const label =
+                    statusFilter === 'PIUTANG'
+                      ? 'Daftar Piutang Aktif Mitra'
+                      : statusFilter === 'HUTANG'
+                      ? 'Daftar Hutang PT ke Mitra'
+                      : statusFilter === 'NGUNCI'
+                      ? 'Daftar Nota Ngunci Mitra'
+                      : statusFilter === 'SIAP_KLIRING'
+                      ? 'Mitra Siap Kliring Silang'
+                      : statusFilter === 'NOTA_AKTIF'
+                      ? 'Daftar Nota Aktif (Piutang & Hutang)'
+                      : 'Semua Rekap Piutang & Hutang';
+                  onPrintThermalList(filteredRows, label, mode);
+                }}
+                disabled={filteredRows.length === 0}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors cursor-pointer disabled:opacity-45"
+                title="Cetak daftar Piutang / Hutang Mitra sesuai filter ke printer thermal 80mm / 58mm"
+              >
+                <Printer className="w-3.5 h-3.5 text-amber-800" />
+                <span>Cetak Thermal</span>
+              </button>
+            )}
             {onOpenCetakList && (
               <button
                 type="button"
@@ -536,6 +580,19 @@ export const RekapMitraPosisiUangSection: React.FC<RekapMitraViewProps> = ({
                             </button>
                           )}
 
+                          {onPrintThermalMitra && (
+                            <button
+                              type="button"
+                              disabled={printingThermalMitraId === m.id}
+                              onClick={() => onPrintThermalMitra(m.id, m.nama)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors cursor-pointer disabled:opacity-50"
+                              title="Cetak rincian Piutang & Hutang mitra ini ke printer thermal 80mm / 58mm"
+                            >
+                              <Printer className="w-3 h-3" />
+                              <span>{printingThermalMitraId === m.id ? '...' : 'Thermal'}</span>
+                            </button>
+                          )}
+
                           <button
                             type="button"
                             onClick={() => onOpenStatement(m.id)}
@@ -665,6 +722,9 @@ export const KhususNotaNgunciSection: React.FC<RekapMitraViewProps> = ({
   onOpenInputNotaLalu,
   onPreviewFotoMitra,
   onOpenCetakList,
+  onPrintThermalMitra,
+  onPrintThermalList,
+  printingThermalMitraId,
 }) => {
   const [search, setSearch] = useState('');
   const [modeTabel, setModeTabel] = useState<'PER_MITRA' | 'PER_NOTA'>('PER_MITRA');
@@ -735,6 +795,20 @@ export const KhususNotaNgunciSection: React.FC<RekapMitraViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onPrintThermalList && (
+              <button
+                type="button"
+                disabled={mitraNgunciList.length === 0}
+                onClick={() =>
+                  onPrintThermalList(mitraNgunciList, 'Daftar Nota Ngunci Mitra', 'NGUNCI')
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors cursor-pointer disabled:opacity-45"
+                title="Cetak Daftar Mitra Nota Ngunci ke printer thermal 80mm / 58mm"
+              >
+                <Printer className="w-3.5 h-3.5 text-amber-800" />
+                <span>Thermal Ngunci</span>
+              </button>
+            )}
             {onOpenCetakList && (
               <button
                 type="button"
@@ -970,6 +1044,18 @@ export const KhususNotaNgunciSection: React.FC<RekapMitraViewProps> = ({
                               <Unlock className="w-3 h-3" />
                               <span>Pulihkan Aktif</span>
                             </button>
+                            {onPrintThermalMitra && (
+                              <button
+                                type="button"
+                                disabled={printingThermalMitraId === m.id}
+                                onClick={() => onPrintThermalMitra(m.id, m.nama)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors cursor-pointer disabled:opacity-50"
+                                title="Cetak rincian Nota Ngunci & Piutang mitra ini ke printer thermal 80mm / 58mm"
+                              >
+                                <Printer className="w-3 h-3" />
+                                <span>{printingThermalMitraId === m.id ? '...' : 'Thermal'}</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => onOpenStatement(m.id)}
@@ -1119,6 +1205,18 @@ export const KhususNotaNgunciSection: React.FC<RekapMitraViewProps> = ({
                             <Unlock className="w-3 h-3" />
                             <span>Pulihkan</span>
                           </button>
+                          {onPrintThermalMitra && (
+                            <button
+                              type="button"
+                              disabled={printingThermalMitraId === n.idMitra}
+                              onClick={() => onPrintThermalMitra(n.idMitra, n.namaMitra)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 cursor-pointer disabled:opacity-50"
+                              title="Cetak rincian Piutang / Nota Ngunci mitra ini ke printer thermal"
+                            >
+                              <Printer className="w-3 h-3" />
+                              <span>{printingThermalMitraId === n.idMitra ? '...' : 'Thermal'}</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => onOpenStatement(n.idMitra)}

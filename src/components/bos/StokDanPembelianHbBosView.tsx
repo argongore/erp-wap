@@ -287,12 +287,26 @@ export const StokDanPembelianHbBosView: React.FC<StokDanPembelianHbBosViewProps>
           ? rk.nilaiModalReadyGudang
           : Math.max(0, readyKg) * rataModal;
 
+      const titipNonFisikKg =
+        Math.round(
+          pembelianHbList
+            .filter(
+              (p) =>
+                (p.komoditasKode === hb.kode ||
+                  p.komoditasNama.toUpperCase().trim() === hb.nama.toUpperCase().trim()) &&
+                Boolean(p.isTitipNonFisik) &&
+                Boolean(p.isBelumPutusHarga || p.status === 'BELUM_PUTUS_HARGA')
+            )
+            .reduce((s, p) => s + (Number(p.beratBersih) || 0), 0) * 100
+        ) / 100;
+
       return {
         kode: hb.kode,
         nama: hb.nama,
         satuan: hb.satuan || 'Kg',
         isBelumPutusHarga: hb.isBelumPutusHarga || rk?.isBelumPutusHarga,
         readyKg,
+        titipNonFisikKg,
         rataModal,
         nilaiModal,
         masukBulanIniKg: rk?.masukBulanIniKg ?? 0,
@@ -301,7 +315,7 @@ export const StokDanPembelianHbBosView: React.FC<StokDanPembelianHbBosViewProps>
         terjualBulanIniKg: rk?.terjualBulanIniKg ?? 0,
       };
     });
-  }, [stokHasilBumiList, ringkasanHb]);
+  }, [stokHasilBumiList, ringkasanHb, pembelianHbList]);
 
   const gudangHbTotals = useMemo(() => {
     let totalReadyKg = 0;
@@ -363,9 +377,51 @@ export const StokDanPembelianHbBosView: React.FC<StokDanPembelianHbBosViewProps>
     [filteredStokToko, showAllStokToko]
   );
 
+  const groupedPembelianHb = useMemo(() => {
+    const getPrefix = (t: (typeof filteredPembelianHb)[number]): string | null => {
+      if (t.batchId && t.batchId.trim()) return t.batchId.trim();
+      const m = String(t.noPembelian || '').match(/^(BHB[A-Z0-9]+)-\d+$/i);
+      return m ? m[1] : null;
+    };
+    const batchMap = new Map<string, typeof filteredPembelianHb>();
+    for (const t of filteredPembelianHb) {
+      const p = getPrefix(t);
+      if (p) {
+        const gk = `${p}|${t.idMitra || t.namaMitra}|${t.metodePembayaran}|${t.tanggal}`;
+        const arr = batchMap.get(gk) || [];
+        arr.push(t);
+        batchMap.set(gk, arr);
+      }
+    }
+    const seen = new Set<string>();
+    const result: Array<
+      | { kind: 'SINGLE'; tx: (typeof filteredPembelianHb)[number] }
+      | { kind: 'BATCH'; prefix: string; items: typeof filteredPembelianHb }
+    > = [];
+    for (const t of filteredPembelianHb) {
+      const p = getPrefix(t);
+      if (p) {
+        const gk = `${p}|${t.idMitra || t.namaMitra}|${t.metodePembayaran}|${t.tanggal}`;
+        const grp = batchMap.get(gk);
+        if (grp && grp.length >= 2) {
+          if (!seen.has(gk)) {
+            seen.add(gk);
+            const sorted = [...grp].sort((a, b) =>
+              String(a.noPembelian || '').localeCompare(String(b.noPembelian || ''), undefined, { numeric: true })
+            );
+            result.push({ kind: 'BATCH', prefix: p, items: sorted });
+          }
+          continue;
+        }
+      }
+      result.push({ kind: 'SINGLE', tx: t });
+    }
+    return result;
+  }, [filteredPembelianHb]);
+
   const displayedPembelianHb = useMemo(
-    () => filteredPembelianHb.slice(0, hbLimit),
-    [filteredPembelianHb, hbLimit]
+    () => groupedPembelianHb.slice(0, hbLimit),
+    [groupedPembelianHb, hbLimit]
   );
 
   return (
@@ -598,8 +654,13 @@ export const StokDanPembelianHbBosView: React.FC<StokDanPembelianHbBosViewProps>
                           {hb.satuan}
                         </div>
                         <div className="text-[11px] text-slate-500">
-                          {(hb.readyKg / 1000).toFixed(2)} Ton
+                          {(hb.readyKg / 1000).toFixed(2)} Ton{hb.isBelumPutusHarga ? ' (Fisik Gudang)' : ''}
                         </div>
+                        {hb.titipNonFisikKg > 0 && (
+                          <div className="text-[11px] font-semibold text-amber-800 mt-0.5">
+                            +{hb.titipNonFisikKg.toLocaleString('id-ID', { maximumFractionDigits: 1 })} {hb.satuan} Titip Non-Fisik
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-3.5 px-4 text-right font-mono text-slate-700 tabular-nums hidden sm:table-cell whitespace-nowrap">
@@ -802,7 +863,164 @@ export const StokDanPembelianHbBosView: React.FC<StokDanPembelianHbBosViewProps>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {displayedPembelianHb.map((tx) => {
+                    {displayedPembelianHb.map((entry) => {
+                      if (entry.kind === 'BATCH') {
+                        const first = entry.items[0];
+                        const totalBersih = Number(
+                          entry.items.reduce((s, i) => s + (Number(i.beratBersih) || 0), 0).toFixed(2)
+                        );
+                        const totalKotor = Number(
+                          entry.items.reduce((s, i) => s + (Number(i.beratKotor) || 0), 0).toFixed(2)
+                        );
+                        const totalNom = entry.items.reduce((s, i) => s + (Number(i.totalNominal) || 0), 0);
+                        const firstWithImg = entry.items.find(
+                          (i) => (i.fotoNotaList && i.fotoNotaList.length > 0) || i.fotoNota
+                        );
+                        const combinedImages = firstWithImg
+                          ? firstWithImg.fotoNotaList && firstWithImg.fotoNotaList.length > 0
+                            ? firstWithImg.fotoNotaList.join('|||')
+                            : firstWithImg.fotoNota || ''
+                          : '';
+
+                        return (
+                          <tr key={entry.prefix} className="hover:bg-slate-50/70 align-top">
+                            <td className="py-3.5 px-5 font-mono tabular-nums whitespace-nowrap">
+                              <div className="font-semibold text-slate-900">{first.tanggal}</div>
+                              <div className="text-xs text-slate-400">
+                                {first.jam || '-'} · {entry.prefix}
+                              </div>
+                              <span className="inline-block mt-1 font-sans text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+                                {entry.items.length} Komoditas
+                              </span>
+                            </td>
+
+                            <td className="py-3.5 px-4 min-w-[270px]">
+                              <div className="font-semibold text-slate-900 mb-1.5">
+                                {first.namaMitra}
+                                {first.divisi ? (
+                                  <span className="text-xs font-normal text-slate-500"> · {first.divisi}</span>
+                                ) : null}
+                              </div>
+                              <div className="rounded-lg border border-slate-200 bg-slate-50/70 overflow-hidden">
+                                <table className="w-full text-[11px] border-collapse">
+                                  <thead>
+                                    <tr className="bg-slate-100 text-[9.5px] text-slate-500 uppercase border-b border-slate-200">
+                                      <th className="py-1 px-2 text-left">Komoditas</th>
+                                      <th className="py-1 px-1.5 text-right">Netto</th>
+                                      <th className="py-1 px-1.5 text-right">Harga</th>
+                                      <th className="py-1 px-2 text-right">Subtotal</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-200/60 bg-white">
+                                    {entry.items.map((sub) => (
+                                      <tr key={sub.noPembelian}>
+                                        <td className="py-1 px-2 font-semibold text-emerald-900">
+                                          {sub.komoditasNama}
+                                        </td>
+                                        <td className="py-1 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                                          {Number(sub.beratBersih || 0).toLocaleString('id-ID', {
+                                            maximumFractionDigits: 1,
+                                          })}{' '}
+                                          Kg
+                                        </td>
+                                        <td className="py-1 px-1.5 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                                          {sub.hargaPerKg > 0 ? formatRupiah(sub.hargaPerKg) : '-'}
+                                        </td>
+                                        <td className="py-1 px-2 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
+                                          {formatRupiah(sub.totalNominal)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                  <tfoot>
+                                    <tr className="bg-slate-100 border-t border-slate-200 font-bold text-[10.5px] text-slate-900">
+                                      <td className="py-1 px-2">Total ({entry.items.length} Komoditas)</td>
+                                      <td className="py-1 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                                        {totalBersih.toLocaleString('id-ID', { maximumFractionDigits: 1 })} Kg
+                                      </td>
+                                      <td className="py-1 px-1.5 text-right text-[9.5px] text-slate-500 uppercase">
+                                        Akhir
+                                      </td>
+                                      <td className="py-1 px-2 text-right font-mono tabular-nums font-extrabold text-slate-950 whitespace-nowrap">
+                                        {formatRupiah(totalNom)}
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            </td>
+
+                            <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap">
+                              <div className="font-bold text-slate-900">
+                                {totalBersih.toLocaleString('id-ID', {
+                                  maximumFractionDigits: 1,
+                                })}{' '}
+                                Kg
+                              </div>
+                              {totalKotor > totalBersih && (
+                                <div className="text-[11px] text-slate-400">
+                                  Kotor {totalKotor.toLocaleString('id-ID')} Kg
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="py-3.5 px-4 text-right font-mono tabular-nums whitespace-nowrap text-slate-400 italic text-xs">
+                              Terlampir
+                            </td>
+
+                            <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
+                              {formatRupiah(totalNom)}
+                            </td>
+
+                            <td className="py-3.5 px-4 hidden md:table-cell whitespace-nowrap text-xs">
+                              <div
+                                className={`font-semibold ${
+                                  first.metodePembayaran === 'TITIP'
+                                    ? 'text-purple-800'
+                                    : first.metodePembayaran === 'TRANSFER'
+                                    ? 'text-sky-800'
+                                    : 'text-emerald-800'
+                                }`}
+                              >
+                                {first.metodePembayaran}
+                              </div>
+                              <div className="font-mono text-[11px] text-slate-500">
+                                {first.rekeningSumber}
+                              </div>
+                            </td>
+
+                            <td className="py-3.5 px-5 text-right whitespace-nowrap">
+                              {combinedImages ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewNotaHb({
+                                      imageUrl: combinedImages,
+                                      driveFileUrl: firstWithImg?.driveFileUrl,
+                                      driveFolderPath: firstWithImg?.driveFolderPath,
+                                      nomorBukti: entry.prefix,
+                                      namaMitra: first.namaMitra,
+                                      tanggal: `${first.tanggal} ${first.jam || ''}`.trim(),
+                                      nominalText: `${totalBersih.toLocaleString('id-ID')} Kg · ${formatRupiah(totalNom)}`,
+                                      keterangan: `${entry.items.length} Komoditas (${entry.items
+                                        .map((i) => i.komoditasNama)
+                                        .join(', ')})`,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-emerald-700 text-slate-800 hover:text-white text-xs font-semibold transition-colors cursor-pointer"
+                                >
+                                  <ImageIcon className="w-3.5 h-3.5" />
+                                  <span>Lihat Nota</span>
+                                </button>
+                              ) : (
+                                <span className="text-xs text-slate-400">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      const tx = entry.tx;
                       const combinedImages =
                         tx.fotoNotaList && tx.fotoNotaList.length > 0
                           ? tx.fotoNotaList.join('|||')
@@ -912,11 +1130,11 @@ export const StokDanPembelianHbBosView: React.FC<StokDanPembelianHbBosViewProps>
                 </table>
               </div>
 
-              {filteredPembelianHb.length > hbLimit && (
+              {groupedPembelianHb.length > hbLimit && (
                 <div className="px-5 py-3.5 bg-slate-50/70 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
                   <span>
                     Menampilkan <strong>{displayedPembelianHb.length}</strong> dari{' '}
-                    <strong>{filteredPembelianHb.length}</strong> nota pembelian hasil bumi
+                    <strong>{groupedPembelianHb.length}</strong> nota pembelian hasil bumi
                   </span>
                   <div className="flex items-center gap-2">
                     <button
@@ -928,7 +1146,7 @@ export const StokDanPembelianHbBosView: React.FC<StokDanPembelianHbBosViewProps>
                     </button>
                     <button
                       type="button"
-                      onClick={() => setHbLimit(filteredPembelianHb.length)}
+                      onClick={() => setHbLimit(groupedPembelianHb.length)}
                       className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold cursor-pointer"
                     >
                       Tampilkan Semua

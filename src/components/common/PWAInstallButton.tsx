@@ -90,11 +90,16 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     return null;
   }
 
-  const resolvedFullUrl =
+  const rawFullUrl =
     fullViewUrl ||
     (typeof window !== 'undefined' && window.location.origin.includes('.run.app')
       ? window.location.origin
       : 'https://ais-pre-ynez6daz23cz4wbfcoqdvf-293331351835.asia-southeast1.run.app');
+
+  const resolvedFullUrl =
+    rawFullUrl.includes('ais-dev-') && !rawFullUrl.endsWith('/app')
+      ? `${rawFullUrl.replace(/\/+$/, '')}/app`
+      : rawFullUrl;
 
   const handleClick = async () => {
     if (isInstallable) {

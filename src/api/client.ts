@@ -57,6 +57,20 @@ import {
   AuditStokOpnameLog,
   RekapCtrContract,
 } from '../server/types.ts';
+import type { BillboardRekapEksekutifData } from '../server/services/billboardRekapService.ts';
+import type {
+  AuditMutasiResponse,
+  AuditMutasiRow,
+  AuditKategoriBreakdown,
+  AuditMutasiTargetType,
+} from '../server/services/mutasiAuditService.ts';
+export type {
+  BillboardRekapEksekutifData,
+  AuditMutasiResponse,
+  AuditMutasiRow,
+  AuditKategoriBreakdown,
+  AuditMutasiTargetType,
+};
 
 export interface KaryawanWithBon extends Karyawan {
   kasbonBarang: number;
@@ -647,6 +661,9 @@ export const api = {
     tanggal?: string;
     metode: 'TUNAI' | 'TRANSFER' | 'KASBON' | 'INTERNAL_PT' | 'SINKRON' | 'PEMAKAIAN_PENGELUARAN';
     rekeningTujuan?: string;
+    dpNominal?: number;
+    dpMetode?: 'TUNAI' | 'TRANSFER';
+    dpRekeningTujuan?: string;
     kategoriPengeluaran?: string;
     idInventaris?: string;
     penerimaPengeluaran?: string;
@@ -737,6 +754,7 @@ export const api = {
     potonganRafaksi: number;
     hargaPerKg: number;
     isBelumPutusHarga?: boolean;
+    isTitipNonFisik?: boolean;
     fotoNota?: string;
     isNotaLalu?: boolean;
     noNotaLalu?: string;
@@ -777,6 +795,7 @@ export const api = {
       potonganRafaksi: number;
       hargaPerKg: number;
       isBelumPutusHarga?: boolean;
+      isTitipNonFisik?: boolean;
       keteranganItem?: string;
     }>;
   }): Promise<{
@@ -961,6 +980,8 @@ export const api = {
     keterangan?: string;
     allowOverStockMuat?: boolean;
     isHabisMuatSusut?: boolean;
+    sisaFisikAktualKg?: number;
+    biarkanStokMinus?: boolean;
   }): Promise<TransaksiPenjualanHasilBumi> => {
     const data = await requestJson('/api/transaksi/penjualan-hasil-bumi', {
       method: 'POST',
@@ -1722,6 +1743,7 @@ export const api = {
       rekeningSumber?: string;
       persentasePotongKasbon?: number;
       nominalPotongKustom?: number;
+      nominalDititipkan?: number;
       metodePembayaran?: 'TUNAI' | 'TRANSFER' | 'SINKRON';
       keterangan?: string;
     }
@@ -1921,6 +1943,21 @@ export const api = {
   getBillboardData: async (): Promise<BillboardData> => {
     const data = await requestJson('/api/billboard');
     if (!data.success) throw new Error(data.message || 'Gagal memuat data billboard command center');
+    return data.data;
+  },
+
+  getBillboardRekapEksekutif: async (params?: {
+    periode?: 'BULAN' | 'SEMUA';
+    bulan?: number;
+    tahun?: number;
+  }): Promise<BillboardRekapEksekutifData> => {
+    const q = new URLSearchParams();
+    if (params?.periode) q.set('periode', params.periode);
+    if (params?.bulan) q.set('bulan', String(params.bulan));
+    if (params?.tahun) q.set('tahun', String(params.tahun));
+    const qs = q.toString();
+    const data = await requestJson(`/api/billboard/rekap-eksekutif${qs ? `?${qs}` : ''}`);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat rekap eksekutif monitor TV');
     return data.data;
   },
 
@@ -2201,6 +2238,7 @@ export const api = {
     hargaPerKg?: number;
     hargaJualPerKg?: number;
     isBelumPutusHarga?: boolean;
+    isTitipNonFisik?: boolean;
     noSuratJalan?: string;
     noNotaLalu?: string;
     noFakturSupplier?: string;
@@ -2533,6 +2571,40 @@ export const api = {
     });
     if (!data.success) throw new Error(data.message || 'Gagal menghapus transaksi');
     return data;
+  },
+
+  // Audit Mutasi Rekening Kas/Bank & Divisi
+  getAuditMutasiRekening: async (kode: string): Promise<AuditMutasiResponse> => {
+    const data = await requestJson(`/api/audit/mutasi-rekening/${encodeURIComponent(kode)}`);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat mutasi rekening');
+    return data.data;
+  },
+
+  getAuditMutasiDivisi: async (namaOrKode: string): Promise<AuditMutasiResponse> => {
+    const data = await requestJson(`/api/audit/mutasi-divisi/${encodeURIComponent(namaOrKode)}`);
+    if (!data.success) throw new Error(data.message || 'Gagal memuat mutasi divisi');
+    return data.data;
+  },
+
+  sinkronSaldoRekeningKeMutasi: async (
+    kode: string
+  ): Promise<{
+    kode: string;
+    nama: string;
+    saldoSebelumnya: number;
+    saldoSesudah: number;
+    selisihDiperbaiki: number;
+    message?: string;
+  }> => {
+    const data = await requestJson(
+      `/api/audit/mutasi-rekening/${encodeURIComponent(kode)}/sinkron-saldo`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+    if (!data.success) throw new Error(data.message || 'Gagal menyinkronkan saldo rekening');
+    return { ...data.data, message: data.message };
   },
 };
 

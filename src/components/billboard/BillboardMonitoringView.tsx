@@ -25,17 +25,20 @@ import {
   AlertCircle,
   Eye,
   Radio,
+  Table2,
 } from 'lucide-react';
 import { api, BillboardData } from '../../api/client.ts';
 import { DEFAULT_PT_LOGO_URL } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { DivisiLogoAvatar } from '../common/DivisiLogoAvatar.tsx';
+import { RekapEksekutifTVView } from './RekapEksekutifTVView.tsx';
 
 interface BillboardMonitoringViewProps {
   onClose?: () => void;
 }
 
 export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = ({ onClose }) => {
+  const [viewMode, setViewMode] = useState<'REKAP_SPREADSHEET' | 'LIVE_MONITOR'>('REKAP_SPREADSHEET');
   const [data, setData] = useState<BillboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [timeStr, setTimeStr] = useState('');
@@ -88,11 +91,13 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
   };
 
   useEffect(() => {
+    if (viewMode !== 'LIVE_MONITOR') return;
     fetchData();
-  }, []);
+  }, [viewMode]);
 
-  // Auto-refresh countdown every 5 seconds
+  // Auto-refresh countdown every 5 seconds (only while Live Monitor is active)
   useEffect(() => {
+    if (viewMode !== 'LIVE_MONITOR') return;
     const timer = setInterval(() => {
       setSecondsUntilRefresh((prev) => {
         if (prev <= 1) {
@@ -104,7 +109,7 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
     }, 1000);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [viewMode]);
 
   // Fullscreen toggle handler
   const toggleFullscreen = () => {
@@ -150,6 +155,24 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
     }
   };
 
+  if (viewMode === 'REKAP_SPREADSHEET') {
+    return (
+      <div
+        ref={containerRef}
+        className={`min-h-full w-full overflow-y-auto ${
+          isFullscreen ? 'fixed inset-0 z-50 bg-[#ECEFF3]' : ''
+        }`}
+      >
+        <RekapEksekutifTVView
+          onClose={onClose}
+          onSwitchToLiveMonitor={() => setViewMode('LIVE_MONITOR')}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullscreen}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}
@@ -191,6 +214,16 @@ export const BillboardMonitoringView: React.FC<BillboardMonitoringViewProps> = (
           </div>
 
           <div className="flex items-center space-x-1.5 bg-slate-900 border border-slate-800 p-1.5 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setViewMode('REKAP_SPREADSHEET')}
+              title="Buka Rekap Eksekutif (Format Spreadsheet)"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors cursor-pointer"
+            >
+              <Table2 className="w-3.5 h-3.5" />
+              <span>Rekap Eksekutif</span>
+            </button>
+
             <button
               onClick={() => {
                 setLoading(true);

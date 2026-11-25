@@ -372,6 +372,7 @@ export async function exportRekeningKoranToImage(
           );
           const rowHeight = Math.max(42, maxLineCount * LINE_H + CELL_PAD_Y * 2);
 
+          const isBelumPutus = Boolean(row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA');
           return {
             noText: String(idx + 1),
             tanggal: row.tanggal || '-',
@@ -381,7 +382,7 @@ export async function exportRekeningKoranToImage(
             hargaLines,
             piutangText: piutangVal > 0 ? formatRupiah(piutangVal) : '-',
             piutangSubText,
-            titipText: titipVal > 0 ? formatRupiah(titipVal) : '-',
+            titipText: titipVal > 0 ? formatRupiah(titipVal) : isBelumPutus ? 'Belum Putus' : '-',
             titipSubText,
             ketLines,
             rowHeight,

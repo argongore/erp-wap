@@ -33,6 +33,7 @@ import {
   UserCog,
   FileDown,
   Pencil,
+  Printer,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
@@ -42,6 +43,7 @@ import {
   ItemBonBarangKaryawan,
   ItemBonUangKaryawan,
   NamaDivisi,
+  ProfilPerusahaan,
   RekapPayrollBulananSummary,
   Rekening,
 } from '../../server/types.ts';
@@ -55,6 +57,8 @@ import {
 import { CetakRekapGajiModal } from './CetakRekapGajiModal.tsx';
 import { DownloadHistoryGajiButton } from './DownloadHistoryGajiButton.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { buildThermalReceiptDraftPencairan } from '../../utils/thermalPayrollReceipt.ts';
 
 interface RekapitulasiPayrollBulananTableProps {
   rekeningList: Rekening[];
@@ -138,6 +142,8 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
   const [settleModePotongBon, setSettleModePotongBon] = useState<'TIDAK_POTONG' | 'SEBAGIAN_PERSEN' | 'SEBAGIAN_NOMINAL' | 'LUNASI_PENUH'>('SEBAGIAN_PERSEN');
   const [settlePersenBon, setSettlePersenBon] = useState<number>(50);
   const [settleNominalKustom, setSettleNominalKustom] = useState<number>(0);
+  const [settleModeTitip, setSettleModeTitip] = useState<'AMBIL_SEMUA' | 'SEBAGIAN_TITIP' | 'TITIP_SEMUA'>('AMBIL_SEMUA');
+  const [settleNominalAmbilSebagian, setSettleNominalAmbilSebagian] = useState<number>(0);
   const [settleSubmitting, setSettleSubmitting] = useState<boolean>(false);
   const [settleError, setSettleError] = useState<string>('');
 
@@ -152,6 +158,61 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
     fotoUrl: string;
   } | null>(null);
   const [editUpahId, setEditUpahId] = useState<string | null>(null);
+  const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
+
+  useEffect(() => {
+    api
+      .getProfilPerusahaan()
+      .then((p) => {
+        if (p) setProfilPerusahaan(p);
+      })
+      .catch(() => null);
+  }, []);
+
+  const handleOpenThermalItem = (item: ItemRekapPayrollBulanan) => {
+    const rincian = item.rincianHarian || [];
+    const totalUpahMurni =
+      rincian.length > 0
+        ? rincian.reduce((acc, l) => acc + (l.totalUpah ?? l.jumlah ?? 0), 0)
+        : Number(item.totalGajiKotor || 0);
+    const totalPending = Number(item.totalHakUpahPending || 0);
+    const bonUang = Number(item.sisaKasbonUang || 0);
+    const bonBarang = Number(item.sisaKasbonBarang || 0);
+    const totalBon = Number(item.totalSisaBonKaryawan || bonUang + bonBarang);
+    const titipPanen = Number(item.saldoTitipHasilPanenMitra || 0);
+    const estimasiBersih = Math.max(0, totalUpahMurni - totalBon);
+
+    setThermalReceipt(
+      buildThermalReceiptDraftPencairan({
+        namaKaryawan: item.nama,
+        nik: item.nik,
+        jabatan: item.jabatan,
+        divisi: item.divisiAktifSaatIni || item.divisiUtama,
+        periodeLabel:
+          rekapData?.periodeBulan ||
+          `${BULAN_LIST.find((b) => b.value === selectedBulan)?.label || selectedBulan} ${selectedTahun}`,
+        dailyLogs: rincian,
+        includeStatusTag: true,
+        title: 'RINCIAN PENGGAJIAN PER HARI',
+        totalGajiKotor: totalUpahMurni,
+        kasbonUang: bonUang,
+        kasbonBarang: bonBarang,
+        totalKasbonAwal: totalBon,
+        potonganKasbon: Number(item.totalPotonganBon || 0),
+        saldoTitipPanen: titipPanen,
+        gajiBersihDiterima: estimasiBersih,
+        totalLabel: totalBon > 0 ? 'ESTIMASI SETELAH BON' : 'TOTAL HAK UPAH',
+        statusLabel:
+          totalPending > 0
+            ? `BELUM CAIR: ${formatRupiah(totalPending)}`
+            : rincian.length > 0
+            ? 'SUDAH CAIR / LUNAS'
+            : 'BELUM ADA INPUT HARIAN',
+        catatan: `Rekap harian periode ${rekapData?.periodeBulan || '-'} (${item.totalHariKerja} hari masuk).`,
+      })
+    );
+  };
 
   const handleOpenProfilItem = (item: ItemRekapPayrollBulanan) => {
     if (onOpenProfilKaryawan) {
@@ -233,6 +294,29 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
       const formattedTanggalBayar =
         sy && sm && sd ? `${sd}/${sm}/${sy}` : settleTanggalBayar;
 
+      let estimasiPotong = 0;
+      if (settleModePotongBon === 'LUNASI_PENUH') {
+        estimasiPotong = Math.min(settleKaryawan.totalHakUpahPending, settleKaryawan.totalSisaBonKaryawan);
+      } else if (settleModePotongBon === 'SEBAGIAN_PERSEN') {
+        estimasiPotong = Math.min(
+          settleKaryawan.totalHakUpahPending,
+          Math.round((settleKaryawan.totalSisaBonKaryawan * settlePersenBon) / 100)
+        );
+      } else if (settleModePotongBon === 'SEBAGIAN_NOMINAL') {
+        estimasiPotong = Math.min(
+          settleKaryawan.totalHakUpahPending,
+          settleKaryawan.totalSisaBonKaryawan,
+          Math.max(0, Number(settleNominalKustom) || 0)
+        );
+      }
+      const hakSetelahBon = Math.max(0, settleKaryawan.totalHakUpahPending - estimasiPotong);
+      const finalDititipkan =
+        settleModeTitip === 'TITIP_SEMUA'
+          ? hakSetelahBon
+          : settleModeTitip === 'SEBAGIAN_TITIP'
+          ? Math.max(0, hakSetelahBon - Math.min(Math.max(0, Math.round(settleNominalAmbilSebagian || 0)), hakSetelahBon))
+          : 0;
+
       await api.settleHakUpahKaryawan(settleKaryawan.idKaryawan, {
         divisi: settleKaryawan.divisiUtama,
         tanggalBayar: formattedTanggalBayar,
@@ -247,8 +331,11 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
             : 'TRANSFER',
         persentasePotongKasbon: finalPersen,
         nominalPotongKustom: finalNominal,
+        nominalDititipkan: finalDititipkan,
       });
       setSettleKaryawan(null);
+      setSettleModeTitip('AMBIL_SEMUA');
+      setSettleNominalAmbilSebagian(0);
       await loadRekap();
       onRefreshAll?.();
     } catch (err: any) {
@@ -782,6 +869,15 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
 
                             <button
                               type="button"
+                              onClick={() => handleOpenThermalItem(item)}
+                              className="p-1.5 bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 border border-amber-600/70 rounded transition-colors cursor-pointer"
+                              title={`Cetak Thermal (80mm/58mm) Rincian Gaji Per Hari ${item.nama}`}
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => handleOpenProfilItem(item)}
                               className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-sky-300 border border-zinc-700 rounded transition-colors cursor-pointer"
                               title="Update Profil, Foto & Upgrade Divisi Karyawan"
@@ -977,6 +1073,16 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                                       }}
                                       onError={(msg) => setDownloadNotice(`Gagal: ${msg}`)}
                                     />
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenThermalItem(item)}
+                                      className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-zinc-950 text-xs font-extrabold rounded-lg flex items-center space-x-1.5 shadow-2xs transition-colors cursor-pointer shrink-0"
+                                      title="Cetak struk thermal 80mm / 58mm berisi rincian gaji per hari kerja untuk pencairan gaji"
+                                    >
+                                      <Printer className="w-3.5 h-3.5" />
+                                      <span>Cetak Thermal (80mm/58mm)</span>
+                                    </button>
 
                                     <button
                                       onClick={() => onOpenInputPayrollHarian(item.idKaryawan, item.divisiUtama)}
@@ -1699,55 +1805,182 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
                 )}
               </div>
 
-              {/* Real-time calculation preview */}
-              <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800 space-y-2 text-xs">
-                {(() => {
-                  let potongan = 0;
-                  if (settleModePotongBon === 'TIDAK_POTONG') {
-                    potongan = 0;
-                  } else if (settleModePotongBon === 'LUNASI_PENUH') {
-                    potongan = Math.min(settleKaryawan.totalHakUpahPending, settleKaryawan.totalSisaBonKaryawan);
-                  } else if (settleModePotongBon === 'SEBAGIAN_PERSEN') {
-                    potongan = Math.min(
-                      settleKaryawan.totalHakUpahPending,
-                      Math.round((settleKaryawan.totalSisaBonKaryawan * settlePersenBon) / 100)
-                    );
-                  } else if (settleModePotongBon === 'SEBAGIAN_NOMINAL') {
-                    potongan = Math.min(
-                      settleKaryawan.totalHakUpahPending,
-                      settleKaryawan.totalSisaBonKaryawan,
-                      Number(settleNominalKustom) || 0
-                    );
-                  }
-                  const gajiBersih = Math.max(0, settleKaryawan.totalHakUpahPending - potongan);
-                  const sisaBonSetelahnya = Math.max(0, settleKaryawan.totalSisaBonKaryawan - potongan);
+              {/* Opsi Pengambilan & Titipan Sisa Gaji + Real-time calculation preview */}
+              {(() => {
+                let potongan = 0;
+                if (settleModePotongBon === 'TIDAK_POTONG') {
+                  potongan = 0;
+                } else if (settleModePotongBon === 'LUNASI_PENUH') {
+                  potongan = Math.min(settleKaryawan.totalHakUpahPending, settleKaryawan.totalSisaBonKaryawan);
+                } else if (settleModePotongBon === 'SEBAGIAN_PERSEN') {
+                  potongan = Math.min(
+                    settleKaryawan.totalHakUpahPending,
+                    Math.round((settleKaryawan.totalSisaBonKaryawan * settlePersenBon) / 100)
+                  );
+                } else if (settleModePotongBon === 'SEBAGIAN_NOMINAL') {
+                  potongan = Math.min(
+                    settleKaryawan.totalHakUpahPending,
+                    settleKaryawan.totalSisaBonKaryawan,
+                    Number(settleNominalKustom) || 0
+                  );
+                }
+                const hakGajiBersih = Math.max(0, settleKaryawan.totalHakUpahPending - potongan);
+                const sisaBonSetelahnya = Math.max(0, settleKaryawan.totalSisaBonKaryawan - potongan);
+                const nominalTitip =
+                  settleModeTitip === 'TITIP_SEMUA'
+                    ? hakGajiBersih
+                    : settleModeTitip === 'SEBAGIAN_TITIP'
+                    ? Math.max(
+                        0,
+                        hakGajiBersih -
+                          Math.min(Math.max(0, Math.round(settleNominalAmbilSebagian || 0)), hakGajiBersih)
+                      )
+                    : 0;
+                const gajiAmbilCash = Math.max(0, hakGajiBersih - nominalTitip);
 
-                  return (
-                    <>
+                return (
+                  <>
+                    <div className="p-3 bg-zinc-950 rounded-xl border border-amber-800/60 space-y-2.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-amber-300">
+                          Opsi Pengambilan &amp; Titipan Sisa Gaji:
+                        </span>
+                        <span className="text-[10px] text-zinc-400 font-mono">
+                          Hak Bersih: {formatRupiah(hakGajiBersih)}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettleModeTitip('AMBIL_SEMUA');
+                            setSettleNominalAmbilSebagian(hakGajiBersih);
+                          }}
+                          className={`py-2 px-2 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer ${
+                            settleModeTitip === 'AMBIL_SEMUA'
+                              ? 'bg-emerald-700 border-emerald-500 text-white'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          Ambil Semua
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettleModeTitip('SEBAGIAN_TITIP');
+                            if (
+                              settleNominalAmbilSebagian <= 0 ||
+                              settleNominalAmbilSebagian >= hakGajiBersih
+                            ) {
+                              setSettleNominalAmbilSebagian(
+                                hakGajiBersih >= 100000 ? 100000 : Math.floor(hakGajiBersih / 2)
+                              );
+                            }
+                          }}
+                          className={`py-2 px-2 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer ${
+                            settleModeTitip === 'SEBAGIAN_TITIP'
+                              ? 'bg-amber-600 border-amber-500 text-zinc-950'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          Ambil + Titip Sisa
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettleModeTitip('TITIP_SEMUA');
+                            setSettleNominalAmbilSebagian(0);
+                          }}
+                          className={`py-2 px-2 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer ${
+                            settleModeTitip === 'TITIP_SEMUA'
+                              ? 'bg-amber-500 border-amber-400 text-zinc-950'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          Titip 100%
+                        </button>
+                      </div>
+
+                      {settleModeTitip === 'SEBAGIAN_TITIP' && hakGajiBersih > 0 && (
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <div>
+                            <label className="block text-[10px] text-zinc-400 mb-1">
+                              Diambil Cash / TF (Rp)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={hakGajiBersih}
+                              step="any"
+                              value={gajiAmbilCash}
+                              onChange={(e) => {
+                                const val = Math.min(
+                                  Math.max(0, Math.round(Number(e.target.value) || 0)),
+                                  hakGajiBersih
+                                );
+                                setSettleNominalAmbilSebagian(val);
+                              }}
+                              className="w-full bg-zinc-800 border border-emerald-700 rounded-lg px-2.5 py-1.5 text-xs text-emerald-300 font-mono font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-zinc-400 mb-1">
+                              Dititipkan ke Saldo Titip (Rp)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={hakGajiBersih}
+                              step="any"
+                              value={nominalTitip}
+                              onChange={(e) => {
+                                const t = Math.min(
+                                  Math.max(0, Math.round(Number(e.target.value) || 0)),
+                                  hakGajiBersih
+                                );
+                                setSettleNominalAmbilSebagian(Math.max(0, hakGajiBersih - t));
+                              }}
+                              className="w-full bg-zinc-800 border border-amber-700 rounded-lg px-2.5 py-1.5 text-xs text-amber-300 font-mono font-bold"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800 space-y-2 text-xs">
                       <div className="flex justify-between">
                         <span className="text-zinc-400">Total Upah Kotor Berjalan:</span>
                         <span className="font-mono text-zinc-200">{formatRupiah(settleKaryawan.totalHakUpahPending)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-zinc-400">Potongan Bon Bulan Ini:</span>
+                        <span className="text-zinc-400">Potongan Piutang / Bon:</span>
                         <span className="font-mono font-bold text-rose-400">
                           {potongan > 0 ? `-${formatRupiah(potongan)}` : 'Rp 0 (Tidak Dipotong)'}
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-zinc-400">Sisa Bon Karyawan Setelahnya:</span>
-                        <span className="font-mono text-amber-300">{formatRupiah(sisaBonSetelahnya)}</span>
+                        <span className="text-zinc-400">Sisa Piutang / Bon Setelahnya:</span>
+                        <span className="font-mono text-zinc-300">{formatRupiah(sisaBonSetelahnya)}</span>
                       </div>
+                      {nominalTitip > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-amber-300 font-semibold">Dititipkan ke Saldo Titipan (TIT01):</span>
+                          <span className="font-mono font-bold text-amber-300">{formatRupiah(nominalTitip)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between items-center pt-2 border-t border-zinc-800">
-                        <span className="text-zinc-200 font-bold">Gaji Bersih Siap Bayar:</span>
+                        <span className="text-zinc-200 font-bold">
+                          {nominalTitip > 0 ? 'Uang Diambil Cash / TF:' : 'Gaji Bersih Siap Bayar:'}
+                        </span>
                         <span className="text-base font-bold font-mono text-emerald-400">
-                          {formatRupiah(gajiBersih)}
+                          {formatRupiah(gajiAmbilCash)}
                         </span>
                       </div>
-                    </>
-                  );
-                })()}
-              </div>
+                    </div>
+                  </>
+                );
+              })()}
 
               <div className="flex items-center justify-end space-x-2 pt-2">
                 <button
@@ -1814,6 +2047,12 @@ export const RekapitulasiPayrollBulananTable: React.FC<RekapitulasiPayrollBulana
           }}
         />
       )}
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={profilPerusahaan}
+      />
     </div>
   );
 };

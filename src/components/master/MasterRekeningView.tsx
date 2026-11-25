@@ -28,6 +28,10 @@ import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
 import { ModalTransaksiRekeningTitip } from '../common/ModalTransaksiRekeningTitip.tsx';
 import { ModalAuditRekeningTitip } from '../common/ModalAuditRekeningTitip.tsx';
+import {
+  ModalAuditMutasiRekening,
+  type AuditMutasiTarget,
+} from '../common/ModalAuditMutasiRekening.tsx';
 import { exportRekeningTitipToPdf } from '../../utils/exportRekeningTitip.ts';
 
 interface Props {
@@ -59,6 +63,7 @@ export const MasterRekeningView: React.FC<Props> = ({
   const [anakPerusahaanModalKode, setAnakPerusahaanModalKode] = useState<string | null>(null);
   const [rekeningTitipModalKode, setRekeningTitipModalKode] = useState<string | null>(null);
   const [auditRekeningTitipKode, setAuditRekeningTitipKode] = useState<string | null>(null);
+  const [auditMutasiTarget, setAuditMutasiTarget] = useState<AuditMutasiTarget | null>(null);
   const [downloadingTitipKode, setDownloadingTitipKode] = useState<string | null>(null);
   const [karyawanList, setKaryawanList] = useState<Karyawan[]>([]);
 
@@ -954,9 +959,30 @@ export const MasterRekeningView: React.FC<Props> = ({
                           </>
                         )}
 
-                        {/* Tombol Perbarui Saldo Fleksibel */}
+                        {/* Tombol Audit Mutasi & Perbarui Saldo Fleksibel */}
                         {!isVirtual ? (
                           <>
+                            {!isRekeningTitip && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAuditMutasiTarget({
+                                    type:
+                                      getKategori(rek) === 'OPERASIONAL_DIVISI'
+                                        ? 'DIVISI'
+                                        : 'REKENING_KAS',
+                                    kodeOrNama: rek.kode,
+                                    label: rek.nama,
+                                  })
+                                }
+                                className="flex items-center space-x-1 px-2 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap"
+                                title="Buka Mutasi Rekening & Audit Rekonsiliasi Saldo"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Mutasi &amp; Audit</span>
+                              </button>
+                            )}
+
                             <button
                               type="button"
                               onClick={() => openUpdateSaldoModal(rek)}
@@ -1730,6 +1756,13 @@ export const MasterRekeningView: React.FC<Props> = ({
         onClose={() => setAuditRekeningTitipKode(null)}
         onOpenTransfer={(kode) => setRekeningTitipModalKode(kode)}
         onOpenRekeningKoran={onOpenStatement}
+      />
+
+      {/* Modal 8: Audit Mutasi Rekening Kas/Bank & Divisi dengan Rekonsiliasi Saldo */}
+      <ModalAuditMutasiRekening
+        target={auditMutasiTarget}
+        onClose={() => setAuditMutasiTarget(null)}
+        onSaldoSynced={onRefresh}
       />
     </div>
   );

@@ -152,6 +152,8 @@ export interface AuditMutasiRekeningTitipItem {
   nominalKeluar: number;  // Uang dibelanjakan / dikembalikan ke Rekening PT
   saldoSetelah: number;
   detailItems?: RekeningKoranItemDetail[];
+  mergedIds?: string[];
+  mergedCount?: number;
   createdAt?: string;
 }
 
@@ -682,6 +684,11 @@ export interface TransaksiPenjualan {
   totalLabaKotor?: number; // totalNominal - totalModalHpp
   statusPembayaran: 'LUNAS' | 'BELUM_BAYAR';
   sisaPiutang: number;   // outstanding balance for KASBON
+  // DP / Uang Muka opsional saat penjualan KASBON (sebagian dibayar Tunai/Transfer, sisanya masuk Kasbon)
+  dpNominal?: number;
+  dpMetode?: 'TUNAI' | 'TRANSFER';
+  dpRekeningTujuan?: string; // KAS01 atau kode rekening bank/titip penerima DP
+  idBayarBonDp?: string;     // ID transaksi BayarBon otomatis untuk DP ini
   isNotaNgunci?: boolean;
   tanggalNgunci?: string;
   catatanNgunci?: string;
@@ -859,6 +866,7 @@ export interface TransaksiPembelianHasilBumi {
   rekeningSumber: string; // KAS01 for TUNAI, bank for TRANSFER, TIT01 for TITIP, SINKRON for non-cash sync
   status: 'LUNAS' | 'BELUM_DIAMBIL' | 'TITIP' | 'BELUM_PUTUS_HARGA';
   isBelumPutusHarga?: boolean;
+  isTitipNonFisik?: boolean; // True jika kopi titip lama yang barang fisiknya sudah tidak ada di gudang (tidak menambah stok fisik gudang)
   statusHarga?: 'HARGA_PUTUS' | 'BELUM_PUTUS_HARGA';
   tanggalPutusHarga?: string;
   fotoNota?: string;     // Base64 data URL / image link of weighing receipt or physical slip
@@ -938,7 +946,10 @@ export interface TransaksiPenjualanHasilBumi {
   isBelumPutusHargaJual?: boolean;
   selisihTimbangMuatKg?: number; // Jika berat muat melebihi stok buku gudang (contoh: Stok 3.064,1 Kg -> Muat 3.094,0 Kg -> Selisih 29,9 Kg)
   isHabisMuatSusut?: boolean;    // true jika gudang dikuras habis saat muat & sisa selisih masuk ke SUSUT
-  beratSusutKg?: number;         // Tonase susut saat kloter muat ditutup habis
+  beratSusutKg?: number;         // Tonase susut (kurang muat) saat kloter muat ditutup habis / sisa fisik < buku
+  sisaFisikAktualKg?: number;    // Opsional: sisa fisik riil yang masih ada di gudang tepat setelah muat (contoh: 750 Kg saat buku minus/lebih muat)
+  biarkanStokMinus?: boolean;    // true jika stok buku dibiarkan minus (tidak dipaksa jadi 0 Kg)
+  selisihLebihMuatKg?: number;   // Selisih lebih muat / surplus fisik (+Kg) vs stok buku (indikasi barang masuk dari grade/komoditas lain)
   nominalUangMasukTerkumpul?: number; // Akumulasi uang hasil penjualan yang sudah masuk lewat menu Uang Masuk
   statusUangMasuk?: 'BELUM_MASUK' | 'SEBAGIAN' | 'LUNAS';
   idUangMasukList?: string[];
@@ -1087,6 +1098,8 @@ export interface TransaksiBayarBon {
   isKompensasiTitipan?: boolean;
   isPotongGaji?: boolean;
   isSuratJalanPotongBon?: boolean;
+  isDpPenjualan?: boolean;
+  noPenjualanTerkait?: string;
   alokasi: AlokasiPembayaranBon[];
   keterangan: string;
   fotoBukti?: string;
@@ -1281,7 +1294,10 @@ export interface TransaksiPenggajian {
   persentasePotongKasbon: number; // e.g. 100, 50, 25, 0 atau persentase kustom
   potonganKasbon: number;
   sisaKasbonAkhir: number;
-  gajiBersihDibayar: number; // totalGajiKotor - potonganKasbon
+  hakGajiSetelahPotongBon?: number; // totalGajiKotor - potonganKasbon
+  nominalDititipkan?: number;       // Nominal sisa gaji yang dititipkan ke Saldo Titipan karyawan/mitra
+  idTitipanGajiTerkait?: string;    // ID record pembelianHasilBumi (TTG...) untuk saldo titipan sisa gaji
+  gajiBersihDibayar: number; // Uang riil yang diambil cash/transfer (hakGajiSetelahPotongBon - nominalDititipkan)
   metodePembayaran: 'TUNAI' | 'TRANSFER' | 'SPLIT' | 'SINKRON';
   rekeningSumber: string;  // Rekening kas/bank utama pembayaran (KAS01, REK-GWA, etc.)
   // Split payment fields (jika sebagian cash dan sebagian transfer)
@@ -1408,6 +1424,9 @@ export interface RekeningKoranItemDetail {
   satuan: string;
   harga: number;
   subtotal: number;
+  idTransaksiItem?: string;
+  isBelumPutusHarga?: boolean;
+  isTitipNonFisik?: boolean;
 }
 
 export interface RekeningKoranHistoryItem {
@@ -1446,6 +1465,10 @@ export interface RekeningKoranHistoryItem {
   statusTransaksi?: string;       // LUNAS, BELUM_LUNAS, SEBAGIAN, TITIP, CAIR, KLIRING_SILANG, NGUNCI, PENDING
   nominalTransaksi?: number;      // Nilai pokok transaksi (terutama untuk Tunai/Transfer/Sinkron Lunas yang debet=0 & kredit=0)
   rincianNotaLalu?: string;       // Rincian barang/item asli Nota Lalu
+  batchItemIds?: string[];        // Daftar ID anak (misal BHB...-01, -02) saat batch pembelian hasil bumi digabung jadi 1 transaksi
+  isBelumPutusHarga?: boolean;    // True jika titip panen (misal Kopi Titip) masih menunggu penetapan harga putus
+  isTitipNonFisik?: boolean;      // True jika titip panen lama yang barang fisiknya sudah tidak ada di gudang
+  beratTitipBelumPutusKg?: number; // Total tonase (Kg) titip panen belum putus harga pada baris ini
 }
 
 export interface RekeningKoranMitraSummary {
@@ -1495,6 +1518,8 @@ export interface RekeningKoranMitraSummary {
   totalBayarBonSiklusBerjalan?: number; // Total pembayaran bon pada siklus piutang aktif yang masih berjalan
   totalPiutangBerjalanTampil?: number;  // Total kolom PIUTANG pada Rekening Koran Saldo Berjalan (sebelum dikurangi Bayar Bon siklus aktif)
   totalTitipBerjalanTampil?: number;    // Total kolom TITIP pada Rekening Koran Saldo Berjalan (Titip + Bayar Bon siklus aktif)
+  totalTitipBelumPutusKg?: number;      // Total tonase (Kg) hasil bumi titip panen mitra yang masih Belum Putus Harga
+  jumlahNotaBelumPutusHarga?: number;   // Jumlah nota/transaksi titip panen mitra yang masih Belum Putus Harga
   isNotaNgunci?: boolean;
   catatanNgunci?: string;
   nominalNotaNgunci?: number;
@@ -1819,6 +1844,15 @@ export interface TransaksiUangMasuk {
 // ==========================================
 export type ArusUangType = 'MASUK' | 'KELUAR' | 'MUTASI' | 'NON_TUNAI';
 
+export interface UnifiedTransactionItemDetail {
+  nama: string;
+  qty: number;
+  satuan: string;
+  harga: number;
+  subtotal: number;
+  idTransaksiItem?: string;
+}
+
 export interface UnifiedTransactionItem {
   id: string;
   tanggal: string;
@@ -1862,6 +1896,8 @@ export interface UnifiedTransactionItem {
   fotoNota?: string;
   attachment_url?: string;
   divisi?: string;
+  itemsDetail?: UnifiedTransactionItemDetail[];
+  batchItemIds?: string[];
 }
 
 export interface RekapSemuaTransaksiResponse {

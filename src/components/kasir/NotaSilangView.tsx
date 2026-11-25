@@ -20,6 +20,7 @@ import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { SearchableMitraSelect } from '../common/SearchableMitraSelect.tsx';
 
 interface Props {
   mitraList: Mitra[];
@@ -75,8 +76,6 @@ export const NotaSilangView: React.FC<Props> = ({
   const [idMitraPengambil, setIdMitraPengambil] = useState<string>(
     mitraPengambilBaseOptions[0]?.id || ''
   );
-  const [searchMitra, setSearchMitra] = useState<string>('');
-  const [searchMitraPenyedia, setSearchMitraPenyedia] = useState<string>('');
   const [idMitraAnakPerusahaan, setIdMitraAnakPerusahaan] = useState<string>(defaultAnakId);
   const [tanggalInput, setTanggalInput] = useState<string>(getWIBTodayString());
   const [noNotaToko, setNoNotaToko] = useState<string>('');
@@ -149,38 +148,22 @@ export const NotaSilangView: React.FC<Props> = ({
     loadHistory();
   }, []);
 
-  const filteredMitraPengambil = useMemo(() => {
-    const q = searchMitra.trim().toLowerCase();
-    const base = activeMitras.filter((m) => m.id !== idMitraAnakPerusahaan);
-    if (!q) return base;
-    return base.filter(
-      (m) =>
-        m.nama.toLowerCase().includes(q) ||
-        m.kode.toLowerCase().includes(q) ||
-        (m.alamat || '').toLowerCase().includes(q)
-    );
-  }, [activeMitras, idMitraAnakPerusahaan, searchMitra]);
+  const filteredMitraPengambil = useMemo(
+    () => activeMitras.filter((m) => m.id !== idMitraAnakPerusahaan),
+    [activeMitras, idMitraAnakPerusahaan]
+  );
 
   const filteredSesamaMitraOptions = useMemo(() => {
-    const q = searchMitraPenyedia.trim().toLowerCase();
     const nonSubPeers = activeMitras.filter(
       (m) =>
         m.id !== idMitraPengambil &&
         !m.isAnakPerusahaan &&
         m.id !== 'MTR-DPPARABOT'
     );
-    const base =
-      nonSubPeers.length > 0
-        ? nonSubPeers
-        : activeMitras.filter((m) => m.id !== idMitraPengambil);
-    if (!q) return base;
-    return base.filter(
-      (m) =>
-        m.nama.toLowerCase().includes(q) ||
-        m.kode.toLowerCase().includes(q) ||
-        (m.alamat || '').toLowerCase().includes(q)
-    );
-  }, [activeMitras, idMitraPengambil, searchMitraPenyedia]);
+    return nonSubPeers.length > 0
+      ? nonSubPeers
+      : activeMitras.filter((m) => m.id !== idMitraPengambil);
+  }, [activeMitras, idMitraPengambil]);
 
   const selectedMitraObj = useMemo(
     () => activeMitras.find((m) => m.id === idMitraPengambil),
@@ -569,71 +552,56 @@ export const NotaSilangView: React.FC<Props> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2 border-t border-zinc-100">
               {/* Mitra Pengambil */}
               <div className="space-y-1.5">
-                <label className="block font-bold text-zinc-700">
-                  Mitra Pengambil Barang (+Bon ke PT) <span className="text-rose-500">*</span>
+                <label className="block font-bold text-zinc-700 flex items-center justify-between">
+                  <span>
+                    Mitra Pengambil Barang (+Bon ke PT) <span className="text-rose-500">*</span>
+                  </span>
+                  <span className="text-[10px] font-semibold text-indigo-700">Cari Nama / Kode</span>
                 </label>
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
-                  <input
-                    type="text"
-                    value={searchMitra}
-                    onChange={(e) => setSearchMitra(e.target.value)}
-                    placeholder="Cari mitra pengambil (cth: SAMLAWI)..."
-                    className="w-full pl-8 pr-3 py-1.5 border border-zinc-300 rounded-lg text-xs mb-1.5"
-                  />
-                </div>
-                <select
+                <SearchableMitraSelect
+                  mitras={filteredMitraPengambil}
                   value={idMitraPengambil}
-                  onChange={(e) => setIdMitraPengambil(e.target.value)}
-                  className="w-full px-3 py-2 border border-indigo-300 bg-indigo-50/40 rounded-lg font-bold text-zinc-900"
-                >
-                  {filteredMitraPengambil.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.nama} ({m.kode})
-                    </option>
-                  ))}
-                </select>
+                  onChange={(id) => setIdMitraPengambil(id)}
+                  placeholder="Cari & pilih mitra pengambil..."
+                  searchPlaceholder="Ketik nama mitra pengambil (cth: SAMLAWI)..."
+                  accent="indigo"
+                />
               </div>
 
               {/* Pihak Kedua: Anak Perusahaan (Fokus Utama) ATAU Mitra Penyedia (Sesama Mitra) */}
               <div className="space-y-1.5">
-                <label className="block font-bold text-zinc-700">
-                  {isModeSesamaMitra
-                    ? 'Mitra Penyedia Barang (+JML UANG di Buku Mitra)'
-                    : 'Toko Anak Perusahaan Penyedia (Fokus Utama)'}{' '}
-                  <span className="text-rose-500">*</span>
+                <label className="block font-bold text-zinc-700 flex items-center justify-between">
+                  <span>
+                    {isModeSesamaMitra
+                      ? 'Mitra Penyedia Barang (+JML UANG di Buku Mitra)'
+                      : 'Toko Anak Perusahaan Penyedia (Fokus Utama)'}{' '}
+                    <span className="text-rose-500">*</span>
+                  </span>
+                  <span
+                    className={`text-[10px] font-semibold ${
+                      isModeSesamaMitra ? 'text-teal-700' : 'text-amber-700'
+                    }`}
+                  >
+                    Cari Nama / Kode
+                  </span>
                 </label>
 
-                {isModeSesamaMitra && (
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-2.5" />
-                    <input
-                      type="text"
-                      value={searchMitraPenyedia}
-                      onChange={(e) => setSearchMitraPenyedia(e.target.value)}
-                      placeholder="Cari mitra penyedia barang..."
-                      className="w-full pl-8 pr-3 py-1.5 border border-zinc-300 rounded-lg text-xs mb-1.5"
-                    />
-                  </div>
-                )}
-
-                <select
+                <SearchableMitraSelect
+                  mitras={isModeSesamaMitra ? filteredSesamaMitraOptions : anakPerusahaanOptions}
                   value={idMitraAnakPerusahaan}
-                  onChange={(e) => setIdMitraAnakPerusahaan(e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-lg font-bold ${
+                  onChange={(id) => setIdMitraAnakPerusahaan(id)}
+                  placeholder={
                     isModeSesamaMitra
-                      ? 'border-teal-300 bg-teal-50/50 text-teal-950'
-                      : 'border-amber-300 bg-amber-50/50 text-amber-950'
-                  }`}
-                >
-                  {(isModeSesamaMitra ? filteredSesamaMitraOptions : anakPerusahaanOptions).map(
-                    (m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.nama} ({m.kode})
-                      </option>
-                    )
-                  )}
-                </select>
+                      ? 'Cari & pilih mitra penyedia barang...'
+                      : 'Cari & pilih toko anak perusahaan...'
+                  }
+                  searchPlaceholder={
+                    isModeSesamaMitra
+                      ? 'Ketik nama mitra penyedia, kode, atau HP...'
+                      : 'Ketik nama toko anak perusahaan atau kode...'
+                  }
+                  accent={isModeSesamaMitra ? 'teal' : 'amber'}
+                />
 
                 <p className="text-[10px] text-zinc-500 leading-snug">
                   Otomatis tercatat di buku{' '}

@@ -17,6 +17,7 @@ import { Mitra, Rekening } from '../../server/types.ts';
 import { formatRupiah, dmyToIsoInput, normalizeDateToDmy } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
 import { ImageUploadZone } from './ImageUploadZone.tsx';
+import { SearchableMitraSelect } from './SearchableMitraSelect.tsx';
 
 interface ModalPinjamUangMitraProps {
   isOpen: boolean;
@@ -196,23 +197,20 @@ export const ModalPinjamUangMitra: React.FC<ModalPinjamUangMitraProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Pilihan Mitra */}
+            {/* Pilihan Mitra (Bisa Search Nama/Kode/HP) */}
             <div>
               <label className="block text-xs font-bold text-zinc-700 mb-1.5 flex items-center justify-between">
                 <span>Mitra Pemberi Pinjaman:</span>
-                <span className="text-[10px] font-normal text-zinc-500">Pihak Mitra</span>
+                <span className="text-[10px] font-normal text-emerald-700 font-semibold">Cari Nama / Kode</span>
               </label>
-              <select
+              <SearchableMitraSelect
+                mitras={activeMitras}
                 value={selectedMitraId}
-                onChange={(e) => setSelectedMitraId(e.target.value)}
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-zinc-900 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-              >
-                {activeMitras.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.kode} - {m.nama} ({m.role})
-                  </option>
-                ))}
-              </select>
+                onChange={(id) => setSelectedMitraId(id)}
+                placeholder="Cari & pilih mitra pemberi pinjaman..."
+                searchPlaceholder="Ketik nama mitra, kode, atau no HP..."
+                accent="emerald"
+              />
               {selectedMitra && (
                 <div className="mt-1 text-[11px] text-zinc-500 flex items-center justify-between bg-zinc-100/70 px-2.5 py-1 rounded-lg border border-zinc-200">
                   <span>No HP: {selectedMitra.telepon || '-'}</span>

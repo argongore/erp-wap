@@ -380,31 +380,77 @@ export const ModalAuditRekeningTitip: React.FC<Props> = ({
                               <div className="text-[10px] font-mono text-zinc-400">{m.jam}</div>
                             </td>
                             <td className="py-2.5 px-3 whitespace-nowrap">
-                              <span
-                                className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  m.arah === 'MASUK'
-                                    ? 'bg-emerald-100 text-emerald-900'
-                                    : m.arah === 'KEMBALI'
-                                    ? 'bg-zinc-200 text-zinc-800'
-                                    : 'bg-amber-100 text-amber-900'
-                                }`}
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span
+                                  className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    m.arah === 'MASUK'
+                                      ? 'bg-emerald-100 text-emerald-900'
+                                      : m.arah === 'KEMBALI'
+                                      ? 'bg-zinc-200 text-zinc-800'
+                                      : 'bg-amber-100 text-amber-900'
+                                  }`}
+                                >
+                                  {m.jenis}
+                                </span>
+                                {m.detailItems && m.detailItems.length > 1 && (
+                                  <span className="inline-block px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-sky-100 text-sky-900 border border-sky-200">
+                                    {m.detailItems.length} Rincian
+                                  </span>
+                                )}
+                              </div>
+                              <div
+                                className="text-[10px] font-mono text-zinc-400 mt-0.5"
+                                title={
+                                  m.mergedIds && m.mergedIds.length > 1
+                                    ? `Gabungan Nota: ${m.mergedIds.join(', ')}`
+                                    : m.id
+                                }
                               >
-                                {m.jenis}
-                              </span>
-                              <div className="text-[10px] font-mono text-zinc-400 mt-0.5">{m.id}</div>
+                                {m.id}
+                                {m.mergedIds && m.mergedIds.length > 1 && (
+                                  <span className="text-sky-600 ml-1">
+                                    (+{m.mergedIds.length - 1} nota)
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-2.5 px-3 max-w-md">
                               <div className="font-semibold text-zinc-900">{m.pihakAtauRekeningLawan}</div>
                               <div className="text-[11px] text-zinc-600 mt-0.5">{m.uraian}</div>
-                              {m.detailItems && m.detailItems.length > 0 && (
-                                <div className="mt-1 space-y-0.5 pl-2 border-l-2 border-sky-200">
+                              {m.detailItems && m.detailItems.length > 1 ? (
+                                <div className="mt-1.5 rounded-lg border border-amber-200/90 bg-amber-50/40 overflow-hidden divide-y divide-amber-100/90">
                                   {m.detailItems.map((it, idx) => (
-                                    <div key={idx} className="text-[10px] text-zinc-500">
-                                      • {it.nama} ({it.qty.toLocaleString('id-ID')} {it.satuan} ×{' '}
-                                      {formatRupiah(it.harga)}) = <strong>{formatRupiah(it.subtotal)}</strong>
+                                    <div
+                                      key={idx}
+                                      className="px-2.5 py-1.5 flex items-start justify-between gap-3 text-[10.5px]"
+                                    >
+                                      <div className="min-w-0">
+                                        <span className="font-semibold text-zinc-800">
+                                          {idx + 1}. {it.nama}
+                                        </span>
+                                        <span className="text-zinc-500 ml-1.5 font-mono text-[10px]">
+                                          ({it.qty.toLocaleString('id-ID')} {it.satuan} ×{' '}
+                                          {formatRupiah(it.harga)})
+                                        </span>
+                                      </div>
+                                      <span className="font-mono font-bold text-amber-900 whitespace-nowrap tabular-nums">
+                                        {formatRupiah(it.subtotal)}
+                                      </span>
                                     </div>
                                   ))}
                                 </div>
+                              ) : (
+                                m.detailItems &&
+                                m.detailItems.length === 1 && (
+                                  <div className="mt-1 space-y-0.5 pl-2 border-l-2 border-sky-200">
+                                    {m.detailItems.map((it, idx) => (
+                                      <div key={idx} className="text-[10px] text-zinc-500">
+                                        • {it.nama} ({it.qty.toLocaleString('id-ID')} {it.satuan} ×{' '}
+                                        {formatRupiah(it.harga)}) = <strong>{formatRupiah(it.subtotal)}</strong>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )
                               )}
                               {m.catatan && m.catatan !== m.uraian && (
                                 <div className="text-[10px] text-zinc-400 italic mt-0.5">

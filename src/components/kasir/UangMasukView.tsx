@@ -179,17 +179,26 @@ export const UangMasukView: React.FC<Props> = ({
     }
   }, [initialNoPenjualanHb, penjualanHasilBumiList, pendingHbSales, onClearInitialNoPenjualanHb]);
 
-  // Default select first pending HB sale when switching to PENJUALAN_HASIL_BUMI
+  // Pastikan noPenjualanHb selalu sinkron dengan daftar opsi yang sedang tampil di dropdown
   useEffect(() => {
-    if (jenisSumber === 'PENJUALAN_HASIL_BUMI' && !noPenjualanHb && selectableHbList.length > 0) {
+    if (initialNoPenjualanHb) return;
+    if (jenisSumber !== 'PENJUALAN_HASIL_BUMI') return;
+    if (selectableHbList.length === 0) {
+      if (noPenjualanHb) setNoPenjualanHb('');
+      return;
+    }
+    const stillInList = selectableHbList.some((j) => j.noPenjualan === noPenjualanHb);
+    if (!noPenjualanHb || !stillInList) {
       setNoPenjualanHb(selectableHbList[0].noPenjualan);
     }
-  }, [jenisSumber, noPenjualanHb, selectableHbList]);
+  }, [initialNoPenjualanHb, jenisSumber, noPenjualanHb, selectableHbList]);
 
-  const selectedHb = useMemo(
-    () => penjualanHasilBumiList.find((j) => j.noPenjualan === noPenjualanHb),
-    [penjualanHasilBumiList, noPenjualanHb]
-  );
+  const selectedHb = useMemo(() => {
+    if (selectableHbList.length === 0) return null;
+    return (
+      selectableHbList.find((j) => j.noPenjualan === noPenjualanHb) || selectableHbList[0] || null
+    );
+  }, [selectableHbList, noPenjualanHb]);
 
   // Sync pengirim, divisi & tonase akhir when selectedHb changes
   useEffect(() => {
@@ -584,7 +593,7 @@ export const UangMasukView: React.FC<Props> = ({
         idMitra: modePengirim === 'MITRA' ? idMitra : undefined,
         namaPengirimManual: pengirimFinalLabel,
         noPenjualanHasilBumi:
-          jenisSumber === 'PENJUALAN_HASIL_BUMI' ? noPenjualanHb : undefined,
+          jenisSumber === 'PENJUALAN_HASIL_BUMI' ? selectedHb?.noPenjualan : undefined,
         tonaseAkhirKg:
           jenisSumber === 'PENJUALAN_HASIL_BUMI' && tonaseAkhirKg > 0 ? tonaseAkhirKg : undefined,
         hargaPerKg:
@@ -859,7 +868,7 @@ export const UangMasukView: React.FC<Props> = ({
             ) : (
               <>
                 <select
-                  value={noPenjualanHb}
+                  value={selectedHb?.noPenjualan || ''}
                   onChange={(e) => {
                     setNoPenjualanHb(e.target.value);
                     setStepVerifikasi(false);
@@ -888,7 +897,7 @@ export const UangMasukView: React.FC<Props> = ({
                         <tbody>
                           <tr className="bg-[#92D050] border-b border-zinc-700/30 font-semibold">
                             <td className="py-1.5 px-3 font-sans font-bold border-r border-zinc-700/30">
-                              STOK (SAAT MUAT)
+                              STOK {selectedHb.komoditasNama.toUpperCase()} (SAAT MUAT)
                             </td>
                             <td className="py-1.5 px-3 text-right border-r border-zinc-700/30">
                               {formatKgSpreadsheet(hbCalc.stokAwalSaatMuat)}

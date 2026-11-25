@@ -31,6 +31,7 @@ import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
 import { FotoNotaPreviewModal } from '../common/FotoNotaPreviewModal.tsx';
 import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { SearchableMitraSelect } from '../common/SearchableMitraSelect.tsx';
 
 interface Props {
   mitraList: Mitra[];
@@ -490,23 +491,19 @@ export const KasbonUangView: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <select
+                <SearchableMitraSelect
+                  mitras={activeMitras.filter((m) => {
+                    if (mitraCategoryFilter === 'MITRA') return m.role !== 'KARYAWAN';
+                    if (mitraCategoryFilter === 'KARYAWAN') return m.role === 'KARYAWAN';
+                    return true;
+                  })}
                   value={selectedMitraId}
-                  onChange={(e) => setSelectedMitraId(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-medium focus:ring-1 focus:ring-rose-600 bg-white"
-                >
-                  {activeMitras
-                    .filter((m) => {
-                      if (mitraCategoryFilter === 'MITRA') return m.role !== 'KARYAWAN';
-                      if (mitraCategoryFilter === 'KARYAWAN') return m.role === 'KARYAWAN';
-                      return true;
-                    })
-                    .map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.role === 'KARYAWAN' ? `[KARYAWAN] ${m.nama}` : m.nama} ({m.kode}) - {m.role} - Telp: {m.telepon || '-'}
-                      </option>
-                    ))}
-                </select>
+                  onChange={(id) => setSelectedMitraId(id)}
+                  placeholder="Cari & pilih mitra / karyawan..."
+                  searchPlaceholder="Ketik nama mitra, karyawan, kode, atau no HP..."
+                  accent="rose"
+                  showRolePrefix={true}
+                />
               </div>
 
               {/* Nominal & Tanggal Kasbon */}
@@ -736,17 +733,15 @@ export const KasbonUangView: React.FC<Props> = ({
                 <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
                   Mitra / Customer / Pasukan / Anak Buah <span className="text-rose-500">*</span>
                 </label>
-                <select
+                <SearchableMitraSelect
+                  mitras={activeMitras}
                   value={selectedMitraId}
-                  onChange={(e) => setSelectedMitraId(e.target.value)}
-                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-amber-600 bg-white"
-                >
-                  {activeMitras.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.nama} ({m.kode}) - {m.role} - Telp: {m.telepon || '-'}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(id) => setSelectedMitraId(id)}
+                  placeholder="Cari & pilih mitra..."
+                  searchPlaceholder="Ketik nama mitra, kode, atau no HP..."
+                  accent="amber"
+                  showRolePrefix={true}
+                />
               </div>
 
               {/* Nominal, Tanggal, No Nota */}

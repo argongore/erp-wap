@@ -93,6 +93,8 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
 
   // Belum Putus Harga state (Auto-active for HB-08 KOPI TITIP)
   const [isBelumPutusHarga, setIsBelumPutusHarga] = useState<boolean>(false);
+  // Pembeda status fisik kopi titip: false = fisik barang ada di gudang, true = titip lama (fisik sudah tidak di gudang)
+  const [isTitipNonFisik, setIsTitipNonFisik] = useState<boolean>(false);
 
   const [metode, setMetode] = useState<'TUNAI' | 'TRANSFER' | 'TITIP' | 'SINKRON'>('TUNAI');
   const [rekeningSumber, setRekeningSumber] = useState<string>(availableBanks[0]?.kode || 'BNI01');
@@ -116,6 +118,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       hargaPerKg: number;
       subtotal: number;
       isBelumPutusHarga: boolean;
+      isTitipNonFisik?: boolean;
       keteranganItem?: string;
     }>
   >([]);
@@ -164,7 +167,9 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
   const [showTambahBarangModal, setShowTambahBarangModal] = useState<boolean>(false);
   const [localAddedKomoditas, setLocalAddedKomoditas] = useState<StokHasilBumi[]>([]);
   const [editTxId, setEditTxId] = useState<string | null>(null);
-  const [deleteTargetTx, setDeleteTargetTx] = useState<TransaksiPembelianHasilBumi | null>(null);
+  const [deleteTargetTx, setDeleteTargetTx] = useState<
+    (TransaksiPembelianHasilBumi & { batchDeleteIds?: string[]; batchItemCount?: number }) | null
+  >(null);
   const [deletingTx, setDeletingTx] = useState<boolean>(false);
   const [showResetKasirModal, setShowResetKasirModal] = useState<boolean>(false);
   const [resettingKasir, setResettingKasir] = useState<boolean>(false);
@@ -278,6 +283,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       hargaPerKg: isBelumPutusHarga ? 0 : hargaPerKg,
       subtotal: isBelumPutusHarga ? 0 : Math.round(beratBersih * hargaPerKg),
       isBelumPutusHarga,
+      isTitipNonFisik: isBelumPutusHarga ? isTitipNonFisik : false,
       keteranganItem: keterangan.trim() || undefined,
     };
     setCartHb((prev) => [...prev, newItem]);
@@ -299,6 +305,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
     if (kom) {
       const isKopiTitip = kom.kode === 'HB-08' || Boolean(kom.isBelumPutusHarga) || kom.nama.toUpperCase().includes('TITIP');
       setIsBelumPutusHarga(isKopiTitip);
+      setIsTitipNonFisik(false);
       if (isKopiTitip) {
         setMetode('TITIP');
         setHargaPerKgInput(kom.hargaBeliStandar ? kom.hargaBeliStandar.toString() : '0');
@@ -313,9 +320,18 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
     setDeletingTx(true);
     setErrorMsg('');
     try {
-      const res = await api.deletePembelianHasilBumi(deleteTargetTx.noPembelian);
-      setDeleteTargetTx(null);
-      setActionSuccessMsg(res.message || `Transaksi ${deleteTargetTx.noPembelian} berhasil dihapus & stok/saldo dikembalikan.`);
+      if (deleteTargetTx.batchDeleteIds && deleteTargetTx.batchDeleteIds.length > 1) {
+        for (const childNo of deleteTargetTx.batchDeleteIds) {
+          await api.deletePembelianHasilBumi(childNo);
+        }
+        const batchLabel = `${deleteTargetTx.noPembelian} (${deleteTargetTx.batchDeleteIds.length} komoditas)`;
+        setDeleteTargetTx(null);
+        setActionSuccessMsg(`Transaksi batch ${batchLabel} berhasil dihapus & stok/saldo dikembalikan.`);
+      } else {
+        const res = await api.deletePembelianHasilBumi(deleteTargetTx.noPembelian);
+        setDeleteTargetTx(null);
+        setActionSuccessMsg(res.message || `Transaksi ${deleteTargetTx.noPembelian} berhasil dihapus & stok/saldo dikembalikan.`);
+      }
       setTimeout(() => setActionSuccessMsg(''), 6000);
       await loadTransactions(true);
       onRefresh();
@@ -485,6 +501,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
             potonganRafaksi: it.potonganRafaksi,
             hargaPerKg: it.hargaPerKg,
             isBelumPutusHarga: it.isBelumPutusHarga,
+            isTitipNonFisik: it.isBelumPutusHarga ? Boolean(it.isTitipNonFisik) : false,
             keteranganItem: it.keteranganItem,
           })),
         });
@@ -577,6 +594,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         potonganRafaksi: rafaksi,
         hargaPerKg: isBelumPutusHarga ? hargaPerKg : hargaPerKg,
         isBelumPutusHarga,
+        isTitipNonFisik: isBelumPutusHarga ? isTitipNonFisik : false,
         fotoNota: fotoNota || undefined,
         isNotaLalu,
         noNotaLalu: isNotaLalu ? noNotaLalu.trim() || undefined : undefined,
@@ -592,6 +610,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
       setFotoNota('');
       setIsNotaLalu(false);
       setNoNotaLalu('');
+      setIsTitipNonFisik(false);
       if (tipePetani === 'UMUM') {
         setNamaPetaniManual('');
         setTeleponPetaniManual('');
@@ -605,7 +624,7 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
           ? 'SLIP TITIP TIMBANG HASIL BUMI (BELUM PUTUS HARGA)'
           : 'SLIP PEMBELIAN HASIL BUMI',
         subtitle: isBelumPutusHarga
-          ? `STATUS: TITIP TIMBANG | Divisi: ${divisiLabel}`
+          ? `STATUS: ${isTitipNonFisik ? 'TITIP LAMA NON-FISIK' : 'TITIP FISIK GUDANG'} | Divisi: ${divisiLabel}`
           : `Metode: ${result?.metodePembayaran || metode} | Divisi: ${divisiLabel}`,
         nomorTransaksi: result?.noPembelian || `PHB-${Date.now().toString().slice(-4)}`,
         tanggal: result?.tanggal || getWIBTodayString(),
@@ -617,6 +636,16 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
         detailRows: [
           { label: 'Divisi Terkait', value: divisiLabel },
           { label: 'Komoditas', value: result?.komoditasNama || selectedKomoditas?.nama || 'Hasil Bumi' },
+          ...(isBelumPutusHarga
+            ? [
+                {
+                  label: 'Status Fisik Barang',
+                  value: isTitipNonFisik
+                    ? 'Titip Lama (Fisik Tidak di Gudang)'
+                    : 'Fisik Ada di Gudang',
+                },
+              ]
+            : []),
           { label: 'Berat Timbangan Kotor', value: `${(result?.beratKotor ?? beratKotor ?? 0).toLocaleString('id-ID')} Kg` },
           { label: 'Potongan Rafaksi / Kadar Air', value: `${result?.potonganRafaksi ?? rafaksi ?? 0}%` },
           { label: 'Berat Bersih Diterima', value: `${(result?.beratBersih ?? 0).toLocaleString('id-ID')} Kg`, highlight: true },
@@ -1073,17 +1102,69 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
               </button>
             </div>
 
-            {/* Banner Khusus Kopi Titip / Belum Putus Harga */}
+            {/* Banner & Pemilih Status Fisik Khusus Kopi Titip / Belum Putus Harga */}
             {isBelumPutusHarga && (
-              <div className="p-3 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-xl text-xs text-amber-950 space-y-1">
-                <div className="font-bold flex items-center space-x-1.5 text-amber-900">
-                  <Coffee className="w-4 h-4 text-amber-700" />
-                  <span>☕ KOPI TITIP — BELUM PUTUS HARGA (TITIP PANEN PETANI)</span>
+              <div className="p-3 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-xl text-xs text-amber-950 space-y-2.5">
+                <div className="space-y-1">
+                  <div className="font-bold flex items-center space-x-1.5 text-amber-900">
+                    <Coffee className="w-4 h-4 text-amber-700" />
+                    <span>KOPI TITIP — BELUM PUTUS HARGA (TITIP PANEN PETANI)</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Harga per Kg mengambang / menunggu putus harga dengan petani dan otomatis tercatat di{' '}
+                    <strong>Rekening Koran Mitra</strong>. Pilih status fisik barang di bawah agar stok fisik gudang tidak tercampur:
+                  </p>
                 </div>
-                <p className="text-[11px] text-amber-800 leading-relaxed">
-                  Barang hasil panen kopi masuk gudang &amp; ditimbang akurat. Harga per Kg mengambang / menunggu putus harga dengan petani.
-                  Tidak memotong kas hari ini. Nanti jika harga sepakat, dapat diproses lewat tombol <strong>Putus Harga</strong>.
-                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsTitipNonFisik(false)}
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      !isTitipNonFisik
+                        ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/30 text-emerald-950'
+                        : 'bg-white/80 border-zinc-200 hover:border-emerald-300 text-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-[11px]">Fisik Ada di Gudang</span>
+                      <span
+                        className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                          !isTitipNonFisik ? 'border-emerald-600 bg-emerald-600' : 'border-zinc-300'
+                        }`}
+                      >
+                        {!isTitipNonFisik && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-zinc-600 mt-1 leading-snug">
+                      Barang fisik kopi ada di gudang kita. Menambah tonase <strong>Fisik di Gudang</strong>.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsTitipNonFisik(true)}
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      isTitipNonFisik
+                        ? 'bg-amber-100/90 border-amber-600 ring-2 ring-amber-500/30 text-amber-950'
+                        : 'bg-white/80 border-zinc-200 hover:border-amber-400 text-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-[11px]">Titip Lama (Fisik Tidak di Gudang)</span>
+                      <span
+                        className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                          isTitipNonFisik ? 'border-amber-700 bg-amber-700' : 'border-zinc-300'
+                        }`}
+                      >
+                        {isTitipNonFisik && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-zinc-600 mt-1 leading-snug">
+                      Titipan lama yang fisiknya sudah tidak ada di gudang. Masuk kolom <strong>Titip Non-Fisik</strong> (tidak menambah stok fisik gudang).
+                    </p>
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1098,6 +1179,8 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                     setIsBelumPutusHarga(checked);
                     if (checked) {
                       setMetode('TITIP');
+                    } else {
+                      setIsTitipNonFisik(false);
                     }
                   }}
                   className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
@@ -1237,8 +1320,19 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                 cartHb.map((it, idx) => (
                   <div key={it.id} className="pt-2 first:pt-0 flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="font-bold text-zinc-900">
-                        {idx + 1}. {it.komoditasNama}
+                      <div className="font-bold text-zinc-900 flex items-center gap-1.5 flex-wrap">
+                        <span>{idx + 1}. {it.komoditasNama}</span>
+                        {it.isBelumPutusHarga && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                              it.isTitipNonFisik
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                : 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                            }`}
+                          >
+                            {it.isTitipNonFisik ? 'Titip Non-Fisik' : 'Fisik Gudang'}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] font-mono text-zinc-600">
                         Netto <strong>{it.beratBersih.toLocaleString('id-ID')} Kg</strong> (Bruto {it.beratKotor} Kg · Raf {it.potonganRafaksi}%) ×{' '}
@@ -1584,9 +1678,20 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                       {tx.beratBersih.toLocaleString('id-ID')} Kg
                     </td>
                     <td className="py-2.5 px-3">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                        BELUM PUTUS HARGA
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          BELUM PUTUS HARGA
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            tx.isTitipNonFisik
+                              ? 'bg-orange-100 text-orange-800 border-orange-300'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}
+                        >
+                          {tx.isTitipNonFisik ? 'Titip Lama · Non-Fisik' : 'Fisik Gudang'}
+                        </span>
+                      </div>
                     </td>
                     <td className="py-2.5 px-3 text-center">
                       <div className="inline-flex items-center justify-center gap-1.5">
@@ -1687,59 +1792,241 @@ export const PembelianHasilBumiView: React.FC<Props> = ({
                   </td>
                 </tr>
               ) : (
-                allTransactions.slice(0, 30).map((tx) => (
-                  <tr key={tx.noPembelian} className="hover:bg-zinc-50/80">
-                    <td className="py-2.5 px-3 font-mono font-bold text-amber-900">{tx.noPembelian}</td>
-                    <td className="py-2.5 px-3 text-zinc-600 font-mono whitespace-nowrap">
-                      {tx.tanggal} <span className="text-[10px] text-zinc-400">{tx.jam}</span>
-                    </td>
-                    <td className="py-2.5 px-3 font-semibold text-zinc-900">{tx.namaMitra}</td>
-                    <td className="py-2.5 px-3 font-medium text-zinc-800">{tx.komoditasNama}</td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-600">
-                      {tx.beratKotor > 0
-                        ? `${tx.beratKotor.toLocaleString('id-ID')} Kg (${tx.potonganRafaksi}%)`
-                        : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-zinc-900">
-                      {tx.beratBersih > 0 ? `${tx.beratBersih.toLocaleString('id-ID')} Kg` : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-700">
-                      {tx.hargaPerKg > 0 ? formatRupiah(tx.hargaPerKg) : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-emerald-800">
-                      {formatRupiah(tx.totalNominal)}
-                    </td>
-                    <td className="py-2.5 px-3 text-center text-[11px] font-semibold text-zinc-700">
-                      <div>
-                        {tx.metodePembayaran} ({tx.rekeningSumber})
-                      </div>
-                      {tx.divisi && (
-                        <div className="text-[10px] text-sky-800 font-medium mt-0.5">{tx.divisi}</div>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setEditTxId(tx.noPembelian)}
-                          className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span>Edit</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTargetTx(tx)}
-                          className="inline-flex items-center space-x-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
-                          title="Hapus transaksi pembelian hasil bumi ini & kembalikan stok/saldo"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Hapus</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                (() => {
+                  const getPrefix = (t: TransaksiPembelianHasilBumi): string | null => {
+                    if (t.isNotaSilang || t.komoditasKode === 'NOTA_SILANG' || t.komoditasKode === 'PINJAMAN_DANA') return null;
+                    if (t.batchId && t.batchId.trim()) return t.batchId.trim();
+                    const m = String(t.noPembelian || '').match(/^(BHB[A-Z0-9]+)-\d+$/i);
+                    return m ? m[1] : null;
+                  };
+                  const batchMap = new Map<string, TransaksiPembelianHasilBumi[]>();
+                  for (const t of allTransactions) {
+                    const p = getPrefix(t);
+                    if (p) {
+                      const gk = `${p}|${t.idMitra || t.namaMitra}|${t.metodePembayaran}|${t.tanggal}`;
+                      const arr = batchMap.get(gk) || [];
+                      arr.push(t);
+                      batchMap.set(gk, arr);
+                    }
+                  }
+                  const seen = new Set<string>();
+                  const groupedRows: Array<
+                    | { kind: 'SINGLE'; tx: TransaksiPembelianHasilBumi }
+                    | { kind: 'BATCH'; prefix: string; items: TransaksiPembelianHasilBumi[] }
+                  > = [];
+                  for (const t of allTransactions) {
+                    const p = getPrefix(t);
+                    if (p) {
+                      const gk = `${p}|${t.idMitra || t.namaMitra}|${t.metodePembayaran}|${t.tanggal}`;
+                      const grp = batchMap.get(gk);
+                      if (grp && grp.length >= 2) {
+                        if (!seen.has(gk)) {
+                          seen.add(gk);
+                          const sorted = [...grp].sort((a, b) =>
+                            String(a.noPembelian || '').localeCompare(String(b.noPembelian || ''), undefined, { numeric: true })
+                          );
+                          groupedRows.push({ kind: 'BATCH', prefix: p, items: sorted });
+                        }
+                        continue;
+                      }
+                    }
+                    groupedRows.push({ kind: 'SINGLE', tx: t });
+                  }
+
+                  return groupedRows.slice(0, 30).map((entry) => {
+                    if (entry.kind === 'BATCH') {
+                      const first = entry.items[0];
+                      const totalKotor = Number(entry.items.reduce((s, i) => s + (Number(i.beratKotor) || 0), 0).toFixed(2));
+                      const totalBersih = Number(entry.items.reduce((s, i) => s + (Number(i.beratBersih) || 0), 0).toFixed(2));
+                      const totalNom = entry.items.reduce((s, i) => s + (Number(i.totalNominal) || 0), 0);
+                      return (
+                        <tr key={entry.prefix} className="hover:bg-zinc-50/80 align-top">
+                          <td className="py-2.5 px-3 font-mono font-bold text-amber-900 whitespace-nowrap">
+                            <div>{entry.prefix}</div>
+                            <div className="font-sans text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 inline-block px-1.5 py-0.2 rounded mt-0.5">
+                              {entry.items.length} Komoditas
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-zinc-600 font-mono whitespace-nowrap">
+                            {first.tanggal} <span className="text-[10px] text-zinc-400">{first.jam}</span>
+                          </td>
+                          <td className="py-2.5 px-3 font-semibold text-zinc-900">{first.namaMitra}</td>
+                          <td className="py-2.5 px-3 min-w-[270px]">
+                            <div className="rounded-lg border border-zinc-200 bg-zinc-50/75 overflow-hidden">
+                              <table className="w-full text-[11px] border-collapse">
+                                <thead>
+                                  <tr className="bg-zinc-100 text-[9.5px] text-zinc-500 uppercase border-b border-zinc-200">
+                                    <th className="py-1 px-2 text-left">Komoditas</th>
+                                    <th className="py-1 px-1.5 text-right">Netto</th>
+                                    <th className="py-1 px-1.5 text-right">Harga</th>
+                                    <th className="py-1 px-2 text-right">Subtotal</th>
+                                    <th className="py-1 px-1 text-center w-11">Item</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-zinc-200/60 bg-white">
+                                  {entry.items.map((sub) => (
+                                    <tr key={sub.noPembelian} className="hover:bg-amber-50/35">
+                                      <td className="py-1 px-2 font-semibold text-zinc-800">{sub.komoditasNama}</td>
+                                      <td className="py-1 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                                        {sub.beratBersih.toLocaleString('id-ID')} Kg
+                                      </td>
+                                      <td className="py-1 px-1.5 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
+                                        {sub.hargaPerKg > 0 ? formatRupiah(sub.hargaPerKg) : '-'}
+                                      </td>
+                                      <td className="py-1 px-2 text-right font-mono tabular-nums font-bold text-zinc-900 whitespace-nowrap">
+                                        {formatRupiah(sub.totalNominal)}
+                                      </td>
+                                      <td className="py-1 px-1 text-center whitespace-nowrap">
+                                        <div className="inline-flex items-center gap-0.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditTxId(sub.noPembelian)}
+                                            className="p-0.5 rounded text-zinc-500 hover:text-zinc-900 hover:bg-zinc-200 cursor-pointer"
+                                            title={`Edit ${sub.komoditasNama} (${sub.noPembelian})`}
+                                          >
+                                            <Pencil className="w-3 h-3" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setDeleteTargetTx(sub)}
+                                            className="p-0.5 rounded text-rose-500 hover:text-rose-700 hover:bg-rose-100 cursor-pointer"
+                                            title={`Hapus item ${sub.komoditasNama} (${sub.noPembelian})`}
+                                          >
+                                            <Trash2 className="w-3 h-3" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="bg-zinc-100 border-t border-zinc-200 font-bold text-[10.5px] text-zinc-900">
+                                    <td className="py-1 px-2">Total ({entry.items.length} Komoditas)</td>
+                                    <td className="py-1 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                                      {totalBersih.toLocaleString('id-ID')} Kg
+                                    </td>
+                                    <td className="py-1 px-1.5 text-right text-[9.5px] text-zinc-500 uppercase">Akhir</td>
+                                    <td className="py-1 px-2 text-right font-mono tabular-nums font-extrabold text-emerald-800 whitespace-nowrap">
+                                      {formatRupiah(totalNom)}
+                                    </td>
+                                    <td />
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
+                            {totalKotor > 0 ? `${totalKotor.toLocaleString('id-ID')} Kg` : '-'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-zinc-900 whitespace-nowrap">
+                            {totalBersih > 0 ? `${totalBersih.toLocaleString('id-ID')} Kg` : '-'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-500 italic whitespace-nowrap">
+                            Terlampir
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums font-extrabold text-emerald-800 whitespace-nowrap">
+                            {formatRupiah(totalNom)}
+                          </td>
+                          <td className="py-2.5 px-3 text-center text-[11px] font-semibold text-zinc-700">
+                            <div>
+                              {first.metodePembayaran} ({first.rekeningSumber})
+                            </div>
+                            {first.divisi && (
+                              <div className="text-[10px] text-sky-800 font-medium mt-0.5">{first.divisi}</div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setEditTxId(first.noPembelian)}
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                                title="Edit item pertama batch (atau klik ikon pensil di tiap baris komoditas)"
+                              >
+                                <Pencil className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteTargetTx({
+                                    ...first,
+                                    noPembelian: entry.prefix,
+                                    komoditasNama: `${entry.items.length} Komoditas (${entry.items.map((i) => i.komoditasNama).join(', ')})`,
+                                    beratBersih: totalBersih,
+                                    totalNominal: totalNom,
+                                    batchDeleteIds: entry.items.map((i) => i.noPembelian),
+                                    batchItemCount: entry.items.length,
+                                  })
+                                }
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                                title={`Hapus seluruh ${entry.items.length} komoditas dalam batch ini`}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Hapus</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    const tx = entry.tx;
+                    return (
+                      <tr key={tx.noPembelian} className="hover:bg-zinc-50/80">
+                        <td className="py-2.5 px-3 font-mono font-bold text-amber-900">{tx.noPembelian}</td>
+                        <td className="py-2.5 px-3 text-zinc-600 font-mono whitespace-nowrap">
+                          {tx.tanggal} <span className="text-[10px] text-zinc-400">{tx.jam}</span>
+                        </td>
+                        <td className="py-2.5 px-3 font-semibold text-zinc-900">{tx.namaMitra}</td>
+                        <td className="py-2.5 px-3 font-medium text-zinc-800">{tx.komoditasNama}</td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-600">
+                          {tx.beratKotor > 0
+                            ? `${tx.beratKotor.toLocaleString('id-ID')} Kg (${tx.potonganRafaksi}%)`
+                            : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-zinc-900">
+                          {tx.beratBersih > 0 ? `${tx.beratBersih.toLocaleString('id-ID')} Kg` : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-700">
+                          {tx.hargaPerKg > 0 ? formatRupiah(tx.hargaPerKg) : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-emerald-800">
+                          {formatRupiah(tx.totalNominal)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center text-[11px] font-semibold text-zinc-700">
+                          <div>
+                            {tx.metodePembayaran} ({tx.rekeningSumber})
+                          </div>
+                          {tx.divisi && (
+                            <div className="text-[10px] text-sky-800 font-medium mt-0.5">{tx.divisi}</div>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditTxId(tx.noPembelian)}
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTargetTx(tx)}
+                              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 rounded-md text-[11px] font-semibold transition-colors cursor-pointer"
+                              title="Hapus transaksi pembelian hasil bumi ini & kembalikan stok/saldo"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Hapus</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()
               )}
             </tbody>
           </table>

@@ -227,31 +227,61 @@ async function startServer() {
   });
 
   if (!isProduction) {
+    // Auto-heal any browser that previously installed VitePWA dev-sw.js or sw.js on this dev host
+    const selfDestructSwScript = `
+self.addEventListener('install', () => {
+  self.skipWaiting();
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      } catch {}
+      try {
+        await self.registration.unregister();
+      } catch {}
+      try {
+        const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (const client of clients) {
+          client.navigate(client.url);
+        }
+      } catch {}
+    })()
+  );
+});
+`.trim();
+
+    app.get(['/dev-sw.js', '/sw.js'], (_req, res) => {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Service-Worker-Allowed', '/');
+      res.send(selfDestructSwScript);
+    });
+
+    const disableHmr = process.env.DISABLE_HMR === 'true';
+
     // Development mode: attach Vite middleware lazily so port 3000 listens immediately
     let viteMiddleware: any = null;
     const viteInitPromise = import('vite')
       .then(({ createServer }) =>
         createServer({
           server: {
-            middlewareMode: {
-              server: httpServer,
-            },
-            ws: {
-              server: httpServer,
-            },
-            hmr:
-              process.env.DISABLE_HMR === 'true'
-                ? false
-                : {
-                    server: httpServer,
-                    overlay: false,
-                  },
-            watch:
-              process.env.DISABLE_HMR === 'true'
-                ? null
-                : {
-                    ignored: ['**/data/**', '**/dist/**'],
-                  },
+            allowedHosts: true,
+            middlewareMode: disableHmr ? true : { server: httpServer },
+            ws: disableHmr ? false : { server: httpServer },
+            hmr: disableHmr
+              ? false
+              : {
+                  server: httpServer,
+                  overlay: false,
+                },
+            watch: disableHmr
+              ? null
+              : {
+                  ignored: ['**/data/**', '**/dist/**'],
+                },
           },
           appType: 'spa',
         })
@@ -272,8 +302,17 @@ async function startServer() {
     });
   } else {
     // Production mode: serve prebuilt static files from dist/
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          }
+        },
+      })
+    );
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.sendFile(distIndexPath);
     });
   }

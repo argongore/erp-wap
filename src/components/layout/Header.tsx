@@ -31,7 +31,7 @@ export const ERP_FULL_VIEW_SHARED_URL = isAiStudioOrLocal
   ? 'https://ais-pre-ynez6daz23cz4wbfcoqdvf-293331351835.asia-southeast1.run.app'
   : window.location.origin;
 export const ERP_FULL_VIEW_DEV_URL = isAiStudioOrLocal
-  ? 'https://ais-dev-ynez6daz23cz4wbfcoqdvf-293331351835.asia-southeast1.run.app'
+  ? 'https://ais-dev-ynez6daz23cz4wbfcoqdvf-293331351835.asia-southeast1.run.app/app'
   : window.location.origin;
 
 interface HeaderProps {
@@ -110,10 +110,12 @@ export const Header: React.FC<HeaderProps> = ({
     )
     .reduce((sum, r) => sum + (Number(r?.saldoSaatIni) || 0), 0);
 
-  // Pick current host if already on run.app, otherwise default to shared preview URL
+  // Pick current host if already on run.app (use /app on ais-dev to bypass any stale dev-sw cache on /), otherwise default to shared preview URL
   const directFullScreenHref =
     typeof window !== 'undefined' && window.location.origin.includes('.run.app')
-      ? window.location.origin
+      ? window.location.hostname.startsWith('ais-dev-')
+        ? `${window.location.origin}/app`
+        : window.location.origin
       : ERP_FULL_VIEW_SHARED_URL;
 
   const handleQuickCopyLink = () => {

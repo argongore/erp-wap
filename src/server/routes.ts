@@ -3,6 +3,12 @@ import path from 'path';
 import { Router } from 'express';
 import { dbManager, getWIBDateTime } from './db.ts';
 import { TransactionService } from './services/transactionService.ts';
+import { getBillboardRekapEksekutif } from './services/billboardRekapService.ts';
+import {
+  getMutasiRekeningKas,
+  getMutasiDivisi,
+  sinkronkanSaldoRekeningKeMutasi,
+} from './services/mutasiAuditService.ts';
 import {
   DAFTAR_DIVISI,
   KATEGORI_ALAT_DEFAULT_DESC,
@@ -677,7 +683,10 @@ apiRouter.post('/mitra', async (req, res) => {
       if (db.mitra.some((m) => m.kode === cleanKode)) {
         throw new Error(`Mitra dengan kode ${cleanKode} sudah ada`);
       }
-      const mitraId = `MTR-${Date.now().toString().slice(-4)}`;
+      let mitraId = `MTR-${Date.now().toString().slice(-6)}`;
+      while (db.mitra.some((m) => m.id === mitraId)) {
+        mitraId = `MTR-${Math.floor(100000 + Math.random() * 900000)}`;
+      }
       const newMitra: any = {
         id: mitraId,
         kode: cleanKode,
@@ -707,7 +716,10 @@ apiRouter.post('/mitra', async (req, res) => {
           newMitra.idKaryawanTerkait = existingKry.id;
           if (fotoUrl) existingKry.fotoUrl = String(fotoUrl);
         } else {
-          const kryId = `KRY-${Date.now().toString().slice(-4)}`;
+          let kryId = `KRY-${Date.now().toString().slice(-6)}`;
+          while ((db.karyawan || []).some((k) => k.id === kryId)) {
+            kryId = `KRY-${Math.floor(100000 + Math.random() * 900000)}`;
+          }
           const now = getWIBDateTime();
           newMitra.idKaryawanTerkait = kryId;
           db.karyawan.push({
@@ -852,7 +864,10 @@ apiRouter.put('/mitra/:id', async (req, res) => {
           mitra.idKaryawanTerkait = kry.id;
           mitra.isKaryawan = true;
         } else {
-          const kryId = `KRY-${Date.now().toString().slice(-4)}`;
+          let kryId = `KRY-${Date.now().toString().slice(-6)}`;
+          while ((db.karyawan || []).some((k) => k.id === kryId)) {
+            kryId = `KRY-${Math.floor(100000 + Math.random() * 900000)}`;
+          }
           const now = getWIBDateTime();
           mitra.idKaryawanTerkait = kryId;
           mitra.isKaryawan = true;
@@ -3060,7 +3075,10 @@ apiRouter.post('/karyawan', async (req, res) => {
         throw new Error(`Karyawan dengan NIK ${cleanNik} sudah terdaftar`);
       }
 
-      const id = `KRY-${Date.now().toString().slice(-4)}`;
+      let id = `KRY-${Date.now().toString().slice(-6)}`;
+      while ((db.karyawan || []).some((k) => k.id === id) || (db.mitra || []).some((m) => m.id === `MTR-${id}`)) {
+        id = `KRY-${Math.floor(100000 + Math.random() * 900000)}`;
+      }
       const idMitra = `MTR-${id}`;
       const rawDiv = String(divisi || departemen || 'Gudang Wijaya Agro').trim();
       const selectedDivisi = isExcludedFromDivisi(rawDiv) ? 'PT Wijaya Agro Perkasa' : rawDiv;
@@ -3702,6 +3720,67 @@ apiRouter.get('/database/backup-full-bundle', (_req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Rekap Eksekutif Spreadsheet TV Monitor (100% Live Integrated ERP Data — Sinkron Per Bulan)
+apiRouter.get('/billboard/rekap-eksekutif', (req, res) => {
+  try {
+    const bulan = req.query.bulan ? Number(req.query.bulan) : undefined;
+    const tahun = req.query.tahun ? Number(req.query.tahun) : undefined;
+    const data = getBillboardRekapEksekutif({ periode: 'BULAN', bulan, tahun });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Audit Mutasi Rekening Kas & Bank Fisik (dengan Rekonsiliasi Saldo Awal + Masuk - Keluar)
+apiRouter.get('/audit/mutasi-rekening/:kode', (req, res) => {
+  try {
+    const kode = decodeURIComponent(String(req.params.kode || '')).trim();
+    if (!kode) {
+      return res.status(400).json({ success: false, message: 'Kode rekening wajib diisi' });
+    }
+    const data = getMutasiRekeningKas(kode);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message || 'Gagal memuat mutasi rekening' });
+  }
+});
+
+// Audit Mutasi Keuangan Per Divisi (Laba/Rugi + Dropping + Saldo Berjalan)
+apiRouter.get('/audit/mutasi-divisi/:namaOrKode', (req, res) => {
+  try {
+    const namaOrKode = decodeURIComponent(String(req.params.namaOrKode || '')).trim();
+    if (!namaOrKode) {
+      return res.status(400).json({ success: false, message: 'Nama atau kode divisi wajib diisi' });
+    }
+    const data = getMutasiDivisi(namaOrKode);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message || 'Gagal memuat mutasi divisi' });
+  }
+});
+
+// Rekonsiliasi 1-Klik: Sinkronkan Saldo Sistem Rekening Kas/Bank ke Hasil Mutasi Riil
+apiRouter.post('/audit/mutasi-rekening/:kode/sinkron-saldo', async (req, res) => {
+  try {
+    const kode = decodeURIComponent(String(req.params.kode || '')).trim();
+    if (!kode) {
+      return res.status(400).json({ success: false, message: 'Kode rekening wajib diisi' });
+    }
+    const data = await sinkronkanSaldoRekeningKeMutasi(kode);
+    res.json({
+      success: true,
+      data,
+      message: `Saldo ${data.nama} (${data.kode}) berhasil disinkronkan ke hasil mutasi riil Rp ${data.saldoSesudah.toLocaleString('id-ID')}.`,
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, message: err.message || 'Gagal menyinkronkan saldo rekening' });
   }
 });
 

@@ -50,27 +50,31 @@ export function formatItemTextForPdf(row: RekeningKoranHistoryItem): {
   const items = row.itemsDetail || [];
   const isMulti = items.length > 1;
   const single = items.length === 1 ? items[0] : null;
-  const ketText = (row.catatanTransaksi || row.catatanNgunci || '').trim() || '-';
+  const isBelumPutus = Boolean(row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA');
+  const ketText =
+    (row.catatanTransaksi || row.catatanNgunci || '').trim() ||
+    (isBelumPutus ? 'Titip panen belum putus harga' : '-');
 
   if (isMulti) {
     const headerLabel = row.jenis.replace(/_/g, ' ');
-    const itemLines = items.map(
-      (it, idx) =>
-        `${idx + 1}. ${it.nama} (${it.qty} ${it.satuan} x ${formatRupiah(it.harga)} = ${formatRupiah(it.subtotal)})`
+    const itemLines = items.map((it, idx) =>
+      it.isBelumPutusHarga
+        ? `${idx + 1}. ${it.nama} (${it.qty} ${it.satuan} · Belum Putus Harga)`
+        : `${idx + 1}. ${it.nama} (${it.qty} ${it.satuan} x ${formatRupiah(it.harga)} = ${formatRupiah(it.subtotal)})`
     );
     return {
       itemText: `${headerLabel}\n${itemLines.join('\n')}`,
-      qtyText: `${items.length} Item`,
-      hargaText: 'Rincian',
+      qtyText: row.qtyDisplay && row.qtyDisplay.includes('Kg') ? row.qtyDisplay : `${items.length} Item`,
+      hargaText: row.hargaSatuanDisplay === 'Belum Putus' ? 'Belum Putus' : 'Rincian',
       ketText,
     };
   }
 
   if (single) {
     return {
-      itemText: single.nama,
+      itemText: isBelumPutus ? `${single.nama} [Belum Putus Harga]` : single.nama,
       qtyText: `${single.qty} ${single.satuan}`,
-      hargaText: formatRupiah(single.harga),
+      hargaText: isBelumPutus ? 'Belum Putus' : formatRupiah(single.harga),
       ketText,
     };
   }
@@ -78,7 +82,9 @@ export function formatItemTextForPdf(row: RekeningKoranHistoryItem): {
   return {
     itemText: row.keterangan || row.jenis.replace(/_/g, ' '),
     qtyText: row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1 Trx' : '-'),
-    hargaText: row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-'),
+    hargaText: isBelumPutus
+      ? 'Belum Putus'
+      : row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-'),
     ketText,
   };
 }
@@ -432,6 +438,7 @@ export async function exportRekeningKoranToPdf(
           const formatted = formatItemTextForPdf(row);
           const piutangVal = getRowPiutangVal(row);
           const titipVal = getRowTitipVal(row);
+          const isBelumPutus = Boolean(row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA');
           return [
             String(idx + 1),
             row.tanggal,
@@ -439,7 +446,7 @@ export async function exportRekeningKoranToPdf(
             formatted.qtyText,
             formatted.hargaText,
             piutangVal > 0 ? formatRupiah(piutangVal) : '-',
-            titipVal > 0 ? formatRupiah(titipVal) : '-',
+            titipVal > 0 ? formatRupiah(titipVal) : isBelumPutus ? 'Belum Putus' : '-',
             formatted.ketText,
           ];
         });

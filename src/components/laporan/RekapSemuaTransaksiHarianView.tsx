@@ -135,6 +135,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
     pihakTerkait: string;
     rincian: string;
     nominal: number;
+    batchItemIds?: string[];
   } | null>(null);
   const [deletingTx, setDeletingTx] = useState<boolean>(false);
   const [deleteTxError, setDeleteTxError] = useState<string>('');
@@ -287,7 +288,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
       list = list.filter((tx) => tx.pihakTerkait.toLowerCase().includes(q));
     }
 
-    // Filter Transaksi Search (ID Transaksi, No Faktur, Rekening, Deskripsi)
+    // Filter Transaksi Search (ID Transaksi, No Faktur, Rekening, Deskripsi, Detail Item, Batch IDs)
     if (searchTransaksi.trim()) {
       const q = searchTransaksi.toLowerCase();
       list = list.filter(
@@ -296,7 +297,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
           tx.deskripsi.toLowerCase().includes(q) ||
           tx.rekening.toLowerCase().includes(q) ||
           tx.metode.toLowerCase().includes(q) ||
-          tx.jenisLabel.toLowerCase().includes(q)
+          tx.jenisLabel.toLowerCase().includes(q) ||
+          (tx.batchItemIds || []).some((cid) => cid.toLowerCase().includes(q)) ||
+          (tx.itemsDetail || []).some((it) => it.nama.toLowerCase().includes(q))
       );
     }
 
@@ -1452,15 +1455,41 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                 </tr>
               ) : (
                 displayedTransactions.map((tx, idx) => {
+                  const detailItems = tx.itemsDetail || [];
+                  const isMultiDetail = detailItems.length > 1;
+                  const isHasilBumiLike =
+                    tx.jenis === 'PEMBELIAN_HASIL_BUMI' ||
+                    tx.jenis === 'PENJUALAN_HASIL_BUMI' ||
+                    tx.jenis === 'SURAT_JALAN_BAYAR_MITRA';
+                  const hasPerItemIds = !readOnly && detailItems.some((it) => Boolean(it.idTransaksiItem));
+                  const allSameUnit =
+                    isMultiDetail &&
+                    detailItems.every(
+                      (it) => (it.satuan || '').toLowerCase() === (detailItems[0]?.satuan || '').toLowerCase()
+                    );
+                  const totalDetailQty = isMultiDetail
+                    ? Number(detailItems.reduce((s, it) => s + (Number(it.qty) || 0), 0).toFixed(2))
+                    : 0;
+                  const totalDetailSubtotal = isMultiDetail
+                    ? detailItems.reduce((s, it) => s + (Number(it.subtotal) || 0), 0)
+                    : 0;
+
                   return (
                     <tr
                       key={`${tx.id}-${idx}`}
-                      className="hover:bg-zinc-50/80 transition-colors"
+                      className="hover:bg-zinc-50/80 transition-colors align-top"
                     >
                       {/* No & ID */}
                       <td className="py-3 px-3.5 whitespace-nowrap">
                         <div className="font-mono font-bold text-zinc-900 text-xs">{tx.id}</div>
-                        <div className="text-[10px] text-zinc-400 font-mono">#{idx + 1}</div>
+                        <div className="text-[10px] text-zinc-400 font-mono flex items-center gap-1.5 mt-0.5">
+                          <span>#{idx + 1}</span>
+                          {isMultiDetail && (
+                            <span className="font-sans font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+                              {detailItems.length} {isHasilBumiLike ? 'Komoditas' : 'Item'}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Tanggal & Jam */}
@@ -1513,10 +1542,105 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                         </div>
                       </td>
 
-                      {/* Deskripsi */}
-                      <td className="py-3 px-3.5 text-zinc-700">
-                        <div className="text-xs font-medium leading-relaxed">{tx.deskripsi}</div>
-                        <div className="text-[10px] text-zinc-400 mt-0.5">Metode: {tx.metode}</div>
+                      {/* Deskripsi / Kotak Rincian Multi-Item */}
+                      <td className="py-3 px-3.5 text-zinc-700 min-w-[290px]">
+                        {isMultiDetail ? (
+                          <div className="rounded-lg border border-zinc-200/90 bg-zinc-50/75 overflow-hidden">
+                            <table className="w-full text-[11px] border-collapse">
+                              <thead>
+                                <tr className="bg-zinc-100/90 text-[9.5px] text-zinc-500 uppercase tracking-wider border-b border-zinc-200/80">
+                                  <th className="py-1 px-2 text-left font-bold">
+                                    {isHasilBumiLike ? 'Komoditas' : 'Nama Barang'}
+                                  </th>
+                                  <th className="py-1 px-1.5 text-right font-bold whitespace-nowrap">Qty</th>
+                                  <th className="py-1 px-1.5 text-right font-bold whitespace-nowrap">Harga</th>
+                                  <th className="py-1 px-2 text-right font-bold whitespace-nowrap">Subtotal</th>
+                                  {hasPerItemIds && <th className="py-1 px-1.5 text-center font-bold w-12 no-print">Item</th>}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-zinc-200/60 bg-white/80">
+                                {detailItems.map((it, itemIdx) => (
+                                  <tr key={`${tx.id}-it-${itemIdx}`} className="hover:bg-amber-50/35">
+                                    <td className="py-1 px-2 font-semibold text-zinc-800 leading-snug">
+                                      {it.nama}
+                                    </td>
+                                    <td className="py-1 px-1.5 text-right font-mono tabular-nums text-zinc-700 whitespace-nowrap">
+                                      {Number(it.qty || 0).toLocaleString('id-ID')} {it.satuan}
+                                    </td>
+                                    <td className="py-1 px-1.5 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
+                                      {formatRupiah(it.harga)}
+                                    </td>
+                                    <td className="py-1 px-2 text-right font-mono tabular-nums font-bold text-zinc-900 whitespace-nowrap">
+                                      {formatRupiah(it.subtotal)}
+                                    </td>
+                                    {hasPerItemIds && (
+                                      <td className="py-1 px-1.5 text-center whitespace-nowrap no-print">
+                                        {it.idTransaksiItem ? (
+                                          <div className="inline-flex items-center gap-0.5">
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                setEditModalTarget({ id: it.idTransaksiItem!, jenis: tx.jenis })
+                                              }
+                                              className="p-0.5 rounded text-zinc-500 hover:text-zinc-900 hover:bg-zinc-200/80 transition-colors cursor-pointer"
+                                              title={`Edit ${it.nama} (${it.idTransaksiItem})`}
+                                            >
+                                              <Pencil className="w-3 h-3" />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              disabled={deletingTx}
+                                              onClick={() => {
+                                                setDeleteTxError('');
+                                                setDeleteTxTarget({
+                                                  id: it.idTransaksiItem!,
+                                                  jenis: tx.jenis,
+                                                  tanggal: tx.tanggal,
+                                                  pihakTerkait: tx.pihakTerkait,
+                                                  rincian: `${it.nama} (${it.qty} ${it.satuan})`,
+                                                  nominal: it.subtotal,
+                                                });
+                                              }}
+                                              className="p-0.5 rounded text-rose-500 hover:text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer"
+                                              title={`Hapus item ${it.nama} (${it.idTransaksiItem})`}
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                      </td>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr className="bg-zinc-100/95 border-t border-zinc-200 text-[10.5px] font-bold text-zinc-900">
+                                  <td className="py-1 px-2">
+                                    Total ({detailItems.length} {isHasilBumiLike ? 'Komoditas' : 'Item'})
+                                  </td>
+                                  <td className="py-1 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                                    {allSameUnit
+                                      ? `${totalDetailQty.toLocaleString('id-ID')} ${detailItems[0]?.satuan || ''}`
+                                      : `${detailItems.length} item`}
+                                  </td>
+                                  <td className="py-1 px-1.5 text-right text-[9.5px] uppercase tracking-wider text-zinc-500 font-semibold">
+                                    Akhir
+                                  </td>
+                                  <td className="py-1 px-2 text-right font-mono tabular-nums font-extrabold text-zinc-950 whitespace-nowrap">
+                                    {formatRupiah(totalDetailSubtotal || tx.nominal)}
+                                  </td>
+                                  {hasPerItemIds && <td className="no-print" />}
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="text-xs font-medium leading-relaxed">{tx.deskripsi}</div>
+                        )}
+                        <div className="text-[10px] text-zinc-400 mt-1">
+                          Metode: {tx.metode}
+                          {tx.divisi ? ` · ${tx.divisi}` : ''}
+                        </div>
                       </td>
 
                       {/* Arus Uang */}
@@ -1670,6 +1794,16 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                                     mitra: tx.pihakTerkait,
                                     rekening: tx.rekening,
                                     total: tx.nominal,
+                                    items:
+                                      detailItems.length > 0
+                                        ? detailItems.map((it) => ({
+                                            nama: it.nama,
+                                            qty: Number(it.qty) || 1,
+                                            satuan: it.satuan || 'Pcs',
+                                            harga: Number(it.harga) || 0,
+                                            subtotal: Number(it.subtotal) || 0,
+                                          }))
+                                        : undefined,
                                     detailRows: [
                                       { label: 'Pihak / Mitra', value: tx.pihakTerkait || '-' },
                                       { label: 'Metode / Rekening', value: `${tx.metode || '-'} (${tx.rekening || '-'})` },
@@ -1680,34 +1814,36 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                                     catatan: tx.deskripsi || undefined,
                                     fotoNota: tx.fotoBukti || undefined,
                                   };
-                                  try {
-                                    const detail = await api.getTransactionDetail(tx.id, tx.jenis);
-                                    const rec: any = detail?.record;
-                                    if (rec && Array.isArray(rec.items) && rec.items.length > 0) {
-                                      baseReceipt.items = rec.items.map((it: any) => ({
-                                        nama: it.namaProduk || it.namaBarang || it.nama || '-',
-                                        qty: Number(it.qty) || 1,
-                                        satuan: it.satuan || 'Pcs',
-                                        harga: Number(it.harga) || 0,
-                                        subtotal: Number(it.subtotal) || 0,
-                                      }));
+                                  if (!(tx.batchItemIds && tx.batchItemIds.length > 1)) {
+                                    try {
+                                      const detail = await api.getTransactionDetail(tx.id, tx.jenis);
+                                      const rec: any = detail?.record;
+                                      if (rec && Array.isArray(rec.items) && rec.items.length > 0) {
+                                        baseReceipt.items = rec.items.map((it: any) => ({
+                                          nama: it.namaProduk || it.namaBarang || it.nama || '-',
+                                          qty: Number(it.qty) || 1,
+                                          satuan: it.satuan || 'Pcs',
+                                          harga: Number(it.harga ?? it.hargaBeliSatuan) || 0,
+                                          subtotal: Number(it.subtotal) || 0,
+                                        }));
+                                      }
+                                      if (rec?.komoditasNama && rec?.beratBersih) {
+                                        baseReceipt.items = [
+                                          {
+                                            nama: `${rec.komoditasNama}${rec.jenisTransaksi ? ` (${rec.jenisTransaksi})` : ''}`,
+                                            qty: Number(rec.beratBersih) || 0,
+                                            satuan: 'Kg',
+                                            harga: Number(rec.hargaPerKg) || 0,
+                                            subtotal: Number(rec.totalNominal) || tx.nominal,
+                                          },
+                                        ];
+                                      }
+                                      if (rec?.keterangan) {
+                                        baseReceipt.catatan = rec.keterangan;
+                                      }
+                                    } catch {
+                                      // Fallback cleanly to summary receipt
                                     }
-                                    if (rec?.komoditasNama && rec?.beratBersih) {
-                                      baseReceipt.items = [
-                                        {
-                                          nama: `${rec.komoditasNama}${rec.jenisTransaksi ? ` (${rec.jenisTransaksi})` : ''}`,
-                                          qty: Number(rec.beratBersih) || 0,
-                                          satuan: 'Kg',
-                                          harga: Number(rec.hargaPerKg) || 0,
-                                          subtotal: Number(rec.totalNominal) || tx.nominal,
-                                        },
-                                      ];
-                                    }
-                                    if (rec?.keterangan) {
-                                      baseReceipt.catatan = rec.keterangan;
-                                    }
-                                  } catch {
-                                    // Fallback cleanly to summary receipt
                                   }
                                   onPrintReceipt(baseReceipt);
                                 }}
@@ -1720,9 +1856,21 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                             )}
                             <button
                               type="button"
-                              onClick={() => setEditModalTarget({ id: tx.id, jenis: tx.jenis })}
+                              onClick={() =>
+                                setEditModalTarget({
+                                  id:
+                                    tx.batchItemIds && tx.batchItemIds.length > 0
+                                      ? tx.batchItemIds[0]
+                                      : tx.id,
+                                  jenis: tx.jenis,
+                                })
+                              }
                               className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-100 hover:bg-zinc-900 text-zinc-800 hover:text-white border border-zinc-300 hover:border-zinc-900 rounded-md font-semibold text-[11px] transition-colors cursor-pointer"
-                              title="Edit detail nominal, tonase, qty, harga, rekening, atau tanggal transaksi"
+                              title={
+                                tx.batchItemIds && tx.batchItemIds.length > 1
+                                  ? 'Edit item pertama batch (atau klik ikon pensil di tiap baris komoditas di dalam kotak)'
+                                  : 'Edit detail nominal, tonase, qty, harga, rekening, atau tanggal transaksi'
+                              }
                             >
                               <Pencil className="w-3 h-3" />
                               <span>Edit</span>
@@ -1739,10 +1887,15 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                                   pihakTerkait: tx.pihakTerkait,
                                   rincian: tx.deskripsi || tx.jenisLabel,
                                   nominal: tx.nominal,
+                                  batchItemIds: tx.batchItemIds,
                                 });
                               }}
                               className="inline-flex items-center space-x-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-700 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-700 rounded-md font-semibold text-[11px] transition-colors cursor-pointer"
-                              title="Hapus transaksi ini (otomatis kembalikan mutasi saldo & stok)"
+                              title={
+                                tx.batchItemIds && tx.batchItemIds.length > 1
+                                  ? `Hapus seluruh ${tx.batchItemIds.length} item dalam transaksi batch ini`
+                                  : 'Hapus transaksi ini (otomatis kembalikan mutasi saldo & stok)'
+                              }
                             >
                               <Trash2 className="w-3 h-3" />
                               <span>Hapus</span>
@@ -1957,7 +2110,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
             </div>
             <div className="p-5 space-y-3.5 text-zinc-700">
               <p className="leading-relaxed">
-                Yakin ingin menghapus permanen transaksi berikut?
+                {deleteTxTarget.batchItemIds && deleteTxTarget.batchItemIds.length > 1
+                  ? `Yakin ingin menghapus permanen seluruh ${deleteTxTarget.batchItemIds.length} item komoditas dalam 1 transaksi batch berikut?`
+                  : 'Yakin ingin menghapus permanen transaksi berikut?'}
               </p>
               <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-1.5">
                 <div className="flex items-center justify-between text-[11px] text-zinc-500">
@@ -1965,9 +2120,9 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                   <span className="font-mono tabular-nums">{deleteTxTarget.tanggal}</span>
                 </div>
                 <div className="font-bold text-zinc-900">{deleteTxTarget.pihakTerkait}</div>
-                <div className="text-[11px] text-zinc-600 line-clamp-2">{deleteTxTarget.rincian}</div>
+                <div className="text-[11px] text-zinc-600 line-clamp-3">{deleteTxTarget.rincian}</div>
                 <div className="pt-1.5 border-t border-zinc-200 flex items-center justify-between">
-                  <span className="text-zinc-500">Nominal:</span>
+                  <span className="text-zinc-500">Nominal Total:</span>
                   <span className="font-mono tabular-nums font-extrabold text-rose-800 text-sm">
                     {formatRupiah(deleteTxTarget.nominal)}
                   </span>
@@ -1998,11 +2153,22 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                     setDeletingTx(true);
                     setDeleteTxError('');
                     try {
-                      const res = await api.deleteTransactionUniversal(deleteTxTarget.id, deleteTxTarget.jenis);
-                      setDeleteTxTarget(null);
-                      setKasirSyncBanner(
-                        `Transaksi ${res.idTransaksi} berhasil dihapus & seluruh saldo rekening/stok telah disinkronkan.`
-                      );
+                      if (deleteTxTarget.batchItemIds && deleteTxTarget.batchItemIds.length > 0) {
+                        for (const childId of deleteTxTarget.batchItemIds) {
+                          await api.deleteTransactionUniversal(childId, deleteTxTarget.jenis);
+                        }
+                        const deletedLabel = `${deleteTxTarget.id} (${deleteTxTarget.batchItemIds.length} item)`;
+                        setDeleteTxTarget(null);
+                        setKasirSyncBanner(
+                          `Transaksi batch ${deletedLabel} berhasil dihapus & seluruh saldo rekening/stok telah disinkronkan.`
+                        );
+                      } else {
+                        const res = await api.deleteTransactionUniversal(deleteTxTarget.id, deleteTxTarget.jenis);
+                        setDeleteTxTarget(null);
+                        setKasirSyncBanner(
+                          `Transaksi ${res.idTransaksi} berhasil dihapus & seluruh saldo rekening/stok telah disinkronkan.`
+                        );
+                      }
                       await loadData();
                       window.dispatchEvent(new CustomEvent('erp:data-updated'));
                       onRefreshParent?.();

@@ -10,9 +10,11 @@ import {
   Wheat,
   RefreshCw,
   Lock,
+  Printer,
 } from 'lucide-react';
 import {
   Mitra,
+  ProfilPerusahaan,
   RekapMitraItem,
   Rekening,
   RekeningKoranMitraSummary,
@@ -20,8 +22,9 @@ import {
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat, dmyToIsoInput, normalizeDateToDmy } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
-import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { buildThermalReceiptPiutangHutangMitra } from '../../utils/thermalPiutangHutangReceipt.ts';
 
 interface Props {
   mitraList: Mitra[];
@@ -76,6 +79,15 @@ export const BayarBonView: React.FC<Props> = ({
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [editTxId, setEditTxId] = useState<string | null>(null);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
+  const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
+
+  useEffect(() => {
+    api
+      .getProfilPerusahaan()
+      .then((p) => setProfilPerusahaan(p))
+      .catch(() => {});
+  }, []);
 
   // Sync external navigation target if provided
   useEffect(() => {
@@ -491,9 +503,28 @@ export const BayarBonView: React.FC<Props> = ({
         {/* Left: Input & Summary */}
         <div className="lg:col-span-7 space-y-4">
           <div className="bg-white rounded-xl border border-zinc-200 shadow-2xs p-5 space-y-4">
-            <h2 className="text-xs font-bold text-zinc-900 uppercase tracking-wider">
-              1. Pilih Mitra &amp; Cek Posisi Bon vs Titipan Hasil Bumi
-            </h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-xs font-bold text-zinc-900 uppercase tracking-wider">
+                1. Pilih Mitra &amp; Cek Posisi Bon vs Titipan Hasil Bumi
+              </h2>
+              {statementData && !loadingStatement && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setThermalReceipt(
+                      buildThermalReceiptPiutangHutangMitra(statementData, {
+                        scope: 'SALDO_BERJALAN',
+                      })
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors cursor-pointer"
+                  title="Cetak struk thermal rincian Piutang (Bon) & Hutang (Titip) mitra ini"
+                >
+                  <Printer className="w-3.5 h-3.5 text-amber-800" />
+                  <span>Cetak Thermal Piutang/Hutang</span>
+                </button>
+              )}
+            </div>
 
             {/* Select Mitra */}
             <div>
@@ -1256,6 +1287,12 @@ export const BayarBonView: React.FC<Props> = ({
               .catch(() => {});
           }
         }}
+      />
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={profilPerusahaan}
       />
     </div>
   );

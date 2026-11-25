@@ -53,8 +53,15 @@ function getRowDisplayFields(
     ? `${single.qty} ${single.satuan}`
     : row.qtyDisplay || '-';
 
-  const hargaNumOrText: number | string = isMulti
-    ? 'Rincian'
+  const isBelumPutus = Boolean(
+    row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA'
+  );
+  const hargaNumOrText: number | string = isBelumPutus && !isMulti
+    ? 'Belum Putus'
+    : isMulti
+    ? row.hargaSatuanDisplay === 'Belum Putus'
+      ? 'Belum Putus'
+      : 'Rincian'
     : single
     ? single.harga
     : row.hargaSatuanDisplay || '-';
@@ -84,7 +91,9 @@ function getRowDisplayFields(
       (row.jenis || '').toUpperCase().includes('SINKRON'));
 
   let statusLabel = row.statusTransaksi || '-';
-  if (isKliring) {
+  if (isBelumPutus) {
+    statusLabel = 'BELUM PUTUS HARGA';
+  } else if (isKliring) {
     statusLabel = 'KLIRING SILANG';
   } else if (isSinkron) {
     statusLabel = 'LUNAS SINKRON';
@@ -97,6 +106,10 @@ function getRowDisplayFields(
         : 'LUNAS';
   } else if (row.kategoriMutasiHak === 'TITIP_MASUK') {
     statusLabel = sisaTitip > 0 ? 'TITIP BERJALAN' : 'SUDAH CAIR / KLIRING';
+  } else if (row.kategoriMutasiHak === 'UPAH_TERCATAT') {
+    statusLabel = 'GAJI BELUM CAIR';
+  } else if (row.kategoriMutasiHak === 'UPAH_SUDAH_CAIR') {
+    statusLabel = 'GAJI SUDAH CAIR';
   } else if (!row.isSaldoBerjalan) {
     statusLabel = 'SELESAI / LUNAS';
   }

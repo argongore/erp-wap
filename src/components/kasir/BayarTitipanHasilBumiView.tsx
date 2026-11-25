@@ -16,6 +16,7 @@ import {
 import {
   getRoleMitraLabel,
   Mitra,
+  ProfilPerusahaan,
   Rekening,
   TransaksiKasbonUang,
   TransaksiPembelianBarang,
@@ -26,9 +27,10 @@ import {
 } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat, dmyToIsoInput } from '../../utils/format.ts';
 import { api } from '../../api/client.ts';
-import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalPinjamUangMitra } from '../common/ModalPinjamUangMitra.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { buildThermalReceiptPiutangHutangMitra } from '../../utils/thermalPiutangHutangReceipt.ts';
 
 interface Props {
   mitraList: Mitra[];
@@ -77,6 +79,34 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
   const [pencairanList, setPencairanList] = useState<TransaksiPencairanTitipan[]>([]);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
   const [editTxId, setEditTxId] = useState<string | null>(null);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
+  const [printingThermal, setPrintingThermal] = useState<boolean>(false);
+  const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
+
+  useEffect(() => {
+    api
+      .getProfilPerusahaan()
+      .then((p) => setProfilPerusahaan(p))
+      .catch(() => {});
+  }, []);
+
+  const handlePrintThermalSelectedMitra = async () => {
+    if (!selectedMitraId || printingThermal) return;
+    setPrintingThermal(true);
+    setErrorMsg('');
+    try {
+      const statement = await api.getRekeningKoranMitra(selectedMitraId);
+      setThermalReceipt(
+        buildThermalReceiptPiutangHutangMitra(statement, {
+          scope: 'SALDO_BERJALAN',
+        })
+      );
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal menyiapkan struk thermal hutang/piutang mitra.');
+    } finally {
+      setPrintingThermal(false);
+    }
+  };
 
   useEffect(() => {
     if (initialSelectedMitraId) {
@@ -724,10 +754,20 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
             {/* Rincian Posisi Berjalan (Walaupun Belum Di-Kliring) */}
             {selectedMitra && (
               <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-3">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-bold text-zinc-900">
                     Posisi Saldo {selectedMitra.nama} (Sebelum Kliring)
                   </span>
+                  <button
+                    type="button"
+                    disabled={printingThermal}
+                    onClick={handlePrintThermalSelectedMitra}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    title="Cetak struk thermal rincian Hutang (Titip) & Piutang (Bon) mitra ini"
+                  >
+                    <Printer className="w-3 h-3 text-amber-800" />
+                    <span>{printingThermal ? 'Memuat...' : 'Cetak Thermal'}</span>
+                  </button>
                 </div>
 
                 <div className="p-3 rounded-lg bg-white border border-zinc-200 space-y-1.5 font-mono tabular-nums text-[11px]">
@@ -1280,6 +1320,12 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
           onRefresh();
           loadHistory();
         }}
+      />
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={profilPerusahaan}
       />
     </div>
   );

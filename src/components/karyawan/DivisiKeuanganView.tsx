@@ -43,6 +43,10 @@ import { InputPayrollHarianDivisiModal } from './InputPayrollHarianDivisiModal.t
 import { RekapitulasiPayrollBulananTable } from './RekapitulasiPayrollBulananTable.tsx';
 import { DivisiLogoAvatar, resolveDivisiLogoUrl } from '../common/DivisiLogoAvatar.tsx';
 import { ModalProfilDivisi } from './ModalProfilDivisi.tsx';
+import {
+  ModalAuditMutasiRekening,
+  type AuditMutasiTarget,
+} from '../common/ModalAuditMutasiRekening.tsx';
 
 interface DivisiKeuanganViewProps {
   rekeningList: Rekening[];
@@ -66,6 +70,7 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
   const [selectedDivisi, setSelectedDivisi] = useState<PergerakanKeuanganDivisiSummary | null>(null);
   const [profilDivisiModalOpen, setProfilDivisiModalOpen] = useState(false);
   const [profilDivisiInitialNama, setProfilDivisiInitialNama] = useState<string | undefined>(undefined);
+  const [auditDivisiTarget, setAuditDivisiTarget] = useState<AuditMutasiTarget | null>(null);
 
   // Sub-navigation inside DivisiKeuanganView
   const [activeMainTab, setActiveMainTab] = useState<'IKHTISAR_DIVISI' | 'REKAP_BULANAN' | 'LOG_HARIAN'>('IKHTISAR_DIVISI');
@@ -683,23 +688,41 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
               </div>
 
               {/* Action Buttons */}
-              <div className="p-3 bg-zinc-900 border-t border-zinc-800 grid grid-cols-3 gap-2">
+              <div className="p-3 bg-zinc-900 border-t border-zinc-800 grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => setSelectedDivisi(d)}
-                  className={`flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-medium transition-colors ${
-                    isSelected
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
-                  }`}
-                  title="Lihat Mutasi Kas Divisi"
+                  type="button"
+                  onClick={() =>
+                    setAuditDivisiTarget({
+                      type: 'DIVISI',
+                      kodeOrNama: d.divisi,
+                      label: d.divisi,
+                    })
+                  }
+                  className="flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-bold bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer whitespace-nowrap"
+                  title="Buka Audit Mutasi & Rekening Koran Divisi (Saldo Berjalan + CSV)"
                 >
-                  <History className="w-3.5 h-3.5" />
-                  <span>Mutasi</span>
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Audit Mutasi</span>
                 </button>
 
                 <button
+                  type="button"
+                  onClick={() => setSelectedDivisi(d)}
+                  className={`flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                    isSelected
+                      ? 'bg-zinc-700 text-white border border-emerald-500/60'
+                      : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                  }`}
+                  title="Lihat Jurnal Cepat Divisi di Bawah"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  <span>Jurnal Cepat</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => handleOpenInputPayrollHarian(undefined, d.divisi)}
-                  className="flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-bold bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-800/80 transition-colors cursor-pointer"
+                  className="flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-bold bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-800/80 transition-colors cursor-pointer whitespace-nowrap"
                   title="Input Payroll Harian di Divisi Ini"
                 >
                   <PlusCircle className="w-3.5 h-3.5" />
@@ -707,8 +730,9 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => handleOpenDroppingModal(d.kodeRekening)}
-                  className="flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-medium bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-800/80 transition-colors"
+                  className="flex items-center justify-center space-x-1 py-1.5 px-2 rounded text-[11px] font-medium bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-800/80 transition-colors cursor-pointer whitespace-nowrap"
                   title="Dropping Kas ke Rekening Divisi Ini"
                 >
                   <ArrowRightLeft className="w-3.5 h-3.5" />
@@ -765,6 +789,22 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
+              <button
+                type="button"
+                onClick={() =>
+                  setAuditDivisiTarget({
+                    type: 'DIVISI',
+                    kodeOrNama: selectedDivisi.divisi,
+                    label: selectedDivisi.divisi,
+                  })
+                }
+                className="flex items-center space-x-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-bold shadow-xs transition-colors cursor-pointer whitespace-nowrap"
+                title="Buka Audit Mutasi Lengkap & Export CSV untuk divisi ini"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Audit Mutasi Lengkap</span>
+              </button>
+
               <button
                 onClick={() => handleOpenInputPayrollHarian(undefined, selectedDivisi.divisi)}
                 className="flex items-center space-x-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold shadow-xs transition-colors cursor-pointer"
@@ -1342,6 +1382,16 @@ export const DivisiKeuanganView: React.FC<DivisiKeuanganViewProps> = ({
         initialDivisiNama={profilDivisiInitialNama}
         onClose={() => setProfilDivisiModalOpen(false)}
         onSaved={() => {
+          void loadData(true);
+          onRefreshAll?.();
+        }}
+      />
+
+      {/* Modal Audit Mutasi Lengkap Divisi */}
+      <ModalAuditMutasiRekening
+        target={auditDivisiTarget}
+        onClose={() => setAuditDivisiTarget(null)}
+        onSaldoSynced={() => {
           void loadData(true);
           onRefreshAll?.();
         }}

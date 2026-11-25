@@ -2873,6 +2873,162 @@ class DatabaseManager {
       }
     }
 
+    // 2b. Auto-heal duplikasi ID Mitra (jika pernah terjadi bentrok ID 4-digit dari generator lama)
+    //     Pisahkan ID mitra yang bentrok secara deterministik & arahkan ulang transaksinya ke pemilik asli
+    const mitraIdGroups = new Map<string, Mitra[]>();
+    for (const m of this.db.mitra) {
+      if (!m?.id) continue;
+      const grp = mitraIdGroups.get(m.id) || [];
+      grp.push(m);
+      mitraIdGroups.set(m.id, grp);
+    }
+
+    const usedMitraIds = new Set<string>(this.db.mitra.map((m) => m.id).filter(Boolean));
+    for (const [dupId, group] of mitraIdGroups.entries()) {
+      if (group.length <= 1) continue;
+
+      const primary = group[0];
+      for (let gi = 1; gi < group.length; gi++) {
+        const collider = group[gi];
+        const digitsFromKode = String(collider.kode || '')
+          .replace(/[^0-9]/g, '');
+        const cleanKodeAlpha = String(collider.kode || '')
+          .replace(/[^A-Z0-9]/gi, '')
+          .toUpperCase();
+        let baseCandidate = digitsFromKode
+          ? `MTR-${digitsFromKode.padStart(4, '0')}`
+          : `MTR-${cleanKodeAlpha || `${gi}`}`;
+        let candidate = baseCandidate;
+        let suffix = 2;
+        while (usedMitraIds.has(candidate)) {
+          candidate = `${baseCandidate}-${suffix}`;
+          suffix += 1;
+        }
+        collider.id = candidate;
+        usedMitraIds.add(candidate);
+
+        if (collider.idKaryawanTerkait) {
+          const linkedK = (this.db.karyawan || []).find((k) => k.id === collider.idKaryawanTerkait);
+          if (linkedK) linkedK.idMitraTerkait = candidate;
+        }
+        console.log(
+          `[DB] Auto-heal duplikasi ID Mitra ${dupId}: ${collider.nama} (${collider.kode}) dipindah ke ID unik ${candidate} (pemilik utama ${dupId}: ${primary.nama} / ${primary.kode})`
+        );
+      }
+
+      // Resolusi kepemilikan transaksi yang sebelumnya memakai dupId
+      const membersByLongestName = [...group].sort(
+        (a, b) => (b.nama || '').length - (a.nama || '').length
+      );
+      const notaOwnerMap = new Map<string, Mitra>();
+
+      const resolveOwnerForTx = (tx: {
+        idMitra?: string;
+        namaMitra?: string;
+        keterangan?: string;
+        isNotaNgunci?: boolean;
+        tanggalNgunci?: string;
+        isNotaLalu?: boolean;
+      }): Mitra => {
+        const ketLower = String(tx.keterangan || '').toLowerCase();
+        if (ketLower) {
+          const ketMatches = membersByLongestName.filter((m) => {
+            const nm = String(m.nama || '').trim().toLowerCase();
+            return nm.length >= 3 && ketLower.includes(nm);
+          });
+          if (ketMatches.length === 1) return ketMatches[0];
+        }
+
+        if (tx.isNotaNgunci) {
+          const ngunciMembers = group.filter((m) => Boolean(m.isNotaNgunci));
+          if (ngunciMembers.length === 1) return ngunciMembers[0];
+          if (ngunciMembers.length > 1 && tx.tanggalNgunci) {
+            const byDate = ngunciMembers.filter((m) => m.tanggalNgunci === tx.tanggalNgunci);
+            if (byDate.length === 1) return byDate[0];
+          }
+        }
+
+        if (tx.isNotaLalu && !tx.isNotaNgunci) {
+          const autoCreatedMembers = group.filter((m) =>
+            String(m.catatan || '').toLowerCase().includes('didaftarkan otomatis dari pencatatan nota lalu')
+          );
+          if (autoCreatedMembers.length === 1) return autoCreatedMembers[0];
+        }
+
+        const txNormName = normIdentity(tx.namaMitra);
+        if (txNormName) {
+          const byName = group.filter((m) => normIdentity(m.nama) === txNormName);
+          if (byName.length === 1) return byName[0];
+        }
+
+        return primary;
+      };
+
+      const applyResolution = (
+        arr?: Array<{
+          id?: string;
+          idTransaksi?: string;
+          noPenjualan?: string;
+          noPembelian?: string;
+          idMitra?: string;
+          namaMitra?: string;
+          keterangan?: string;
+          isNotaNgunci?: boolean;
+          tanggalNgunci?: string;
+          isNotaLalu?: boolean;
+        }>
+      ) => {
+        for (const tx of arr || []) {
+          if (tx.idMitra !== dupId) continue;
+          const owner = resolveOwnerForTx(tx);
+          tx.idMitra = owner.id;
+          tx.namaMitra = owner.nama;
+          const refKey = tx.idTransaksi || tx.noPenjualan || tx.noPembelian || tx.id;
+          if (refKey) notaOwnerMap.set(refKey, owner);
+        }
+      };
+
+      applyResolution(this.db.penjualan);
+      applyResolution(this.db.penjualanHasilBumi);
+      applyResolution(this.db.pembelianHasilBumi);
+      applyResolution(this.db.pembelianBarang);
+      applyResolution(this.db.kasbonUang);
+      applyResolution(this.db.pencairanTitipan);
+
+      // BayarBon: ikuti pemilik nota target / alokasi terlebih dahulu agar 100% konsisten
+      for (const b of this.db.bayarBon || []) {
+        if (b.idMitra !== dupId) continue;
+        let owner: Mitra | undefined;
+        if (b.idNotaTarget && notaOwnerMap.has(b.idNotaTarget)) {
+          owner = notaOwnerMap.get(b.idNotaTarget);
+        }
+        if (!owner && Array.isArray(b.alokasi)) {
+          for (const al of b.alokasi) {
+            if (al?.refId && notaOwnerMap.has(al.refId)) {
+              owner = notaOwnerMap.get(al.refId);
+              break;
+            }
+          }
+        }
+        if (!owner) {
+          owner = resolveOwnerForTx(b);
+        }
+        b.idMitra = owner.id;
+        b.namaMitra = owner.nama;
+      }
+
+      for (const trf of this.db.transferRekening || []) {
+        if (trf.idMitraTerkait !== dupId) continue;
+        const owner = resolveOwnerForTx({
+          idMitra: trf.idMitraTerkait,
+          namaMitra: trf.namaMitraTerkait,
+          keterangan: trf.keterangan,
+        });
+        trf.idMitraTerkait = owner.id;
+        trf.namaMitraTerkait = owner.nama;
+      }
+    }
+
     // 3. Mitra <-> All 6 Transaction Tables (recover orphan IDs & unify namaMitra)
     const mitraMap = new Map(this.db.mitra.map((m) => [m.id, m]));
 

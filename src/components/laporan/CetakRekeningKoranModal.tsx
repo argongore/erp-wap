@@ -849,7 +849,9 @@ export const CetakRekeningKoranModal: React.FC<Props> = ({
                             </td>
                             <td className="py-2 px-2 text-center font-mono tabular-nums font-bold whitespace-nowrap">
                               {isMulti
-                                ? `${items.length} Item`
+                                ? row.qtyDisplay && row.qtyDisplay.includes('Kg')
+                                  ? row.qtyDisplay
+                                  : `${items.length} Item`
                                 : single
                                 ? `${single.qty} ${single.satuan}`
                                 : row.qtyDisplay || '-'}

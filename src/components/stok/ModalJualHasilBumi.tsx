@@ -29,7 +29,7 @@ import {
   isRealTransferBankAccount,
   useDivisiOptions,
 } from '../common/DoubleCheckVerifikasiPanel.tsx';
-import { calculateHbMovingAverage } from '../../utils/hasilBumiMovingAverage.ts';
+import { calculateHbMovingAverage, parseTanggalSortKey } from '../../utils/hasilBumiMovingAverage.ts';
 
 interface Props {
   isOpen: boolean;
@@ -109,8 +109,10 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const [metodePembayaran, setMetodePembayaran] = useState<
     'BELUM_PUTUS_HARGA' | 'TUNAI' | 'TRANSFER' | 'PIUTANG' | 'SINKRON'
   >('BELUM_PUTUS_HARGA');
-  const [allowOverStockPutus, setAllowOverStockPutus] = useState<boolean>(false);
-  const [isHabisMuatSusut, setIsHabisMuatSusut] = useState<boolean>(false);
+  const [modeSisaGudang, setModeSisaGudang] = useState<
+    'NORMAL' | 'SISA_FISIK_AKTUAL' | 'HABIS_MUAT'
+  >('NORMAL');
+  const [sisaFisikAktualStr, setSisaFisikAktualStr] = useState<string>('');
   const [confirmDeleteHb, setConfirmDeleteHb] = useState<boolean>(false);
   const [deletingHb, setDeletingHb] = useState<boolean>(false);
   const [deleteSuccessMsg, setDeleteSuccessMsg] = useState<string>('');
@@ -160,8 +162,8 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
       setIdMitra(activeMitra[0]?.id || '');
       setNamaPembeliManual('');
       setMetodePembayaran('BELUM_PUTUS_HARGA');
-      setAllowOverStockPutus(false);
-      setIsHabisMuatSusut(false);
+      setModeSisaGudang('NORMAL');
+      setSisaFisikAktualStr('');
       setConfirmDeleteHb(false);
       setDeleteSuccessMsg('');
       setRekeningTujuan(bankAccounts[0]?.kode || '');
@@ -195,14 +197,31 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
     [activeKomoditas, komoditasKode]
   );
 
-  // Hitung modal rata-rata gudang murni dari siklus berjalan (Sisa Stok Muat Terakhir + Pembelian Baru Berjalan)
+  // Hitung modal rata-rata & stok buku per tanggal transaksi (akurat juga saat input nota mundur seperti tgl 18/11)
+  const selectedDateKey = useMemo(
+    () => parseTanggalSortKey(tanggalInput),
+    [tanggalInput]
+  );
+
   const movingAvg = useMemo(() => {
+    if (!selectedKomoditas) return null;
+    return calculateHbMovingAverage(
+      selectedKomoditas,
+      pembelianList,
+      penjualanList,
+      selectedDateKey > 0 ? { maxDateKey: selectedDateKey } : undefined
+    );
+  }, [selectedKomoditas, pembelianList, penjualanList, selectedDateKey]);
+
+  const movingAvgFull = useMemo(() => {
     if (!selectedKomoditas) return null;
     return calculateHbMovingAverage(selectedKomoditas, pembelianList, penjualanList);
   }, [selectedKomoditas, pembelianList, penjualanList]);
 
   const modalRataRataHitungOtomatis =
-    movingAvg?.rataRataModalTerkini || Math.max(0, Number(selectedKomoditas?.rataRataModalAwal) || 0);
+    movingAvg?.rataRataModalTerkini ||
+    movingAvgFull?.rataRataModalTerkini ||
+    Math.max(0, Number(selectedKomoditas?.rataRataModalAwal) || 0);
 
   // Sinkronkan acuan harga rata-rata beli saat komoditas berganti
   useEffect(() => {
@@ -217,7 +236,12 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
   const hargaRataPengurangStokPerKg = modalRataRataHitungOtomatis;
 
   const readyGudangKg =
-    movingAvg?.stokReadyKg ?? Math.max(0, Number(selectedKomoditas?.stok) || 0);
+    movingAvg?.stokReadyKg ?? (Number(selectedKomoditas?.stok) || 0);
+  const readyGudangTerkiniKg =
+    movingAvgFull?.stokReadyKg ?? (Number(selectedKomoditas?.stok) || 0);
+  const mutasiSetelahTanggalKg =
+    Math.round((readyGudangTerkiniKg - readyGudangKg) * 100) / 100;
+
   const beratKotor = Math.max(0, parseFloat(beratKotorStr) || 0);
   const tonaseAkhir = Math.max(0, parseFloat(tonaseAkhirStr) || 0);
   const potonganRafaksi = Math.min(99.9, Math.max(0, parseFloat(potonganRafaksiStr) || 0));
@@ -235,18 +259,52 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
     : parseRupiahInput(hargaJualDisplay);
 
   const melebihiStok = beratBersih > readyGudangKg;
-  const selisihTimbangKg = Math.round((beratBersih - readyGudangKg) * 100) / 100;
-  const sisaGudangSetelah = Math.max(0, Math.round((readyGudangKg - beratBersih) * 100) / 100);
-  const angkaBarisSisaKg = melebihiStok
-    ? Math.abs(selisihTimbangKg)
-    : sisaGudangSetelah;
-  const angkaBarisSusutKg =
-    beratBersih > 0 && (melebihiStok || isHabisMuatSusut) ? angkaBarisSisaKg : 0;
+  const parsedSisaFisikAktual =
+    modeSisaGudang === 'SISA_FISIK_AKTUAL' && sisaFisikAktualStr.trim() !== ''
+      ? Math.max(0, Math.round((parseFloat(sisaFisikAktualStr) || 0) * 100) / 100)
+      : null;
 
-  // Kalkulasi Tabel Spreadsheet 4 Baris (JUMLAH / MUAT / SISA / SUSUT)
-  const nilaiStokReadyRp = Math.round(readyGudangKg * hargaRataPengurangStokPerKg);
+  const expectedSisaBukuKg = Math.round((readyGudangKg - beratBersih) * 100) / 100;
+
+  let sisaSetelahMuatKg = expectedSisaBukuKg;
+  let lebihMuatPreviewKg = 0;
+  let susutKurangPreviewKg = 0;
+
+  if (beratBersih > 0) {
+    if (modeSisaGudang === 'SISA_FISIK_AKTUAL' && parsedSisaFisikAktual !== null) {
+      sisaSetelahMuatKg = parsedSisaFisikAktual;
+      const varianceVsBuku = Math.round((parsedSisaFisikAktual - expectedSisaBukuKg) * 100) / 100;
+      if (varianceVsBuku > 0) {
+        lebihMuatPreviewKg = varianceVsBuku;
+      } else if (varianceVsBuku < 0) {
+        susutKurangPreviewKg = Math.abs(varianceVsBuku);
+      }
+    } else if (modeSisaGudang === 'HABIS_MUAT') {
+      sisaSetelahMuatKg = 0;
+      if (beratBersih > readyGudangKg) {
+        lebihMuatPreviewKg = Math.round((beratBersih - readyGudangKg) * 100) / 100;
+      } else if (readyGudangKg > beratBersih) {
+        susutKurangPreviewKg = Math.round((readyGudangKg - beratBersih) * 100) / 100;
+      }
+    } else {
+      // NORMAL / BIARKAN MINUS BUKU
+      sisaSetelahMuatKg = expectedSisaBukuKg;
+      if (beratBersih > readyGudangKg) {
+        lebihMuatPreviewKg = Math.round((beratBersih - readyGudangKg) * 100) / 100;
+      }
+    }
+  }
+
+  const estimasiReadyHariIniSetelahMuatKg =
+    Math.round((sisaSetelahMuatKg + mutasiSetelahTanggalKg) * 100) / 100;
+
+  // Kalkulasi Tabel Spreadsheet 4 Baris (JUMLAH / MUAT / SISA / SUSUT atau LEBIH MUAT)
+  const nilaiStokReadyRp = Math.max(0, Math.round(readyGudangKg * hargaRataPengurangStokPerKg));
   const nilaiPengurangStokMuatRp = Math.round(beratBersih * hargaRataPengurangStokPerKg);
-  const nilaiBarisSisaRp = Math.abs(nilaiStokReadyRp - nilaiPengurangStokMuatRp);
+  const nilaiBarisSisaRp =
+    sisaSetelahMuatKg > 0
+      ? Math.round(sisaSetelahMuatKg * hargaRataPengurangStokPerKg)
+      : 0;
 
   const totalOmzetPutus = isBelumPutusHarga
     ? 0
@@ -395,8 +453,6 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
     }
   };
 
-  const blokirKarenaStok = !isBelumPutusHarga && melebihiStok && !allowOverStockPutus;
-
   const validateForm = (): boolean => {
     setErrorMsg('');
     if (!selectedKomoditas) {
@@ -407,9 +463,9 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
       setErrorMsg('Masukkan berat kotor timbangan muat lebih dari 0 Kg.');
       return false;
     }
-    if (blokirKarenaStok) {
+    if (modeSisaGudang === 'SISA_FISIK_AKTUAL' && parsedSisaFisikAktual === null) {
       setErrorMsg(
-        `Stok Ready Gudang (${readyGudangKg.toLocaleString('id-ID')} Kg) lebih kecil dari berat muat (${beratBersih.toLocaleString('id-ID')} Kg). Centang opsi "Izinkan Muat Lebih Timbang" jika terdapat selisih timbangan.`
+        'Masukkan angka Sisa Fisik Aktual (Kg) yang masih ada di gudang setelah muat ini (contoh: 750), atau pilih mode lain.'
       );
       return false;
     }
@@ -495,8 +551,14 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
           ]
             .filter(Boolean)
             .join(' | ') || undefined,
-        allowOverStockMuat: isBelumPutusHarga || allowOverStockPutus,
-        isHabisMuatSusut: isHabisMuatSusut || melebihiStok,
+        allowOverStockMuat: true,
+        isHabisMuatSusut:
+          modeSisaGudang === 'HABIS_MUAT' ||
+          (modeSisaGudang === 'SISA_FISIK_AKTUAL' && parsedSisaFisikAktual === 0),
+        ...(modeSisaGudang === 'SISA_FISIK_AKTUAL' && parsedSisaFisikAktual !== null
+          ? { sisaFisikAktualKg: parsedSisaFisikAktual }
+          : {}),
+        biarkanStokMinus: modeSisaGudang === 'NORMAL' && melebihiStok,
       });
 
       if (pakaiPtKomisi && komisiPtNominal > 0) {
@@ -582,14 +644,29 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
               },
               {
                 label:
-                  (record.selisihTimbangMuatKg || 0) > 0
-                    ? 'Selisih Lebih Timbang Muat'
+                  record.sisaFisikAktualKg !== undefined
+                    ? 'Sisa Fisik Aktual di Gudang'
                     : 'SISA STOK di Gudang',
-                value:
-                  (record.selisihTimbangMuatKg || 0) > 0
-                    ? `+${Number(record.selisihTimbangMuatKg).toLocaleString('id-ID')} Kg (Stok Gudang Jadi 0 Kg)`
-                    : `${record.stokGudangSetelah.toLocaleString('id-ID')} Kg`,
+                value: `${record.stokGudangSetelah.toLocaleString('id-ID')} Kg${
+                  record.stokGudangSetelah < 0 ? ' (Minus Buku)' : ''
+                }`,
               },
+              ...((record.selisihLebihMuatKg || 0) > 0
+                ? [
+                    {
+                      label: 'Lebih Muat / Minus Buku (Indikasi Grade Lain)',
+                      value: `+${Number(record.selisihLebihMuatKg).toLocaleString('id-ID')} Kg`,
+                      highlight: true,
+                    },
+                  ]
+                : (record.beratSusutKg || 0) > 0
+                ? [
+                    {
+                      label: 'Susut / Kurang Muat',
+                      value: `-${Number(record.beratSusutKg).toLocaleString('id-ID')} Kg`,
+                    },
+                  ]
+                : []),
               {
                 label: 'Status Pencairan Uang',
                 value: 'Rp 0 (Input Nanti Lewat Menu Uang Masuk)',
@@ -1007,24 +1084,163 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Opsi Gudang Dikuras Habis (Sisa Masuk ke Baris SUSUT) */}
-          {beratBersih > 0 && beratBersih < readyGudangKg && (
-            <label className="flex items-center gap-2.5 p-2.5 rounded-lg bg-zinc-50 border border-zinc-300 text-zinc-800 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={isHabisMuatSusut}
-                onChange={(e) => {
-                  setIsHabisMuatSusut(e.target.checked);
-                  setStepVerifikasi(false);
-                }}
-                className="rounded border-zinc-400 text-rose-600 focus:ring-rose-600"
-              />
-              <span className="text-[11px] font-semibold">
-                Gudang Dikuras Habis Saat Muat Ini (Selisih{' '}
-                <strong className="font-mono">{formatKgSpreadsheet(sisaGudangSetelah)} Kg</strong>{' '}
-                dicatat sebagai <strong>SUSUT</strong> &amp; stok gudang menjadi 0 Kg)
-              </span>
-            </label>
+          {/* Pemilih Kondisi Sisa Stok Gudang Setelah Muat (3 Mode: Normal/Minus, Sisa Fisik Aktual, Habis Muat Susut) */}
+          {beratBersih > 0 && (
+            <div className="rounded-xl border border-zinc-300 bg-zinc-50/80 p-3 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-zinc-900">
+                  Kondisi Sisa Stok Gudang Tepat Setelah Muat Tanggal{' '}
+                  {tanggalInput ? tanggalInput.split('-').reverse().join('/') : '-'}
+                </span>
+                {mutasiSetelahTanggalKg !== 0 && (
+                  <span className="text-[10px] font-mono font-semibold text-sky-800 bg-sky-100 border border-sky-200 px-2 py-0.5 rounded">
+                    Stok Buku Tgl Ini: {formatKgSpreadsheet(readyGudangKg)} Kg · Beli Setelah Tgl Ini: {mutasiSetelahTanggalKg > 0 ? '+' : ''}
+                    {formatKgSpreadsheet(mutasiSetelahTanggalKg)} Kg
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModeSisaGudang('NORMAL');
+                    setStepVerifikasi(false);
+                  }}
+                  className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                    modeSisaGudang === 'NORMAL'
+                      ? melebihiStok
+                        ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-500'
+                        : 'bg-emerald-50 border-emerald-600 ring-1 ring-emerald-600'
+                      : 'bg-white border-zinc-200 hover:bg-zinc-50'
+                  }`}
+                >
+                  <div className="text-[11px] font-bold text-zinc-900">
+                    {melebihiStok ? '1. Biarkan Buku Minus' : '1. Normal (Sisa Buku)'}
+                  </div>
+                  <div className="text-[10px] text-zinc-600 mt-0.5 leading-snug">
+                    {melebihiStok
+                      ? `Stok buku menjadi ${formatKgSpreadsheet(expectedSisaBukuKg)} Kg (tanpa diblokir & tanpa dipaksa 0 Kg).`
+                      : `Sisa otomatis ${formatKgSpreadsheet(expectedSisaBukuKg)} Kg lanjut ke siklus berikutnya.`}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModeSisaGudang('SISA_FISIK_AKTUAL');
+                    setStepVerifikasi(false);
+                  }}
+                  className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                    modeSisaGudang === 'SISA_FISIK_AKTUAL'
+                      ? 'bg-indigo-50 border-indigo-600 ring-1 ring-indigo-600'
+                      : 'bg-white border-zinc-200 hover:bg-zinc-50'
+                  }`}
+                >
+                  <div className="text-[11px] font-bold text-indigo-950">
+                    2. Input Sisa Fisik Gudang
+                  </div>
+                  <div className="text-[10px] text-zinc-600 mt-0.5 leading-snug">
+                    Barang fisik masih ada di gudang (mis. 750 Kg). Selisih minus buku otomatis tercatat di rekapan antar komoditas!
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModeSisaGudang('HABIS_MUAT');
+                    setStepVerifikasi(false);
+                  }}
+                  className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                    modeSisaGudang === 'HABIS_MUAT'
+                      ? 'bg-rose-50 border-rose-600 ring-1 ring-rose-600'
+                      : 'bg-white border-zinc-200 hover:bg-zinc-50'
+                  }`}
+                >
+                  <div className="text-[11px] font-bold text-rose-950">
+                    3. Gudang Habis Muat (0 Kg)
+                  </div>
+                  <div className="text-[10px] text-zinc-600 mt-0.5 leading-snug">
+                    Kloter dikuras habis jadi 0 Kg. Selisih kurang masuk <strong>SUSUT</strong> (dipakai saat STIK/KA selesai muat).
+                  </div>
+                </button>
+              </div>
+
+              {modeSisaGudang === 'SISA_FISIK_AKTUAL' && (
+                <div className="p-3 rounded-lg bg-indigo-50/70 border border-indigo-200 space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                    <div>
+                      <label className="block text-[11px] font-bold text-indigo-950 mb-1">
+                        Sisa Fisik Aktual di Gudang Tepat Setelah Muat Ini (Kg)
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        placeholder="Contoh: 750"
+                        value={sisaFisikAktualStr}
+                        onChange={(e) => {
+                          setSisaFisikAktualStr(e.target.value);
+                          setStepVerifikasi(false);
+                        }}
+                        className="w-full px-3 py-2 rounded-lg border border-indigo-400 bg-white font-mono tabular-nums font-bold text-indigo-950 focus:outline-none focus:border-indigo-700"
+                      />
+                    </div>
+                    <div className="text-[11px] space-y-1 font-mono tabular-nums">
+                      {parsedSisaFisikAktual !== null ? (
+                        <>
+                          {lebihMuatPreviewKg > 0 ? (
+                            <div className="text-amber-900 bg-amber-100 border border-amber-300 px-2.5 py-1.5 rounded font-bold">
+                              Selisih Lebih Muat / Minus Buku: +{formatKgSpreadsheet(lebihMuatPreviewKg)} Kg
+                              <span className="block font-sans font-normal text-[10px] text-amber-800">
+                                (Indikasi masuk dari grade/komoditas lain — otomatis muncul di Rekapan Saling Melengkapi)
+                              </span>
+                            </div>
+                          ) : susutKurangPreviewKg > 0 ? (
+                            <div className="text-rose-900 bg-rose-100 border border-rose-300 px-2.5 py-1.5 rounded font-bold">
+                              Selisih Susut / Kurang Fisik: -{formatKgSpreadsheet(susutKurangPreviewKg)} Kg
+                            </div>
+                          ) : (
+                            <div className="text-emerald-900 bg-emerald-100 border border-emerald-300 px-2.5 py-1.5 rounded font-bold">
+                              Klop dengan Stok Buku (Selisih 0 Kg)
+                            </div>
+                          )}
+                          {mutasiSetelahTanggalKg !== 0 && (
+                            <div className="text-[10px] text-indigo-900 font-sans">
+                              Estimasi Ready Gudang Hari Ini:{' '}
+                              <strong className="font-mono">
+                                {formatKgSpreadsheet(parsedSisaFisikAktual)} + {formatKgSpreadsheet(mutasiSetelahTanggalKg)} ={' '}
+                                {formatKgSpreadsheet(estimasiReadyHariIniSetelahMuatKg)} Kg
+                              </strong>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-indigo-800 font-sans">
+                          Isi estimasi sisa fisik di gudang tepat setelah muat (contoh: <strong>750</strong> Kg).
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {modeSisaGudang === 'NORMAL' && melebihiStok && (
+                <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-950 text-[11px] leading-relaxed">
+                  <strong>Info Muat Melebihi Buku:</strong> Muat{' '}
+                  <strong className="font-mono">{formatKgSpreadsheet(beratBersih)} Kg</strong> lebih besar dari stok buku per tanggal muat (
+                  <strong className="font-mono">{formatKgSpreadsheet(readyGudangKg)} Kg</strong>). Stok buku akan tercatat{' '}
+                  <strong className="font-mono text-rose-700">{formatKgSpreadsheet(sisaSetelahMuatKg)} Kg</strong> dan selisih{' '}
+                  <strong className="font-mono">+{formatKgSpreadsheet(lebihMuatPreviewKg)} Kg</strong> masuk ke Rekapan Selisih Antar Komoditas.
+                  {mutasiSetelahTanggalKg !== 0 && (
+                    <span>
+                      {' '}Dengan pembelian setelah tanggal muat (+{formatKgSpreadsheet(mutasiSetelahTanggalKg)} Kg), Ready Hari Ini menjadi{' '}
+                      <strong className="font-mono">{formatKgSpreadsheet(estimasiReadyHariIniSetelahMuatKg)} Kg</strong>.
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Informasi Siklus Muat Berjalan (Moving Average) */}
@@ -1033,7 +1249,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
               <div className="font-bold flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-sky-600"></span>
-                  Siklus Stok Berjalan (Moving Average Gudang Real)
+                  Siklus Stok Berjalan per {tanggalInput ? tanggalInput.split('-').reverse().join('/') : 'Saat Ini'}
                 </span>
                 <span className="text-[11px] text-sky-700">Muat Terakhir: {movingAvg.tanggalMuatTerakhir || '-'}</span>
               </div>
@@ -1045,7 +1261,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                 Pembelian Baru:{' '}
                 <strong className="text-zinc-900">{formatKgSpreadsheet(movingAvg.pembelianBaruSetelahMuatKg)} Kg</strong> ({movingAvg.pembelianBaruSetelahMuatCount} nota = {formatRupiah(movingAvg.pembelianBaruSetelahMuatRp)})
                 {' → '}
-                Ready Gudang Saat Ini:{' '}
+                Ready Buku Tgl Ini:{' '}
                 <strong className="text-sky-800 font-bold">{formatKgSpreadsheet(movingAvg.stokReadyKg)} Kg</strong> @{' '}
                 <strong className="text-sky-800 font-bold">{formatRupiah(movingAvg.rataRataModalTerkini)}</strong>
               </div>
@@ -1053,7 +1269,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
           )}
 
           {/* ===================================================================== */}
-          {/* TABEL SIMULASI SPREADSHEET 4 BARIS: JUMLAH (HIJAU) / MUAT (KUNING) / SISA (BIRU) / SUSUT (MERAH) */}
+          {/* TABEL SIMULASI SPREADSHEET 4 BARIS: JUMLAH (HIJAU) / MUAT (KUNING) / SISA (BIRU) / SUSUT atau LEBIH MUAT */}
           {/* ===================================================================== */}
           <div className="rounded-xl border border-zinc-400 overflow-hidden">
             <div className="px-3.5 py-2 bg-zinc-900 text-white flex items-center justify-between gap-2">
@@ -1081,7 +1297,9 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                   {/* Baris 1: JUMLAH (Hijau #6AA84F) */}
                   <tr className="bg-[#6AA84F] border-b border-zinc-700 font-bold">
                     <td className="py-2 px-3 font-sans font-bold text-center border-r border-zinc-700">
-                      JUMLAH
+                      {mutasiSetelahTanggalKg !== 0
+                        ? `JUMLAH (PER ${tanggalInput ? tanggalInput.split('-').reverse().join('/') : '-'})`
+                        : 'JUMLAH'}
                     </td>
                     <td className="py-2 px-3 text-center border-r border-zinc-700" />
                     <td className="py-2 px-3 text-right border-r border-zinc-700">
@@ -1118,33 +1336,63 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                     </td>
                   </tr>
 
-                  {/* Baris 3: SISA (Biru #00B0F0) */}
-                  <tr className="bg-[#00B0F0] border-b border-zinc-700 font-bold">
+                  {/* Baris 3: SISA (Biru #00B0F0 / Rose jika minus) */}
+                  <tr
+                    className={`${
+                      sisaSetelahMuatKg < 0 ? 'bg-rose-200 text-rose-950' : 'bg-[#00B0F0]'
+                    } border-b border-zinc-700 font-bold`}
+                  >
                     <td className="py-2 px-3 font-sans font-bold text-center border-r border-zinc-700">
-                      SISA
+                      {modeSisaGudang === 'SISA_FISIK_AKTUAL' && parsedSisaFisikAktual !== null
+                        ? 'SISA FISIK GUDANG (AKTUAL)'
+                        : sisaSetelahMuatKg < 0
+                        ? 'SISA STOK (MINUS BUKU)'
+                        : 'SISA STOK'}
                     </td>
                     <td className="py-2 px-3 text-center border-r border-zinc-700" />
                     <td className="py-2 px-3 text-right border-r border-zinc-700">
-                      {formatKgSpreadsheet(angkaBarisSisaKg)}
+                      {formatKgSpreadsheet(sisaSetelahMuatKg)}
                     </td>
-                    <td className="py-2 px-3 text-right border-r border-zinc-700" />
+                    <td className="py-2 px-3 text-right border-r border-zinc-700">
+                      {sisaSetelahMuatKg > 0 ? formatRupiah(hargaRataPengurangStokPerKg) : '-'}
+                    </td>
                     <td className="py-2 px-3 text-right font-extrabold">
                       {formatRupiah(nilaiBarisSisaRp)}
                     </td>
                   </tr>
 
-                  {/* Baris 4: SUSUT (Merah #FF0000) */}
-                  <tr className="bg-[#FF0000] text-zinc-950 font-bold">
-                    <td className="py-2 px-3 font-sans font-bold text-center border-r border-zinc-700">
-                      SUSUT
-                    </td>
-                    <td className="py-2 px-3 text-center border-r border-zinc-700" />
-                    <td className="py-2 px-3 text-right border-r border-zinc-700">
-                      {angkaBarisSusutKg > 0 ? formatKgSpreadsheet(angkaBarisSusutKg) : '0,0'}
-                    </td>
-                    <td className="py-2 px-3 text-right border-r border-zinc-700" />
-                    <td className="py-2 px-3 text-right" />
-                  </tr>
+                  {/* Baris 4: LEBIH MUAT / MINUS BUKU (Amber) atau SUSUT (Merah #FF0000) */}
+                  {lebihMuatPreviewKg > 0 ? (
+                    <tr className="bg-amber-300 text-amber-950 font-bold">
+                      <td className="py-2 px-3 font-sans font-extrabold text-center border-r border-zinc-700">
+                        LEBIH MUAT / MINUS BUKU (INDIKASI GRADE LAIN)
+                      </td>
+                      <td className="py-2 px-3 text-center border-r border-zinc-700 font-sans text-[10px]">
+                        Surplus Fisik
+                      </td>
+                      <td className="py-2 px-3 text-right border-r border-zinc-700">
+                        +{formatKgSpreadsheet(lebihMuatPreviewKg)}
+                      </td>
+                      <td className="py-2 px-3 text-right border-r border-zinc-700 font-sans text-[10px]">
+                        Buku Minus
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono">
+                        -{formatKgSpreadsheet(lebihMuatPreviewKg)} Kg
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr className="bg-[#FF0000] text-zinc-950 font-bold">
+                      <td className="py-2 px-3 font-sans font-bold text-center border-r border-zinc-700">
+                        SUSUT
+                      </td>
+                      <td className="py-2 px-3 text-center border-r border-zinc-700" />
+                      <td className="py-2 px-3 text-right border-r border-zinc-700">
+                        {susutKurangPreviewKg > 0 ? formatKgSpreadsheet(susutKurangPreviewKg) : '0,0'}
+                      </td>
+                      <td className="py-2 px-3 text-right border-r border-zinc-700" />
+                      <td className="py-2 px-3 text-right" />
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1193,19 +1441,6 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
             </div>
           ) : (
             <div className="space-y-3">
-              {melebihiStok && (
-                <label className="flex items-center space-x-2 p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-950 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={allowOverStockPutus}
-                    onChange={(e) => setAllowOverStockPutus(e.target.checked)}
-                    className="rounded border-amber-400 text-emerald-700 focus:ring-emerald-600"
-                  />
-                  <span className="text-[11px] font-semibold">
-                    Izinkan Muat Lebih Timbang (+{formatKgSpreadsheet(angkaBarisSisaKg)} Kg di atas stok tercatat; sisa stok gudang menjadi 0 Kg)
-                  </span>
-                </label>
-              )}
 
               <div className="space-y-2">
                 <label className="block text-[11px] font-semibold text-zinc-700">
@@ -1781,7 +2016,7 @@ export const ModalJualHasilBumi: React.FC<Props> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting || blokirKarenaStok || beratBersih <= 0}
+                  disabled={submitting || beratBersih <= 0}
                   className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:bg-zinc-300 disabled:cursor-not-allowed text-white font-semibold flex items-center space-x-2 cursor-pointer transition-colors"
                 >
                   <CheckCircle2 className="w-4 h-4" />

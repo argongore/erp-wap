@@ -780,8 +780,13 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                               {displayTxId}
                             </td>
                             <td className="py-2.5 px-3">
-                              <div className="font-semibold text-zinc-900">
-                                {row.isNotaSilang && single ? single.nama : row.jenis.replace(/_/g, ' ')}
+                              <div className="font-semibold text-zinc-900 flex items-center gap-1.5 flex-wrap">
+                                <span>{row.isNotaSilang && single ? single.nama : row.jenis.replace(/_/g, ' ')}</span>
+                                {(row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA') && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-900 text-[9px] font-bold uppercase">
+                                    Belum Putus Harga
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[10px] text-zinc-600">
                                 {(row.isNotaSilang ? row.catatanTransaksi : row.keterangan) || row.keterangan || '-'}
@@ -791,7 +796,11 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                                   {row.itemsDetail.map((it, idx) => (
                                     <div key={idx} className="flex justify-between">
                                       <span>• {it.nama}</span>
-                                      <span className="font-mono tabular-nums">{it.qty} {it.satuan} @ {formatRupiah(it.harga)}</span>
+                                      <span className="font-mono tabular-nums">
+                                        {it.isBelumPutusHarga
+                                          ? `${it.qty} ${it.satuan} · Belum Putus`
+                                          : `${it.qty} ${it.satuan} @ ${formatRupiah(it.harga)}`}
+                                      </span>
                                     </div>
                                   ))}
                                 </div>
@@ -801,7 +810,11 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                               {row.qtyDisplay || (row.jenis === 'KASBON_UANG' ? '1' : '-')}
                             </td>
                             <td className="py-2.5 px-2 text-right font-mono tabular-nums text-zinc-700 text-[10px] whitespace-nowrap">
-                              {row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-')}
+                              {row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA' ? (
+                                <span className="text-amber-800 font-bold">Belum Putus</span>
+                              ) : (
+                                row.hargaSatuanDisplay || (row.jenis === 'KASBON_UANG' ? formatRupiah(row.debet) : '-')
+                              )}
                             </td>
                             <td className="py-2.5 px-3 text-right font-mono tabular-nums text-rose-700 font-semibold whitespace-nowrap text-[10px]">
                               {row.debet > 0 ? `+${formatRupiah(row.debet)}` : '-'}
@@ -1051,40 +1064,98 @@ export const PublicSharePortal: React.FC<PublicSharePortalProps> = ({
                             it.id.toLowerCase().includes(q) ||
                             it.pihakTerkait.toLowerCase().includes(q) ||
                             it.deskripsi.toLowerCase().includes(q) ||
-                            it.jenisLabel.toLowerCase().includes(q)
+                            it.jenisLabel.toLowerCase().includes(q) ||
+                            (it.itemsDetail || []).some((d) => d.nama.toLowerCase().includes(q))
                           );
                         })
-                        .map((it: UnifiedTransactionItem) => (
-                          <tr key={it.id} className="hover:bg-zinc-50/70">
-                            <td className="py-2.5 px-3 font-mono text-zinc-500 text-[10px]">
-                              {it.jam}
-                            </td>
-                            <td className="py-2.5 px-3 font-mono font-bold text-zinc-900 text-[10px]">
-                              {it.id}
-                            </td>
-                            <td className="py-2.5 px-3 font-semibold text-zinc-800 text-[10px]">
-                              {it.jenisLabel}
-                            </td>
-                            <td className="py-2.5 px-3 font-medium text-zinc-900">
-                              {it.pihakTerkait}
-                            </td>
-                            <td className="py-2.5 px-3 text-zinc-600 text-[10px]">
-                              {it.deskripsi}
-                            </td>
-                            <td
-                              className={`py-2.5 px-3 text-right font-mono font-bold text-[11px] ${
-                                it.arusUang === 'MASUK'
-                                  ? 'text-emerald-700'
-                                  : it.arusUang === 'KELUAR'
-                                  ? 'text-rose-700'
-                                  : 'text-zinc-700'
-                              }`}
-                            >
-                              {it.arusUang === 'MASUK' ? '+' : it.arusUang === 'KELUAR' ? '-' : ''}
-                              {formatRupiah(it.nominal)}
-                            </td>
-                          </tr>
-                        ))
+                        .map((it: UnifiedTransactionItem) => {
+                          const detailItems = it.itemsDetail || [];
+                          const isMulti = detailItems.length > 1;
+                          const isHbLike =
+                            it.jenis === 'PEMBELIAN_HASIL_BUMI' ||
+                            it.jenis === 'PENJUALAN_HASIL_BUMI' ||
+                            it.jenis === 'SURAT_JALAN_BAYAR_MITRA';
+                          const totalSub = isMulti
+                            ? detailItems.reduce((s, d) => s + (Number(d.subtotal) || 0), 0)
+                            : 0;
+                          return (
+                            <tr key={it.id} className="hover:bg-zinc-50/70 align-top">
+                              <td className="py-2.5 px-3 font-mono text-zinc-500 text-[10px]">
+                                {it.jam}
+                              </td>
+                              <td className="py-2.5 px-3 font-mono font-bold text-zinc-900 text-[10px]">
+                                <div>{it.id}</div>
+                                {isMulti && (
+                                  <div className="font-sans font-semibold text-amber-800 text-[9px] mt-0.5">
+                                    {detailItems.length} {isHbLike ? 'Komoditas' : 'Item'}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 font-semibold text-zinc-800 text-[10px]">
+                                {it.jenisLabel}
+                              </td>
+                              <td className="py-2.5 px-3 font-medium text-zinc-900">
+                                {it.pihakTerkait}
+                              </td>
+                              <td className="py-2.5 px-3 text-zinc-600 text-[10px]">
+                                {isMulti ? (
+                                  <div className="rounded-md border border-zinc-200 bg-zinc-50/70 overflow-hidden">
+                                    <table className="w-full text-[10px] border-collapse">
+                                      <thead>
+                                        <tr className="bg-zinc-100 text-[9px] text-zinc-500 uppercase border-b border-zinc-200">
+                                          <th className="py-1 px-2 text-left">{isHbLike ? 'Komoditas' : 'Barang'}</th>
+                                          <th className="py-1 px-1.5 text-right">Qty</th>
+                                          <th className="py-1 px-1.5 text-right">Harga</th>
+                                          <th className="py-1 px-2 text-right">Subtotal</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-zinc-200/60 bg-white">
+                                        {detailItems.map((d, dIdx) => (
+                                          <tr key={`${it.id}-d-${dIdx}`}>
+                                            <td className="py-1 px-2 font-semibold text-zinc-800">{d.nama}</td>
+                                            <td className="py-1 px-1.5 text-right font-mono whitespace-nowrap">
+                                              {Number(d.qty || 0).toLocaleString('id-ID')} {d.satuan}
+                                            </td>
+                                            <td className="py-1 px-1.5 text-right font-mono whitespace-nowrap">
+                                              {formatRupiah(d.harga)}
+                                            </td>
+                                            <td className="py-1 px-2 text-right font-mono font-bold text-zinc-900 whitespace-nowrap">
+                                              {formatRupiah(d.subtotal)}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                      <tfoot>
+                                        <tr className="bg-zinc-100 border-t border-zinc-200 font-bold text-zinc-900">
+                                          <td colSpan={3} className="py-1 px-2">
+                                            Total ({detailItems.length} {isHbLike ? 'Komoditas' : 'Item'})
+                                          </td>
+                                          <td className="py-1 px-2 text-right font-mono whitespace-nowrap">
+                                            {formatRupiah(totalSub || it.nominal)}
+                                          </td>
+                                        </tr>
+                                      </tfoot>
+                                    </table>
+                                  </div>
+                                ) : (
+                                  it.deskripsi
+                                )}
+                              </td>
+                              <td
+                                className={`py-2.5 px-3 text-right font-mono font-bold text-[11px] whitespace-nowrap ${
+                                  it.arusUang === 'MASUK'
+                                    ? 'text-emerald-700'
+                                    : it.arusUang === 'KELUAR'
+                                    ? 'text-rose-700'
+                                    : 'text-zinc-700'
+                                }`}
+                              >
+                                {it.arusUang === 'MASUK' ? '+' : it.arusUang === 'KELUAR' ? '-' : ''}
+                                {formatRupiah(it.nominal)}
+                              </td>
+                            </tr>
+                          );
+                        })
                     )}
                   </tbody>
                 </table>

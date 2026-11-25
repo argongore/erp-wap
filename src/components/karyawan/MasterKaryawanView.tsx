@@ -61,6 +61,7 @@ import {
   compressFotoProfilImage,
 } from './ModalProfilKaryawan.tsx';
 import { DownloadHistoryGajiButton } from './DownloadHistoryGajiButton.tsx';
+import { RekapPencairanPenggajianView } from './RekapPencairanPenggajianView.tsx';
 
 interface MasterKaryawanViewProps {
   rekeningList: Rekening[];
@@ -809,7 +810,7 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
           }`}
         >
           <History className="w-4 h-4 text-sky-400" />
-          <span>Riwayat Slip Gaji ({penggajianHistory.length})</span>
+          <span>Rekap Penggajian ({penggajianHistory.length})</span>
         </button>
       </div>
 
@@ -2037,123 +2038,17 @@ export const MasterKaryawanView: React.FC<MasterKaryawanViewProps> = ({
         </div>
       )}
 
-      {/* TAB 4: RIWAYAT SLIP PENGGAJIAN */}
+      {/* TAB 4: REKAP PENCAIRAN PENGGAJIAN RESMI */}
       {activeTab === 'riwayat-gaji' && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden space-y-4 p-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-800">
-            <div>
-              <h3 className="text-sm font-bold text-zinc-100 flex items-center space-x-2">
-                <History className="w-4 h-4 text-sky-400" />
-                <span>Riwayat Slip Penggajian Resmi &amp; Pencairan</span>
-              </h3>
-              <p className="text-[11px] text-zinc-400 mt-0.5">
-                Daftar pembayaran upah harian &amp; bulanan yang telah dicairkan dari kas operasional divisi.
-              </p>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <span className="text-xs text-zinc-400">Filter Divisi:</span>
-              <select
-                value={filterDivisiGaji}
-                onChange={(e) => setFilterDivisiGaji(e.target.value)}
-                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200"
-              >
-                <option value="ALL">Semua Divisi</option>
-                {DAFTAR_DIVISI.map((d) => (
-                  <option key={d.id} value={d.nama}>
-                    {d.nama}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-zinc-300">
-              <thead className="bg-zinc-800/80 text-[11px] uppercase tracking-wider text-zinc-400 font-semibold border-b border-zinc-700">
-                <tr>
-                  <th className="py-2.5 px-3">No. Slip</th>
-                  <th className="py-2.5 px-3">Tanggal</th>
-                  <th className="py-2.5 px-3">Karyawan</th>
-                  <th className="py-2.5 px-3">Divisi Pembayar</th>
-                  <th className="py-2.5 px-3">Tipe</th>
-                  <th className="py-2.5 px-3 text-right">Gaji Kotor</th>
-                  <th className="py-2.5 px-3 text-right">Potongan Bon</th>
-                  <th className="py-2.5 px-3 text-right">Bersih Diterima</th>
-                  <th className="py-2.5 px-3 text-center">Cetak</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800 font-mono">
-                {penggajianHistory.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="py-8 text-center text-zinc-500 font-sans">
-                      Belum ada slip penggajian yang dicairkan.
-                    </td>
-                  </tr>
-                ) : (
-                  penggajianHistory
-                    .filter((g) => filterDivisiGaji === 'ALL' || g.divisi === filterDivisiGaji)
-                    .map((g) => (
-                      <tr key={g.id} className="hover:bg-zinc-800/40 transition-colors">
-                        <td className="py-2.5 px-3 font-bold text-zinc-200">{g.slipNomor}</td>
-                        <td className="py-2.5 px-3 font-sans text-zinc-400">
-                          {g.tanggal} <span className="text-[10px] text-zinc-500">{g.jam}</span>
-                        </td>
-                        <td className="py-2.5 px-3 font-sans font-semibold text-zinc-200">
-                          {g.namaKaryawan}
-                        </td>
-                        <td className="py-2.5 px-3 font-sans text-zinc-300">
-                          <span className="px-2 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300 border border-zinc-700">
-                            {g.divisi}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 font-sans">
-                          <span className="text-[10px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded font-bold">
-                            {g.tipeGaji}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-zinc-300">
-                          {formatRupiah(g.totalGajiKotor)}
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-rose-400">
-                          -{formatRupiah(g.potonganKasbon)}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-bold text-emerald-400">
-                          {formatRupiah(g.gajiBersihDibayar)}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-sans">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => setActiveSlip(g)}
-                              className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-[11px] font-medium transition-colors flex items-center space-x-1 cursor-pointer"
-                            >
-                              <Printer className="w-3 h-3 text-emerald-400" />
-                              <span>Slip</span>
-                            </button>
-                            <DownloadHistoryGajiButton
-                              idKaryawan={g.idKaryawan}
-                              namaKaryawan={g.namaKaryawan}
-                              compact
-                              variant="sky"
-                              label="History"
-                              onDownloaded={(msg) => {
-                                setSuccessBanner(msg);
-                                setTimeout(() => setSuccessBanner(''), 7000);
-                              }}
-                              onError={(msg) => {
-                                setSuccessBanner(`Gagal mengunduh: ${msg}`);
-                                setTimeout(() => setSuccessBanner(''), 7000);
-                              }}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <RekapPencairanPenggajianView
+          penggajianHistory={penggajianHistory}
+          logHarianList={logHarianList}
+          onOpenSlip={(g) => setActiveSlip(g)}
+          onFeedback={(msg) => {
+            setSuccessBanner(msg);
+            setTimeout(() => setSuccessBanner(''), 7000);
+          }}
+        />
       )}
 
       {/* Modal: Input Payroll Harian Divisi */}

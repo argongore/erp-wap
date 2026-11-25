@@ -208,6 +208,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
   const [beratBersihManualInput, setBeratBersihManualInput] = useState('');
   const [hargaPerKgInput, setHargaPerKgInput] = useState('');
   const [isBelumPutusHarga, setIsBelumPutusHarga] = useState(false);
+  const [isTitipNonFisik, setIsTitipNonFisik] = useState(false);
   const [noSuratJalan, setNoSuratJalan] = useState('');
   const [noNotaLalu, setNoNotaLalu] = useState('');
   const [rincianBarangNotaLalu, setRincianBarangNotaLalu] = useState('');
@@ -335,6 +336,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
           setBeratBersihManualInput(String(bersih));
           setHargaPerKgInput(String(Number(r.hargaPerKg) || 0));
           setIsBelumPutusHarga(Boolean(r.isBelumPutusHarga || r.status === 'BELUM_PUTUS_HARGA'));
+          setIsTitipNonFisik(Boolean(r.isTitipNonFisik));
           setMetode(r.metodePembayaran || 'TUNAI');
           setRekeningSumber(
             r.rekeningSumber && r.rekeningSumber !== 'TIT01' && r.rekeningSumber !== 'KAS01'
@@ -892,6 +894,7 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
             payload.beratBersihManual = Number(beratBersihManualInput) || 0;
           }
           payload.isBelumPutusHarga = isBelumPutusHarga;
+          payload.isTitipNonFisik = isBelumPutusHarga ? isTitipNonFisik : false;
           payload.hargaPerKg = Number(hargaPerKgInput) || 0;
           payload.metode = isBelumPutusHarga ? 'TITIP' : metode;
           if (metode === 'TRANSFER' && !isBelumPutusHarga) {
@@ -1797,14 +1800,18 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                         />
                       </div>
                     ) : (
-                      <div className="flex items-end">
+                      <div className="flex flex-col justify-end gap-1.5">
                         <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-200 bg-amber-50/70 w-full cursor-pointer">
                           <input
                             type="checkbox"
                             checked={isBelumPutusHarga}
                             onChange={(e) => {
                               setIsBelumPutusHarga(e.target.checked);
-                              if (e.target.checked) setMetode('TITIP');
+                              if (e.target.checked) {
+                                setMetode('TITIP');
+                              } else {
+                                setIsTitipNonFisik(false);
+                              }
                             }}
                             className="rounded border-amber-400 text-amber-700"
                           />
@@ -1812,6 +1819,19 @@ export const ModalEditTransaksiUniversal: React.FC<ModalEditTransaksiUniversalPr
                             Belum Putus Harga (Titip Timbang Mengambang)
                           </span>
                         </label>
+                        {isBelumPutusHarga && (
+                          <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-100/70 w-full cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isTitipNonFisik}
+                              onChange={(e) => setIsTitipNonFisik(e.target.checked)}
+                              className="rounded border-amber-500 text-amber-800"
+                            />
+                            <span className="text-[11px] font-semibold text-amber-950">
+                              Titip Lama / Non-Fisik (Barang fisik sudah tidak ada di gudang)
+                            </span>
+                          </label>
+                        )}
                       </div>
                     )}
                   </div>

@@ -77,9 +77,11 @@ import {
   KliringModalMode,
   ModalKliringSilangMitra,
 } from '../common/ModalKliringSilangMitra.tsx';
-import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { buildThermalReceiptPiutangHutangMitra } from '../../utils/thermalPiutangHutangReceipt.ts';
 import { ModalToggleNotaNgunci } from '../master/RekapKhususMitraNgunciSection.tsx';
 import { ImageUploadZone } from '../common/ImageUploadZone.tsx';
+import { SearchableMitraSelect } from '../common/SearchableMitraSelect.tsx';
 import { exportHistoryMitraToCsv, exportHistoryMitraToXlsx } from '../../utils/exportHistoryMitra.ts';
 import { exportRekeningKoranToPdf } from '../../utils/exportRekeningKoranPdf.ts';
 import { exportRekeningKoranToImage } from '../../utils/exportRekeningKoranImage.ts';
@@ -122,6 +124,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
   const [modalPinjamUangOpen, setModalPinjamUangOpen] = useState<boolean>(false);
   const [modalBersihkanNotaOpen, setModalBersihkanNotaOpen] = useState<boolean>(false);
   const [anakPerusahaanModalOpen, setAnakPerusahaanModalOpen] = useState<boolean>(false);
@@ -166,6 +169,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
   const [universalEditId, setUniversalEditId] = useState<string | null>(null);
   const [deleteTxTarget, setDeleteTxTarget] = useState<{
     idTransaksi: string;
+    batchItemIds?: string[];
     tanggal: string;
     uraian: string;
     nominal: number;
@@ -316,12 +320,15 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
       const jenisUpper = (item.jenis || '').toUpperCase();
       const isTitipMasuk =
         item.kategoriMutasiHak === 'TITIP_MASUK' ||
+        item.kategoriMutasiHak === 'UPAH_TERCATAT' ||
+        item.kategoriMutasiHak === 'UPAH_SUDAH_CAIR' ||
         (!item.kategoriMutasiHak &&
           ((jenisUpper.includes('TITIP') &&
             !jenisUpper.includes('PENCAIRAN') &&
             !jenisUpper.includes('POTONG TITIPAN')) ||
             jenisUpper.includes('PINJAMAN UANG PT KE MITRA') ||
-            jenisUpper.includes('UPAH KERJA')));
+            jenisUpper.includes('UPAH KERJA') ||
+            jenisUpper.includes('GAJI BULANAN')));
       const isTitipKeluar =
         item.kategoriMutasiHak === 'TITIP_CAIR' ||
         item.kategoriMutasiHak === 'SLIP_GAJI' ||
@@ -875,6 +882,27 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
     setShowPrintModal(true);
   };
 
+  const handlePrintThermalMitra = (scopeOverride?: 'SALDO_BERJALAN' | 'SEMUA_HISTORY') => {
+    if (!statement) return;
+    setDownloadHistoryMenuOpen(false);
+    const activeScope =
+      scopeOverride || (ledgerTab === 'SALDO_BERJALAN' ? 'SALDO_BERJALAN' : 'SEMUA_HISTORY');
+    const targetRows =
+      activeScope === 'SALDO_BERJALAN' ? historyBerjalanList : historySelesaiList;
+    const scopeLabel =
+      activeScope === 'SALDO_BERJALAN'
+        ? `Saldo Berjalan (${historyBerjalanList.length} Transaksi)`
+        : `History — ${getHistoryFilterLabel()} (${historySelesaiList.length} Transaksi)`;
+
+    setThermalReceipt(
+      buildThermalReceiptPiutangHutangMitra(statement, {
+        scope: activeScope,
+        customRows: targetRows,
+        scopeLabel,
+      })
+    );
+  };
+
   const handleQuickCopy = () => {
     if (!statement) return;
     const lines = [
@@ -1206,6 +1234,14 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                         <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
                         <span>Excel (.xlsx)</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePrintThermalMitra('SALDO_BERJALAN')}
+                        className="col-span-2 px-2 py-1.5 rounded-lg text-left text-[11px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-amber-800 shrink-0" />
+                        <span>Cetak Thermal (80mm / 58mm)</span>
+                      </button>
                     </div>
 
                     <div className="px-3 py-1.5 border-b border-zinc-100 bg-emerald-50/70 text-[10px] font-extrabold uppercase tracking-wider text-emerald-900 flex items-center justify-between">
@@ -1331,6 +1367,19 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                 </>
               )}
             </div>
+          )}
+
+          {statement && (
+            <button
+              type="button"
+              onClick={() => handlePrintThermalMitra()}
+              disabled={loading}
+              className="flex items-center space-x-1.5 px-3.5 py-2 text-xs font-extrabold text-zinc-950 bg-amber-400 hover:bg-amber-300 border border-amber-500 disabled:opacity-50 rounded-lg shadow-xs transition-colors cursor-pointer"
+              title="Cetak Rincian Piutang / Hutang Mitra ini ke Printer Thermal 80mm / 58mm (USB / Bluetooth / RawBT)"
+            >
+              <Printer className="w-4 h-4 text-zinc-950" />
+              <span>Cetak Thermal</span>
+            </button>
           )}
 
           <button
@@ -1460,25 +1509,26 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
       {/* Select Mitra Card */}
       <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex-1 max-w-md">
-          <label className="block text-xs font-bold text-zinc-700 mb-1 uppercase tracking-wider">
-            Pilih Nama Mitra / Petani:
+          <label className="block text-xs font-bold text-zinc-700 mb-1 uppercase tracking-wider flex items-center justify-between">
+            <span>Pilih Nama Mitra / Petani:</span>
+            <span className="text-[10px] font-semibold normal-case tracking-normal text-indigo-700">
+              Cari Nama / Kode / HP
+            </span>
           </label>
-          <select
+          <SearchableMitraSelect
+            mitras={mitraList}
             value={currentMitraId}
-            onChange={(e) => onSelectMitra(e.target.value)}
-            className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-indigo-600 bg-white"
-          >
-            {mitraList.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.nama} ({m.kode}) -{' '}
-                {getRoleMitraLabel(m.role, {
-                  isAnakPerusahaan: m.isAnakPerusahaan,
-                  isKaryawan: m.isKaryawan,
-                })}{' '}
-                - {m.telepon}
-              </option>
-            ))}
-          </select>
+            onChange={(id) => onSelectMitra(id)}
+            placeholder="Cari & pilih nama mitra / petani..."
+            searchPlaceholder="Ketik nama mitra, kode, role, atau no HP..."
+            accent="indigo"
+            getRoleLabel={(m) =>
+              getRoleMitraLabel(m.role, {
+                isAnakPerusahaan: m.isAnakPerusahaan,
+                isKaryawan: m.isKaryawan,
+              })
+            }
+          />
         </div>
 
         {statement && (() => {
@@ -2337,31 +2387,78 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                 <div className="text-[10px] font-mono text-zinc-400">{m.jam}</div>
                               </td>
                               <td className="py-2 px-3 whitespace-nowrap">
-                                <span
-                                  className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    m.arah === 'MASUK'
-                                      ? 'bg-emerald-100 text-emerald-900'
-                                      : m.arah === 'KEMBALI'
-                                      ? 'bg-zinc-200 text-zinc-800'
-                                      : 'bg-amber-100 text-amber-900'
-                                  }`}
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span
+                                    className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                      m.arah === 'MASUK'
+                                        ? 'bg-emerald-100 text-emerald-900'
+                                        : m.arah === 'KEMBALI'
+                                        ? 'bg-zinc-200 text-zinc-800'
+                                        : 'bg-amber-100 text-amber-900'
+                                    }`}
+                                  >
+                                    {m.jenis}
+                                  </span>
+                                  {m.detailItems && m.detailItems.length > 1 && (
+                                    <span className="inline-block px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-sky-100 text-sky-900 border border-sky-200">
+                                      {m.detailItems.length} Rincian
+                                    </span>
+                                  )}
+                                </div>
+                                <div
+                                  className="text-[10px] font-mono text-zinc-400 mt-0.5"
+                                  title={
+                                    m.mergedIds && m.mergedIds.length > 1
+                                      ? `Gabungan Nota: ${m.mergedIds.join(', ')}`
+                                      : m.id
+                                  }
                                 >
-                                  {m.jenis}
-                                </span>
-                                <div className="text-[10px] font-mono text-zinc-400 mt-0.5">{m.id}</div>
+                                  {m.id}
+                                  {m.mergedIds && m.mergedIds.length > 1 && (
+                                    <span className="text-sky-600 ml-1">
+                                      (+{m.mergedIds.length - 1} nota)
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="py-2 px-3 max-w-md">
                                 <div className="font-semibold text-zinc-900">{m.pihakAtauRekeningLawan}</div>
                                 <div className="text-[11px] text-zinc-600 mt-0.5">{m.uraian}</div>
-                                {m.detailItems && m.detailItems.length > 0 && (
-                                  <div className="mt-1 space-y-0.5 pl-2 border-l-2 border-sky-200">
+                                {m.detailItems && m.detailItems.length > 1 ? (
+                                  <div className="mt-1.5 rounded-lg border border-amber-200/90 bg-amber-50/40 overflow-hidden divide-y divide-amber-100/90">
                                     {m.detailItems.map((it, idx) => (
-                                      <div key={idx} className="text-[10px] text-zinc-600">
-                                        • {it.nama} ({it.qty.toLocaleString('id-ID')} {it.satuan} ×{' '}
-                                        {formatRupiah(it.harga)}) = <strong>{formatRupiah(it.subtotal)}</strong>
+                                      <div
+                                        key={idx}
+                                        className="px-2.5 py-1.5 flex items-start justify-between gap-3 text-[10.5px]"
+                                      >
+                                        <div className="min-w-0">
+                                          <span className="font-semibold text-zinc-800">
+                                            {idx + 1}. {it.nama}
+                                          </span>
+                                          <span className="text-zinc-500 ml-1.5 font-mono text-[10px]">
+                                            ({it.qty.toLocaleString('id-ID')} {it.satuan} ×{' '}
+                                            {formatRupiah(it.harga)})
+                                          </span>
+                                        </div>
+                                        <span className="font-mono font-bold text-amber-900 whitespace-nowrap tabular-nums">
+                                          {formatRupiah(it.subtotal)}
+                                        </span>
                                       </div>
                                     ))}
                                   </div>
+                                ) : (
+                                  m.detailItems &&
+                                  m.detailItems.length === 1 && (
+                                    <div className="mt-1 space-y-0.5 pl-2 border-l-2 border-sky-200">
+                                      {m.detailItems.map((it, idx) => (
+                                        <div key={idx} className="text-[10px] text-zinc-600">
+                                          • {it.nama} ({it.qty.toLocaleString('id-ID')} {it.satuan} ×{' '}
+                                          {formatRupiah(it.harga)}) ={' '}
+                                          <strong>{formatRupiah(it.subtotal)}</strong>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )
                                 )}
                                 {m.catatan && m.catatan !== m.uraian && (
                                   <div className="text-[10px] text-zinc-400 italic mt-0.5">
@@ -2878,6 +2975,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                       ledgerTab === 'SALDO_BERJALAN' && (statement.totalBayarBonSiklusBerjalan || 0) > 0;
                     const adaSaldoSilang = statement.totalBonKeseluruhan > 0 && statement.totalTitip > 0;
                     const adaRumusPengurang = displayPiutangTotal > 0 && displayTitipTotal > 0;
+                    const totalBelumPutusKg = statement.totalTitipBelumPutusKg || 0;
                     if (sisaBayar > 0) {
                       return (
                         <>
@@ -2891,6 +2989,11 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             <div className="text-[10px] font-mono tabular-nums text-slate-300">
                               Piutang {formatRupiahSingkat(displayPiutangTotal)} − {hasBayarBonSiklus && statement.totalTitip <= 0 ? 'Bayar Bon' : 'Titip'} {formatRupiahSingkat(displayTitipTotal)}
                               {adaSaldoSilang && !hasBayarBonSiklus ? ' · Belum Kliring' : ''}
+                            </div>
+                          )}
+                          {totalBelumPutusKg > 0 && (
+                            <div className="text-[10px] font-mono tabular-nums text-amber-300 font-bold mt-0.5">
+                              + Titip Panen Belum Putus: {totalBelumPutusKg.toLocaleString('id-ID')} Kg
                             </div>
                           )}
                         </>
@@ -2910,17 +3013,27 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               Titip {formatRupiahSingkat(statement.totalTitip)} − Piutang {formatRupiahSingkat(statement.totalBonKeseluruhan)} · Belum Kliring
                             </div>
                           )}
+                          {totalBelumPutusKg > 0 && (
+                            <div className="text-[10px] font-mono tabular-nums text-amber-300 font-bold mt-0.5">
+                              + Titip Panen Belum Putus: {totalBelumPutusKg.toLocaleString('id-ID')} Kg
+                            </div>
+                          )}
                         </>
                       );
                     }
                     return (
                       <>
                         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
-                          Yang Harus Dibayar
+                          {totalBelumPutusKg > 0 ? 'Saldo Rupiah / Titip Panen' : 'Yang Harus Dibayar'}
                         </div>
                         <div className="text-base font-black font-mono tabular-nums text-emerald-300">
                           {adaSaldoSilang ? 'Impas Rp 0 (Belum Kliring)' : 'LUNAS / IMPAS (Rp 0)'}
                         </div>
+                        {totalBelumPutusKg > 0 && (
+                          <div className="text-[10px] font-mono tabular-nums text-amber-300 font-bold mt-0.5">
+                            Titip Panen Belum Putus: {totalBelumPutusKg.toLocaleString('id-ID')} Kg
+                          </div>
+                        )}
                       </>
                     );
                   })()}
@@ -2992,11 +3105,17 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             row.metodePembayaran === 'SINKRON' ||
                             (row.jenis || '').toUpperCase().includes('SINKRON'));
 
+                        const isBelumPutusRow = Boolean(
+                          row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA'
+                        );
+
                         return (
                           <tr
                             key={row.id}
                             className={
-                              row.isBayarBonSiklusBerjalan && ledgerTab === 'SALDO_BERJALAN'
+                              isBelumPutusRow
+                                ? 'bg-amber-50/50 hover:bg-amber-50/80 transition-colors align-top'
+                                : row.isBayarBonSiklusBerjalan && ledgerTab === 'SALDO_BERJALAN'
                                 ? 'bg-emerald-50/50 hover:bg-emerald-50/80 transition-colors align-top'
                                 : 'hover:bg-amber-50/30 transition-colors align-top'
                             }
@@ -3013,11 +3132,26 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                             {/* ITEM / NAMA BARANG */}
                             <td className="py-3 px-3">
                               <div className="space-y-1">
-                                {(row.isNotaLalu || row.isNotaNgunci || row.fotoNota || !row.isNotaSilang || ledgerTab === 'HISTORY_SELESAI') && (
+                                {(row.isNotaLalu || row.isNotaNgunci || row.fotoNota || isBelumPutusRow || !row.isNotaSilang || ledgerTab === 'HISTORY_SELESAI') && (
                                   <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-zinc-500">
                                     {!row.isNotaSilang && (
                                       <span className="font-bold uppercase tracking-wide text-zinc-700">
                                         {row.jenis.replace(/_/g, ' ')}
+                                      </span>
+                                    )}
+                                    {isBelumPutusRow && (
+                                      <span className="px-1.5 py-0.5 rounded border border-amber-300 bg-amber-100 text-amber-900 font-bold text-[9px] uppercase">
+                                        Belum Putus Harga
+                                      </span>
+                                    )}
+                                    {isBelumPutusRow && row.isTitipNonFisik && (
+                                      <span className="px-1.5 py-0.5 rounded border border-orange-300 bg-orange-100 text-orange-900 font-bold text-[9px] uppercase">
+                                        Titip Lama · Non-Fisik
+                                      </span>
+                                    )}
+                                    {isBelumPutusRow && !row.isTitipNonFisik && (
+                                      <span className="px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-900 font-bold text-[9px] uppercase">
+                                        Fisik Gudang
                                       </span>
                                     )}
                                     {ledgerTab === 'HISTORY_SELESAI' && isKliringRow && (
@@ -3047,6 +3181,7 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                         </span>
                                       )}
                                     {ledgerTab === 'HISTORY_SELESAI' &&
+                                      !isBelumPutusRow &&
                                       (row.debet > 0 ? (
                                         sisaHutangNotaRow > 0 ? (
                                           <span className="px-1.5 py-0.5 rounded border border-rose-300 bg-rose-50 text-rose-800 font-bold text-[9px] uppercase">
@@ -3060,6 +3195,10 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                       ) : row.kategoriMutasiHak === 'TITIP_MASUK' && (row.titipBerjalan ?? 0) > 0 ? (
                                         <span className="px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-900 font-bold text-[9px] uppercase">
                                           Titip Berjalan · Sisa {formatRupiah(row.titipBerjalan || 0)}
+                                        </span>
+                                      ) : row.kategoriMutasiHak === 'UPAH_TERCATAT' ? (
+                                        <span className="px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-900 font-bold text-[9px] uppercase">
+                                          Gaji Belum Cair
                                         </span>
                                       ) : !isKliringRow && !isSinkronRow ? (
                                         <span className="px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 font-bold text-[9px] uppercase">
@@ -3163,38 +3302,112 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                     </div>
                                   )}
 
-                                {isMultiItem ? (
-                                  <div className="border border-zinc-200 rounded-lg overflow-hidden bg-zinc-50/70">
-                                    <table className="w-full text-[11px] border-collapse">
-                                      <thead className="bg-zinc-100 border-b border-zinc-200 text-[9px] font-bold uppercase text-zinc-600">
-                                        <tr>
-                                          <th className="py-1 px-2 text-left">Nama Barang</th>
-                                          <th className="py-1 px-2 text-center">Qty</th>
-                                          <th className="py-1 px-2 text-right">Harga</th>
-                                          <th className="py-1 px-2 text-right">Jumlah</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody className="divide-y divide-zinc-200/70 bg-white">
-                                        {items.map((it, idx) => (
-                                          <tr key={idx}>
-                                            <td className="py-1 px-2 font-semibold text-zinc-900">
-                                              {idx + 1}. {it.nama}
-                                            </td>
-                                            <td className="py-1 px-2 text-center font-mono tabular-nums text-zinc-700 whitespace-nowrap">
-                                              {it.qty} {it.satuan}
-                                            </td>
-                                            <td className="py-1 px-2 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
-                                              {formatRupiah(it.harga)}
-                                            </td>
-                                            <td className="py-1 px-2 text-right font-mono tabular-nums font-bold text-zinc-900 whitespace-nowrap">
-                                              {formatRupiah(it.subtotal)}
-                                            </td>
+                                {isMultiItem ? (() => {
+                                  const hasPerItemId = items.some((it) => Boolean(it.idTransaksiItem));
+                                  const isAllKg = items.every(
+                                    (it) => String(it.satuan || '').trim().toLowerCase() === 'kg'
+                                  );
+                                  const totalQtyBox =
+                                    Math.round(items.reduce((s, it) => s + (Number(it.qty) || 0), 0) * 100) / 100;
+                                  const totalSubtotalBox = items.reduce(
+                                    (s, it) => s + (Number(it.subtotal) || 0),
+                                    0
+                                  );
+                                  return (
+                                    <div className="border border-zinc-200 rounded-lg overflow-hidden bg-zinc-50/70">
+                                      <table className="w-full text-[11px] border-collapse">
+                                        <thead className="bg-zinc-100 border-b border-zinc-200 text-[9px] font-bold uppercase text-zinc-600">
+                                          <tr>
+                                            <th className="py-1 px-2 text-left">
+                                              {row.jenis.includes('HASIL BUMI') ? 'Komoditas' : 'Nama Barang'}
+                                            </th>
+                                            <th className="py-1 px-2 text-center">Qty</th>
+                                            <th className="py-1 px-2 text-right">Harga</th>
+                                            <th className="py-1 px-2 text-right">Subtotal</th>
+                                            {hasPerItemId && (
+                                              <th className="py-1 px-1.5 text-center w-14">Aksi</th>
+                                            )}
                                           </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                ) : singleItem ? (
+                                        </thead>
+                                        <tbody className="divide-y divide-zinc-200/70 bg-white">
+                                          {items.map((it, idx) => (
+                                            <tr key={it.idTransaksiItem || idx} className="hover:bg-zinc-50/80">
+                                              <td className="py-1 px-2 font-semibold text-zinc-900">
+                                                {idx + 1}. {it.nama}
+                                              </td>
+                                              <td className="py-1 px-2 text-center font-mono tabular-nums text-zinc-700 whitespace-nowrap">
+                                                {it.qty} {it.satuan}
+                                              </td>
+                                              <td className="py-1 px-2 text-right font-mono tabular-nums text-zinc-600 whitespace-nowrap">
+                                                {it.isBelumPutusHarga ? (
+                                                  <span className="text-amber-700 font-bold">Belum Putus</span>
+                                                ) : (
+                                                  formatRupiah(it.harga)
+                                                )}
+                                              </td>
+                                              <td className="py-1 px-2 text-right font-mono tabular-nums font-bold text-zinc-900 whitespace-nowrap">
+                                                {it.isBelumPutusHarga ? (
+                                                  <span className="text-amber-700 font-bold">Belum Putus</span>
+                                                ) : (
+                                                  formatRupiah(it.subtotal)
+                                                )}
+                                              </td>
+                                              {hasPerItemId && (
+                                                <td className="py-1 px-1.5 text-center whitespace-nowrap">
+                                                  {it.idTransaksiItem && (
+                                                    <div className="inline-flex items-center gap-1">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => setUniversalEditId(it.idTransaksiItem!)}
+                                                        className="p-1 text-zinc-600 hover:text-zinc-950 hover:bg-zinc-200 rounded transition-colors cursor-pointer"
+                                                        title={`Edit ${it.nama} (${it.idTransaksiItem})`}
+                                                      >
+                                                        <Pencil className="w-2.5 h-2.5" />
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        disabled={partnerActionBusy || deletingTx}
+                                                        onClick={() => {
+                                                          setDeleteTxError('');
+                                                          setDeleteTxTarget({
+                                                            idTransaksi: it.idTransaksiItem!,
+                                                            tanggal: row.tanggal,
+                                                            uraian: `${it.nama} (${it.qty} ${it.satuan})`,
+                                                            nominal: it.subtotal,
+                                                            keterangan: ketUtama || undefined,
+                                                          });
+                                                        }}
+                                                        className="p-1 text-rose-600 hover:text-rose-800 hover:bg-rose-100 rounded transition-colors cursor-pointer"
+                                                        title={`Hapus item ${it.nama} (${it.idTransaksiItem})`}
+                                                      >
+                                                        <Trash2 className="w-2.5 h-2.5" />
+                                                      </button>
+                                                    </div>
+                                                  )}
+                                                </td>
+                                              )}
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                        <tfoot className="bg-zinc-100/90 border-t border-zinc-200 text-[10px] font-bold text-zinc-800">
+                                          <tr>
+                                            <td className="py-1 px-2 text-left">
+                                              Total ({items.length} {row.jenis.includes('HASIL BUMI') ? 'Komoditas' : 'Item'})
+                                            </td>
+                                            <td className="py-1 px-2 text-center font-mono tabular-nums whitespace-nowrap">
+                                              {isAllKg ? `${totalQtyBox.toLocaleString('id-ID')} Kg` : `${items.length} Item`}
+                                            </td>
+                                            <td className="py-1 px-2 text-right text-zinc-500">Akhir</td>
+                                            <td className="py-1 px-2 text-right font-mono tabular-nums font-extrabold text-emerald-900 whitespace-nowrap">
+                                              {formatRupiah(totalSubtotalBox)}
+                                            </td>
+                                            {hasPerItemId && <td />}
+                                          </tr>
+                                        </tfoot>
+                                      </table>
+                                    </div>
+                                  );
+                                })() : singleItem ? (
                                   <div className="font-bold text-zinc-900 text-xs">
                                     {singleItem.nama}
                                   </div>
@@ -3208,20 +3421,39 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
                             {/* QTY */}
                             <td className="py-3 px-3 text-center font-mono tabular-nums font-bold text-zinc-800 whitespace-nowrap text-[11px]">
-                              {isMultiItem
-                                ? `${items.length} Brg`
-                                : singleItem
-                                ? `${singleItem.qty} ${singleItem.satuan}`
-                                : row.qtyDisplay || '-'}
+                              {isMultiItem ? (
+                                row.qtyDisplay && row.qtyDisplay.includes('Kg') ? (
+                                  <div>
+                                    <div>{row.qtyDisplay.split('(')[0].trim()}</div>
+                                    <div className="text-[9px] font-normal text-zinc-500">
+                                      {items.length} Komoditas
+                                    </div>
+                                  </div>
+                                ) : (
+                                  `${items.length} Brg`
+                                )
+                              ) : singleItem ? (
+                                `${singleItem.qty} ${singleItem.satuan}`
+                              ) : (
+                                row.qtyDisplay || '-'
+                              )}
                             </td>
 
                             {/* HARGA */}
                             <td className="py-3 px-3 text-right font-mono tabular-nums text-zinc-700 whitespace-nowrap text-[11px]">
-                              {isMultiItem
-                                ? 'Terlampir'
-                                : singleItem
-                                ? formatRupiah(singleItem.harga)
-                                : row.hargaSatuanDisplay || '-'}
+                              {isBelumPutusRow && !isMultiItem ? (
+                                <span className="font-bold text-amber-800">Belum Putus</span>
+                              ) : isMultiItem ? (
+                                row.hargaSatuanDisplay === 'Belum Putus' ? (
+                                  <span className="font-bold text-amber-800">Belum Putus</span>
+                                ) : (
+                                  'Terlampir'
+                                )
+                              ) : singleItem ? (
+                                formatRupiah(singleItem.harga)
+                              ) : (
+                                row.hargaSatuanDisplay || '-'
+                              )}
                             </td>
 
                             {/* PIUTANG */}
@@ -3263,7 +3495,20 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
 
                             {/* TITIP / HAK */}
                             <td className="py-3 px-3 text-right font-mono tabular-nums font-bold text-emerald-800 bg-emerald-50/20 whitespace-nowrap text-xs">
-                              {nominalTitipCol > 0 ? formatRupiah(nominalTitipCol) : '-'}
+                              {nominalTitipCol > 0 ? (
+                                <>
+                                  {formatRupiah(nominalTitipCol)}
+                                  {isBelumPutusRow && (
+                                    <div className="text-[9px] font-bold text-amber-800">
+                                      + Belum Putus ({(row.beratTitipBelumPutusKg || 0).toLocaleString('id-ID')} Kg)
+                                    </div>
+                                  )}
+                                </>
+                              ) : isBelumPutusRow ? (
+                                <span className="text-amber-800 font-bold text-[11px]">Belum Putus</span>
+                              ) : (
+                                '-'
+                              )}
                               {ledgerTab === 'SALDO_BERJALAN' &&
                                 (row.nominalMutasiHak || 0) > 0 &&
                                 nominalTitipCol > 0 &&
@@ -3292,6 +3537,12 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               {ketUtama ? (
                                 <div className="font-semibold text-zinc-900 leading-snug">
                                   {ketUtama}
+                                </div>
+                              ) : isBelumPutusRow ? (
+                                <div className="text-amber-900 font-semibold leading-snug">
+                                  {row.isTitipNonFisik
+                                    ? `Titip lama (fisik tidak di gudang) · menunggu putus harga (${(row.beratTitipBelumPutusKg || singleItem?.qty || 0).toLocaleString('id-ID')} Kg)`
+                                    : `Titip panen (fisik di gudang) · menunggu putus harga (${(row.beratTitipBelumPutusKg || singleItem?.qty || 0).toLocaleString('id-ID')} Kg)`}
                                 </div>
                               ) : row.catatanNgunci ? (
                                 <div className="text-rose-800 font-medium leading-snug">
@@ -3362,44 +3613,87 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                     </button>
                                   </>
                                 )}
-                                <button
-                                  type="button"
-                                  onClick={() => setUniversalEditId(parentTxId)}
-                                  className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold text-zinc-800 hover:text-white bg-zinc-100 hover:bg-zinc-900 rounded border border-zinc-300 hover:border-zinc-900 transition-colors cursor-pointer"
-                                  title="Edit detail nominal, qty, harga, keterangan, atau tanggal"
-                                >
-                                  <Pencil className="w-3 h-3" />
-                                  <span>Edit</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={partnerActionBusy || deletingTx}
-                                  onClick={() => {
-                                    setDeleteTxError('');
-                                    setDeleteTxTarget({
-                                      idTransaksi: parentTxId,
-                                      tanggal: row.tanggal,
-                                      uraian:
-                                        singleItem?.nama ||
-                                        (isMultiItem ? `${items.length} Barang (${items.map((x) => x.nama).join(', ')})` : '') ||
-                                        row.keterangan ||
-                                        row.jenis.replace(/_/g, ' '),
-                                      nominal:
-                                        nominalPiutangCol ||
-                                        nominalTitipCol ||
-                                        row.debet ||
-                                        row.kredit ||
-                                        row.nominalMutasiHak ||
-                                        0,
-                                      keterangan: ketUtama || undefined,
-                                    });
-                                  }}
-                                  className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-700 rounded border border-rose-200 hover:border-rose-700 transition-colors cursor-pointer"
-                                  title="Hapus transaksi ini (misal salah input / double input)"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                  <span>Hapus</span>
-                                </button>
+                                {row.kategoriMutasiHak === 'UPAH_TERCATAT' ||
+                                row.kategoriMutasiHak === 'UPAH_SUDAH_CAIR' ? (
+                                  onNavigateToBayarGaji ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onNavigateToBayarGaji(statement?.idKaryawanTerkait)
+                                      }
+                                      className="inline-flex items-center space-x-1 px-2.5 py-1 text-[10px] font-bold text-emerald-900 bg-emerald-50 hover:bg-emerald-700 hover:text-white rounded border border-emerald-300 transition-colors cursor-pointer"
+                                      title="Lihat rincian upah per hari & pencairan di menu Gaji & Upah"
+                                    >
+                                      <FileText className="w-3 h-3" />
+                                      <span>Rincian Gaji</span>
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] text-zinc-500 font-medium">
+                                      Via Gaji &amp; Upah
+                                    </span>
+                                  )
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setUniversalEditId(
+                                          row.batchItemIds && row.batchItemIds.length > 0
+                                            ? row.batchItemIds[0]
+                                            : parentTxId
+                                        )
+                                      }
+                                      className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold text-zinc-800 hover:text-white bg-zinc-100 hover:bg-zinc-900 rounded border border-zinc-300 hover:border-zinc-900 transition-colors cursor-pointer"
+                                      title={
+                                        row.batchItemIds && row.batchItemIds.length > 1
+                                          ? 'Edit item pertama (atau klik ikon pensil per komoditas di dalam kotak)'
+                                          : 'Edit detail nominal, qty, harga, keterangan, atau tanggal'
+                                      }
+                                    >
+                                      <Pencil className="w-3 h-3" />
+                                      <span>Edit</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={partnerActionBusy || deletingTx}
+                                      onClick={() => {
+                                        setDeleteTxError('');
+                                        setDeleteTxTarget({
+                                          idTransaksi: parentTxId,
+                                          batchItemIds:
+                                            row.batchItemIds && row.batchItemIds.length > 1
+                                              ? row.batchItemIds
+                                              : undefined,
+                                          tanggal: row.tanggal,
+                                          uraian:
+                                            singleItem?.nama ||
+                                            (isMultiItem
+                                              ? `${items.length} ${row.jenis.includes('HASIL BUMI') ? 'Komoditas' : 'Barang'} (${items.map((x) => x.nama).join(', ')})`
+                                              : '') ||
+                                            row.keterangan ||
+                                            row.jenis.replace(/_/g, ' '),
+                                          nominal:
+                                            nominalPiutangCol ||
+                                            nominalTitipCol ||
+                                            row.debet ||
+                                            row.kredit ||
+                                            row.nominalMutasiHak ||
+                                            0,
+                                          keterangan: ketUtama || undefined,
+                                        });
+                                      }}
+                                      className="inline-flex items-center space-x-1 px-2 py-1 text-[10px] font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-700 rounded border border-rose-200 hover:border-rose-700 transition-colors cursor-pointer"
+                                      title={
+                                        row.batchItemIds && row.batchItemIds.length > 1
+                                          ? `Hapus seluruh ${row.batchItemIds.length} komoditas dalam transaksi ini`
+                                          : 'Hapus transaksi ini (misal salah input / double input)'
+                                      }
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      <span>Hapus</span>
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -3420,11 +3714,18 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                           {formatRupiah(statement.totalTitipBerjalanTampil ?? statement.totalTitip)}
                         </td>
                         <td colSpan={2} className="py-3 px-4 text-left font-mono tabular-nums text-slate-900">
-                          {(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)) > 0
-                            ? `Sisa Piutang Berjalan: ${formatRupiah(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip))}`
-                            : (statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)) > 0
-                            ? `Yang Harus Dibayar: Hutang ${formatRupiah(statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan))}`
-                            : 'IMPAS (Rp 0)'}
+                          <div>
+                            {(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip)) > 0
+                              ? `Sisa Piutang Berjalan: ${formatRupiah(statement.sisaBonBersih ?? Math.max(0, statement.totalBonKeseluruhan - statement.totalTitip))}`
+                              : (statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan)) > 0
+                              ? `Yang Harus Dibayar: Hutang ${formatRupiah(statement.sisaTitipanBersih ?? Math.max(0, statement.totalTitip - statement.totalBonKeseluruhan))}`
+                              : 'IMPAS (Rp 0)'}
+                          </div>
+                          {(statement.totalTitipBelumPutusKg || 0) > 0 && (
+                            <div className="text-[10px] text-amber-800 font-bold mt-0.5">
+                              + Titip Panen Belum Putus: {(statement.totalTitipBelumPutusKg || 0).toLocaleString('id-ID')} Kg
+                            </div>
+                          )}
                         </td>
                       </tr>
                     </tfoot>
@@ -3707,11 +4008,16 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                               ? row.debet - row.sisaPiutangNota
                               : 0;
 
+                          const isBelumPutusPrintRow = Boolean(
+                            row.isBelumPutusHarga || row.statusTransaksi === 'BELUM_PUTUS_HARGA'
+                          );
                           return (
                             <tr
                               key={row.id}
                               className={
-                                row.isBayarBonSiklusBerjalan && ledgerTab === 'SALDO_BERJALAN'
+                                isBelumPutusPrintRow
+                                  ? 'align-top bg-amber-50/50'
+                                  : row.isBayarBonSiklusBerjalan && ledgerTab === 'SALDO_BERJALAN'
                                   ? 'align-top bg-emerald-50/50'
                                   : 'align-top'
                               }
@@ -3730,7 +4036,13 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                           {idx + 1}. {it.nama}
                                         </span>
                                         <span className="font-mono tabular-nums text-zinc-700 whitespace-nowrap">
-                                          {it.qty} {it.satuan} × {formatRupiah(it.harga)} = <strong>{formatRupiah(it.subtotal)}</strong>
+                                          {it.isBelumPutusHarga ? (
+                                            `${it.qty} ${it.satuan} · Belum Putus`
+                                          ) : (
+                                            <>
+                                              {it.qty} {it.satuan} × {formatRupiah(it.harga)} = <strong>{formatRupiah(it.subtotal)}</strong>
+                                            </>
+                                          )}
                                         </span>
                                       </div>
                                     ))}
@@ -3742,7 +4054,14 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                   </div>
                                 ) : single ? (
                                   <div>
-                                    <div className="font-bold text-zinc-900">{single.nama}</div>
+                                    <div className="font-bold text-zinc-900">
+                                      {single.nama}
+                                      {isBelumPutusPrintRow && (
+                                        <span className="ml-1.5 text-[9px] font-bold text-amber-800 uppercase">
+                                          [Belum Putus Harga]
+                                        </span>
+                                      )}
+                                    </div>
                                     {sudahDibayarNota > 0 && (
                                       <div className="text-[9px] text-emerald-800 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-0.5 inline-block">
                                         Sudah Dicicil/Dibayar: {formatRupiah(sudahDibayarNota)} · Sisa Piutang: {formatRupiah(row.sisaPiutangNota || 0)}
@@ -3764,16 +4083,24 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                                 {isMulti ? `${items.length} Item` : single ? `${single.qty} ${single.satuan}` : row.qtyDisplay || '-'}
                               </td>
                               <td className="py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap">
-                                {isMulti ? 'Rincian' : single ? formatRupiah(single.harga) : row.hargaSatuanDisplay || '-'}
+                                {isBelumPutusPrintRow && !isMulti
+                                  ? 'Belum Putus'
+                                  : isMulti
+                                  ? row.hargaSatuanDisplay === 'Belum Putus'
+                                    ? 'Belum Putus'
+                                    : 'Rincian'
+                                  : single
+                                  ? formatRupiah(single.harga)
+                                  : row.hargaSatuanDisplay || '-'}
                               </td>
                               <td className="py-2 px-2 text-right font-mono tabular-nums font-bold text-rose-800 whitespace-nowrap">
                                 {piutangVal > 0 ? formatRupiah(piutangVal) : '-'}
                               </td>
                               <td className="py-2 px-2 text-right font-mono tabular-nums font-bold text-emerald-800 whitespace-nowrap">
-                                {titipVal > 0 ? formatRupiah(titipVal) : '-'}
+                                {titipVal > 0 ? formatRupiah(titipVal) : isBelumPutusPrintRow ? 'Belum Putus' : '-'}
                               </td>
                               <td className="py-2 px-2.5 text-zinc-900 font-semibold">
-                                {ketNote || '-'}
+                                {ketNote || (isBelumPutusPrintRow ? 'Titip panen belum putus harga' : '-')}
                               </td>
                             </tr>
                           );
@@ -4793,11 +5120,21 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                     setDeletingTx(true);
                     setDeleteTxError('');
                     try {
-                      const res = await api.deleteTransactionUniversal(deleteTxTarget.idTransaksi);
-                      setDeleteTxTarget(null);
-                      setEditSuccessMsg(
-                        `Transaksi ${res.idTransaksi} berhasil dihapus. Saldo mitra & rekening kas/bank telah disinkronkan otomatis.`
-                      );
+                      if (deleteTxTarget.batchItemIds && deleteTxTarget.batchItemIds.length > 0) {
+                        for (const childId of deleteTxTarget.batchItemIds) {
+                          await api.deleteTransactionUniversal(childId);
+                        }
+                        setDeleteTxTarget(null);
+                        setEditSuccessMsg(
+                          `Transaksi batch ${deleteTxTarget.idTransaksi} (${deleteTxTarget.batchItemIds.length} komoditas) berhasil dihapus. Saldo mitra, stok & kas/bank disinkronkan otomatis.`
+                        );
+                      } else {
+                        const res = await api.deleteTransactionUniversal(deleteTxTarget.idTransaksi);
+                        setDeleteTxTarget(null);
+                        setEditSuccessMsg(
+                          `Transaksi ${res.idTransaksi} berhasil dihapus. Saldo mitra & rekening kas/bank telah disinkronkan otomatis.`
+                        );
+                      }
                       await loadStatementData(currentMitraId, true);
                       window.dispatchEvent(new CustomEvent('erp:data-updated'));
                       onRefreshParent?.();
@@ -4941,6 +5278,12 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={activeProfil}
+      />
     </div>
   );
 };

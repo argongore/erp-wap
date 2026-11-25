@@ -12,17 +12,22 @@ import {
   BookOpen,
   Wheat,
   History,
+  Printer,
+  PiggyBank,
 } from 'lucide-react';
 import { api, KaryawanWithBon } from '../../api/client.ts';
 import {
   CatatanUpahHarian,
   DetailHarianKaryawanResponse,
   NamaDivisi,
+  ProfilPerusahaan,
   Rekening,
   TransaksiPenggajian,
   TANPA_DIVISI_VALUE,
 } from '../../server/types.ts';
 import { dmyToIsoInput } from '../../utils/format.ts';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { buildThermalReceiptDraftPencairan } from '../../utils/thermalPayrollReceipt.ts';
 
 export type ModeBayarGajiModal = 'AKUMULASI_HARIAN' | 'BULAN_SEBELUMNYA_LANGSUNG';
 
@@ -146,6 +151,12 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
   const [persentasePotong, setPersentasePotong] = useState<number>(0);
   const [nominalPotongKustom, setNominalPotongKustom] = useState<number>(0);
 
+  // Opsi Alokasi Sisa Gaji: Ambil Semua, Ambil Sebagian + Titip Sisa, atau Titip Semua (100%)
+  const [modeAlokasiSisaGaji, setModeAlokasiSisaGaji] = useState<
+    'AMBIL_SEMUA' | 'SEBAGIAN_TITIP' | 'TITIP_SEMUA'
+  >('AMBIL_SEMUA');
+  const [nominalDiambilSebagian, setNominalDiambilSebagian] = useState<number>(0);
+
   const [divisi, setDivisi] = useState<NamaDivisi | string>('Gudang Wijaya Agro');
   const [metodePembayaran, setMetodePembayaran] = useState<'TUNAI' | 'TRANSFER' | 'SINKRON'>('TUNAI');
   const [rekeningSumber, setRekeningSumber] = useState<string>('KAS01');
@@ -157,6 +168,17 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
 
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
+
+  useEffect(() => {
+    api
+      .getProfilPerusahaan()
+      .then((p) => {
+        if (p) setProfilPerusahaan(p);
+      })
+      .catch(() => null);
+  }, []);
 
   // Hanya rekening Kas Tunai & Bank PT riil (TIDAK termasuk Buku Operasional Divisi REK-* yang bersaldo Rp 0 di awal bulan)
   const realRekenings = useMemo(
@@ -202,6 +224,8 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
         if (cancelled) return;
         setDetailData(res);
         setBonusInput(0);
+        setModeAlokasiSisaGaji('AMBIL_SEMUA');
+        setNominalDiambilSebagian(0);
 
         const empDiv = (res.karyawan.divisi || res.karyawan.departemen || 'Gudang Wijaya Agro') as NamaDivisi;
         setDivisi(empDiv);
@@ -305,8 +329,22 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
     }
   }
 
-  const gajiBersihDiterima = Math.max(0, totalGajiKotor - nominalPotonganKasbon);
+  const hakGajiSetelahPotongBon = Math.max(0, totalGajiKotor - nominalPotonganKasbon);
   const sisaKasbonSetelahGaji = Math.max(0, totalKasbonAktif - nominalPotonganKasbon);
+
+  const nominalDititipkan = useMemo(() => {
+    if (hakGajiSetelahPotongBon <= 0) return 0;
+    if (modeAlokasiSisaGaji === 'TITIP_SEMUA') return hakGajiSetelahPotongBon;
+    if (modeAlokasiSisaGaji === 'SEBAGIAN_TITIP') {
+      const ambil = Math.min(Math.max(0, Math.round(nominalDiambilSebagian || 0)), hakGajiSetelahPotongBon);
+      return Math.max(0, hakGajiSetelahPotongBon - ambil);
+    }
+    return 0;
+  }, [hakGajiSetelahPotongBon, modeAlokasiSisaGaji, nominalDiambilSebagian]);
+
+  // Uang riil yang keluar dari Kasir / Bank (setelah potong bon & titip sisa gaji)
+  const gajiBersihDiterima = Math.max(0, hakGajiSetelahPotongBon - nominalDititipkan);
+  const saldoTitipSetelahGaji = saldoTitipPanenMitra + nominalDititipkan;
 
   const isSinkronMode = metodePembayaran === 'SINKRON' || rekeningSumber === 'SINKRON';
   const effectiveRekeningKode = isSinkronMode
@@ -381,9 +419,12 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
           metodePembayaran: isSinkronMode ? 'SINKRON' : metodePembayaran,
           persentasePotongKasbon: persentasePotong === -1 ? 0 : persentasePotong,
           nominalPotongKustom: persentasePotong === -1 ? nominalPotongKustom : undefined,
+          nominalDititipkan: nominalDititipkan > 0 ? nominalDititipkan : 0,
           keterangan:
             keterangan.trim() ||
-            `Pembayaran Gaji Bulan Sebelumnya (${periodeLabel}) - Dicairkan tgl ${formattedTanggalBayar}`,
+            `Pembayaran Gaji Bulan Sebelumnya (${periodeLabel}) - Dicairkan tgl ${formattedTanggalBayar}${
+              nominalDititipkan > 0 ? ` · Dititipkan ${formatRp(nominalDititipkan)}` : ''
+            }`,
         });
 
         onSuccess(slip);
@@ -411,9 +452,12 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
         metodePembayaran: isSinkronMode ? 'SINKRON' : metodePembayaran,
         persentasePotongKasbon: persentasePotong === -1 ? 0 : persentasePotong,
         nominalPotongKustom: persentasePotong === -1 ? nominalPotongKustom : undefined,
+        nominalDititipkan: nominalDititipkan > 0 ? nominalDititipkan : 0,
         keterangan:
           keterangan.trim() ||
-          `Pencairan Gaji Hari Kerja (${selectedUnpaidRows.length} hari masuk) - ${periodeLabel}`,
+          `Pencairan Gaji Hari Kerja (${selectedUnpaidRows.length} hari masuk) - ${periodeLabel}${
+            nominalDititipkan > 0 ? ` · Dititipkan ${formatRp(nominalDititipkan)}` : ''
+          }`,
       });
 
       onSuccess(slip);
@@ -425,6 +469,58 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
   };
 
   const unpaidAllCount = (detailData?.logHarian || []).filter((u) => u.status === 'TERCATAT').length;
+
+  const handlePreviewThermalDraft = () => {
+    if (!selectedKaryawan) return;
+    const logsForThermal =
+      modePembayaranGaji === 'BULAN_SEBELUMNYA_LANGSUNG'
+        ? ikutkanUpahBulanLalu
+          ? unpaidRowsSelectedMonth
+          : []
+        : selectedUnpaidRows;
+
+    const receipt = buildThermalReceiptDraftPencairan({
+      namaKaryawan: selectedKaryawan.nama,
+      nik: selectedKaryawan.nik,
+      jabatan: selectedKaryawan.jabatan,
+      divisi: String(divisi || selectedKaryawan.divisi || 'Gudang Wijaya Agro'),
+      periodeLabel:
+        modePembayaranGaji === 'BULAN_SEBELUMNYA_LANGSUNG'
+          ? `Gaji Bulan ${periodeLabel}`
+          : filterScope === 'BULAN_INI'
+          ? periodeLabel
+          : `Akumulasi s/d ${periodeLabel}`,
+      tanggalCetakDmy: formatIsoToDmyDisplay(tanggalBayar),
+      dailyLogs: logsForThermal,
+      includeStatusTag: false,
+      title: 'RINCIAN PENCAIRAN GAJI',
+      gajiPokokTambahan:
+        modePembayaranGaji === 'BULAN_SEBELUMNYA_LANGSUNG' ? Math.max(0, gajiBulanLaluInput) : 0,
+      bonus: Math.max(0, bonusInput),
+      totalGajiKotor,
+      kasbonUang,
+      kasbonBarang,
+      totalKasbonAwal: totalKasbonAktif,
+      potonganKasbon: nominalPotonganKasbon,
+      persentasePotongKasbon: persentasePotong > 0 ? persentasePotong : undefined,
+      sisaKasbonAkhir: sisaKasbonSetelahGaji,
+      saldoTitipPanen: saldoTitipPanenMitra,
+      hakGajiSetelahPotongBon,
+      nominalDititipkan,
+      gajiBersihDiterima,
+      totalLabel: nominalDititipkan > 0 ? 'DIAMBIL TUNAI / TRANSFER' : 'GAJI BERSIH DITERIMA',
+      metodePembayaran: isSinkronMode ? 'SINKRON' : metodePembayaran,
+      rekeningSumber:
+        nominalDititipkan > 0 && gajiBersihDiterima === 0 && !isSinkronMode
+          ? 'TIT01'
+          : effectiveRekeningKode,
+      statusLabel: 'DRAFT PENCAIRAN (CEK KARYAWAN)',
+      catatan:
+        keterangan.trim() ||
+        `Rincian pencairan gaji ${periodeLabel} (cair tgl ${formatIsoToDmyDisplay(tanggalBayar)})`,
+    });
+    setThermalReceipt(receipt);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
@@ -855,32 +951,54 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
             </>
           )}
 
-          {/* 4. Potong Kasbon Fleksibel */}
-          <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">
+          {/* 4. Potong Piutang / Kasbon Fleksibel */}
+          <div
+            className={`p-4 rounded-xl border space-y-3 ${
+              totalKasbonAktif > 0
+                ? 'border-rose-300 bg-rose-50/40'
+                : 'border-slate-200 bg-white'
+            }`}
+          >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Potongan Kasbon Karyawan (Uang + Barang Toko / Hasil Bumi)
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>1. Opsi Potongan Piutang / Kasbon Karyawan</span>
                 </h4>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Kasbon Uang: <span className="font-mono tabular-nums font-semibold">{formatRp(kasbonUang)}</span> · Kasbon Barang:{' '}
-                  <span className="font-mono tabular-nums font-semibold">{formatRp(kasbonBarang)}</span>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Piutang / Bon Uang:{' '}
+                  <span className="font-mono tabular-nums font-semibold text-slate-900">
+                    {formatRp(kasbonUang)}
+                  </span>{' '}
+                  · Bon Barang:{' '}
+                  <span className="font-mono tabular-nums font-semibold text-slate-900">
+                    {formatRp(kasbonBarang)}
+                  </span>
                 </p>
               </div>
               <div className="text-right">
-                <span className="text-[11px] text-slate-500 block">Total Kasbon Aktif</span>
+                <span className="text-[11px] text-slate-500 block">Total Piutang / Bon Aktif</span>
                 <span
                   className={`text-sm font-mono tabular-nums font-bold ${
-                    totalKasbonAktif > 0 ? 'text-rose-600' : 'text-emerald-600'
+                    totalKasbonAktif > 0 ? 'text-rose-700' : 'text-emerald-700'
                   }`}
                 >
-                  {totalKasbonAktif > 0 ? formatRp(totalKasbonAktif) : 'Tidak Ada Kasbon'}
+                  {totalKasbonAktif > 0 ? formatRp(totalKasbonAktif) : 'Bebas Piutang (Rp 0)'}
                 </span>
               </div>
             </div>
 
             {totalKasbonAktif > 0 && (
               <div className="space-y-2.5">
+                <div className="px-3 py-2 rounded-lg bg-white border border-rose-200 text-xs text-rose-900 flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    Karyawan ini memiliki piutang aktif{' '}
+                    <strong className="font-mono tabular-nums">{formatRp(totalKasbonAktif)}</strong>. Pilih apakah ingin memotong piutang langsung dari gaji ini:
+                  </span>
+                  <span className="font-mono tabular-nums text-[11px] font-bold text-slate-700">
+                    Sisa Piutang Akhir: {formatRp(sisaKasbonSetelahGaji)}
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   {[
                     { label: '0% (Tunda)', val: 0 },
@@ -893,10 +1011,10 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                       key={opt.val}
                       type="button"
                       onClick={() => setPersentasePotong(opt.val)}
-                      className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-colors ${
+                      className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
                         persentasePotong === opt.val
                           ? 'bg-slate-900 text-white border-slate-900'
-                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
                       }`}
                     >
                       {opt.label}
@@ -907,7 +1025,7 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                 {persentasePotong === -1 && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Masukkan Nominal Potongan Kasbon (Maks {formatRp(Math.min(totalKasbonAktif, totalGajiKotor))})
+                      Masukkan Nominal Potongan Piutang / Bon (Maks {formatRp(Math.min(totalKasbonAktif, totalGajiKotor))})
                     </label>
                     <input
                       type="number"
@@ -915,12 +1033,219 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
                       max={Math.min(totalKasbonAktif, totalGajiKotor)}
                       step="any"
                       value={nominalPotongKustom || ''}
-                      onChange={(e) => setNominalPotongKustom(Number(e.target.value) || 0)}
-                      placeholder="Contoh: 100000"
-                      className="w-full px-3.5 py-2 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-lg"
+                      onChange={(e) => setNominalPotongKustom(Math.max(0, Number(e.target.value) || 0))}
+                      placeholder="Contoh: 400000"
+                      className="w-full px-3.5 py-2 text-sm font-mono tabular-nums font-bold border border-slate-300 rounded-lg bg-white"
                     />
                   </div>
                 )}
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-semibold text-slate-700">
+                Hak Gaji Bersih Setelah Potong Piutang:
+              </span>
+              <span className="font-mono tabular-nums text-sm font-bold text-slate-900">
+                {formatRp(hakGajiSetelahPotongBon)}
+              </span>
+            </div>
+          </div>
+
+          {/* 4B. Opsi Pengambilan & Titipan Sisa Gaji */}
+          <div className="p-4 rounded-xl border border-amber-300 bg-amber-50/40 space-y-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <PiggyBank className="w-4 h-4 text-amber-700" />
+                  <span>2. Opsi Pengambilan Cash / Transfer &amp; Titipan Sisa Gaji</span>
+                </h4>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Karyawan bisa mengambil seluruh gaji, mengambil sebagian cash lalu menitipkan sisanya, atau menitipkan 100% ke Saldo Titipan Rekening Mitra.
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-[11px] text-slate-500 block">Saldo Titipan Saat Ini</span>
+                <span className="text-xs font-mono tabular-nums font-bold text-amber-800">
+                  {formatRp(saldoTitipPanenMitra)}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setModeAlokasiSisaGaji('AMBIL_SEMUA');
+                  setNominalDiambilSebagian(hakGajiSetelahPotongBon);
+                }}
+                className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
+                  modeAlokasiSisaGaji === 'AMBIL_SEMUA'
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                <div className="text-xs font-bold">Ambil Semua (100% Cair)</div>
+                <div
+                  className={`text-[11px] font-mono tabular-nums mt-0.5 ${
+                    modeAlokasiSisaGaji === 'AMBIL_SEMUA' ? 'text-emerald-300' : 'text-slate-500'
+                  }`}
+                >
+                  Cair {formatRp(hakGajiSetelahPotongBon)} · Titip Rp 0
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setModeAlokasiSisaGaji('SEBAGIAN_TITIP');
+                  if (nominalDiambilSebagian <= 0 || nominalDiambilSebagian >= hakGajiSetelahPotongBon) {
+                    const defaultAmbil =
+                      hakGajiSetelahPotongBon >= 100000
+                        ? 100000
+                        : Math.floor(hakGajiSetelahPotongBon / 2);
+                    setNominalDiambilSebagian(defaultAmbil);
+                  }
+                }}
+                className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
+                  modeAlokasiSisaGaji === 'SEBAGIAN_TITIP'
+                    ? 'bg-amber-600 text-white border-amber-700'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-amber-50'
+                }`}
+              >
+                <div className="text-xs font-bold">Ambil Sebagian + Titip Sisa</div>
+                <div
+                  className={`text-[11px] mt-0.5 ${
+                    modeAlokasiSisaGaji === 'SEBAGIAN_TITIP' ? 'text-amber-100' : 'text-slate-500'
+                  }`}
+                >
+                  Misal ambil Rp 100 rb cash, sisa dititip
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setModeAlokasiSisaGaji('TITIP_SEMUA');
+                  setNominalDiambilSebagian(0);
+                }}
+                className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
+                  modeAlokasiSisaGaji === 'TITIP_SEMUA'
+                    ? 'bg-amber-700 text-white border-amber-800'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-amber-50'
+                }`}
+              >
+                <div className="text-xs font-bold">Titipkan Semua (100% Titip)</div>
+                <div
+                  className={`text-[11px] font-mono tabular-nums mt-0.5 ${
+                    modeAlokasiSisaGaji === 'TITIP_SEMUA' ? 'text-amber-100' : 'text-slate-500'
+                  }`}
+                >
+                  Cair Rp 0 · Titip {formatRp(hakGajiSetelahPotongBon)}
+                </div>
+              </button>
+            </div>
+
+            {modeAlokasiSisaGaji === 'SEBAGIAN_TITIP' && hakGajiSetelahPotongBon > 0 && (
+              <div className="p-3.5 rounded-xl bg-white border border-amber-300 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Diambil Cash / Transfer Sekarang (Rp)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={hakGajiSetelahPotongBon}
+                      step="any"
+                      value={gajiBersihDiterima}
+                      onChange={(e) => {
+                        const val = Math.min(
+                          Math.max(0, Math.round(Number(e.target.value) || 0)),
+                          hakGajiSetelahPotongBon
+                        );
+                        setNominalDiambilSebagian(val);
+                      }}
+                      placeholder="Contoh: 100000"
+                      className="w-full px-3 py-2 text-sm font-mono tabular-nums font-bold border border-emerald-400 rounded-lg bg-emerald-50/40 text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {[100000, 200000, 500000, 1000000]
+                        .filter((v) => v <= hakGajiSetelahPotongBon)
+                        .map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setNominalDiambilSebagian(preset)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border cursor-pointer ${
+                              gajiBersihDiterima === preset
+                                ? 'bg-emerald-700 text-white border-emerald-700'
+                                : 'bg-white text-slate-700 border-slate-300 hover:bg-emerald-50'
+                            }`}
+                          >
+                            {preset >= 1000000
+                              ? `${preset / 1000000} Jt`
+                              : `${preset / 1000} rb`}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Sisa Gaji Dititipkan ke Saldo Titipan (Rp)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={hakGajiSetelahPotongBon}
+                      step="any"
+                      value={nominalDititipkan}
+                      onChange={(e) => {
+                        const titipVal = Math.min(
+                          Math.max(0, Math.round(Number(e.target.value) || 0)),
+                          hakGajiSetelahPotongBon
+                        );
+                        setNominalDiambilSebagian(Math.max(0, hakGajiSetelahPotongBon - titipVal));
+                      }}
+                      placeholder="Otomatis terhitung"
+                      className="w-full px-3 py-2 text-sm font-mono tabular-nums font-bold border border-amber-400 rounded-lg bg-amber-50/50 text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <p className="text-[11px] text-amber-900 mt-1.5">
+                      Saldo Titipan setelah transaksi:{' '}
+                      <strong className="font-mono tabular-nums">{formatRp(saldoTitipSetelahGaji)}</strong>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {nominalDititipkan > 0 && (
+              <div className="px-3.5 py-2.5 rounded-lg bg-white border border-amber-200 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-500 block">Gaji Kotor</span>
+                  <span className="font-mono tabular-nums font-bold text-slate-900">
+                    {formatRp(totalGajiKotor)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 block">Potong Piutang</span>
+                  <span className="font-mono tabular-nums font-bold text-rose-700">
+                    -{formatRp(nominalPotonganKasbon)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 block">Diambil Cash / TF</span>
+                  <span className="font-mono tabular-nums font-bold text-emerald-700">
+                    {formatRp(gajiBersihDiterima)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 block">Dititipkan (TIT01)</span>
+                  <span className="font-mono tabular-nums font-bold text-amber-700">
+                    +{formatRp(nominalDititipkan)}
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -1079,9 +1404,19 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
               <p className="text-[11px] text-emerald-900 mt-2 font-medium">
                 {isSinkronMode ? (
                   <>Mode <strong>SINKRON</strong>: tercatat di buku gaji tanpa memotong saldo kas harian.</>
+                ) : nominalDititipkan > 0 && gajiBersihDiterima === 0 ? (
+                  <>
+                    Seluruh sisa gaji sebesar <strong className="font-mono">{formatRp(nominalDititipkan)}</strong> masuk ke <strong>Saldo Titipan Karyawan/Mitra (TIT01)</strong>. Kas keluar hari ini <strong>Rp 0</strong>.
+                  </>
                 ) : (
                   <>
-                    Uang keluar sebesar <strong className="font-mono">{formatRp(gajiBersihDiterima)}</strong> akan otomatis masuk ke <strong>Uang Keluar pada Arus Kas Harian tanggal {formatIsoToDmyDisplay(tanggalBayar)}</strong> ({selectedRekObj?.nama || effectiveRekeningKode}).
+                    Uang keluar sebesar <strong className="font-mono">{formatRp(gajiBersihDiterima)}</strong> otomatis masuk ke <strong>Uang Keluar Arus Kas Harian tanggal {formatIsoToDmyDisplay(tanggalBayar)}</strong> ({selectedRekObj?.nama || effectiveRekeningKode})
+                    {nominalDititipkan > 0 && (
+                      <>
+                        {' '}dan sisa <strong className="font-mono text-amber-800">{formatRp(nominalDititipkan)}</strong> masuk ke <strong>Saldo Titipan (TIT01)</strong>
+                      </>
+                    )}
+                    .
                   </>
                 )}
               </p>
@@ -1092,39 +1427,62 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
           <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1 text-xs">
               <div className="text-slate-400">
-                Periode Gaji: <span className="text-amber-300 font-bold">{periodeLabel}</span> · Total Gaji Kotor:{' '}
+                Periode Gaji: <span className="text-amber-300 font-bold">{periodeLabel}</span> · Gaji Kotor:{' '}
                 <span className="text-white font-mono tabular-nums font-bold">{formatRp(totalGajiKotor)}</span>
                 {nominalPotonganKasbon > 0 && (
                   <>
                     {' '}
-                    · Potong Kasbon:{' '}
+                    · Potong Piutang:{' '}
                     <span className="text-rose-300 font-mono tabular-nums font-bold">
                       -{formatRp(nominalPotonganKasbon)}
                     </span>{' '}
-                    (Sisa Bon: {formatRp(sisaKasbonSetelahGaji)})
+                    (Sisa: {formatRp(sisaKasbonSetelahGaji)})
+                  </>
+                )}
+                {nominalDititipkan > 0 && (
+                  <>
+                    {' '}
+                    · Dititipkan:{' '}
+                    <span className="text-amber-300 font-mono tabular-nums font-bold">
+                      {formatRp(nominalDititipkan)}
+                    </span>
                   </>
                 )}
               </div>
               <div className="text-base sm:text-lg font-bold flex flex-wrap items-center gap-2">
-                <span>Uang Gaji Bersih Keluar Kas ({formatIsoToDmyDisplay(tanggalBayar)}):</span>
+                <span>
+                  {nominalDititipkan > 0
+                    ? `Diambil Cash/TF (${formatIsoToDmyDisplay(tanggalBayar)}):`
+                    : `Uang Gaji Bersih Keluar Kas (${formatIsoToDmyDisplay(tanggalBayar)}):`}
+                </span>
                 <span className="text-emerald-400 font-mono tabular-nums text-xl">
                   {formatRp(gajiBersihDiterima)}
                 </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
+                className="px-3.5 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors cursor-pointer"
               >
                 Batal
               </button>
               <button
+                type="button"
+                disabled={!selectedKaryawan || loadingDetail}
+                onClick={handlePreviewThermalDraft}
+                className="px-3.5 py-2.5 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                title="Cetak rincian gaji per hari ke printer thermal 80mm / 58mm untuk pengecekan sebelum atau saat pencairan"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Cetak Thermal</span>
+              </button>
+              <button
                 type="submit"
                 disabled={submitting || saldoTidakCukup}
-                className="px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 flex items-center gap-2 transition-colors shadow-lg cursor-pointer"
+                className="px-4 sm:px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 flex items-center gap-2 transition-colors shadow-lg cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />
                 <span>
@@ -1140,6 +1498,12 @@ export const BayarGajiKaryawanModal: React.FC<BayarGajiKaryawanModalProps> = ({
           </div>
         </form>
       </div>
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={profilPerusahaan}
+      />
     </div>
   );
 };

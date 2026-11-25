@@ -46,7 +46,11 @@ import { ModalPinjamUangMitra } from '../common/ModalPinjamUangMitra.tsx';
 import { ModalBersihkanNotaLalu } from '../common/ModalBersihkanNotaLalu.tsx';
 import { ModalTransaksiAnakPerusahaan } from '../common/ModalTransaksiAnakPerusahaan.tsx';
 import { ModalKliringSilangMitra } from '../common/ModalKliringSilangMitra.tsx';
-import { ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
+import {
+  buildThermalReceiptDaftarPiutangHutang,
+  buildThermalReceiptPiutangHutangMitra,
+} from '../../utils/thermalPiutangHutangReceipt.ts';
 import { findSimilarMitra, useFuzzyMitraMatches } from '../../utils/nameSimilarity.ts';
 import { FuzzyNameWarningCard } from '../common/FuzzyNameWarningCard.tsx';
 import {
@@ -165,8 +169,62 @@ export const MasterMitraView: React.FC<Props> = ({
     dismissedAddWarning.length > 0 &&
     dismissedAddWarning.toLowerCase() === formNama.trim().toLowerCase();
 
-  // Pintasan Download PDF Rekening Koran Langsung
+  // Pintasan Download PDF & Cetak Thermal Rekening Koran Langsung
   const [downloadingPdfMitraId, setDownloadingPdfMitraId] = useState<string | null>(null);
+  const [printingThermalMitraId, setPrintingThermalMitraId] = useState<string | null>(null);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
+
+  const handleDirectPrintThermalMitra = async (mitraId: string, mitraNama: string) => {
+    setPrintingThermalMitraId(mitraId);
+    setErrorMsg('');
+    try {
+      const statement = await api.getRekeningKoranMitra(mitraId);
+      if (!statement) {
+        throw new Error('Data piutang/hutang mitra tidak ditemukan');
+      }
+      setThermalReceipt(
+        buildThermalReceiptPiutangHutangMitra(statement, {
+          scope: 'SALDO_BERJALAN',
+        })
+      );
+    } catch (err: any) {
+      setErrorMsg(`Gagal memuat struk thermal ${mitraNama}: ${err?.message || err}`);
+    } finally {
+      setPrintingThermalMitraId(null);
+    }
+  };
+
+  const handlePrintThermalList = (
+    targetItems?: RekapMitraItem[],
+    customLabel?: string,
+    modeOverride?: 'PIUTANG' | 'HUTANG' | 'SEMUA' | 'NGUNCI'
+  ) => {
+    const mode: 'PIUTANG' | 'HUTANG' | 'SEMUA' | 'NGUNCI' =
+      modeOverride ||
+      (viewModeMaster === 'KHUSUS_NOTA_NGUNCI' || activeFilter === 'NOTA_NGUNCI'
+        ? 'NGUNCI'
+        : activeFilter === 'BON_AKTIF'
+        ? 'PIUTANG'
+        : activeFilter === 'HUTANG_TITIP'
+        ? 'HUTANG'
+        : 'SEMUA');
+    const sourceItems = targetItems || filteredItems;
+    const label =
+      customLabel ||
+      (mode === 'PIUTANG'
+        ? 'Daftar Piutang Aktif Mitra'
+        : mode === 'HUTANG'
+        ? 'Daftar Hutang PT ke Mitra'
+        : mode === 'NGUNCI'
+        ? 'Daftar Nota Ngunci'
+        : 'Rekap Piutang & Hutang Aktif');
+    setThermalReceipt(
+      buildThermalReceiptDaftarPiutangHutang(sourceItems, {
+        mode,
+        filterLabel: label,
+      })
+    );
+  };
 
   const openCetakListModal = (explicitPreset?: InitialCetakMitraPreset) => {
     if (explicitPreset) {
@@ -540,6 +598,16 @@ export const MasterMitraView: React.FC<Props> = ({
 
           <button
             type="button"
+            onClick={() => handlePrintThermalList()}
+            className="flex items-center space-x-1.5 px-3 py-2 text-xs font-extrabold text-zinc-950 bg-amber-400 hover:bg-amber-300 border border-amber-500 rounded-lg shadow-xs transition-colors cursor-pointer"
+            title="Cetak Daftar Piutang / Hutang Mitra ke Printer Thermal 80mm / 58mm"
+          >
+            <Printer className="w-4 h-4 text-zinc-950" />
+            <span>Thermal Piutang/Hutang</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleSyncToSupabase}
             disabled={isSyncingSupabase}
             className="flex items-center space-x-1.5 px-3 py-2 text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
@@ -851,6 +919,9 @@ export const MasterMitraView: React.FC<Props> = ({
           onOpenKliringSilang={(mitraItem) => setKliringTargetMitra(mitraItem)}
           onPreviewFotoMitra={setPreviewFotoMitra}
           onOpenCetakList={(preset) => openCetakListModal(preset)}
+          onPrintThermalMitra={handleDirectPrintThermalMitra}
+          onPrintThermalList={handlePrintThermalList}
+          printingThermalMitraId={printingThermalMitraId}
         />
       )}
 
@@ -871,6 +942,9 @@ export const MasterMitraView: React.FC<Props> = ({
           }}
           onPreviewFotoMitra={setPreviewFotoMitra}
           onOpenCetakList={(preset) => openCetakListModal(preset)}
+          onPrintThermalMitra={handleDirectPrintThermalMitra}
+          onPrintThermalList={handlePrintThermalList}
+          printingThermalMitraId={printingThermalMitraId}
         />
       )}
 
@@ -1082,7 +1156,7 @@ export const MasterMitraView: React.FC<Props> = ({
 
                   return (
                     <tr
-                      key={m.id}
+                      key={`${m.id}-${m.kode}`}
                       className={`hover:bg-zinc-50/80 transition-colors ${
                         isAnak ? 'bg-teal-50/30' : ''
                       }`}
@@ -1472,6 +1546,17 @@ export const MasterMitraView: React.FC<Props> = ({
                           >
                             <FileText className="w-3.5 h-3.5 text-indigo-600" />
                             <span>Rekening Koran</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDirectPrintThermalMitra(m.id, m.nama)}
+                            disabled={printingThermalMitraId === m.id}
+                            className="flex items-center space-x-1 px-2.5 py-1.5 text-[11px] font-extrabold text-zinc-950 bg-amber-400 hover:bg-amber-300 border border-amber-500 disabled:opacity-50 rounded-lg shadow-2xs transition-colors cursor-pointer"
+                            title={`Cetak Thermal (80mm/58mm) Rincian Piutang & Hutang ${m.nama}`}
+                          >
+                            <Printer className={`w-3.5 h-3.5 ${printingThermalMitraId === m.id ? 'animate-pulse' : ''}`} />
+                            <span>{printingThermalMitraId === m.id ? '...' : 'Thermal'}</span>
                           </button>
 
                           <button
@@ -2216,6 +2301,12 @@ export const MasterMitraView: React.FC<Props> = ({
             : 'ALL'
         }
         initialSearchTerm={searchTerm}
+      />
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={(fullErpData as any)?.profilPerusahaan || null}
       />
     </div>
   );

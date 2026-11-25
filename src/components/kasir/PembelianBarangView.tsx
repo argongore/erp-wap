@@ -1785,10 +1785,51 @@ export const PembelianBarangView: React.FC<Props> = ({
                       <td className="py-2.5 px-3 font-sans font-semibold text-zinc-200">
                         {pb.namaMitra}
                       </td>
-                      <td className="py-2.5 px-3 font-sans text-zinc-300">
-                        <div className="truncate max-w-[250px]">
-                          {pb.items.map((i) => `${i.namaProduk} (${i.qty} ${i.satuan})`).join(', ')}
-                        </div>
+                      <td className="py-2.5 px-3 font-sans text-zinc-300 min-w-[260px]">
+                        {pb.items.length > 1 ? (
+                          <div className="rounded-lg border border-zinc-700/80 bg-zinc-900/70 overflow-hidden">
+                            <table className="w-full text-[11px] border-collapse">
+                              <thead>
+                                <tr className="bg-zinc-800/90 text-[9.5px] text-zinc-400 uppercase border-b border-zinc-700/80">
+                                  <th className="py-1 px-2 text-left">Nama Barang</th>
+                                  <th className="py-1 px-1.5 text-right">Qty</th>
+                                  <th className="py-1 px-1.5 text-right">Harga</th>
+                                  <th className="py-1 px-2 text-right">Subtotal</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-zinc-800/80">
+                                {pb.items.map((it, iIdx) => (
+                                  <tr key={`${pb.noPembelian}-i-${iIdx}`}>
+                                    <td className="py-1 px-2 font-semibold text-zinc-200">{it.namaProduk}</td>
+                                    <td className="py-1 px-1.5 text-right font-mono whitespace-nowrap text-zinc-300">
+                                      {Number(it.qty || 0).toLocaleString('id-ID')} {it.satuan}
+                                    </td>
+                                    <td className="py-1 px-1.5 text-right font-mono whitespace-nowrap text-zinc-400">
+                                      {formatRupiah(it.hargaBeliSatuan)}
+                                    </td>
+                                    <td className="py-1 px-2 text-right font-mono font-bold whitespace-nowrap text-zinc-100">
+                                      {formatRupiah(it.subtotal)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr className="bg-zinc-800/90 border-t border-zinc-700 font-bold text-[10.5px] text-amber-300">
+                                  <td colSpan={3} className="py-1 px-2">
+                                    Total ({pb.items.length} Barang)
+                                  </td>
+                                  <td className="py-1 px-2 text-right font-mono whitespace-nowrap">
+                                    {formatRupiah(pb.totalNominal)}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="truncate max-w-[250px]">
+                            {pb.items.map((i) => `${i.namaProduk} (${i.qty} ${i.satuan})`).join(', ')}
+                          </div>
+                        )}
                         {isRekapRow && (
                           <span className="text-[10px] text-amber-400">Rekapan Tanpa Stok</span>
                         )}

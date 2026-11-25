@@ -308,9 +308,18 @@ export const PenjualanView: React.FC<Props> = ({
     'TUNAI' | 'TRANSFER' | 'KASBON' | 'SINKRON' | 'INTERNAL_PT' | 'PEMAKAIAN_PENGELUARAN'
   >('TUNAI');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(availableBanks[0]?.kode || 'BNI01');
+  const [dpNominalInput, setDpNominalInput] = useState<string>('');
+  const [dpMetode, setDpMetode] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
+  const [dpRekeningTujuan, setDpRekeningTujuan] = useState<string>(availableBanks[0]?.kode || 'BNI01');
   const [divisi, setDivisi] = useState<string>('Wijaya Karya');
   const [tanggalInput, setTanggalInput] = useState<string>(dmyToIsoInput());
   const [keterangan, setKeterangan] = useState<string>('');
+
+  useEffect(() => {
+    if (availableBanks.length > 0 && !availableBanks.some((b) => b.kode === dpRekeningTujuan)) {
+      setDpRekeningTujuan(availableBanks[0].kode);
+    }
+  }, [availableBanks, dpRekeningTujuan]);
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedProductCode, setSelectedProductCode] = useState<string>(
@@ -694,6 +703,14 @@ export const PenjualanView: React.FC<Props> = ({
   const totalLabaKotor = totalOmzet - totalModalHpp;
   const persentaseMargin = totalOmzet > 0 ? (totalLabaKotor / totalOmzet) * 100 : 0;
 
+  // DP / Bayar Awal saat metode KASBON
+  const effectiveDpNominal =
+    metode === 'KASBON'
+      ? Math.max(0, Math.round(Number(String(dpNominalInput || '').replace(/[^0-9]/g, '')) || 0))
+      : 0;
+  const sisaKasbonPreview = Math.max(0, totalOmzet - effectiveDpNominal);
+  const dpBankObj = availableBanks.find((b) => b.kode === dpRekeningTujuan);
+
   const finalBuyerName =
     tipePembeli === 'UMUM'
       ? pelangganUmumMode === 'MANUAL'
@@ -721,6 +738,18 @@ export const PenjualanView: React.FC<Props> = ({
       setErrorMsg('Metode KASBON piutang hanya berlaku untuk mitra/karyawan terdaftar');
       return;
     }
+    if (metode === 'KASBON' && effectiveDpNominal > 0) {
+      if (effectiveDpNominal >= totalOmzet) {
+        setErrorMsg(
+          `Nominal DP (${formatRupiah(effectiveDpNominal)}) sama dengan atau melebihi total tagihan (${formatRupiah(totalOmzet)}). Gunakan metode TUNAI atau TRANSFER (Lunas) saja.`
+        );
+        return;
+      }
+      if (dpMetode === 'TRANSFER' && !dpRekeningTujuan) {
+        setErrorMsg('Pilih rekening bank tujuan transfer untuk DP');
+        return;
+      }
+    }
     if (metode === 'TRANSFER' && totalOmzet > 0 && !rekeningTujuan) {
       setErrorMsg('Pilih rekening bank tujuan transfer');
       return;
@@ -742,6 +771,18 @@ export const PenjualanView: React.FC<Props> = ({
     if (metode === 'KASBON' && tipePembeli === 'UMUM' && pelangganUmumMode === 'MANUAL') {
       setErrorMsg('Metode KASBON piutang hanya berlaku untuk mitra/karyawan terdaftar');
       return;
+    }
+    if (metode === 'KASBON' && effectiveDpNominal > 0) {
+      if (effectiveDpNominal >= totalOmzet) {
+        setErrorMsg(
+          `Nominal DP (${formatRupiah(effectiveDpNominal)}) sama dengan atau melebihi total tagihan (${formatRupiah(totalOmzet)}). Gunakan metode TUNAI atau TRANSFER (Lunas) saja.`
+        );
+        return;
+      }
+      if (dpMetode === 'TRANSFER' && !dpRekeningTujuan) {
+        setErrorMsg('Pilih rekening bank tujuan transfer untuk DP');
+        return;
+      }
     }
     if (metode === 'TRANSFER' && totalOmzet > 0 && !rekeningTujuan) {
       setErrorMsg('Pilih rekening bank tujuan transfer');
@@ -783,6 +824,18 @@ export const PenjualanView: React.FC<Props> = ({
         divisi,
         metode: effectiveMetode,
         rekeningTujuan: effectiveMetode === 'TRANSFER' ? rekeningTujuan : undefined,
+        dpNominal:
+          effectiveMetode === 'KASBON' && effectiveDpNominal > 0
+            ? effectiveDpNominal
+            : undefined,
+        dpMetode:
+          effectiveMetode === 'KASBON' && effectiveDpNominal > 0 ? dpMetode : undefined,
+        dpRekeningTujuan:
+          effectiveMetode === 'KASBON' && effectiveDpNominal > 0
+            ? dpMetode === 'TRANSFER'
+              ? dpRekeningTujuan
+              : 'KAS01'
+            : undefined,
         kategoriPengeluaran:
           effectiveMetode === 'PEMAKAIAN_PENGELUARAN' ? kategoriPengeluaran : undefined,
         idInventaris:
@@ -810,6 +863,8 @@ export const PenjualanView: React.FC<Props> = ({
       setVerifiedDoubleCheck(false);
       setCart([]);
       setKeterangan('');
+      setDpNominalInput('');
+      setDpMetode('TUNAI');
       if (isManualUmum) {
         setNamaPembeliManual('');
       }
@@ -820,6 +875,13 @@ export const PenjualanView: React.FC<Props> = ({
       const isInternalPT =
         result?.metode === 'INTERNAL_PT' ||
         ((result?.totalNominal ?? 0) === 0 && !isPemakaianPengeluaran && !isSinkron);
+      const hasDpKasbon = result?.metode === 'KASBON' && (Number(result?.dpNominal) || 0) > 0;
+      const dpBankLabelReceipt =
+        result?.dpMetode === 'TRANSFER'
+          ? rekeningList.find((r) => r.kode === result?.dpRekeningTujuan)?.nama ||
+            result?.dpRekeningTujuan ||
+            'Bank'
+          : 'Tunai KAS01';
 
       // Trigger print receipt
       const receipt: ReceiptData = {
@@ -841,7 +903,9 @@ export const PenjualanView: React.FC<Props> = ({
         tanggal: result?.tanggal || normalizeDateToDmy(tanggalInput),
         jam: result?.jam || '00:00:00',
         mitra: result?.namaMitra || buyerForExpense,
-        rekening: result?.rekeningTujuan || (isInternalPT ? 'INTERNAL_PT' : '-'),
+        rekening: hasDpKasbon
+          ? `${result?.dpRekeningTujuan || 'KAS01'} (DP) / BON01`
+          : result?.rekeningTujuan || (isInternalPT ? 'INTERNAL_PT' : '-'),
         kategori: 'PENJUALAN',
         items: (result?.items || []).map((i) => ({
           nama: i?.namaProduk || '-',
@@ -876,6 +940,8 @@ export const PenjualanView: React.FC<Props> = ({
               ? 'SINKRON (LUNAS TANPA UANG MASUK)'
               : isInternalPT
               ? 'PEMAKAIAN SENDIRI (HARGA RP 0)'
+              : hasDpKasbon
+              ? `KASBON + DP (${result?.dpMetode === 'TRANSFER' ? `Transfer ${dpBankLabelReceipt}` : 'Tunai KAS01'})`
               : result?.metode || effectiveMetode,
           },
           {
@@ -886,6 +952,8 @@ export const PenjualanView: React.FC<Props> = ({
               ? 'SINKRON (RP 0 UANG FISIK MASUK)'
               : isInternalPT
               ? 'BIAYA OPERASIONAL INTERNAL PT'
+              : hasDpKasbon
+              ? `${result?.dpRekeningTujuan || 'KAS01'} (DP Masuk) · BON01 (Sisa)`
               : result?.rekeningTujuan || '-',
           },
           {
@@ -896,6 +964,8 @@ export const PenjualanView: React.FC<Props> = ({
               ? 'LUNAS SINKRON (TIDAK ADA UANG FISIK MASUK)'
               : isInternalPT
               ? 'SELESAI (STOK DIKELUARKAN UNTUK OPERASIONAL PT)'
+              : hasDpKasbon
+              ? 'KASBON DENGAN DP (SISA BELUM LUNAS)'
               : result?.statusPembayaran === 'LUNAS'
               ? 'LUNAS (UANG MASUK)'
               : 'BELUM BAYAR (PIUTANG KASBON)',
@@ -906,6 +976,8 @@ export const PenjualanView: React.FC<Props> = ({
               ? `Nominal Masuk Pengeluaran ${kategoriPengeluaran}`
               : isInternalPT
               ? 'Total Biaya Modal HPP'
+              : hasDpKasbon
+              ? 'TOTAL'
               : 'Total Tagihan Penjualan',
             value: isPemakaianPengeluaran
               ? (result?.totalNominal || 0) > 0
@@ -916,6 +988,20 @@ export const PenjualanView: React.FC<Props> = ({
               : result?.totalNominal ?? 0,
             isTotal: true,
           },
+          ...(hasDpKasbon
+            ? [
+                {
+                  label: `BAYAR (DP ${result?.dpMetode === 'TRANSFER' ? `Transfer ${result?.dpRekeningTujuan}` : 'Tunai'})`,
+                  value: Number(result?.dpNominal) || 0,
+                  highlight: true,
+                },
+                {
+                  label: 'SISA (KASBON)',
+                  value: Number(result?.sisaPiutang) || 0,
+                  highlight: true,
+                },
+              ]
+            : []),
         ],
         catatan: result?.keterangan || keterangan,
         kasir: 'Kasir Wijaya Agro',
@@ -2106,14 +2192,160 @@ export const PenjualanView: React.FC<Props> = ({
               )}
 
               {metode === 'KASBON' && (
-                <div className="p-2.5 bg-amber-950/60 rounded-lg border border-amber-800/80 text-[11px] text-amber-300 space-y-1">
-                  <div className="font-bold flex items-center space-x-1">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span>Penjualan Kasbon (Piutang Customer/Karyawan)</span>
+                <div className="p-3 bg-amber-950/60 rounded-lg border border-amber-800/80 text-[11px] text-amber-200 space-y-2.5">
+                  <div>
+                    <div className="font-bold flex items-center space-x-1 text-amber-300">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>Penjualan Kasbon (Bisa Disertai DP / Bayar Sebagian)</span>
+                    </div>
+                    <p className="text-[10px] text-amber-200/80 mt-0.5 leading-relaxed">
+                      Barang keluar dan stok berkurang. Jika mitra menitipkan uang DP di awal (Tunai/Transfer), isi nominal DP di bawah — uang DP langsung masuk ke Kas/Bank, dan sisanya otomatis menjadi piutang kasbon (BON01).
+                    </p>
                   </div>
-                  <p>
-                    Barang keluar dan stok berkurang. Mitra memiliki kewajiban piutang kasbon barang (BON01).
-                  </p>
+
+                  {/* Input DP / Bayar Awal Opsional */}
+                  <div className="p-2.5 rounded-lg bg-zinc-900/90 border border-amber-700/60 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="font-bold text-amber-200 text-[11px]">
+                        DP / Bayar di Awal (Opsional)
+                      </label>
+                      {effectiveDpNominal > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDpNominalInput('')}
+                          className="text-[10px] text-zinc-400 hover:text-rose-300 underline cursor-pointer"
+                        >
+                          Reset Rp 0 (Kasbon Penuh)
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-zinc-400 mb-1">
+                          Nominal DP / Bayar Awal (Rp)
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] font-mono text-zinc-400">
+                            Rp
+                          </span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="0 (kosongkan jika tanpa DP)"
+                            value={
+                              dpNominalInput
+                                ? Number(dpNominalInput.replace(/[^0-9]/g, '') || 0).toLocaleString('id-ID')
+                                : ''
+                            }
+                            onChange={(e) => {
+                              const digits = e.target.value.replace(/[^0-9]/g, '');
+                              setDpNominalInput(digits);
+                            }}
+                            className="w-full pl-8 pr-2.5 py-1.5 rounded-md bg-zinc-950 border border-zinc-700 text-emerald-300 font-mono font-bold text-xs focus:outline-hidden focus:border-emerald-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] text-zinc-400 mb-1">
+                          Metode Pembayaran DP
+                        </label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setDpMetode('TUNAI')}
+                            className={`py-1.5 px-2 rounded-md text-[11px] font-bold border transition-all cursor-pointer ${
+                              dpMetode === 'TUNAI'
+                                ? 'bg-emerald-600 text-white border-emerald-500'
+                                : 'bg-zinc-950 text-zinc-400 border-zinc-700 hover:text-zinc-200'
+                            }`}
+                          >
+                            Tunai (KAS01)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDpMetode('TRANSFER')}
+                            className={`py-1.5 px-2 rounded-md text-[11px] font-bold border transition-all cursor-pointer ${
+                              dpMetode === 'TRANSFER'
+                                ? 'bg-sky-600 text-white border-sky-500'
+                                : 'bg-zinc-950 text-zinc-400 border-zinc-700 hover:text-zinc-200'
+                            }`}
+                          >
+                            Transfer Bank
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {dpMetode === 'TRANSFER' && (
+                      <div className="pt-0.5">
+                        <label className="block text-[10px] text-sky-300 font-semibold mb-1">
+                          Rekening Bank Tujuan Transfer DP:
+                        </label>
+                        <select
+                          value={dpRekeningTujuan}
+                          onChange={(e) => setDpRekeningTujuan(e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-sky-700/80 rounded-md bg-zinc-950 text-zinc-100 text-xs font-medium"
+                        >
+                          {availableBanks.map((b) => (
+                            <option key={b.kode} value={b.kode}>
+                              {b.nama} ({b.kode}) — Saldo: {formatRupiah(b.saldoSaatIni)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Ringkasan TOTAL / BAYAR (DP) / SISA KASBON */}
+                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800 text-center">
+                      <div className="p-1.5 rounded bg-zinc-950/80 border border-zinc-800">
+                        <div className="text-[9.5px] uppercase text-zinc-400 font-semibold">TOTAL</div>
+                        <div className="font-mono font-bold text-xs text-zinc-100 tabular-nums">
+                          {formatRupiah(totalOmzet)}
+                        </div>
+                      </div>
+                      <div className="p-1.5 rounded bg-emerald-950/50 border border-emerald-800/60">
+                        <div className="text-[9.5px] uppercase text-emerald-300 font-semibold">
+                          BAYAR (DP)
+                        </div>
+                        <div className="font-mono font-bold text-xs text-emerald-400 tabular-nums">
+                          {formatRupiah(effectiveDpNominal)}
+                        </div>
+                        {effectiveDpNominal > 0 && (
+                          <div className="text-[9px] text-emerald-300/80 truncate">
+                            {dpMetode === 'TRANSFER' ? dpRekeningTujuan : 'Tunai KAS01'}
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        className={`p-1.5 rounded border ${
+                          effectiveDpNominal > 0 && effectiveDpNominal >= totalOmzet
+                            ? 'bg-rose-950/60 border-rose-700'
+                            : 'bg-amber-950/60 border-amber-700/70'
+                        }`}
+                      >
+                        <div className="text-[9.5px] uppercase text-amber-300 font-semibold">
+                          SISA KASBON
+                        </div>
+                        <div
+                          className={`font-mono font-bold text-xs tabular-nums ${
+                            effectiveDpNominal > 0 && effectiveDpNominal >= totalOmzet
+                              ? 'text-rose-400'
+                              : 'text-amber-400'
+                          }`}
+                        >
+                          {formatRupiah(sisaKasbonPreview)}
+                        </div>
+                      </div>
+                    </div>
+
+                    {effectiveDpNominal > 0 && effectiveDpNominal >= totalOmzet && (
+                      <div className="text-[10px] text-rose-300 font-semibold">
+                        Nominal DP sama dengan / melebihi total tagihan. Silakan pilih metode LUNAS (Tunai / Transfer Bank) saja.
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -2128,8 +2360,14 @@ export const PenjualanView: React.FC<Props> = ({
 
               <ArusKasDivisiSelectorCard
                 direction="MASUK"
-                metode={totalOmzet === 0 && metode !== 'KASBON' ? 'INTERNAL_PT' : metode}
-                nominal={totalOmzet}
+                metode={
+                  metode === 'KASBON' && effectiveDpNominal > 0
+                    ? dpMetode
+                    : totalOmzet === 0 && metode !== 'KASBON'
+                    ? 'INTERNAL_PT'
+                    : metode
+                }
+                nominal={metode === 'KASBON' && effectiveDpNominal > 0 ? effectiveDpNominal : totalOmzet}
                 divisi={divisi}
                 divisiOptions={divisiOptions}
                 onChangeDivisi={setDivisi}
@@ -2173,6 +2411,8 @@ export const PenjualanView: React.FC<Props> = ({
                     ? 'bg-teal-600 hover:bg-teal-500'
                     : metode === 'INTERNAL_PT' || totalOmzet === 0
                     ? 'bg-blue-600 hover:bg-blue-500'
+                    : metode === 'KASBON' && effectiveDpNominal > 0
+                    ? 'bg-amber-600 hover:bg-amber-500'
                     : 'bg-emerald-600 hover:bg-emerald-500'
                 }`}
               >
@@ -2184,6 +2424,8 @@ export const PenjualanView: React.FC<Props> = ({
                     ? `Simpan Penjualan Sinkron (${formatRupiah(totalOmzet)})`
                     : metode === 'INTERNAL_PT' || totalOmzet === 0
                     ? `Simpan Pengeluaran Internal PT (${effectiveSaleItems.length} Item)`
+                    : metode === 'KASBON' && effectiveDpNominal > 0
+                    ? `Simpan Kasbon + DP ${formatRupiah(effectiveDpNominal)} (Sisa ${formatRupiah(sisaKasbonPreview)})`
                     : `Simpan Transaksi (${formatRupiah(totalOmzet)})`}
                 </span>
               </button>
@@ -2258,6 +2500,11 @@ export const PenjualanView: React.FC<Props> = ({
                             ? `KE PENGELUARAN (${pj.kategoriPengeluaran || 'BIAYA'})`
                             : `${pj.metode} (${pj.rekeningTujuan})`}
                         </div>
+                        {pj.metode === 'KASBON' && (pj.dpNominal || 0) > 0 && (
+                          <div className="text-[10px] text-emerald-400 font-mono mt-0.5">
+                            DP {formatRupiah(pj.dpNominal || 0)} ({pj.dpMetode === 'TRANSFER' ? pj.dpRekeningTujuan : 'TUNAI'}) · Sisa {formatRupiah(pj.sisaPiutang || 0)}
+                          </div>
+                        )}
                         {pj.divisi && (
                           <div className="text-[10px] text-sky-400 font-medium mt-0.5">
                             {isTanpaDivisi(pj.divisi) ? 'Tanpa Divisi' : pj.divisi}
@@ -2350,6 +2597,8 @@ export const PenjualanView: React.FC<Props> = ({
                       ? 'SINKRON (LUNAS TANPA UANG MASUK)'
                       : metode === 'INTERNAL_PT' || totalOmzet === 0
                       ? 'PEMAKAIAN KEBUTUHAN INTERNAL PT (RP 0)'
+                      : metode === 'KASBON' && effectiveDpNominal > 0
+                      ? `KASBON + DP (${dpMetode === 'TRANSFER' ? `Transfer ${dpBankObj?.nama || dpRekeningTujuan}` : 'Tunai KAS01'})`
                       : metode}
                   </span>
                 </div>
@@ -2393,29 +2642,57 @@ export const PenjualanView: React.FC<Props> = ({
                       : formatRupiah(totalOmzet)}
                   </span>
                 </div>
+                {metode === 'KASBON' && effectiveDpNominal > 0 && (
+                  <div className="pt-1.5 border-t border-zinc-700/80 space-y-1">
+                    <div className="flex justify-between text-emerald-300">
+                      <span className="font-semibold">
+                        BAYAR / DP ({dpMetode === 'TRANSFER' ? `Transfer ${dpRekeningTujuan}` : 'Tunai KAS01'}):
+                      </span>
+                      <span className="font-mono font-bold tabular-nums">
+                        {formatRupiah(effectiveDpNominal)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-amber-300">
+                      <span className="font-bold">SISA MASUK KASBON (BON01):</span>
+                      <span className="font-mono font-bold tabular-nums">
+                        {formatRupiah(sisaKasbonPreview)}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Panel Double-Check Verifikasi Uang Riil & Divisi Terkait */}
               <DoubleCheckVerifikasiPanel
                 direction="MASUK"
                 metode={
-                  totalOmzet === 0 &&
-                  metode !== 'KASBON' &&
-                  metode !== 'SINKRON' &&
-                  metode !== 'PEMAKAIAN_PENGELUARAN'
+                  metode === 'KASBON' && effectiveDpNominal > 0
+                    ? dpMetode
+                    : totalOmzet === 0 &&
+                      metode !== 'KASBON' &&
+                      metode !== 'SINKRON' &&
+                      metode !== 'PEMAKAIAN_PENGELUARAN'
                     ? 'INTERNAL_PT'
                     : metode
                 }
                 nominal={
-                  metode === 'PEMAKAIAN_PENGELUARAN'
+                  metode === 'KASBON' && effectiveDpNominal > 0
+                    ? effectiveDpNominal
+                    : metode === 'PEMAKAIAN_PENGELUARAN'
                     ? totalOmzet > 0
                       ? totalOmzet
                       : totalModalHpp
                     : totalOmzet
                 }
                 rekeningList={rekeningList}
-                selectedTransferKode={rekeningTujuan}
-                onChangeTransferKode={setRekeningTujuan}
+                selectedTransferKode={
+                  metode === 'KASBON' && effectiveDpNominal > 0 ? dpRekeningTujuan : rekeningTujuan
+                }
+                onChangeTransferKode={
+                  metode === 'KASBON' && effectiveDpNominal > 0
+                    ? setDpRekeningTujuan
+                    : setRekeningTujuan
+                }
                 divisi={divisi}
                 divisiOptions={divisiOptions}
                 onChangeDivisi={setDivisi}

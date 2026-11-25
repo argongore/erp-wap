@@ -38,12 +38,17 @@ export interface HbCycleStep {
   sisaStokRp?: number;
   sisaUnitRate?: number;
   isHabisMuat?: boolean;
+  sisaFisikAktualKg?: number;
+  biarkanStokMinus?: boolean;
+  susutKurangKg?: number;
+  selisihLebihMuatKg?: number;
 }
 
 export interface RollingStokHbResult {
   komoditasKode: string;
   komoditasNama: string;
   stokReadyKg: number;
+  stokTitipNonFisikKg?: number;
   rataRataModalTerkini: number;
   totalNilaiModalTerkini: number;
   adaPenjualanSebelumnya: boolean;
@@ -54,22 +59,28 @@ export interface RollingStokHbResult {
   pembelianBaruSetelahMuatKg: number;
   pembelianBaruSetelahMuatRp: number;
   pembelianBaruSetelahMuatCount: number;
+  totalSusutKurangKg: number;
+  totalLebihMuatKg: number;
+  netSelisihStokKg: number;
   steps: HbCycleStep[];
 }
 
 /**
  * Menghitung Rata-Rata Bergerak / Moving Average Siklus Muat Hasil Bumi (Format Buku Gudang Real):
  * 1. Setiap penjualan/muat menghasilkan SISA STOK fisik & nilai modal dengan HPP rata-rata berjalan saat muat.
- * 2. Sisa stok tersebut otomatis menjadi basis/stok awal siklus berjalan berikutnya.
- * 3. Pembelian-pembelian harian baru setelah tanggal muat sampai muat berikutnya terus terakumulasi ke dalam stok ready dan mengupdate harga rata-rata modal secara riil.
+ * 2. Mendukung 3 mode sisa gudang: Normal/Biarkan Minus Buku, Sisa Fisik Aktual (input Kg sisa riil di gudang), dan Habis Muat (0 Kg + Susut).
+ * 3. Memisahkan pencatatan SUSUT (kurang muat, -Kg) dan LEBIH MUAT / MINUS BUKU (surplus fisik, +Kg) untuk rekonsiliasi selisih antar komoditas/grade.
  */
 export function calculateHbMovingAverage(
   komoditas: StokHasilBumi,
   allPurchases: TransaksiPembelianHasilBumi[] = [],
-  allSales: TransaksiPenjualanHasilBumi[] = []
+  allSales: TransaksiPenjualanHasilBumi[] = [],
+  options?: { maxDateKey?: number }
 ): RollingStokHbResult {
   const targetKode = komoditas.kode;
   const targetNamaUpper = String(komoditas.nama || '').trim().toUpperCase();
+  const maxDateKey =
+    options?.maxDateKey && Number(options.maxDateKey) > 0 ? Number(options.maxDateKey) : undefined;
 
   const isMatch = (kode?: string, nama?: string) =>
     kode === targetKode || String(nama || '').trim().toUpperCase() === targetNamaUpper;
@@ -77,10 +88,27 @@ export function calculateHbMovingAverage(
   const purchases = (allPurchases || []).filter(
     (p) =>
       isMatch(p.komoditasKode, p.komoditasNama) &&
-      !p.isBelumPutusHarga &&
-      p.status !== 'BELUM_PUTUS_HARGA' &&
+      !p.isNotaSilang &&
+      !p.isTitipNonFisik &&
+      p.komoditasKode !== 'PINJAMAN_DANA' &&
+      p.komoditasKode !== 'TITIP_DANA' &&
+      p.komoditasKode !== 'NOTA_SILANG' &&
       Number(p.beratBersih || 0) > 0
   );
+
+  const stokTitipNonFisikKg =
+    Math.round(
+      (allPurchases || [])
+        .filter(
+          (p) =>
+            isMatch(p.komoditasKode, p.komoditasNama) &&
+            Boolean(p.isTitipNonFisik) &&
+            Boolean(p.isBelumPutusHarga || p.status === 'BELUM_PUTUS_HARGA') &&
+            !p.isNotaSilang &&
+            Number(p.beratBersih || 0) > 0
+        )
+        .reduce((s, p) => s + (Number(p.beratBersih) || 0), 0) * 100
+    ) / 100;
 
   const sales = (allSales || []).filter(
     (j) => isMatch(j.komoditasKode, j.komoditasNama) && Number(j.beratBersih || 0) > 0
@@ -104,6 +132,7 @@ export function calculateHbMovingAverage(
         kg: number;
         rp: number;
         rate: number;
+        isBelumPutus: boolean;
         record: TransaksiPembelianHasilBumi;
       }
     | {
@@ -132,7 +161,7 @@ export function calculateHbMovingAverage(
     }
   }
 
-  if (stokAwalKg > 0 && modalAwalRp > 0) {
+  if (stokAwalKg > 0) {
     const tglAwal = komoditas.tanggalInputStokAwal || '01/11/2026';
     rawEvents.push({
       type: 'INITIAL',
@@ -140,30 +169,36 @@ export function calculateHbMovingAverage(
       createdAt: '1970-01-01T00:00:00.000Z',
       tanggal: tglAwal,
       kg: stokAwalKg,
-      rp: modalAwalRp,
-      rate: rataModalAwal > 0 ? rataModalAwal : Math.round(modalAwalRp / stokAwalKg),
+      rp: modalAwalRp > 0 ? modalAwalRp : 0,
+      rate: modalAwalRp > 0 ? (rataModalAwal > 0 ? rataModalAwal : Math.round(modalAwalRp / stokAwalKg)) : 0,
     });
   }
 
   for (const p of purchases) {
     const tgl = p.tanggalNotaLalu || p.tanggal || '01/11/2026';
+    const dKey = parseTanggalSortKey(tgl);
+    if (maxDateKey !== undefined && dKey > maxDateKey) continue;
+    const isBelumPutus = Boolean(p.isBelumPutusHarga || p.status === 'BELUM_PUTUS_HARGA');
     rawEvents.push({
       type: 'BUY',
-      dateKey: parseTanggalSortKey(tgl),
+      dateKey: dKey,
       createdAt: p.createdAt || '',
       tanggal: tgl,
       kg: Number(p.beratBersih) || 0,
-      rp: Number(p.totalNominal) || 0,
-      rate: Number(p.hargaPerKg) || 0,
+      rp: isBelumPutus ? 0 : Number(p.totalNominal) || 0,
+      rate: isBelumPutus ? 0 : Number(p.hargaPerKg) || 0,
+      isBelumPutus,
       record: p,
     });
   }
 
   for (const j of sales) {
     const tgl = j.tanggal || '01/11/2026';
+    const dKey = parseTanggalSortKey(tgl);
+    if (maxDateKey !== undefined && dKey > maxDateKey) continue;
     rawEvents.push({
       type: 'SELL',
-      dateKey: parseTanggalSortKey(tgl),
+      dateKey: dKey,
       createdAt: j.createdAt || '',
       tanggal: tgl,
       kg: Number(j.beratBersih) || 0,
@@ -181,6 +216,7 @@ export function calculateHbMovingAverage(
   });
 
   let poolKg = 0;
+  let pricedPoolKg = 0;
   let poolValue = 0;
 
   let adaPenjualanSebelumnya = false;
@@ -193,13 +229,28 @@ export function calculateHbMovingAverage(
   let pembelianBaruSetelahMuatRp = 0;
   let pembelianBaruSetelahMuatCount = 0;
 
+  let totalSusutKurangKg = 0;
+  let totalLebihMuatKg = 0;
+
   const steps: HbCycleStep[] = [];
 
   for (const ev of rawEvents) {
     if (ev.type === 'INITIAL' || ev.type === 'BUY') {
       poolKg = Math.round((poolKg + ev.kg) * 100) / 100;
-      poolValue += ev.rp;
-      const rateAfter = poolKg > 0 ? Math.round(poolValue / poolKg) : ev.rate;
+      const isPricedLot =
+        ev.type === 'INITIAL' ? ev.rp > 0 : !ev.isBelumPutus && ev.rp > 0;
+      if (isPricedLot) {
+        pricedPoolKg = Math.round((pricedPoolKg + ev.kg) * 100) / 100;
+        poolValue += ev.rp;
+      }
+      const rateAfter =
+        pricedPoolKg > 0 && poolValue > 0 ? Math.round(poolValue / pricedPoolKg) : ev.rate;
+      const displayValueAfter =
+        poolKg <= 0
+          ? 0
+          : pricedPoolKg > poolKg && rateAfter > 0
+          ? Math.round(poolKg * rateAfter)
+          : poolValue;
 
       if (adaPenjualanSebelumnya && ev.type === 'BUY') {
         pembelianBaruSetelahMuatKg = Math.round((pembelianBaruSetelahMuatKg + ev.kg) * 100) / 100;
@@ -219,29 +270,84 @@ export function calculateHbMovingAverage(
         hargaPerKg: ev.rate,
         totalRp: ev.rp,
         poolKgAfter: poolKg,
-        poolValueAfter: poolValue,
+        poolValueAfter: displayValueAfter,
         poolUnitRateAfter: rateAfter,
       });
     } else if (ev.type === 'SELL') {
       const j = ev.record;
       const muatKg = ev.kg;
+      const poolBeforeKg = poolKg;
 
       const rateAtSale =
-        poolKg > 0 && poolValue > 0
-          ? Math.round(poolValue / poolKg)
+        pricedPoolKg > 0 && poolValue > 0
+          ? Math.round(poolValue / pricedPoolKg)
           : Number(j.modalRataRataPerKg) ||
             rataRataMuatTerakhir ||
             Number(komoditas.rataRataModalAwal) ||
             0;
 
-      const isHabisMuat = Boolean(
-        j.isHabisMuatSusut ||
-          muatKg >= poolKg ||
-          (Number(j.stokGudangSetelah) === 0 && poolKg > 0)
-      );
+      const hasSisaFisikAktual =
+        j.sisaFisikAktualKg !== undefined &&
+        j.sisaFisikAktualKg !== null &&
+        Number.isFinite(Number(j.sisaFisikAktualKg)) &&
+        Number(j.sisaFisikAktualKg) >= 0;
+      const keepMinus = Boolean(j.biarkanStokMinus);
 
-      const sisaKg = isHabisMuat ? 0 : Math.max(0, Math.round((poolKg - muatKg) * 100) / 100);
-      const sisaRp = isHabisMuat ? 0 : Math.max(0, Math.round(sisaKg * rateAtSale));
+      let isHabisMuat = false;
+      let sisaKg = 0;
+      let sisaPricedKg = 0;
+      let sisaRp = 0;
+      let susutKurangKg = 0;
+      let selisihLebihMuatKg = 0;
+
+      if (hasSisaFisikAktual) {
+        sisaKg = Math.round(Number(j.sisaFisikAktualKg) * 100) / 100;
+        const expectedSisaBuku = Math.round((poolBeforeKg - muatKg) * 100) / 100;
+        const varianceKg = Math.round((sisaKg - expectedSisaBuku) * 100) / 100;
+        if (varianceKg > 0) {
+          selisihLebihMuatKg = varianceKg;
+        } else if (varianceKg < 0) {
+          susutKurangKg = Math.abs(varianceKg);
+        }
+        isHabisMuat = sisaKg === 0;
+        sisaPricedKg = sisaKg;
+        sisaRp = Math.max(0, Math.round(sisaPricedKg * rateAtSale));
+      } else if (keepMinus) {
+        sisaKg = Math.round((poolBeforeKg - muatKg) * 100) / 100;
+        isHabisMuat = false;
+        if (muatKg > poolBeforeKg) {
+          selisihLebihMuatKg = Math.round((muatKg - poolBeforeKg) * 100) / 100;
+        }
+        sisaPricedKg =
+          sisaKg <= 0
+            ? 0
+            : pricedPoolKg >= poolBeforeKg
+            ? sisaKg
+            : Math.max(0, Math.min(sisaKg, Math.round((pricedPoolKg - muatKg) * 100) / 100));
+        sisaRp = Math.max(0, Math.round(sisaPricedKg * rateAtSale));
+      } else {
+        isHabisMuat = Boolean(
+          j.isHabisMuatSusut ||
+            muatKg >= poolBeforeKg ||
+            (Number(j.stokGudangSetelah) === 0 && poolBeforeKg > 0)
+        );
+        sisaKg = isHabisMuat ? 0 : Math.max(0, Math.round((poolBeforeKg - muatKg) * 100) / 100);
+        sisaPricedKg = isHabisMuat
+          ? 0
+          : pricedPoolKg >= poolBeforeKg
+          ? sisaKg
+          : Math.max(0, Math.min(sisaKg, Math.round((pricedPoolKg - muatKg) * 100) / 100));
+        sisaRp = isHabisMuat ? 0 : Math.max(0, Math.round(sisaPricedKg * rateAtSale));
+
+        if (muatKg > poolBeforeKg) {
+          selisihLebihMuatKg = Math.round((muatKg - poolBeforeKg) * 100) / 100;
+        } else if (isHabisMuat && poolBeforeKg > muatKg) {
+          susutKurangKg = Math.round((poolBeforeKg - muatKg) * 100) / 100;
+        }
+      }
+
+      totalSusutKurangKg = Math.round((totalSusutKurangKg + susutKurangKg) * 100) / 100;
+      totalLebihMuatKg = Math.round((totalLebihMuatKg + selisihLebihMuatKg) * 100) / 100;
 
       steps.push({
         dateKey: ev.dateKey,
@@ -258,9 +364,14 @@ export function calculateHbMovingAverage(
         sisaStokRp: sisaRp,
         sisaUnitRate: rateAtSale,
         isHabisMuat,
+        ...(hasSisaFisikAktual ? { sisaFisikAktualKg: sisaKg } : {}),
+        ...(keepMinus ? { biarkanStokMinus: true } : {}),
+        susutKurangKg,
+        selisihLebihMuatKg,
       });
 
       poolKg = sisaKg;
+      pricedPoolKg = sisaPricedKg;
       poolValue = sisaRp;
 
       adaPenjualanSebelumnya = true;
@@ -276,16 +387,23 @@ export function calculateHbMovingAverage(
   }
 
   const stokReadyKg = poolKg;
-  const totalNilaiModalTerkini = poolValue;
   const rataRataModalTerkini =
-    stokReadyKg > 0 && totalNilaiModalTerkini > 0
-      ? Math.round(totalNilaiModalTerkini / stokReadyKg)
+    pricedPoolKg > 0 && poolValue > 0
+      ? Math.round(poolValue / pricedPoolKg)
       : rataRataMuatTerakhir || Number(komoditas.rataRataModalAwal) || 0;
+  const totalNilaiModalTerkini =
+    stokReadyKg <= 0
+      ? 0
+      : pricedPoolKg > stokReadyKg && rataRataModalTerkini > 0
+      ? Math.round(stokReadyKg * rataRataModalTerkini)
+      : poolValue;
+  const netSelisihStokKg = Math.round((totalLebihMuatKg - totalSusutKurangKg) * 100) / 100;
 
   return {
     komoditasKode: komoditas.kode,
     komoditasNama: komoditas.nama,
     stokReadyKg,
+    stokTitipNonFisikKg,
     rataRataModalTerkini,
     totalNilaiModalTerkini,
     adaPenjualanSebelumnya,
@@ -296,6 +414,9 @@ export function calculateHbMovingAverage(
     pembelianBaruSetelahMuatKg,
     pembelianBaruSetelahMuatRp,
     pembelianBaruSetelahMuatCount,
+    totalSusutKurangKg,
+    totalLebihMuatKg,
+    netSelisihStokKg,
     steps,
   };
 }

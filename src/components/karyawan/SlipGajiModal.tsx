@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Printer, Copy, Check, Download, X, Wallet, Building2, User, CheckCircle2 } from 'lucide-react';
-import { TransaksiPenggajian, CatatanUpahHarian } from '../../server/types.ts';
+import { Printer, Copy, Check, Download, X, Wallet, Building2, User, CheckCircle2, Receipt } from 'lucide-react';
+import { TransaksiPenggajian, CatatanUpahHarian, ProfilPerusahaan } from '../../server/types.ts';
 import { api } from '../../api/client.ts';
 import { DownloadHistoryGajiButton } from './DownloadHistoryGajiButton.tsx';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
+import { buildThermalReceiptFromSlipGaji } from '../../utils/thermalPayrollReceipt.ts';
 
 interface SlipGajiModalProps {
   slip: TransaksiPenggajian | null;
@@ -22,12 +24,21 @@ function getNamaHariIndo(dmy?: string): string {
 export const SlipGajiModal: React.FC<SlipGajiModalProps> = ({ slip, onClose }) => {
   const [copied, setCopied] = useState(false);
   const [rincianKerja, setRincianKerja] = useState<CatatanUpahHarian[]>([]);
+  const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
 
   useEffect(() => {
     if (!slip) {
       setRincianKerja([]);
+      setThermalReceipt(null);
       return;
     }
+    api
+      .getProfilPerusahaan()
+      .then((p) => {
+        if (p) setProfilPerusahaan(p);
+      })
+      .catch(() => null);
     api
       .getUpahHarian()
       .then((list) => {
@@ -56,6 +67,10 @@ export const SlipGajiModal: React.FC<SlipGajiModalProps> = ({ slip, onClose }) =
 
   if (!slip) return null;
 
+  const handleOpenThermalSlip = () => {
+    setThermalReceipt(buildThermalReceiptFromSlipGaji(slip, rincianKerja));
+  };
+
   const formatRupiah = (val: number) => {
     return 'Rp ' + Number(val || 0).toLocaleString('id-ID');
   };
@@ -69,6 +84,12 @@ export const SlipGajiModal: React.FC<SlipGajiModalProps> = ({ slip, onClose }) =
   };
 
   const generateTextSummary = () => {
+    const nominalDititipkan = Math.max(0, Number(slip.nominalDititipkan) || 0);
+    const hakSetelahPotong =
+      slip.hakGajiSetelahPotongBon !== undefined
+        ? Number(slip.hakGajiSetelahPotongBon) || 0
+        : Math.max(0, (Number(slip.totalGajiKotor) || 0) - (Number(slip.potonganKasbon) || 0));
+
     return `*SLIP GAJI KARYAWAN - PT WIJAYA AGRO*
 =========================================
 No. Slip : ${slip.slipNomor}
@@ -89,16 +110,25 @@ Penugasan: ${slip.divisi || 'Gudang Wijaya Agro'}
 • Bonus/Lembur      : ${formatRupiah(slip.bonus)}
 *Total Gaji Kotor   : ${formatRupiah(slip.totalGajiKotor)}*
 -----------------------------------------
-*POTONGAN KASBON*
-• Kasbon Awal       : ${formatRupiah(slip.totalKasbonAwal)}
-• Potongan Kasbon   : -${formatRupiah(slip.potonganKasbon)} (${slip.persentasePotongKasbon}%)
-• Sisa Kasbon Akhir : ${formatRupiah(slip.sisaKasbonAkhir)}
+*POTONGAN PIUTANG / KASBON*
+• Piutang/Bon Awal  : ${formatRupiah(slip.totalKasbonAwal)}
+• Potongan Piutang  : -${formatRupiah(slip.potonganKasbon)}${slip.persentasePotongKasbon ? ` (${slip.persentasePotongKasbon}%)` : ''}
+• Sisa Piutang Akhir: ${formatRupiah(slip.sisaKasbonAkhir)}
+-----------------------------------------${
+      nominalDititipkan > 0
+        ? `
+*ALOKASI SISA GAJI*
+• Hak Gaji Bersih   : ${formatRupiah(hakSetelahPotong)}
+• Dititipkan (Titip): ${formatRupiah(nominalDititipkan)}
 -----------------------------------------
-*TOTAL GAJI BERSIH (TAKE HOME PAY)*
+*UANG DIAMBIL (CASH / TRANSFER)*`
+        : `
+*TOTAL GAJI BERSIH (TAKE HOME PAY)*`
+    }
 >>> ${formatRupiah(slip.gajiBersihDibayar)} <<<
 -----------------------------------------
-Metode  : ${slip.metodePembayaran} (${slip.rekeningSumber})
-Status  : LUNAS & DIBAYARKAN
+Metode  : ${nominalDititipkan > 0 && slip.gajiBersihDibayar === 0 ? 'TITIP 100% (SALDO TITIPAN)' : `${slip.metodePembayaran} (${slip.rekeningSumber})`}
+Status  : ${nominalDititipkan > 0 ? (slip.gajiBersihDibayar === 0 ? 'LUNAS · 100% DITITIPKAN' : 'LUNAS · CAIR + TITIP SISA') : 'LUNAS & DIBAYARKAN'}
 
 _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
   };
@@ -161,14 +191,17 @@ _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
           >
             {/* Kop Surat PT Wijaya Agro */}
             <div className="border-b-2 border-zinc-900 pb-3 mb-4 text-center relative">
-              <h1 className="text-xl font-black tracking-wider text-emerald-900">
-                PT WIJAYA AGRO NUSANTARA
+              <h1 className="text-xl font-black tracking-wider text-emerald-900 uppercase">
+                {profilPerusahaan?.namaPerusahaan || 'PT. WIJAYA AGRO PERKASA'}
               </h1>
               <p className="text-[11px] text-zinc-600 font-medium">
-                Pusat Sarana Produksi Pertanian, Saprotan & Perdagangan Komoditas Hasil Bumi
+                {profilPerusahaan?.catatanHeaderNota ||
+                  profilPerusahaan?.badanHukum ||
+                  'Pusat Sarana Produksi Pertanian, Saprotan & Perdagangan Komoditas Hasil Bumi'}
               </p>
               <p className="text-[10px] text-zinc-500">
-                Jl. Raya Agro Niaga No. 88, Blitar, Jawa Timur | Telp: (0342) 889900 | WA: 0812-3456-7890
+                {profilPerusahaan?.alamat || '-'}
+                {profilPerusahaan?.telepon ? ` | Telp: ${profilPerusahaan.telepon}` : ''}
               </p>
               <div className="mt-2 inline-block bg-zinc-900 text-white font-bold px-4 py-0.5 rounded text-[11px] tracking-wide uppercase">
                 SLIP GAJI KARYAWAN & POTONGAN KASBON
@@ -306,14 +339,40 @@ _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
               </div>
             )}
 
+            {/* Alokasi Titipan Sisa Gaji (jika ada) */}
+            {(Number(slip.nominalDititipkan) || 0) > 0 && (
+              <div className="bg-amber-50 border border-amber-300 text-amber-950 p-3 rounded-lg mb-3 text-[11px] space-y-1">
+                <div className="flex justify-between font-semibold">
+                  <span>Hak Gaji Bersih (Setelah Potong Piutang/Bon):</span>
+                  <span className="font-mono">
+                    {formatRupiah(
+                      slip.hakGajiSetelahPotongBon !== undefined
+                        ? slip.hakGajiSetelahPotongBon
+                        : Math.max(0, (Number(slip.totalGajiKotor) || 0) - (Number(slip.potonganKasbon) || 0))
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between font-bold text-amber-900">
+                  <span>Dititipkan ke Saldo Titipan Karyawan/Mitra ({slip.idTitipanGajiTerkait || 'TIT01'}):</span>
+                  <span className="font-mono">{formatRupiah(Number(slip.nominalDititipkan) || 0)}</span>
+                </div>
+              </div>
+            )}
+
             {/* Total Take Home Pay */}
             <div className="bg-emerald-900 text-white p-3.5 rounded-lg flex items-center justify-between mb-4 shadow-xs">
               <div>
                 <p className="text-[10px] font-bold tracking-wider uppercase text-emerald-200">
-                  GAJI BERSIH DITERIMA KARYAWAN (TAKE HOME PAY)
+                  {(Number(slip.nominalDititipkan) || 0) > 0
+                    ? 'UANG GAJI DIAMBIL (CASH / TRANSFER)'
+                    : 'GAJI BERSIH DITERIMA KARYAWAN (TAKE HOME PAY)'}
                 </p>
                 <p className="text-[11px] text-emerald-100">
-                  Ditransfer / dibayarkan via rekening <span className="font-bold underline">{slip.rekeningSumber}</span>
+                  {(Number(slip.nominalDititipkan) || 0) > 0 && slip.gajiBersihDibayar === 0 ? (
+                    <>Seluruh sisa gaji dititipkan ke <span className="font-bold underline">Saldo Titipan (TIT01)</span></>
+                  ) : (
+                    <>Ditransfer / dibayarkan via rekening <span className="font-bold underline">{slip.rekeningSumber}</span></>
+                  )}
                 </p>
               </div>
               <div className="text-right">
@@ -321,7 +380,11 @@ _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
                   {formatRupiah(slip.gajiBersihDibayar)}
                 </span>
                 <span className="block text-[10px] text-emerald-300 font-semibold">
-                  STATUS: LUNAS & DIBAYAR
+                  {(Number(slip.nominalDititipkan) || 0) > 0
+                    ? slip.gajiBersihDibayar === 0
+                      ? 'STATUS: LUNAS · 100% DITITIPKAN'
+                      : 'STATUS: LUNAS · CAIR + TITIP SISA'
+                    : 'STATUS: LUNAS & DIBAYAR'}
                 </span>
               </div>
             </div>
@@ -346,17 +409,26 @@ _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
 
         {/* Modal Action Footer */}
         <div className="p-4 bg-zinc-800/90 border-t border-zinc-700 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenThermalSlip}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 rounded-lg font-bold text-xs shadow-xs transition-colors cursor-pointer"
+              title="Cetak struk thermal 80mm / 58mm lengkap dengan rincian per hari kerja (USB / Bluetooth / RawBT)"
+            >
+              <Receipt className="w-4 h-4" />
+              <span>Cetak Thermal (80mm/58mm)</span>
+            </button>
             <button
               onClick={handlePrint}
-              className="flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium text-xs shadow-xs transition-colors"
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium text-xs shadow-xs transition-colors cursor-pointer"
             >
               <Printer className="w-4 h-4" />
-              <span>Cetak Slip Gaji</span>
+              <span>Cetak A4</span>
             </button>
             <button
               onClick={handleCopyText}
-              className={`flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+              className={`flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
                 copied
                   ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
                   : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200 border-zinc-600'
@@ -382,12 +454,18 @@ _Dokumen ini merupakan slip upah/gaji resmi PT Wijaya Agro._`;
 
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded-lg text-xs font-medium transition-colors"
+            className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded-lg text-xs font-medium transition-colors cursor-pointer"
           >
             Tutup
           </button>
         </div>
       </div>
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={profilPerusahaan}
+      />
     </div>
   );
 };

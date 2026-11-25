@@ -63,6 +63,12 @@ import {
   exportRekeningTitipToPdf,
   exportRekeningTitipToXlsx,
 } from '../../utils/exportRekeningTitip.ts';
+import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
+import {
+  buildThermalReceiptDraftPencairan,
+  buildThermalReceiptFromSlipGaji,
+} from '../../utils/thermalPayrollReceipt.ts';
+import { buildThermalReceiptBonTitipKaryawan } from '../../utils/thermalPiutangHutangReceipt.ts';
 
 interface DetailHarianKaryawanModalProps {
   idKaryawan: string;
@@ -94,12 +100,16 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
     () => new Date().toISOString().split('T')[0]
   );
   const [settlePersenBon, setSettlePersenBon] = useState<number>(100);
+  const [settleNominalBonKustom, setSettleNominalBonKustom] = useState<number>(0);
+  const [settleModeTitip, setSettleModeTitip] = useState<'AMBIL_SEMUA' | 'SEBAGIAN_TITIP' | 'TITIP_SEMUA'>('AMBIL_SEMUA');
+  const [settleNominalAmbilSebagian, setSettleNominalAmbilSebagian] = useState<number>(0);
   const [settleSubmitting, setSettleSubmitting] = useState(false);
   const [settleError, setSettleError] = useState('');
   const [editTarget, setEditTarget] = useState<{ id: string; jenis: string } | null>(null);
   const [showProfilModal, setShowProfilModal] = useState(false);
   const [showPhotoZoom, setShowPhotoZoom] = useState(false);
   const [profilPerusahaan, setProfilPerusahaan] = useState<ProfilPerusahaan | null>(null);
+  const [thermalReceipt, setThermalReceipt] = useState<ReceiptData | null>(null);
 
   // Per-employee history download & filter state
   const [exportPeriodKey, setExportPeriodKey] = useState<string>('SEMUA');
@@ -142,6 +152,22 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
       const formattedTanggalBayar =
         sy && sm && sd ? `${sd}/${sm}/${sy}` : settleTanggalBayar;
 
+      const upahKotor = Number(detail.karyawan.totalUpahBelumDibayar) || 0;
+      const totalBon = Number(detail.karyawan.totalBonKaryawan) || 0;
+      const estPotong =
+        totalBon <= 0
+          ? 0
+          : settlePersenBon === -1
+          ? Math.min(Math.max(0, Number(settleNominalBonKustom) || 0), totalBon, upahKotor)
+          : Math.min(Math.round((totalBon * settlePersenBon) / 100), totalBon, upahKotor);
+      const hakSetelahBon = Math.max(0, upahKotor - estPotong);
+      const finalDititipkan =
+        settleModeTitip === 'TITIP_SEMUA'
+          ? hakSetelahBon
+          : settleModeTitip === 'SEBAGIAN_TITIP'
+          ? Math.max(0, hakSetelahBon - Math.min(Math.max(0, Math.round(settleNominalAmbilSebagian || 0)), hakSetelahBon))
+          : 0;
+
       await api.settleHakUpahKaryawan(idKaryawan, {
         divisi: settleDivisi,
         tanggalBayar: formattedTanggalBayar,
@@ -153,9 +179,13 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
             : settleRekening === 'KAS01'
             ? 'TUNAI'
             : 'TRANSFER',
-        persentasePotongKasbon: settlePersenBon,
+        persentasePotongKasbon: settlePersenBon === -1 ? 0 : settlePersenBon,
+        nominalPotongKustom: settlePersenBon === -1 ? Math.max(0, Number(settleNominalBonKustom) || 0) : undefined,
+        nominalDititipkan: finalDititipkan,
       });
       setShowSettleModal(false);
+      setSettleModeTitip('AMBIL_SEMUA');
+      setSettleNominalAmbilSebagian(0);
       onRefreshAll();
       loadDetail();
     } catch (err: any) {
@@ -250,6 +280,78 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
     } finally {
       setDownloadingFmt(null);
     }
+  };
+
+  const handleOpenThermalRincianHarian = () => {
+    const totalUpahScope = filteredLogHarian.reduce(
+      (sum, u) => sum + (Number(u.jumlah !== undefined ? u.jumlah : u.totalUpahHarian) || 0),
+      0
+    );
+    const totalUpahBelumCairScope = filteredLogHarian
+      .filter((u) => u.status === 'TERCATAT')
+      .reduce(
+        (sum, u) => sum + (Number(u.jumlah !== undefined ? u.jumlah : u.totalUpahHarian) || 0),
+        0
+      );
+    const totalBonAktif = (karyawan.totalKasbonUang || 0) + (karyawan.totalKasbonBarang || 0);
+    const basisUpah = exportStatusKerja === 'BON' ? totalUpahBelumCairScope : totalUpahScope;
+    const estimasiBersih = Math.max(0, basisUpah - totalBonAktif);
+
+    setThermalReceipt(
+      buildThermalReceiptDraftPencairan({
+        namaKaryawan: karyawan.nama,
+        nik: karyawan.nik,
+        jabatan: karyawan.jabatan,
+        divisi: karyawan.divisi || karyawan.departemen || karyawan.divisiTerakhir,
+        periodeLabel: preparedHistory.scopeLabel || 'Semua Periode',
+        dailyLogs: filteredLogHarian,
+        includeStatusTag: true,
+        title: 'RINCIAN PENGGAJIAN PER HARI',
+        totalGajiKotor: basisUpah,
+        kasbonUang: karyawan.totalKasbonUang || 0,
+        kasbonBarang: karyawan.totalKasbonBarang || 0,
+        totalKasbonAwal: totalBonAktif,
+        potonganKasbon: 0,
+        saldoTitipPanen: ringkasanTitip.saldoTitipAktif,
+        gajiBersihDiterima: estimasiBersih,
+        totalLabel: totalBonAktif > 0 ? 'ESTIMASI SETELAH BON' : 'TOTAL UPAH HARIAN',
+        statusLabel:
+          exportStatusKerja === 'BON'
+            ? 'BELUM CAIR (SIAP PENCAIRAN)'
+            : exportStatusKerja === 'LUNAS'
+            ? 'SUDAH CAIR (LUNAS)'
+            : `BELUM CAIR: ${formatRupiah(totalUpahBelumCairScope)}`,
+        catatan: `Filter: ${preparedHistory.scopeLabel} · ${filteredLogHarian.length} catatan harian.`,
+      })
+    );
+  };
+
+  const handleOpenThermalSlipRow = (slip: TransaksiPenggajian) => {
+    const idSet = new Set(slip.daftarUpahHarianIds || []);
+    let matched = (logHarian || []).filter(
+      (u) => idSet.has(u.id) || u.idPayrollSettlement === slip.id
+    );
+    if (matched.length === 0 && slip.tanggal) {
+      const slipParts = slip.tanggal.split('/');
+      if (slipParts.length === 3) {
+        const [, sm, sy] = slipParts;
+        matched = (logHarian || []).filter((u) => {
+          const uParts = (u.tanggalKerja || '').split('/');
+          return uParts.length === 3 && uParts[1] === sm && uParts[2] === sy;
+        });
+      }
+    }
+    setThermalReceipt(buildThermalReceiptFromSlipGaji(slip, matched));
+  };
+
+  const handleOpenThermalBonTitip = () => {
+    if (!detail) return;
+    setThermalReceipt(
+      buildThermalReceiptBonTitipKaryawan(detail, {
+        scopeLabel: preparedHistory.scopeLabel || 'Saldo Aktif Berjalan',
+        saldoTitipAktif: ringkasanTitip.saldoTitipAktif,
+      })
+    );
   };
 
   const handleDownloadTitipHistory = async (
@@ -595,6 +697,16 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
 
             <button
               type="button"
+              onClick={handleOpenThermalRincianHarian}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-amber-300 border border-zinc-700 rounded-lg text-[11px] font-bold shadow-2xs transition-colors cursor-pointer"
+              title="Cetak rincian gaji per hari ini ke printer thermal 80mm / 58mm (USB / Bluetooth / RawBT)"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Thermal 80mm</span>
+            </button>
+
+            <button
+              type="button"
               disabled={Boolean(downloadingFmt)}
               onClick={() => handleDownloadHistory('csv')}
               className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white hover:bg-zinc-100 text-zinc-700 border border-zinc-300 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50"
@@ -901,6 +1013,24 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
           {/* TAB 2: Mutasi Bon & Detail Uang Titip Karyawan */}
           {activeTab === 'MUTASI_BON' && (
             <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-amber-50/80 border border-amber-200 rounded-xl">
+                <div className="text-xs text-amber-950">
+                  <div className="font-bold">Cetak Struk Thermal Piutang (Bon) &amp; Hutang (Uang Titip)</div>
+                  <div className="text-[11px] text-amber-800">
+                    Mencetak rincian bon barang, bon uang, uang titip, serta hak upah berjalan untuk printer 80mm / 58mm.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenThermalBonTitip}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-amber-950 bg-amber-200/80 hover:bg-amber-300 border border-amber-400 rounded-lg transition-colors cursor-pointer shrink-0"
+                  title="Cetak rincian Piutang (Bon) & Hutang (Uang Titip) karyawan ke printer thermal"
+                >
+                  <Printer className="w-3.5 h-3.5 text-amber-900" />
+                  <span>Cetak Thermal Bon &amp; Titip</span>
+                </button>
+              </div>
+
               {/* 0. Detail Uang Titip (Titipan Sisa Gaji / Dana & Pengambilan) */}
               <div className="space-y-2">
                 <h3 className="font-bold text-violet-900 text-xs flex items-center space-x-2">
@@ -1158,14 +1288,25 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                           </td>
                           <td className="py-2.5 px-3 text-zinc-600">{g.rekeningSumber} ({g.metodePembayaran})</td>
                           <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => setEditTarget({ id: g.id, jenis: 'PENGGAJIAN' })}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer"
-                            >
-                              <Pencil className="w-2.5 h-2.5" />
-                              <span>Edit</span>
-                            </button>
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenThermalSlipRow(g)}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300 text-[10px] font-bold cursor-pointer"
+                                title="Cetak Slip Gaji & Rincian Harian ke Printer Thermal 80mm/58mm"
+                              >
+                                <Printer className="w-2.5 h-2.5" />
+                                <span>Thermal</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditTarget({ id: g.id, jenis: 'PENGGAJIAN' })}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-100 hover:bg-zinc-900 text-zinc-700 hover:text-white border border-zinc-200 text-[10px] font-semibold cursor-pointer"
+                              >
+                                <Pencil className="w-2.5 h-2.5" />
+                                <span>Edit</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1365,30 +1506,63 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                               <div className="text-[10px] text-zinc-400">{m.jam}</div>
                             </td>
                             <td className="py-2 px-3 whitespace-nowrap">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[9px] font-bold ${
-                                  m.arah === 'MASUK'
-                                    ? 'bg-emerald-100 text-emerald-900'
-                                    : m.arah === 'KEMBALI'
-                                    ? 'bg-zinc-200 text-zinc-800'
-                                    : 'bg-amber-100 text-amber-900'
-                                }`}
-                              >
-                                {m.jenis}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[9px] font-bold ${
+                                    m.arah === 'MASUK'
+                                      ? 'bg-emerald-100 text-emerald-900'
+                                      : m.arah === 'KEMBALI'
+                                      ? 'bg-zinc-200 text-zinc-800'
+                                      : 'bg-amber-100 text-amber-900'
+                                  }`}
+                                >
+                                  {m.jenis}
+                                </span>
+                                {m.detailItems && m.detailItems.length > 1 && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-100 text-sky-900 border border-sky-200">
+                                    {m.detailItems.length} Rincian
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-2 px-3">
                               <div className="font-semibold text-zinc-900">{m.pihakAtauRekeningLawan}</div>
                               <div className="text-[10px] text-zinc-600">{m.uraian}</div>
-                              {m.detailItems && m.detailItems.length > 0 && (
-                                <div className="mt-1 space-y-0.5 pl-2 border-l-2 border-sky-200">
+                              {m.detailItems && m.detailItems.length > 1 ? (
+                                <div className="mt-1.5 rounded-lg border border-amber-200/90 bg-amber-50/40 overflow-hidden divide-y divide-amber-100/90">
                                   {m.detailItems.map((it, idx) => (
-                                    <div key={idx} className="text-[10px] text-zinc-600">
-                                      • {it.nama} ({it.qty} {it.satuan} &times; {formatRupiah(it.harga)}) ={' '}
-                                      <strong>{formatRupiah(it.subtotal)}</strong>
+                                    <div
+                                      key={idx}
+                                      className="px-2 py-1 flex items-start justify-between gap-2 text-[10px]"
+                                    >
+                                      <div className="min-w-0">
+                                        <span className="font-semibold text-zinc-800">
+                                          {idx + 1}. {it.nama}
+                                        </span>
+                                        <span className="text-zinc-500 ml-1 font-mono text-[9.5px]">
+                                          ({it.qty.toLocaleString('id-ID')} {it.satuan} &times;{' '}
+                                          {formatRupiah(it.harga)})
+                                        </span>
+                                      </div>
+                                      <span className="font-mono font-bold text-amber-900 whitespace-nowrap tabular-nums">
+                                        {formatRupiah(it.subtotal)}
+                                      </span>
                                     </div>
                                   ))}
                                 </div>
+                              ) : (
+                                m.detailItems &&
+                                m.detailItems.length === 1 && (
+                                  <div className="mt-1 space-y-0.5 pl-2 border-l-2 border-sky-200">
+                                    {m.detailItems.map((it, idx) => (
+                                      <div key={idx} className="text-[10px] text-zinc-600">
+                                        • {it.nama} ({it.qty.toLocaleString('id-ID')} {it.satuan} &times;{' '}
+                                        {formatRupiah(it.harga)}) ={' '}
+                                        <strong>{formatRupiah(it.subtotal)}</strong>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )
                               )}
                             </td>
                             <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700 whitespace-nowrap">
@@ -1520,7 +1694,7 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
 
               <div>
                 <label className="block font-semibold text-zinc-700 mb-1">
-                  Pilihan Pemotongan Bon Karyawan
+                  Pilihan Pemotongan Piutang / Bon Karyawan
                 </label>
                 <select
                   value={settlePersenBon}
@@ -1528,12 +1702,144 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
                   className="w-full px-3 py-2 border border-zinc-300 rounded-lg font-semibold"
                   disabled={karyawan.totalBonKaryawan <= 0}
                 >
-                  <option value={100}>Potong 100% (Lunaskan Bon Sebanyak Upah)</option>
-                  <option value={50}>Potong 50% dari Bon</option>
-                  <option value={25}>Potong 25% dari Bon</option>
-                  <option value={0}>0% (Tanpa Potongan Bon)</option>
+                  <option value={100}>Potong 100% (Lunaskan Piutang Sebanyak Upah)</option>
+                  <option value={50}>Potong 50% dari Piutang</option>
+                  <option value={25}>Potong 25% dari Piutang</option>
+                  <option value={0}>0% (Tanpa Potongan Piutang)</option>
+                  <option value={-1}>Nominal Lain (Input Manual)</option>
                 </select>
+                {settlePersenBon === -1 && karyawan.totalBonKaryawan > 0 && (
+                  <input
+                    type="number"
+                    min={0}
+                    max={Math.min(karyawan.totalBonKaryawan, karyawan.totalUpahBelumDibayar)}
+                    step="any"
+                    value={settleNominalBonKustom || ''}
+                    onChange={(e) => setSettleNominalBonKustom(Math.max(0, Number(e.target.value) || 0))}
+                    placeholder="Nominal potong piutang (Rp)"
+                    className="w-full mt-2 px-3 py-2 border border-rose-300 rounded-lg font-mono font-bold"
+                  />
+                )}
               </div>
+
+              {(() => {
+                const upahKotor = Number(karyawan.totalUpahBelumDibayar) || 0;
+                const totalBon = Number(karyawan.totalBonKaryawan) || 0;
+                const pot =
+                  totalBon <= 0
+                    ? 0
+                    : settlePersenBon === -1
+                    ? Math.min(Math.max(0, Number(settleNominalBonKustom) || 0), totalBon, upahKotor)
+                    : Math.min(Math.round((totalBon * settlePersenBon) / 100), totalBon, upahKotor);
+                const hakBersih = Math.max(0, upahKotor - pot);
+                const titip =
+                  settleModeTitip === 'TITIP_SEMUA'
+                    ? hakBersih
+                    : settleModeTitip === 'SEBAGIAN_TITIP'
+                    ? Math.max(
+                        0,
+                        hakBersih - Math.min(Math.max(0, Math.round(settleNominalAmbilSebagian || 0)), hakBersih)
+                      )
+                    : 0;
+                const ambilCash = Math.max(0, hakBersih - titip);
+
+                return (
+                  <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-300 space-y-2.5">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-amber-950">Opsi Pengambilan &amp; Titipan Sisa Gaji</span>
+                      <span className="font-mono font-bold text-zinc-800">{formatRupiah(hakBersih)}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettleModeTitip('AMBIL_SEMUA');
+                          setSettleNominalAmbilSebagian(hakBersih);
+                        }}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                          settleModeTitip === 'AMBIL_SEMUA'
+                            ? 'bg-zinc-900 text-white border-zinc-900'
+                            : 'bg-white text-zinc-700 border-zinc-300'
+                        }`}
+                      >
+                        Ambil Semua
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettleModeTitip('SEBAGIAN_TITIP');
+                          if (settleNominalAmbilSebagian <= 0 || settleNominalAmbilSebagian >= hakBersih) {
+                            setSettleNominalAmbilSebagian(hakBersih >= 100000 ? 100000 : Math.floor(hakBersih / 2));
+                          }
+                        }}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                          settleModeTitip === 'SEBAGIAN_TITIP'
+                            ? 'bg-amber-600 text-white border-amber-700'
+                            : 'bg-white text-zinc-700 border-zinc-300'
+                        }`}
+                      >
+                        Ambil + Titip
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettleModeTitip('TITIP_SEMUA');
+                          setSettleNominalAmbilSebagian(0);
+                        }}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                          settleModeTitip === 'TITIP_SEMUA'
+                            ? 'bg-amber-700 text-white border-amber-800'
+                            : 'bg-white text-zinc-700 border-zinc-300'
+                        }`}
+                      >
+                        Titip 100%
+                      </button>
+                    </div>
+                    {settleModeTitip === 'SEBAGIAN_TITIP' && hakBersih > 0 && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-semibold text-zinc-700 mb-0.5">
+                            Diambil Cash/TF (Rp)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={hakBersih}
+                            step="any"
+                            value={ambilCash}
+                            onChange={(e) => {
+                              const v = Math.min(Math.max(0, Math.round(Number(e.target.value) || 0)), hakBersih);
+                              setSettleNominalAmbilSebagian(v);
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-emerald-400 rounded-lg font-mono font-bold bg-white text-emerald-900"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-zinc-700 mb-0.5">
+                            Dititipkan (Rp)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={hakBersih}
+                            step="any"
+                            value={titip}
+                            onChange={(e) => {
+                              const t = Math.min(Math.max(0, Math.round(Number(e.target.value) || 0)), hakBersih);
+                              setSettleNominalAmbilSebagian(Math.max(0, hakBersih - t));
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-amber-400 rounded-lg font-mono font-bold bg-white text-amber-900"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="pt-2 border-t border-amber-200 flex justify-between text-[11px] font-mono">
+                      <span className="text-emerald-800 font-bold">Cash/TF: {formatRupiah(ambilCash)}</span>
+                      <span className="text-amber-800 font-bold">Titip: {formatRupiah(titip)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="flex justify-end space-x-2 pt-2 border-t border-zinc-200">
                 <button
@@ -1599,6 +1905,12 @@ export const DetailHarianKaryawanModal: React.FC<DetailHarianKaryawanModalProps>
           onClose={() => setShowPhotoZoom(false)}
         />
       )}
+
+      <PrintReceiptModal
+        receipt={thermalReceipt}
+        onClose={() => setThermalReceipt(null)}
+        profilPerusahaan={profilPerusahaan}
+      />
     </div>
   );
 };

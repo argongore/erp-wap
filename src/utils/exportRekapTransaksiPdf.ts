@@ -555,6 +555,17 @@ export function exportRekapTransaksiToPdf(
               ? `${tx.arusUang === 'MUTASI' ? '[Mutasi] ' : ''}${formatRupiah(tx.nominal)}`
               : '-';
 
+          const detailLines =
+            tx.itemsDetail && tx.itemsDetail.length > 1
+              ? [
+                  `Rincian (${tx.itemsDetail.length} Item):`,
+                  ...tx.itemsDetail.map(
+                    (it) =>
+                      `• ${it.nama} (${Number(it.qty || 0).toLocaleString('id-ID')} ${it.satuan} @ ${formatRupiah(it.harga)} = ${formatRupiah(it.subtotal)})`
+                  ),
+                ].join('\n')
+              : tx.deskripsi;
+
           if (isLandscape) {
             return [
               String(idx + 1),
@@ -562,7 +573,7 @@ export function exportRekapTransaksiToPdf(
               tx.id,
               tx.jenisLabel,
               `${tx.pihakTerkait}${tx.divisi ? `\n[${tx.divisi}]` : ''}`,
-              `${tx.deskripsi}${tx.fotoBukti ? ' [Nota Terlampir]' : ''}`,
+              `${detailLines}${tx.fotoBukti ? '\n[Nota Terlampir]' : ''}`,
               `${tx.rekening}\n(${tx.metode})`,
               tx.nominalMasuk > 0 ? `+${formatRupiah(tx.nominalMasuk)}` : '-',
               tx.nominalKeluar > 0 ? `-${formatRupiah(tx.nominalKeluar)}` : '-',
@@ -575,7 +586,7 @@ export function exportRekapTransaksiToPdf(
             String(idx + 1),
             `${tx.tanggal}\n${tx.jam}`,
             `${tx.id}\n${tx.jenisLabel}`,
-            `${tx.pihakTerkait}\n${tx.deskripsi}`,
+            `${tx.pihakTerkait}\n${detailLines}`,
             tx.rekening,
             tx.nominalMasuk > 0 ? `+${formatRupiah(tx.nominalMasuk)}` : '-',
             tx.nominalKeluar > 0 ? `-${formatRupiah(tx.nominalKeluar)}` : '-',
