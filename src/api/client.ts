@@ -1079,18 +1079,24 @@ export const api = {
   },
 
   processNotaSilang: async (payload: {
-    idMitraPengambil: string;
+    idMitraPengambil?: string;
+    tipePembeli?: 'MITRA' | 'UMUM';
+    namaPembeliUmum?: string;
     idMitraAnakPerusahaan?: string;
-    modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+    modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'BAYAR_LUNAS_KAS_PT' | 'PROYEK_BERSAMA' | 'SESAMA_MITRA';
+    statusProyek?: 'BON_PROYEK' | 'LUNAS_SINKRON';
+    metodeBayarKasPt?: 'TUNAI' | 'TRANSFER';
+    rekeningTujuanKasPt?: string;
     tanggal?: string;
     noNotaToko?: string;
     fotoNota?: string;
     keterangan?: string;
     items: NotaSilangItemInput[];
+    tambahanHargaMusiman?: number;
   }): Promise<
     NotaSilangRecordSummary & {
       penjualanMitra: TransaksiPenjualan;
-      bukuAnakPerusahaan: TransaksiPembelianHasilBumi;
+      bukuAnakPerusahaan: TransaksiPembelianHasilBumi | null;
       mitraPengambilNama: string;
       anakPerusahaanNama: string;
     }
@@ -2222,7 +2228,7 @@ export const api = {
     idMitra?: string;
     namaMitraManual?: string;
     idMitraAnakPerusahaan?: string;
-    modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+    modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'BAYAR_LUNAS_KAS_PT' | 'PROYEK_BERSAMA' | 'SESAMA_MITRA';
     noNotaToko?: string;
     idKaryawan?: string;
     namaKaryawanManual?: string;
@@ -2331,6 +2337,8 @@ export const api = {
     nominalPenyelesaianFisik?: number;
     metodeFisik?: 'TUNAI' | 'TRANSFER';
     rekeningFisik?: string;
+    targetBonIds?: string[];
+    stayBonIds?: string[];
     keterangan?: string;
     tanggal?: string;
   }): Promise<HasilKliringSilangResponse> => {

@@ -1304,6 +1304,8 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
               <option value="BAYAR_BON">Pembayaran Bon (Pelunasan Piutang)</option>
               <option value="PENGELUARAN_DIVISI">Biaya &amp; Beban Operasional Divisi</option>
               <option value="PENCAIRAN_TITIPAN">Pencairan Titipan Hasil Bumi</option>
+              <option value="UANG_MASUK">Uang Masuk (+) &amp; Pencairan Hasil Bumi</option>
+              <option value="BRILINK">Agen BRILink (Admin &amp; Mutasi Pokok)</option>
               <option value="UPAH_HARIAN">Upah Harian Karyawan</option>
               <option value="PENGGAJIAN">Gaji Bulanan Karyawan</option>
               <option value="TRANSFER_REKENING">Transfer Antar Rekening</option>
@@ -1521,6 +1523,14 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                               ? 'bg-rose-100 text-rose-900 border border-rose-300'
                               : tx.jenis === 'PENCAIRAN_TITIPAN'
                               ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                              : tx.jenis === 'UANG_MASUK'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : tx.jenis === 'BRILINK'
+                              ? tx.arusUang === 'MASUK'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : tx.arusUang === 'KELUAR'
+                                ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                : 'bg-sky-100 text-sky-800 border border-sky-300'
                               : tx.jenis === 'UPAH_HARIAN' || tx.jenis === 'PENGGAJIAN'
                               ? 'bg-purple-100 text-purple-800 border border-purple-300'
                               : 'bg-sky-100 text-sky-800 border border-sky-300'
@@ -1858,10 +1868,11 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                               type="button"
                               onClick={() =>
                                 setEditModalTarget({
-                                  id:
+                                  id: (
                                     tx.batchItemIds && tx.batchItemIds.length > 0
                                       ? tx.batchItemIds[0]
-                                      : tx.id,
+                                      : tx.id
+                                  ).replace(/^(BRI[A-Z0-9]+)-POKOK$/i, '$1'),
                                   jenis: tx.jenis,
                                 })
                               }
@@ -1881,7 +1892,7 @@ export const RekapSemuaTransaksiHarianView: React.FC<Props> = ({
                               onClick={() => {
                                 setDeleteTxError('');
                                 setDeleteTxTarget({
-                                  id: tx.id,
+                                  id: tx.id.replace(/^(BRI[A-Z0-9]+)-POKOK$/i, '$1'),
                                   jenis: tx.jenis,
                                   tanggal: tx.tanggal,
                                   pihakTerkait: tx.pihakTerkait,

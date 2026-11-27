@@ -169,6 +169,132 @@ function resolveKelompokItemPengeluaran(nama, explicit) {
   }
   return "BIASA";
 }
+function isInternalMilikSendiriSuratJalan(inv) {
+  if (!inv) return false;
+  if (inv.sumberBarang === "STOK_HB_PT" || inv.idMitra === "STOK_HB_PT") return true;
+  const nama = String(inv.namaMitra || "").trim().toUpperCase();
+  if (!nama) return false;
+  return nama === "GUDANG WIJAYA AGRO" || nama === "GWA" || nama === "PT WIJAYA AGRO PERKASA" || nama === "PT WAP" || nama === "CV WIJAYA AGRO" || nama.includes("GUDANG WIJAYA AGRO") || nama.includes("STOK HB (PT WAP)") || nama.includes("STOK HB PT");
+}
+function isExcludedUangMasukFromDivisiCashflow(um) {
+  if (!um) return true;
+  if (um.metode === "SINKRON" || um.rekeningTujuan === "SINKRON" || um.metode === "PIUTANG" || um.rekeningTujuan === "BON01") {
+    return true;
+  }
+  const kat = String(um.kategori || "").trim().toUpperCase();
+  if (kat === "SETTLEMENT_BUYER_SJ" || kat === "PENJUALAN_SURAT_JALAN" || kat === "PELUNASAN_BON") {
+    return true;
+  }
+  const ket = String(um.keterangan || "").trim().toLowerCase();
+  if (ket.startsWith("potong kasbon dari inv") || ket.startsWith("potong piutang dari")) {
+    return true;
+  }
+  return false;
+}
+function computeSuratJalanKeuntunganPtEntries(suratJalan, uangMasuk) {
+  const entries = [];
+  const umList = Array.isArray(uangMasuk) ? uangMasuk : [];
+  for (const sj of suratJalan || []) {
+    const isOwn = isInternalMilikSendiriSuratJalan(sj);
+    const rawMargin = Math.max(
+      0,
+      Math.round(
+        Number(sj.marginHargaPt) || Math.max(
+          0,
+          (Number(sj.totalPenjualanBuyer) || 0) - (Number(sj.totalPenjualanMitra) || 0)
+        )
+      )
+    );
+    const marginPt = isOwn ? 0 : rawMargin;
+    const komisiTotal = Math.max(0, Math.round(Number(sj.komisiNominal) || 0));
+    const grossKeuntunganPt = marginPt + komisiTotal;
+    if (grossKeuntunganPt <= 0) continue;
+    let alreadyInUangMasuk = 0;
+    for (const um of umList) {
+      if (isExcludedUangMasukFromDivisiCashflow(um)) continue;
+      const matchById = Boolean(sj.idUangMasukKomisi && um.idTransaksi === sj.idUangMasukKomisi);
+      const matchByInvKomisi = Boolean(
+        sj.noInvoice && (um.kategori === "KOMISI_SURAT_JALAN" || um.kategori === "JASA_PENJUALAN_PT") && String(um.keterangan || "").includes(sj.noInvoice)
+      );
+      if (matchById || matchByInvKomisi) {
+        alreadyInUangMasuk += Math.max(0, Math.round(Number(um.nominal) || 0));
+      }
+    }
+    const totalNominal = Math.max(0, grossKeuntunganPt - alreadyInUangMasuk);
+    if (totalNominal <= 0) continue;
+    const komisiCovered = Math.min(komisiTotal, alreadyInUangMasuk);
+    const marginCovered = Math.min(marginPt, Math.max(0, alreadyInUangMasuk - komisiCovered));
+    const marginNet = Math.max(0, marginPt - marginCovered);
+    const komisiNet = Math.max(0, komisiTotal - komisiCovered);
+    const rincianParts = [];
+    if (marginNet > 0) {
+      rincianParts.push(`Selisih Basis Rp ${marginNet.toLocaleString("id-ID")}`);
+    }
+    if (komisiNet > 0) {
+      rincianParts.push(`Komisi Rp ${komisiNet.toLocaleString("id-ID")}`);
+    }
+    const statusLabel = sj.statusPembayaranMitra === "LUNAS" ? "Lunas" : sj.statusUangBuyer === "DITERIMA" ? "Dana Buyer Masuk" : "Pending Buyer";
+    const buyerKode = (sj.kategoriKode || "").trim().toUpperCase();
+    entries.push({
+      id: `SJ-PT-${sj.noInvoice || sj.id}`,
+      noInvoice: sj.noInvoice || sj.id,
+      tanggal: sj.tanggalUangBuyerMasuk || sj.tanggalBayarMitra || sj.tanggal,
+      jam: sj.jamUangBuyerMasuk || sj.jamBayarMitra || sj.jam || "00:00:00",
+      namaMitra: sj.namaMitra || "Mitra",
+      buyerKode,
+      marginHargaPt: marginNet,
+      komisiNominal: komisiNet,
+      nominal: totalNominal,
+      rekeningFisik: sj.rekeningTerimaBuyerKode || sj.rekeningBayarMitraKode || sj.rekeningPtKode || "BNI01",
+      statusLabel,
+      keterangan: `Keuntungan Surat Jalan ${sj.noInvoice} (${sj.namaMitra}${buyerKode ? ` \xB7 ${buyerKode}` : ""}): ${rincianParts.join(" + ")} [${statusLabel}]`,
+      createdAt: sj.createdAt
+    });
+  }
+  return entries;
+}
+function parseTransactionDateTimeMs(item) {
+  if (!item) return 0;
+  const rawDate = String(item.tanggal || item.tanggalKerja || "").trim();
+  const rawJam = String(item.jam || "00:00:00").trim();
+  const [hh, min, ss] = rawJam.split(":").map(Number);
+  if (rawDate) {
+    const sep = rawDate.includes("/") ? "/" : rawDate.includes("-") ? "-" : "";
+    if (sep) {
+      const strParts = rawDate.split(sep);
+      const numParts = strParts.map(Number);
+      if (numParts.length === 3 && numParts.every((n) => !Number.isNaN(n))) {
+        if (strParts[0].length === 4) {
+          const [yyyy2, mm2, dd2] = numParts;
+          return new Date(yyyy2, mm2 - 1, dd2, hh || 0, min || 0, ss || 0).getTime();
+        }
+        const [dd, mm, yyyy] = numParts;
+        return new Date(yyyy, mm - 1, dd, hh || 0, min || 0, ss || 0).getTime();
+      }
+    }
+  }
+  if (item.createdAt) {
+    const ms = new Date(item.createdAt).getTime();
+    if (!Number.isNaN(ms)) return ms;
+  }
+  return 0;
+}
+function sortTransactionsByDateDesc(list) {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => {
+    const diff = parseTransactionDateTimeMs(b) - parseTransactionDateTimeMs(a);
+    if (diff !== 0) return diff;
+    return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  });
+}
+function sortTransactionsByDateAsc(list) {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => {
+    const diff = parseTransactionDateTimeMs(a) - parseTransactionDateTimeMs(b);
+    if (diff !== 0) return diff;
+    return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+  });
+}
 
 // src/utils/rekapCtrHelper.ts
 import jsPDF from "jspdf";
@@ -580,6 +706,7 @@ var SupabaseSyncEngine = class {
     this.lastCloudCheckAt = 0;
     this.activeFreshCheckPromise = null;
     this.hasUnsyncedLocalChanges = false;
+    this.pendingAllowOverwrite = false;
     this.lastLocalMutationAt = 0;
     this.lastMirrorFingerprint = "";
     this.retryTimer = null;
@@ -758,10 +885,16 @@ var SupabaseSyncEngine = class {
       }
     }
   }
-  markLocalMutation(data) {
+  isCloudStateVerified() {
+    return this.hasVerifiedCloudState;
+  }
+  markLocalMutation(data, options) {
     this.hasUnsyncedLocalChanges = true;
     this.lastLocalMutationAt = Date.now();
     this.queuedData = data;
+    if (options?.allowOverwrite) {
+      this.pendingAllowOverwrite = true;
+    }
   }
   hasPendingLocalChanges() {
     return this.hasUnsyncedLocalChanges || this.isSyncing || this.queuedData !== null || Date.now() - this.lastLocalMutationAt < 6e4;
@@ -775,20 +908,31 @@ var SupabaseSyncEngine = class {
   }
   /**
    * Compacts JSONB state before upserting to Supabase so wijaya_agro_erp_state never hits Postgres statement_timeout:
-   * 1. Caps auditLogs to latest 250 entries.
+   * 1. Caps auditLogs to latest 200 entries.
    * 2. Deduplicates identical base64 strings between fotoNota and fotoNotaList.
    * 3. Offloads heavy inline base64 images (>25KB) to Supabase Storage bucket ('erp-bukti-nota') incrementally.
+   *    In fastMode (interactive create/edit/delete flush), enforces a strict 1.5s budget so Supabase state upsert
+   *    always completes immediately before the HTTP response returns.
    */
-  async prepareCompactCloudData(data) {
+  async prepareCompactCloudData(data, options) {
     if (Array.isArray(data.auditLogs) && data.auditLogs.length > 200) {
       data.auditLogs = data.auditLogs.slice(0, 200);
     }
-    let uploadsRemaining = 15;
+    const fastMode = Boolean(options?.fastMode);
+    const storageSkipped = Date.now() < this.storageUnavailableUntil;
+    const deadlineAt = fastMode ? Date.now() + 1500 : Date.now() + 12e3;
+    let uploadsRemaining = storageSkipped ? 0 : fastMode ? 2 : 15;
+    const perUploadTimeoutMs = fastMode ? 1200 : 4500;
     const uploadWithFastTimeout = async (base64, prefix) => {
+      if (Date.now() >= deadlineAt || Date.now() < this.storageUnavailableUntil) {
+        uploadsRemaining = 0;
+        return null;
+      }
+      const remainingBudget = Math.max(250, Math.min(perUploadTimeoutMs, deadlineAt - Date.now()));
       try {
         return await Promise.race([
           this.uploadBuktiImage(base64, prefix),
-          new Promise((resolve) => setTimeout(() => resolve(null), 4500))
+          new Promise((resolve) => setTimeout(() => resolve(null), remainingBudget))
         ]);
       } catch {
         return null;
@@ -945,27 +1089,30 @@ var SupabaseSyncEngine = class {
       const produkCount = data.produk?.length || 0;
       const karyawanCount = data.karyawan?.length || 0;
       const mitraCount = data.mitra?.length || 0;
-      const latestAuditId = data.auditLogs?.[0]?.idTransaksi || "";
+      const latestAudit = data.auditLogs?.[0];
+      const latestAuditId = latestAudit?.idTransaksi || "";
       const isExplicitAdminResetOrRestore = options?.allowOverwrite || latestAuditId === "SYS-RESET" || latestAuditId === "SYS-CLEAN-DATA" || latestAuditId === "SYS-RESTORE";
       if (!this.hasVerifiedCloudState && !isExplicitAdminResetOrRestore) {
         const { data: remoteMeta, error: metaErr } = await this.client.from("wijaya_agro_erp_state").select("mitra_count, karyawan_count, transaksi_count").eq("id", "MAIN_DATABASE").maybeSingle();
         if (!metaErr && remoteMeta) {
           const cloudScore = (remoteMeta.mitra_count || 0) + (remoteMeta.karyawan_count || 0) + (remoteMeta.transaksi_count || 0);
           const localScore = mitraCount + karyawanCount + txCount;
-          if (cloudScore > localScore) {
+          const isCatastrophicColdWipe = localScore === 0 && cloudScore > 0 || cloudScore >= 20 && localScore < Math.floor(cloudScore * 0.5);
+          if (isCatastrophicColdWipe) {
             console.warn(
-              `[SupabaseSyncEngine] Menahan timpaan dari container baru (Cloud=${cloudScore} > Lokal=${localScore}).`
+              `[SupabaseSyncEngine] Menahan timpaan dari container baru (Cloud=${cloudScore} >> Lokal=${localScore}).`
             );
+            this.hasUnsyncedLocalChanges = true;
             return {
               success: false,
-              message: "Proteksi aktif: Mencegah penimpaan data Cloud yang lebih lengkap."
+              message: "Proteksi aktif: Mencegah penimpaan data Cloud oleh container kosong."
             };
           }
         }
         this.hasVerifiedCloudState = true;
       }
       const dataCopy = JSON.parse(JSON.stringify(data));
-      await this.prepareCompactCloudData(dataCopy);
+      await this.prepareCompactCloudData(dataCopy, { fastMode: options?.fastMode });
       const compactData = this.deepStripImagesForCloud(dataCopy);
       if (Array.isArray(compactData.auditLogs) && compactData.auditLogs.length > 100) {
         compactData.auditLogs = compactData.auditLogs.slice(0, 100);
@@ -1017,6 +1164,7 @@ var SupabaseSyncEngine = class {
       this.hasVerifiedCloudState = true;
       if (this.queuedData === null) {
         this.hasUnsyncedLocalChanges = false;
+        this.pendingAllowOverwrite = false;
       }
       if (this.retryTimer) {
         clearTimeout(this.retryTimer);
@@ -1192,10 +1340,14 @@ var SupabaseSyncEngine = class {
       try {
         while (this.queuedData) {
           const snapshot = this.queuedData;
+          const allowOverwrite = this.pendingAllowOverwrite || this.hasVerifiedCloudState;
           this.queuedData = null;
           let pushed = false;
           for (let attempt = 0; attempt < 3; attempt++) {
-            const res = await this.pushToSupabase(snapshot);
+            const res = await this.pushToSupabase(snapshot, {
+              allowOverwrite,
+              fastMode: true
+            });
             if (res.success) {
               pushed = true;
               break;
@@ -1206,8 +1358,16 @@ var SupabaseSyncEngine = class {
             }
           }
           if (!pushed) {
+            this.hasUnsyncedLocalChanges = true;
+            this.pendingAllowOverwrite = this.pendingAllowOverwrite || allowOverwrite;
             if (!this.queuedData) {
               this.queuedData = snapshot;
+            }
+            if (!this.retryTimer && !IS_SERVERLESS) {
+              this.retryTimer = setTimeout(() => {
+                this.retryTimer = null;
+                void this.drainQueue();
+              }, 3e3);
             }
             break;
           }
@@ -1222,11 +1382,11 @@ var SupabaseSyncEngine = class {
     await this.activeDrainPromise;
   }
   /**
-   * Immediate write-through flush to Supabase with bounded wait so mutations persist to Supabase right away
+   * Immediate write-through flush to Supabase with bounded wait so mutations (create/edit/delete) persist right away
    */
-  async flushSync(data, maxWaitMs = 4500) {
+  async flushSync(data, maxWaitMs = 4500, options) {
     if (!this.config.autoSync || !this.client) return;
-    this.markLocalMutation(data);
+    this.markLocalMutation(data, { allowOverwrite: options?.allowOverwrite ?? true });
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
       this.syncTimer = null;
@@ -1242,7 +1402,7 @@ var SupabaseSyncEngine = class {
    */
   triggerAutoSync(data) {
     if (!this.config.autoSync || !this.client) return;
-    this.markLocalMutation(data);
+    this.markLocalMutation(data, { allowOverwrite: true });
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
     }
@@ -1252,8 +1412,10 @@ var SupabaseSyncEngine = class {
   }
   /**
    * Safe Cloud-First Reconnection:
-   * Always pulls existing cloud data from Supabase FIRST so ephemeral container restarts NEVER overwrite cloud data.
-   * Only pushes local data if Supabase has no MAIN_DATABASE row yet, OR if local clearly has richer active data than an empty cloud row.
+   * Always pulls existing cloud data from Supabase FIRST so ephemeral container restarts NEVER overwrite cloud data
+   * or resurrect deleted transactions from a stale local JSON cache.
+   * Only pushes local data if Supabase has no MAIN_DATABASE row yet, Cloud is empty, OR this live process explicitly
+   * has unsynced local mutations waiting to be flushed.
    */
   async syncSmartWithCloud(dbManager2) {
     if (!this.client || !this.config.url || !this.config.key) {
@@ -1265,11 +1427,11 @@ var SupabaseSyncEngine = class {
       const local = dbManager2.get();
       const cloudScore = (cloud.mitra?.length || 0) + (cloud.karyawan?.length || 0) + countAllTransactions(cloud);
       const localScore = (local.mitra?.length || 0) + (local.karyawan?.length || 0) + countAllTransactions(local);
-      if (localScore > cloudScore) {
+      if (cloudScore === 0 && localScore > 0 || this.hasUnsyncedLocalChanges) {
         console.log(
-          `[SupabaseSyncEngine] Data lokal memiliki lebih banyak entitas (${localScore} > ${cloudScore}), memprioritaskan penyimpanan lokal ke Cloud Supabase.`
+          `[SupabaseSyncEngine] Memprioritaskan push lokal ke Cloud Supabase (cloudScore=${cloudScore}, localScore=${localScore}, unsynced=${this.hasUnsyncedLocalChanges}).`
         );
-        const pushRes = await this.pushToSupabase(local, { allowOverwrite: true });
+        const pushRes = await this.pushToSupabase(local, { allowOverwrite: true, fastMode: true });
         return {
           direction: "PUSHED_TO_SUPABASE",
           message: `Data lokal (${localScore} entitas) berhasil disimpan ke Cloud Supabase: ${pushRes.message}`
@@ -1281,8 +1443,8 @@ var SupabaseSyncEngine = class {
       const cloudHadSupplierSj = (cloud.pengeluaran || []).some((e) => String(e.kategori || "").trim().toUpperCase() === "PEMBAYARAN_SUPPLIER_SJ") || (cloud.masterItemPengeluaran || []).some((m) => String(m.nama || "").trim().toUpperCase() === "PEMBAYARAN_SUPPLIER_SJ");
       const cloudKas01Saldo = (cloud.rekening || []).find((r) => r.kode === "KAS01")?.saldoSaatIni;
       const mergedKas01Saldo = (mergedLocal.rekening || []).find((r) => r.kode === "KAS01")?.saldoSaatIni;
-      if (cloudHadSweep || cloudHadSupplierSj || cloudKas01Saldo !== mergedKas01Saldo || (mergedLocal.suratJalan?.length || 0) > (cloud.suratJalan?.length || 0) || (mergedLocal.rekapCtr?.length || 0) > (cloud.rekapCtr?.length || 0) || countAllTransactions(mergedLocal) > countAllTransactions(cloud)) {
-        void this.pushToSupabase(mergedLocal, { allowOverwrite: true }).catch(
+      if (cloudHadSweep || cloudHadSupplierSj || cloudKas01Saldo !== mergedKas01Saldo) {
+        void this.pushToSupabase(mergedLocal, { allowOverwrite: true, fastMode: true }).catch(
           (err) => console.warn("[SupabaseSyncEngine] Push merged state warning:", err)
         );
       }
@@ -1677,13 +1839,19 @@ function parseTanggalSortKey(tanggal) {
   }
   return 0;
 }
-function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
+function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = [], options) {
   const targetKode = komoditas.kode;
   const targetNamaUpper = String(komoditas.nama || "").trim().toUpperCase();
+  const maxDateKey = options?.maxDateKey && Number(options.maxDateKey) > 0 ? Number(options.maxDateKey) : void 0;
   const isMatch = (kode, nama) => kode === targetKode || String(nama || "").trim().toUpperCase() === targetNamaUpper;
   const purchases = (allPurchases || []).filter(
-    (p) => isMatch(p.komoditasKode, p.komoditasNama) && !p.isBelumPutusHarga && p.status !== "BELUM_PUTUS_HARGA" && Number(p.beratBersih || 0) > 0
+    (p) => isMatch(p.komoditasKode, p.komoditasNama) && !p.isNotaSilang && !p.isTitipNonFisik && p.komoditasKode !== "PINJAMAN_DANA" && p.komoditasKode !== "TITIP_DANA" && p.komoditasKode !== "NOTA_SILANG" && Number(p.beratBersih || 0) > 0
   );
+  const stokTitipNonFisikKg = Math.round(
+    (allPurchases || []).filter(
+      (p) => isMatch(p.komoditasKode, p.komoditasNama) && Boolean(p.isTitipNonFisik) && Boolean(p.isBelumPutusHarga || p.status === "BELUM_PUTUS_HARGA") && !p.isNotaSilang && Number(p.beratBersih || 0) > 0
+    ).reduce((s, p) => s + (Number(p.beratBersih) || 0), 0) * 100
+  ) / 100;
   const sales = (allSales || []).filter(
     (j) => isMatch(j.komoditasKode, j.komoditasNama) && Number(j.beratBersih || 0) > 0
   );
@@ -1701,7 +1869,7 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
       modalAwalRp = Math.round(stokAwalKg * rataModalAwal);
     }
   }
-  if (stokAwalKg > 0 && modalAwalRp > 0) {
+  if (stokAwalKg > 0) {
     const tglAwal = komoditas.tanggalInputStokAwal || "01/11/2026";
     rawEvents.push({
       type: "INITIAL",
@@ -1710,28 +1878,34 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
       createdAt: "1970-01-01T00:00:00.000Z",
       tanggal: tglAwal,
       kg: stokAwalKg,
-      rp: modalAwalRp,
-      rate: rataModalAwal > 0 ? rataModalAwal : Math.round(modalAwalRp / stokAwalKg)
+      rp: modalAwalRp > 0 ? modalAwalRp : 0,
+      rate: modalAwalRp > 0 ? rataModalAwal > 0 ? rataModalAwal : Math.round(modalAwalRp / stokAwalKg) : 0
     });
   }
   for (const p of purchases) {
     const tgl = p.tanggalNotaLalu || p.tanggal || "01/11/2026";
+    const dKey = parseTanggalSortKey(tgl);
+    if (maxDateKey !== void 0 && dKey > maxDateKey) continue;
+    const isBelumPutus = Boolean(p.isBelumPutusHarga || p.status === "BELUM_PUTUS_HARGA");
     rawEvents.push({
       type: "BUY",
-      dateKey: parseTanggalSortKey(tgl),
+      dateKey: dKey,
       createdAt: p.createdAt || "",
       tanggal: tgl,
       kg: Number(p.beratBersih) || 0,
-      rp: Number(p.totalNominal) || 0,
-      rate: Number(p.hargaPerKg) || 0,
+      rp: isBelumPutus ? 0 : Number(p.totalNominal) || 0,
+      rate: isBelumPutus ? 0 : Number(p.hargaPerKg) || 0,
+      isBelumPutus,
       record: p
     });
   }
   for (const j of sales) {
     const tgl = j.tanggal || "01/11/2026";
+    const dKey = parseTanggalSortKey(tgl);
+    if (maxDateKey !== void 0 && dKey > maxDateKey) continue;
     rawEvents.push({
       type: "SELL",
-      dateKey: parseTanggalSortKey(tgl),
+      dateKey: dKey,
       createdAt: j.createdAt || "",
       tanggal: tgl,
       kg: Number(j.beratBersih) || 0,
@@ -1747,6 +1921,7 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
     return (a.createdAt || "").localeCompare(b.createdAt || "");
   });
   let poolKg = 0;
+  let pricedPoolKg = 0;
   let poolValue = 0;
   let adaPenjualanSebelumnya = false;
   let tanggalMuatTerakhir = void 0;
@@ -1756,12 +1931,19 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
   let pembelianBaruSetelahMuatKg = 0;
   let pembelianBaruSetelahMuatRp = 0;
   let pembelianBaruSetelahMuatCount = 0;
+  let totalSusutKurangKg = 0;
+  let totalLebihMuatKg = 0;
   const steps = [];
   for (const ev of rawEvents) {
     if (ev.type === "INITIAL" || ev.type === "BUY") {
       poolKg = Math.round((poolKg + ev.kg) * 100) / 100;
-      poolValue += ev.rp;
-      const rateAfter = poolKg > 0 ? Math.round(poolValue / poolKg) : ev.rate;
+      const isPricedLot = ev.type === "INITIAL" ? ev.rp > 0 : !ev.isBelumPutus && ev.rp > 0;
+      if (isPricedLot) {
+        pricedPoolKg = Math.round((pricedPoolKg + ev.kg) * 100) / 100;
+        poolValue += ev.rp;
+      }
+      const rateAfter = pricedPoolKg > 0 && poolValue > 0 ? Math.round(poolValue / pricedPoolKg) : ev.rate;
+      const displayValueAfter = poolKg <= 0 ? 0 : pricedPoolKg > poolKg && rateAfter > 0 ? Math.round(poolKg * rateAfter) : poolValue;
       if (adaPenjualanSebelumnya && ev.type === "BUY") {
         pembelianBaruSetelahMuatKg = Math.round((pembelianBaruSetelahMuatKg + ev.kg) * 100) / 100;
         pembelianBaruSetelahMuatRp += ev.rp;
@@ -1776,18 +1958,57 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
         hargaPerKg: ev.rate,
         totalRp: ev.rp,
         poolKgAfter: poolKg,
-        poolValueAfter: poolValue,
+        poolValueAfter: displayValueAfter,
         poolUnitRateAfter: rateAfter
       });
     } else if (ev.type === "SELL") {
       const j = ev.record;
       const muatKg = ev.kg;
-      const rateAtSale = poolKg > 0 && poolValue > 0 ? Math.round(poolValue / poolKg) : Number(j.modalRataRataPerKg) || rataRataMuatTerakhir || Number(komoditas.rataRataModalAwal) || 0;
-      const isHabisMuat = Boolean(
-        j.isHabisMuatSusut || muatKg >= poolKg || Number(j.stokGudangSetelah) === 0 && poolKg > 0
-      );
-      const sisaKg = isHabisMuat ? 0 : Math.max(0, Math.round((poolKg - muatKg) * 100) / 100);
-      const sisaRp = isHabisMuat ? 0 : Math.max(0, Math.round(sisaKg * rateAtSale));
+      const poolBeforeKg = poolKg;
+      const rateAtSale = pricedPoolKg > 0 && poolValue > 0 ? Math.round(poolValue / pricedPoolKg) : Number(j.modalRataRataPerKg) || rataRataMuatTerakhir || Number(komoditas.rataRataModalAwal) || 0;
+      const hasSisaFisikAktual = j.sisaFisikAktualKg !== void 0 && j.sisaFisikAktualKg !== null && Number.isFinite(Number(j.sisaFisikAktualKg)) && Number(j.sisaFisikAktualKg) >= 0;
+      const keepMinus = Boolean(j.biarkanStokMinus);
+      let isHabisMuat = false;
+      let sisaKg = 0;
+      let sisaPricedKg = 0;
+      let sisaRp = 0;
+      let susutKurangKg = 0;
+      let selisihLebihMuatKg = 0;
+      if (hasSisaFisikAktual) {
+        sisaKg = Math.round(Number(j.sisaFisikAktualKg) * 100) / 100;
+        const expectedSisaBuku = Math.round((poolBeforeKg - muatKg) * 100) / 100;
+        const varianceKg = Math.round((sisaKg - expectedSisaBuku) * 100) / 100;
+        if (varianceKg > 0) {
+          selisihLebihMuatKg = varianceKg;
+        } else if (varianceKg < 0) {
+          susutKurangKg = Math.abs(varianceKg);
+        }
+        isHabisMuat = sisaKg === 0;
+        sisaPricedKg = sisaKg;
+        sisaRp = Math.max(0, Math.round(sisaPricedKg * rateAtSale));
+      } else if (keepMinus) {
+        sisaKg = Math.round((poolBeforeKg - muatKg) * 100) / 100;
+        isHabisMuat = false;
+        if (muatKg > poolBeforeKg) {
+          selisihLebihMuatKg = Math.round((muatKg - poolBeforeKg) * 100) / 100;
+        }
+        sisaPricedKg = sisaKg <= 0 ? 0 : pricedPoolKg >= poolBeforeKg ? sisaKg : Math.max(0, Math.min(sisaKg, Math.round((pricedPoolKg - muatKg) * 100) / 100));
+        sisaRp = Math.max(0, Math.round(sisaPricedKg * rateAtSale));
+      } else {
+        isHabisMuat = Boolean(
+          j.isHabisMuatSusut || muatKg >= poolBeforeKg || Number(j.stokGudangSetelah) === 0 && poolBeforeKg > 0
+        );
+        sisaKg = isHabisMuat ? 0 : Math.max(0, Math.round((poolBeforeKg - muatKg) * 100) / 100);
+        sisaPricedKg = isHabisMuat ? 0 : pricedPoolKg >= poolBeforeKg ? sisaKg : Math.max(0, Math.min(sisaKg, Math.round((pricedPoolKg - muatKg) * 100) / 100));
+        sisaRp = isHabisMuat ? 0 : Math.max(0, Math.round(sisaPricedKg * rateAtSale));
+        if (muatKg > poolBeforeKg) {
+          selisihLebihMuatKg = Math.round((muatKg - poolBeforeKg) * 100) / 100;
+        } else if (isHabisMuat && poolBeforeKg > muatKg) {
+          susutKurangKg = Math.round((poolBeforeKg - muatKg) * 100) / 100;
+        }
+      }
+      totalSusutKurangKg = Math.round((totalSusutKurangKg + susutKurangKg) * 100) / 100;
+      totalLebihMuatKg = Math.round((totalLebihMuatKg + selisihLebihMuatKg) * 100) / 100;
       steps.push({
         dateKey: ev.dateKey,
         tanggal: ev.tanggal,
@@ -1802,9 +2023,14 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
         sisaStokKg: sisaKg,
         sisaStokRp: sisaRp,
         sisaUnitRate: rateAtSale,
-        isHabisMuat
+        isHabisMuat,
+        ...hasSisaFisikAktual ? { sisaFisikAktualKg: sisaKg } : {},
+        ...keepMinus ? { biarkanStokMinus: true } : {},
+        susutKurangKg,
+        selisihLebihMuatKg
       });
       poolKg = sisaKg;
+      pricedPoolKg = sisaPricedKg;
       poolValue = sisaRp;
       adaPenjualanSebelumnya = true;
       tanggalMuatTerakhir = j.tanggal;
@@ -1817,12 +2043,14 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
     }
   }
   const stokReadyKg = poolKg;
-  const totalNilaiModalTerkini = poolValue;
-  const rataRataModalTerkini = stokReadyKg > 0 && totalNilaiModalTerkini > 0 ? Math.round(totalNilaiModalTerkini / stokReadyKg) : rataRataMuatTerakhir || Number(komoditas.rataRataModalAwal) || 0;
+  const rataRataModalTerkini = pricedPoolKg > 0 && poolValue > 0 ? Math.round(poolValue / pricedPoolKg) : rataRataMuatTerakhir || Number(komoditas.rataRataModalAwal) || 0;
+  const totalNilaiModalTerkini = stokReadyKg <= 0 ? 0 : pricedPoolKg > stokReadyKg && rataRataModalTerkini > 0 ? Math.round(stokReadyKg * rataRataModalTerkini) : poolValue;
+  const netSelisihStokKg = Math.round((totalLebihMuatKg - totalSusutKurangKg) * 100) / 100;
   return {
     komoditasKode: komoditas.kode,
     komoditasNama: komoditas.nama,
     stokReadyKg,
+    stokTitipNonFisikKg,
     rataRataModalTerkini,
     totalNilaiModalTerkini,
     adaPenjualanSebelumnya,
@@ -1833,6 +2061,9 @@ function calculateHbMovingAverage(komoditas, allPurchases = [], allSales = []) {
     pembelianBaruSetelahMuatKg,
     pembelianBaruSetelahMuatRp,
     pembelianBaruSetelahMuatCount,
+    totalSusutKurangKg,
+    totalLebihMuatKg,
+    netSelisihStokKg,
     steps
   };
 }
@@ -2351,6 +2582,7 @@ function getDefaultDatabase() {
     suratJalan: [],
     rekapCtr: getDefaultRekapCtrContracts(),
     dismissedRekapCtrRefs: [],
+    deletedTransactionIds: [],
     auditStokLogs: [],
     auditLogs: [
       {
@@ -2418,7 +2650,8 @@ var DatabaseManager = class {
           deletedHasilBumiKodes: Array.isArray(parsed.deletedHasilBumiKodes) ? parsed.deletedHasilBumiKodes : [],
           deletedMasterPengeluaranNames: Array.isArray(parsed.deletedMasterPengeluaranNames) ? parsed.deletedMasterPengeluaranNames : [],
           deletedProdukKodes: Array.isArray(parsed.deletedProdukKodes) ? parsed.deletedProdukKodes : [],
-          dismissedRekapCtrRefs: Array.isArray(parsed.dismissedRekapCtrRefs) ? parsed.dismissedRekapCtrRefs : []
+          dismissedRekapCtrRefs: Array.isArray(parsed.dismissedRekapCtrRefs) ? parsed.dismissedRekapCtrRefs : [],
+          deletedTransactionIds: Array.isArray(parsed.deletedTransactionIds) ? parsed.deletedTransactionIds : []
         };
         if (!Array.isArray(merged.karyawan)) {
           merged.karyawan = [];
@@ -2592,14 +2825,89 @@ var DatabaseManager = class {
   get() {
     return this.db;
   }
-  mergeListById(localList, incomingList, getId) {
+  normalizeTombstoneId(raw) {
+    return String(raw || "").trim().toUpperCase();
+  }
+  collectTrackedTransactionIds(db) {
+    const ids = /* @__PURE__ */ new Set();
+    const pushId = (raw) => {
+      const norm = this.normalizeTombstoneId(raw);
+      if (norm) ids.add(norm);
+    };
+    for (const p of db.penjualan || []) pushId(p?.noPenjualan || p?.id);
+    for (const pb of db.pembelianBarang || []) pushId(pb?.noPembelian || pb?.id);
+    for (const ph of db.pembelianHasilBumi || []) pushId(ph?.noPembelian || ph?.id);
+    for (const pjh of db.penjualanHasilBumi || []) pushId(pjh?.noPenjualan || pjh?.id);
+    for (const kb of db.kasbonUang || []) pushId(kb?.idTransaksi || kb?.id);
+    for (const bb of db.bayarBon || []) pushId(bb?.idTransaksi || bb?.id);
+    for (const tr of db.transferRekening || []) pushId(tr?.noTransfer || tr?.id);
+    for (const pe of db.pengeluaran || []) pushId(pe?.idTransaksi || pe?.id);
+    for (const pt of db.pencairanTitipan || []) pushId(pt?.idPencairan || pt?.id);
+    for (const br of db.brilink || []) pushId(br?.idTransaksi || br?.id);
+    for (const um of db.uangMasuk || []) pushId(um?.idTransaksi || um?.id);
+    for (const u of db.upahHarian || []) pushId(u?.id);
+    for (const g of db.penggajian || []) pushId(g?.id);
+    for (const sj of db.suratJalan || []) pushId(sj?.noInvoice || sj?.id);
+    for (const ctr of db.rekapCtr || []) pushId(ctr?.id || (ctr?.noUrut ? `CTR-${ctr.noUrut}` : ""));
+    for (const inv of db.inventaris || []) pushId(inv?.id || inv?.kode);
+    return ids;
+  }
+  purgeDeletedTransactions(db) {
+    if (!Array.isArray(db.deletedTransactionIds) || db.deletedTransactionIds.length === 0) {
+      return;
+    }
+    const deletedSet = new Set(
+      db.deletedTransactionIds.map((id) => this.normalizeTombstoneId(id)).filter(Boolean)
+    );
+    if (deletedSet.size === 0) return;
+    const keepIfNotDeleted = (list, getId) => {
+      if (!Array.isArray(list)) return [];
+      return list.filter((item) => {
+        const id = this.normalizeTombstoneId(getId(item));
+        return !id || !deletedSet.has(id);
+      });
+    };
+    db.penjualan = keepIfNotDeleted(db.penjualan, (p) => p?.noPenjualan || p?.id);
+    db.pembelianBarang = keepIfNotDeleted(db.pembelianBarang, (pb) => pb?.noPembelian || pb?.id);
+    db.pembelianHasilBumi = keepIfNotDeleted(db.pembelianHasilBumi, (ph) => ph?.noPembelian || ph?.id);
+    db.penjualanHasilBumi = keepIfNotDeleted(db.penjualanHasilBumi, (pjh) => pjh?.noPenjualan || pjh?.id);
+    db.kasbonUang = keepIfNotDeleted(db.kasbonUang, (kb) => kb?.idTransaksi || kb?.id);
+    db.bayarBon = keepIfNotDeleted(db.bayarBon, (bb) => bb?.idTransaksi || bb?.id);
+    db.transferRekening = keepIfNotDeleted(db.transferRekening, (tr) => tr?.noTransfer || tr?.id);
+    db.pengeluaran = keepIfNotDeleted(db.pengeluaran, (pe) => pe?.idTransaksi || pe?.id);
+    db.pencairanTitipan = keepIfNotDeleted(db.pencairanTitipan, (pt) => pt?.idPencairan || pt?.id);
+    db.brilink = keepIfNotDeleted(db.brilink, (br) => br?.idTransaksi || br?.id);
+    db.uangMasuk = keepIfNotDeleted(db.uangMasuk, (um) => um?.idTransaksi || um?.id);
+    db.upahHarian = keepIfNotDeleted(db.upahHarian, (u) => u?.id);
+    db.penggajian = keepIfNotDeleted(db.penggajian, (g) => g?.id);
+    db.suratJalan = keepIfNotDeleted(db.suratJalan, (sj) => sj?.noInvoice || sj?.id);
+    db.rekapCtr = keepIfNotDeleted(db.rekapCtr, (ctr) => ctr?.id || (ctr?.noUrut ? `CTR-${ctr.noUrut}` : ""));
+    db.inventaris = keepIfNotDeleted(db.inventaris, (inv) => inv?.id || inv?.kode);
+  }
+  mergeListById(localList, incomingList, getId, options) {
     const local = Array.isArray(localList) ? localList : [];
     const incoming = Array.isArray(incomingList) ? incomingList : [];
+    const authoritativeCloud = Boolean(options?.authoritativeCloud);
+    const deletedSet = options?.deletedSet;
     const map = /* @__PURE__ */ new Map();
+    const isTombstoned = (rawId) => {
+      if (!deletedSet || deletedSet.size === 0) return false;
+      return deletedSet.has(this.normalizeTombstoneId(rawId));
+    };
     const getItemTime = (it) => {
       if (!it) return 0;
       const raw = it.updateTerakhir || it.terakhirUpdate || it.updatedAt || it.createdAt || it.timestamp || 0;
       return new Date(raw).getTime() || 0;
+    };
+    const preservePhotosOnly = (cloudItem, localItem) => {
+      if (!cloudItem || !localItem) return;
+      const photoFields = ["fotoNota", "fotoBukti", "fotoKuitansi", "fotoItem", "fotoStnk", "fotoTimbangan"];
+      for (const pf of photoFields) {
+        if (!cloudItem[pf] && localItem[pf]) cloudItem[pf] = localItem[pf];
+      }
+      if ((!cloudItem.fotoNotaList || cloudItem.fotoNotaList.length === 0) && Array.isArray(localItem.fotoNotaList) && localItem.fotoNotaList.length > 0) {
+        cloudItem.fotoNotaList = [...localItem.fotoNotaList];
+      }
     };
     const reconcilePair = (a, b) => {
       if (!a || !b) return;
@@ -2624,7 +2932,7 @@ var DatabaseManager = class {
       if (a.stokAwal !== void 0 && b.stokAwal === void 0) {
         b.stokAwal = a.stokAwal;
         b.modalAwalTotal = b.modalAwalTotal ?? a.modalAwalTotal;
-        b.rataRataModalAwal = b.rataRataModalAwal ?? a.modalAwalTotal;
+        b.rataRataModalAwal = b.rataRataModalAwal ?? a.rataRataModalAwal;
         b.keteranganStokAwal = b.keteranganStokAwal ?? a.keteranganStokAwal;
         b.tanggalInputStokAwal = b.tanggalInputStokAwal ?? a.tanggalInputStokAwal;
       }
@@ -2654,7 +2962,7 @@ var DatabaseManager = class {
     for (const item of incoming) {
       if (item) {
         const id = getId(item);
-        if (id) {
+        if (id && !isTombstoned(id)) {
           map.set(id, item);
         }
       }
@@ -2662,15 +2970,19 @@ var DatabaseManager = class {
     for (const item of local) {
       if (item) {
         const id = getId(item);
-        if (id) {
+        if (id && !isTombstoned(id)) {
           const existing = map.get(id);
-          if (!existing) {
+          if (authoritativeCloud) {
+            if (existing) {
+              preservePhotosOnly(existing, item);
+            }
+          } else if (!existing) {
             map.set(id, item);
           } else {
             reconcilePair(existing, item);
             const incomingTime = getItemTime(existing);
             const localTime = getItemTime(item);
-            if (localTime >= incomingTime) {
+            if (localTime > incomingTime) {
               map.set(id, item);
             }
           }
@@ -2679,70 +2991,157 @@ var DatabaseManager = class {
     }
     return Array.from(map.values());
   }
-  applyIncomingSnapshot(incoming) {
+  mergeTombstoneArrays(localArr, incomingArr, options) {
+    const incoming = Array.isArray(incomingArr) ? incomingArr : [];
+    const local = options?.skipLocalUnion ? [] : Array.isArray(localArr) ? localArr : [];
+    const merged = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const raw of [...incoming, ...local]) {
+      const clean = String(raw || "").trim();
+      const key = clean.toUpperCase();
+      if (clean && !seen.has(key)) {
+        seen.add(key);
+        merged.push(clean);
+      }
+    }
+    const maxItems = options?.maxItems || 2500;
+    return merged.length > maxItems ? merged.slice(merged.length - maxItems) : merged;
+  }
+  applyIncomingSnapshot(incoming, options) {
+    const authoritativeCloud = Boolean(options?.authoritativeCloud);
+    const skipLocalUnion = Boolean(options?.skipLocalTombstoneUnion);
+    this.db.deletedHasilBumiKodes = this.mergeTombstoneArrays(
+      this.db.deletedHasilBumiKodes,
+      incoming.deletedHasilBumiKodes,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.deletedMasterPengeluaranNames = this.mergeTombstoneArrays(
+      this.db.deletedMasterPengeluaranNames,
+      incoming.deletedMasterPengeluaranNames,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.deletedProdukKodes = this.mergeTombstoneArrays(
+      this.db.deletedProdukKodes,
+      incoming.deletedProdukKodes,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.dismissedRekapCtrRefs = this.mergeTombstoneArrays(
+      this.db.dismissedRekapCtrRefs,
+      incoming.dismissedRekapCtrRefs,
+      { skipLocalUnion, maxItems: 500 }
+    );
+    this.db.deletedTransactionIds = this.mergeTombstoneArrays(
+      this.db.deletedTransactionIds,
+      incoming.deletedTransactionIds,
+      { skipLocalUnion, maxItems: 2500 }
+    );
+    const deletedTxSet = new Set(
+      (this.db.deletedTransactionIds || []).map((id) => this.normalizeTombstoneId(id)).filter(Boolean)
+    );
+    const txMergeOpts = { authoritativeCloud, deletedSet: deletedTxSet };
+    const masterMergeOpts = { authoritativeCloud };
     this.db.profilPerusahaan = incoming.profilPerusahaan || this.db.profilPerusahaan;
     this.db.rekening = Array.isArray(incoming.rekening) && incoming.rekening.length > 0 ? incoming.rekening : this.db.rekening;
-    this.db.mitra = this.mergeListById(this.db.mitra, incoming.mitra, (m) => m.kode || m.id);
-    this.db.karyawan = this.mergeListById(this.db.karyawan, incoming.karyawan, (k) => k.nik || k.id);
-    this.db.upahHarian = this.mergeListById(this.db.upahHarian, incoming.upahHarian, (u) => u.id);
-    this.db.penggajian = this.mergeListById(this.db.penggajian, incoming.penggajian, (p) => p.id);
-    this.db.produk = this.mergeListById(this.db.produk, incoming.produk, (pr) => pr.kode);
+    this.db.mitra = this.mergeListById(this.db.mitra, incoming.mitra, (m) => m.kode || m.id, masterMergeOpts);
+    this.db.karyawan = this.mergeListById(this.db.karyawan, incoming.karyawan, (k) => k.nik || k.id, masterMergeOpts);
+    this.db.upahHarian = this.mergeListById(this.db.upahHarian, incoming.upahHarian, (u) => u.id, txMergeOpts);
+    this.db.penggajian = this.mergeListById(this.db.penggajian, incoming.penggajian, (p) => p.id, txMergeOpts);
+    this.db.produk = this.mergeListById(this.db.produk, incoming.produk, (pr) => pr.kode, masterMergeOpts);
     this.db.kategoriProduk = this.mergeListById(
       this.db.kategoriProduk,
       incoming.kategoriProduk,
-      (kp) => kp.kode || kp.id || kp.nama
+      (kp) => kp.kode || kp.id || kp.nama,
+      masterMergeOpts
     );
-    this.db.stokBarang = this.mergeListById(this.db.stokBarang, incoming.stokBarang, (sb) => sb.kode);
+    this.db.stokBarang = this.mergeListById(this.db.stokBarang, incoming.stokBarang, (sb) => sb.kode, masterMergeOpts);
     this.db.stokHasilBumi = this.mergeListById(
       this.db.stokHasilBumi,
       incoming.stokHasilBumi,
-      (sh) => sh.kode
+      (sh) => sh.kode,
+      masterMergeOpts
     );
-    this.db.penjualan = this.mergeListById(this.db.penjualan, incoming.penjualan, (p) => p.noPenjualan || p.id);
+    this.db.penjualan = this.mergeListById(
+      this.db.penjualan,
+      incoming.penjualan,
+      (p) => p.noPenjualan || p.id,
+      txMergeOpts
+    );
     this.db.pembelianBarang = this.mergeListById(
       this.db.pembelianBarang,
       incoming.pembelianBarang,
-      (pb) => pb.noPembelian || pb.id
+      (pb) => pb.noPembelian || pb.id,
+      txMergeOpts
     );
     this.db.pembelianHasilBumi = this.mergeListById(
       this.db.pembelianHasilBumi,
       incoming.pembelianHasilBumi,
-      (ph) => ph.noPembelian || ph.id
+      (ph) => ph.noPembelian || ph.id,
+      txMergeOpts
     );
     this.db.penjualanHasilBumi = this.mergeListById(
       this.db.penjualanHasilBumi,
       incoming.penjualanHasilBumi,
-      (pjh) => pjh.noPenjualan || pjh.id
+      (pjh) => pjh.noPenjualan || pjh.id,
+      txMergeOpts
     );
-    this.db.kasbonUang = this.mergeListById(this.db.kasbonUang, incoming.kasbonUang, (kb) => kb.idTransaksi || kb.id);
-    this.db.bayarBon = this.mergeListById(this.db.bayarBon, incoming.bayarBon, (bb) => bb.idTransaksi || bb.id);
+    this.db.kasbonUang = this.mergeListById(
+      this.db.kasbonUang,
+      incoming.kasbonUang,
+      (kb) => kb.idTransaksi || kb.id,
+      txMergeOpts
+    );
+    this.db.bayarBon = this.mergeListById(
+      this.db.bayarBon,
+      incoming.bayarBon,
+      (bb) => bb.idTransaksi || bb.id,
+      txMergeOpts
+    );
     this.db.transferRekening = this.mergeListById(
       this.db.transferRekening,
       incoming.transferRekening,
-      (tr) => tr.noTransfer || tr.id
+      (tr) => tr.noTransfer || tr.id,
+      txMergeOpts
     );
-    this.db.pengeluaran = this.mergeListById(this.db.pengeluaran, incoming.pengeluaran, (pe) => pe.idTransaksi || pe.id);
+    this.db.pengeluaran = this.mergeListById(
+      this.db.pengeluaran,
+      incoming.pengeluaran,
+      (pe) => pe.idTransaksi || pe.id,
+      txMergeOpts
+    );
     this.db.pencairanTitipan = this.mergeListById(
       this.db.pencairanTitipan,
       incoming.pencairanTitipan,
-      (pt) => pt.idPencairan || pt.id
+      (pt) => pt.idPencairan || pt.id,
+      txMergeOpts
     );
-    this.db.brilink = this.mergeListById(this.db.brilink, incoming.brilink, (br) => br.idTransaksi || br.id);
-    this.db.uangMasuk = this.mergeListById(this.db.uangMasuk, incoming.uangMasuk, (um) => um.idTransaksi || um.id);
-    this.db.auditLogs = this.mergeListById(this.db.auditLogs, incoming.auditLogs, (al) => al.id);
-    this.db.divisi = this.mergeListById(this.db.divisi, incoming.divisi, (d) => d.kode || d.id || d.nama);
-    this.db.cashOpnameLogs = this.mergeListById(this.db.cashOpnameLogs, incoming.cashOpnameLogs, (co) => co.id);
-    this.db.auditStokLogs = this.mergeListById(this.db.auditStokLogs, incoming.auditStokLogs, (as) => as.id);
-    this.db.inventaris = this.mergeListById(this.db.inventaris, incoming.inventaris, (inv) => inv.id || inv.kode);
+    this.db.brilink = this.mergeListById(
+      this.db.brilink,
+      incoming.brilink,
+      (br) => br.idTransaksi || br.id,
+      txMergeOpts
+    );
+    this.db.uangMasuk = this.mergeListById(
+      this.db.uangMasuk,
+      incoming.uangMasuk,
+      (um) => um.idTransaksi || um.id,
+      txMergeOpts
+    );
+    this.db.auditLogs = this.mergeListById(this.db.auditLogs, incoming.auditLogs, (al) => al.id, masterMergeOpts);
+    this.db.divisi = this.mergeListById(this.db.divisi, incoming.divisi, (d) => d.kode || d.id || d.nama, masterMergeOpts);
+    this.db.cashOpnameLogs = this.mergeListById(this.db.cashOpnameLogs, incoming.cashOpnameLogs, (co) => co.id, masterMergeOpts);
+    this.db.auditStokLogs = this.mergeListById(this.db.auditStokLogs, incoming.auditStokLogs, (as) => as.id, masterMergeOpts);
+    this.db.inventaris = this.mergeListById(this.db.inventaris, incoming.inventaris, (inv) => inv.id || inv.kode, txMergeOpts);
     this.db.masterItemPengeluaran = this.mergeListById(
       this.db.masterItemPengeluaran,
       incoming.masterItemPengeluaran,
-      (mi) => mi.id || mi.nama
+      (mi) => mi.id || mi.nama,
+      masterMergeOpts
     );
     this.db.suratJalan = this.mergeListById(
       this.db.suratJalan,
       incoming.suratJalan,
-      (sj) => sj.noInvoice || sj.id
+      (sj) => sj.noInvoice || sj.id,
+      txMergeOpts
     ).sort((a, b) => {
       const timeA = new Date(a.createdAt || 0).getTime();
       const timeB = new Date(b.createdAt || 0).getTime();
@@ -2751,12 +3150,9 @@ var DatabaseManager = class {
     this.db.rekapCtr = this.mergeListById(
       this.db.rekapCtr,
       incoming.rekapCtr,
-      (c) => c.id || `CTR-${c.noUrut}`
+      (c) => c.id || `CTR-${c.noUrut}`,
+      txMergeOpts
     ).sort((a, b) => (a.noUrut || 0) - (b.noUrut || 0));
-    this.db.deletedHasilBumiKodes = Array.isArray(incoming.deletedHasilBumiKodes) ? incoming.deletedHasilBumiKodes : this.db.deletedHasilBumiKodes || [];
-    this.db.deletedMasterPengeluaranNames = Array.isArray(incoming.deletedMasterPengeluaranNames) ? incoming.deletedMasterPengeluaranNames : this.db.deletedMasterPengeluaranNames || [];
-    this.db.deletedProdukKodes = Array.isArray(incoming.deletedProdukKodes) ? incoming.deletedProdukKodes : this.db.deletedProdukKodes || [];
-    this.db.dismissedRekapCtrRefs = Array.isArray(incoming.dismissedRekapCtrRefs) ? incoming.dismissedRekapCtrRefs : this.db.dismissedRekapCtrRefs || [];
   }
   /**
    * Hydrate memory & local mirror directly from Supabase Cloud (Single Source of Truth)
@@ -2768,7 +3164,7 @@ var DatabaseManager = class {
     }
     this.isWriting = true;
     try {
-      this.applyIncomingSnapshot(incoming);
+      this.applyIncomingSnapshot(incoming, { authoritativeCloud: true });
       this.reconcileRelationalIntegrity();
       this.synchronizeVirtualAccounts();
       this.saveDirect(this.db);
@@ -2785,7 +3181,10 @@ var DatabaseManager = class {
       this.ensureDirectory();
       const emergencyFile = path2.join(TEMP_BACKUP_DIR, `pre_restore_emergency_${Date.now()}.json`);
       fs2.writeFileSync(emergencyFile, JSON.stringify(this.db), "utf-8");
-      this.applyIncomingSnapshot(incoming);
+      this.applyIncomingSnapshot(incoming, {
+        authoritativeCloud: true,
+        skipLocalTombstoneUnion: true
+      });
       const { tanggal, jam, iso } = getWIBDateTime();
       this.db.auditLogs.unshift({
         id: `LOG-RESTORE-${Date.now()}`,
@@ -2890,6 +3289,8 @@ var DatabaseManager = class {
     if (!Array.isArray(this.db.inventaris)) this.db.inventaris = [];
     if (!Array.isArray(this.db.masterItemPengeluaran)) this.db.masterItemPengeluaran = [];
     if (!Array.isArray(this.db.suratJalan)) this.db.suratJalan = [];
+    if (!Array.isArray(this.db.deletedTransactionIds)) this.db.deletedTransactionIds = [];
+    this.purgeDeletedTransactions(this.db);
     const removedSjExpenseIds = /* @__PURE__ */ new Set();
     this.db.pengeluaran = (this.db.pengeluaran || []).filter((ex) => {
       const kUpper = String(ex.kategori || "").trim().toUpperCase();
@@ -3087,6 +3488,46 @@ var DatabaseManager = class {
       }
     }
     for (const rek of this.db.rekening) {
+      if (rek.isRekeningTitip || rek.kategori === "REKENING_TITIP") {
+        rek.kategori = "REKENING_TITIP";
+        rek.isRekeningTitip = true;
+        rek.isAnakPerusahaan = false;
+        rek.isVirtual = false;
+        delete rek.rekeningIndukPenyimpan;
+        const linkedKry = (this.db.karyawan || []).find(
+          (k) => rek.idKaryawanTerkait && k.id === rek.idKaryawanTerkait || rek.idMitraTerkait && k.idMitraTerkait === rek.idMitraTerkait
+        );
+        if (linkedKry) {
+          rek.idKaryawanTerkait = linkedKry.id;
+          rek.namaKaryawanTerkait = linkedKry.nama;
+          const mtrId = linkedKry.idMitraTerkait || `MTR-${linkedKry.id}`;
+          const linkedMtr = (this.db.mitra || []).find(
+            (m) => m.id === mtrId || m.idKaryawanTerkait === linkedKry.id
+          );
+          if (linkedMtr) {
+            rek.idMitraTerkait = linkedMtr.id;
+            rek.namaMitraTerkait = linkedMtr.nama;
+          } else {
+            rek.idMitraTerkait = mtrId;
+            rek.namaMitraTerkait = linkedKry.nama;
+          }
+        } else if (rek.idMitraTerkait) {
+          const linkedMtr = (this.db.mitra || []).find((m) => m.id === rek.idMitraTerkait);
+          if (linkedMtr) {
+            rek.namaMitraTerkait = linkedMtr.nama;
+            if (linkedMtr.idKaryawanTerkait) {
+              const kryByMtr = (this.db.karyawan || []).find((k) => k.id === linkedMtr.idKaryawanTerkait);
+              if (kryByMtr) {
+                rek.idKaryawanTerkait = kryByMtr.id;
+                rek.namaKaryawanTerkait = kryByMtr.nama;
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const rek of this.db.rekening) {
+      if (rek.isRekeningTitip || rek.kategori === "REKENING_TITIP") continue;
       const isDpParabot = rek.kode === "REK-DPPARABO" || rek.kode === "DPPARABOT" || !rek.isVirtual && rek.nama.toLowerCase().includes("dp parabot");
       if (isDpParabot || rek.isAnakPerusahaan || rek.kategori === "ANAK_PERUSAHAAN") {
         rek.kategori = "ANAK_PERUSAHAAN";
@@ -3143,11 +3584,16 @@ var DatabaseManager = class {
       }
     }
     const anakRekMap = new Map(
-      this.db.rekening.filter((r) => r.isAnakPerusahaan || r.kategori === "ANAK_PERUSAHAAN").map((r) => [r.kode, r])
+      this.db.rekening.filter((r) => !r.isRekeningTitip && r.kategori !== "REKENING_TITIP" && (r.isAnakPerusahaan || r.kategori === "ANAK_PERUSAHAAN")).map((r) => [r.kode, r])
+    );
+    const titipRekMap = new Map(
+      this.db.rekening.filter((r) => r.isRekeningTitip || r.kategori === "REKENING_TITIP").map((r) => [r.kode, r])
     );
     for (const trf of this.db.transferRekening) {
       const srcAnak = anakRekMap.get(trf.rekeningSumber);
       const dstAnak = anakRekMap.get(trf.rekeningTujuan);
+      const srcTitip = titipRekMap.get(trf.rekeningSumber);
+      const dstTitip = titipRekMap.get(trf.rekeningTujuan);
       if (srcAnak && dstAnak) {
         trf.idMitraTerkait = dstAnak.idMitraTerkait;
         trf.namaMitraTerkait = `${srcAnak.namaMitraTerkait || srcAnak.nama} -> ${dstAnak.namaMitraTerkait || dstAnak.nama}`;
@@ -3160,6 +3606,24 @@ var DatabaseManager = class {
         trf.idMitraTerkait = srcAnak.idMitraTerkait;
         trf.namaMitraTerkait = srcAnak.namaMitraTerkait || srcAnak.nama;
         trf.tipeMutasiAfiliasi = "TARIK_DARI_ANAK_PERUSAHAAN";
+      } else if (srcTitip && dstTitip) {
+        trf.idKaryawanTerkait = dstTitip.idKaryawanTerkait || srcTitip.idKaryawanTerkait;
+        trf.namaKaryawanTerkait = dstTitip.namaKaryawanTerkait || dstTitip.nama;
+        trf.idMitraTerkait = dstTitip.idMitraTerkait || srcTitip.idMitraTerkait;
+        trf.namaMitraTerkait = dstTitip.namaMitraTerkait || dstTitip.namaKaryawanTerkait || dstTitip.nama;
+        trf.tipeMutasiAfiliasi = "ANTAR_REKENING_TITIP";
+      } else if (dstTitip) {
+        trf.idKaryawanTerkait = dstTitip.idKaryawanTerkait;
+        trf.namaKaryawanTerkait = dstTitip.namaKaryawanTerkait || dstTitip.atasNama;
+        trf.idMitraTerkait = dstTitip.idMitraTerkait;
+        trf.namaMitraTerkait = dstTitip.namaMitraTerkait || dstTitip.namaKaryawanTerkait || dstTitip.nama;
+        trf.tipeMutasiAfiliasi = "TITIP_UANG_KARYAWAN";
+      } else if (srcTitip) {
+        trf.idKaryawanTerkait = srcTitip.idKaryawanTerkait;
+        trf.namaKaryawanTerkait = srcTitip.namaKaryawanTerkait || srcTitip.atasNama;
+        trf.idMitraTerkait = srcTitip.idMitraTerkait;
+        trf.namaMitraTerkait = srcTitip.namaMitraTerkait || srcTitip.namaKaryawanTerkait || srcTitip.nama;
+        trf.tipeMutasiAfiliasi = "KEMBALIKAN_TITIP_KARYAWAN";
       }
     }
     const katSet = new Set(
@@ -3995,6 +4459,119 @@ var DatabaseManager = class {
         }
       }
     }
+    const mitraIdGroups = /* @__PURE__ */ new Map();
+    for (const m of this.db.mitra) {
+      if (!m?.id) continue;
+      const grp = mitraIdGroups.get(m.id) || [];
+      grp.push(m);
+      mitraIdGroups.set(m.id, grp);
+    }
+    const usedMitraIds = new Set(this.db.mitra.map((m) => m.id).filter(Boolean));
+    for (const [dupId, group] of mitraIdGroups.entries()) {
+      if (group.length <= 1) continue;
+      const primary = group[0];
+      for (let gi = 1; gi < group.length; gi++) {
+        const collider = group[gi];
+        const digitsFromKode = String(collider.kode || "").replace(/[^0-9]/g, "");
+        const cleanKodeAlpha = String(collider.kode || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+        let baseCandidate = digitsFromKode ? `MTR-${digitsFromKode.padStart(4, "0")}` : `MTR-${cleanKodeAlpha || `${gi}`}`;
+        let candidate = baseCandidate;
+        let suffix = 2;
+        while (usedMitraIds.has(candidate)) {
+          candidate = `${baseCandidate}-${suffix}`;
+          suffix += 1;
+        }
+        collider.id = candidate;
+        usedMitraIds.add(candidate);
+        if (collider.idKaryawanTerkait) {
+          const linkedK = (this.db.karyawan || []).find((k) => k.id === collider.idKaryawanTerkait);
+          if (linkedK) linkedK.idMitraTerkait = candidate;
+        }
+        console.log(
+          `[DB] Auto-heal duplikasi ID Mitra ${dupId}: ${collider.nama} (${collider.kode}) dipindah ke ID unik ${candidate} (pemilik utama ${dupId}: ${primary.nama} / ${primary.kode})`
+        );
+      }
+      const membersByLongestName = [...group].sort(
+        (a, b) => (b.nama || "").length - (a.nama || "").length
+      );
+      const notaOwnerMap = /* @__PURE__ */ new Map();
+      const resolveOwnerForTx = (tx) => {
+        const ketLower = String(tx.keterangan || "").toLowerCase();
+        if (ketLower) {
+          const ketMatches = membersByLongestName.filter((m) => {
+            const nm = String(m.nama || "").trim().toLowerCase();
+            return nm.length >= 3 && ketLower.includes(nm);
+          });
+          if (ketMatches.length === 1) return ketMatches[0];
+        }
+        if (tx.isNotaNgunci) {
+          const ngunciMembers = group.filter((m) => Boolean(m.isNotaNgunci));
+          if (ngunciMembers.length === 1) return ngunciMembers[0];
+          if (ngunciMembers.length > 1 && tx.tanggalNgunci) {
+            const byDate = ngunciMembers.filter((m) => m.tanggalNgunci === tx.tanggalNgunci);
+            if (byDate.length === 1) return byDate[0];
+          }
+        }
+        if (tx.isNotaLalu && !tx.isNotaNgunci) {
+          const autoCreatedMembers = group.filter(
+            (m) => String(m.catatan || "").toLowerCase().includes("didaftarkan otomatis dari pencatatan nota lalu")
+          );
+          if (autoCreatedMembers.length === 1) return autoCreatedMembers[0];
+        }
+        const txNormName = normIdentity(tx.namaMitra);
+        if (txNormName) {
+          const byName = group.filter((m) => normIdentity(m.nama) === txNormName);
+          if (byName.length === 1) return byName[0];
+        }
+        return primary;
+      };
+      const applyResolution = (arr) => {
+        for (const tx of arr || []) {
+          if (tx.idMitra !== dupId) continue;
+          const owner = resolveOwnerForTx(tx);
+          tx.idMitra = owner.id;
+          tx.namaMitra = owner.nama;
+          const refKey = tx.idTransaksi || tx.noPenjualan || tx.noPembelian || tx.id;
+          if (refKey) notaOwnerMap.set(refKey, owner);
+        }
+      };
+      applyResolution(this.db.penjualan);
+      applyResolution(this.db.penjualanHasilBumi);
+      applyResolution(this.db.pembelianHasilBumi);
+      applyResolution(this.db.pembelianBarang);
+      applyResolution(this.db.kasbonUang);
+      applyResolution(this.db.pencairanTitipan);
+      for (const b of this.db.bayarBon || []) {
+        if (b.idMitra !== dupId) continue;
+        let owner;
+        if (b.idNotaTarget && notaOwnerMap.has(b.idNotaTarget)) {
+          owner = notaOwnerMap.get(b.idNotaTarget);
+        }
+        if (!owner && Array.isArray(b.alokasi)) {
+          for (const al of b.alokasi) {
+            if (al?.refId && notaOwnerMap.has(al.refId)) {
+              owner = notaOwnerMap.get(al.refId);
+              break;
+            }
+          }
+        }
+        if (!owner) {
+          owner = resolveOwnerForTx(b);
+        }
+        b.idMitra = owner.id;
+        b.namaMitra = owner.nama;
+      }
+      for (const trf of this.db.transferRekening || []) {
+        if (trf.idMitraTerkait !== dupId) continue;
+        const owner = resolveOwnerForTx({
+          idMitra: trf.idMitraTerkait,
+          namaMitra: trf.namaMitraTerkait,
+          keterangan: trf.keterangan
+        });
+        trf.idMitraTerkait = owner.id;
+        trf.namaMitraTerkait = owner.nama;
+      }
+    }
     const mitraMap = new Map(this.db.mitra.map((m) => [m.id, m]));
     const syncTxMitra = (tx, defaultRole) => {
       if (!tx.idMitra || tx.idMitra === "UMUM") return;
@@ -4279,7 +4856,14 @@ var DatabaseManager = class {
       return ta - tb;
     });
     for (const sj of sortedSj) {
-      const isStokHb = sj.sumberBarang === "STOK_HB_PT";
+      const isStokHb = isInternalMilikSendiriSuratJalan(sj);
+      if (isStokHb && sj.statusUangBuyer === "DITERIMA" && sj.statusPembayaranMitra === "PENDING") {
+        sj.statusPembayaranMitra = "LUNAS";
+        sj.tanggalBayarMitra = sj.tanggalUangBuyerMasuk || sj.tanggal;
+        sj.catatArusKasBayarMitra = false;
+        sj.nominalBayarMitraAktual = 0;
+        addedCount++;
+      }
       const invKey = sj.noInvoice;
       const hbKey = sj.noPenjualanHasilBumi;
       const plateClean = String(sj.platTruk || "").replace(/\s+/g, "").toUpperCase();
@@ -4319,13 +4903,21 @@ var DatabaseManager = class {
       }
       const isNov4Sj = isRoniNov4Sj || tglClean === "04/11/2026" || tglClean === "4/11/2026" || tglClean === "06/11/2026" || plateClean.includes("8206");
       let targetContract;
-      if (isNov4Sj) {
-        targetContract = this.db.rekapCtr.find((c) => c.noUrut === 27);
-      } else {
-        const sjGudang = (sj.kategoriKode || "SKA").trim().toUpperCase();
-        targetContract = this.db.rekapCtr.find(
-          (c) => c.noUrut >= 28 && (c.gudang || "").trim().toUpperCase() === sjGudang && (c.rows || []).some((r) => (r.tglMasuk || "").trim() === tglClean)
-        );
+      if (sj.rekapCtrId) {
+        targetContract = this.db.rekapCtr.find((c) => c.id === sj.rekapCtrId);
+      }
+      if (!targetContract && sj.rekapCtrNoUrut) {
+        targetContract = this.db.rekapCtr.find((c) => c.noUrut === sj.rekapCtrNoUrut);
+      }
+      if (!targetContract) {
+        if (isNov4Sj) {
+          targetContract = this.db.rekapCtr.find((c) => c.noUrut === 27);
+        } else {
+          const sjGudang = (sj.kategoriKode || "SKA").trim().toUpperCase();
+          targetContract = this.db.rekapCtr.find(
+            (c) => c.noUrut >= 28 && (c.gudang || "").trim().toUpperCase() === sjGudang && (c.rows || []).some((r) => (r.tglMasuk || "").trim() === tglClean)
+          );
+        }
       }
       if (!targetContract) {
         const maxNo = this.db.rekapCtr.reduce((m, c) => Math.max(m, c.noUrut || 0), 27);
@@ -4333,14 +4925,19 @@ var DatabaseManager = class {
         targetContract = {
           id: `CTR-${nextNo}`,
           noUrut: nextNo,
+          noKontrak: sj.rekapCtrNoKontrak || void 0,
           tglCtr: formatTglCtrLabel(tglClean),
           gudang: (sj.kategoriKode || "SKA").trim().toUpperCase(),
           qtyCtr: 0,
+          statusKontrak: "AKTIF",
           rows: []
         };
         this.db.rekapCtr.push(targetContract);
       }
       if (!Array.isArray(targetContract.rows)) targetContract.rows = [];
+      if (targetContract.rows.length === 1 && targetContract.rows[0].sourceType === "MANUAL" && !(targetContract.rows[0].namaSuplayer || "").trim() && (Number(targetContract.rows[0].qtyAkhir) || 0) === 0) {
+        targetContract.rows = [];
+      }
       const ketBaru = desiredStatus === "PENDING" ? "BELUM CAIR" : "";
       const refBase = invKey || hbKey || sj.id;
       const details = Array.isArray(sj.detailItems) && sj.detailItems.length > 0 ? sj.detailItems : null;
@@ -4419,7 +5016,12 @@ var DatabaseManager = class {
     let netKasir = 0;
     for (const p of this.db.penjualan || []) {
       if (!inRange(p.tanggal)) continue;
-      if (p.metode === "KASBON" || p.metode === "SINKRON" || p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang) continue;
+      const isSilangLunasKasPt = Boolean(
+        p.isNotaSilang && p.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (p.metode === "TUNAI" || p.metode === "TRANSFER")
+      );
+      if (p.metode === "KASBON" || p.metode === "SINKRON" || p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang && !isSilangLunasKasPt) {
+        continue;
+      }
       if (p.rekeningTujuan === "KAS01" || p.metode === "TUNAI") netKasir += Math.round(Number(p.totalNominal) || 0);
     }
     for (const j of this.db.penjualanHasilBumi || []) {
@@ -4791,9 +5393,13 @@ var DatabaseManager = class {
         (br) => resolveBrilinkDivNorm(br.divisi) === targetNorm && br.jenisBrilink === "TARIK_TUNAI" && (Number(br.nominalAdmin) || 0) > 0
       ).reduce((sum, br) => sum + (Number(br.nominalAdmin) || 0), 0);
       const masukUangMasukDivisi = (this.db.uangMasuk || []).filter(
-        (um) => !isTanpaDivisi(um.divisi) && norm(um.divisi || "Gudang Wijaya Agro") === targetNorm && (Number(um.nominal) || 0) > 0
+        (um) => !isTanpaDivisi(um.divisi) && norm(um.divisi || "Gudang Wijaya Agro") === targetNorm && !isExcludedUangMasukFromDivisiCashflow(um) && (Number(um.nominal) || 0) > 0
       ).reduce((sum, um) => sum + (Number(um.nominal) || 0), 0);
-      const masukPenjualanKas = masukPenjualanToko + masukPenjualanHasilBumi + masukPelunasanPiutangDivisi + masukAdminBrilink + masukUangMasukDivisi;
+      const masukKeuntunganSuratJalanPt = targetNorm === norm("PT Wijaya Agro Perkasa") ? computeSuratJalanKeuntunganPtEntries(this.db.suratJalan, this.db.uangMasuk).reduce(
+        (sum, e) => sum + e.nominal,
+        0
+      ) : 0;
+      const masukPenjualanKas = masukPenjualanToko + masukPenjualanHasilBumi + masukPelunasanPiutangDivisi + masukAdminBrilink + masukUangMasukDivisi + masukKeuntunganSuratJalanPt;
       const masukDropping = (this.db.transferRekening || []).filter((t) => t.status === "BERHASIL" && t.rekeningTujuan === div.kodeRekening).reduce((sum, t) => sum + (Number(t.nominal) || 0), 0);
       const totalMasukDivisi = masukPenjualanKas + masukDropping;
       let keluarPembelianBarang = 0;
@@ -5087,26 +5693,67 @@ var DatabaseManager = class {
     });
   }
   /**
-   * Transactional lock execution wrapper with automatic relational reconciliation & non-blocking background sync to Supabase
+   * Transactional lock execution wrapper with automatic relational reconciliation,
+   * automatic deletion tombstone capture, and immediate write-through sync to Supabase.
    */
   async executeTransaction(action) {
+    if (supabaseSyncEngine.isConfigured() && !supabaseSyncEngine.isCloudStateVerified()) {
+      try {
+        await supabaseSyncEngine.ensureInitializedOnce(this);
+      } catch {
+      }
+    }
     while (this.isWriting) {
       await new Promise((res) => setTimeout(res, 5));
     }
     this.isWriting = true;
     let result;
     try {
+      const beforeIds = this.collectTrackedTransactionIds(this.db);
       result = action(this.db);
+      const latestAuditId = this.db.auditLogs?.[0]?.idTransaksi || "";
+      const isBulkResetOrRestore = latestAuditId === "SYS-RESTORE" || latestAuditId === "SYS-RESET" || latestAuditId === "SYS-CLEAN-DATA";
+      if (!isBulkResetOrRestore) {
+        const afterIds = this.collectTrackedTransactionIds(this.db);
+        if (!Array.isArray(this.db.deletedTransactionIds)) {
+          this.db.deletedTransactionIds = [];
+        }
+        const tombstoneSet = new Set(
+          this.db.deletedTransactionIds.map((id) => this.normalizeTombstoneId(id)).filter(Boolean)
+        );
+        let tombstonesChanged = false;
+        for (const id of beforeIds) {
+          if (!afterIds.has(id) && !tombstoneSet.has(id)) {
+            tombstoneSet.add(id);
+            this.db.deletedTransactionIds.push(id);
+            tombstonesChanged = true;
+          }
+        }
+        for (const id of afterIds) {
+          if (!beforeIds.has(id) && tombstoneSet.has(id)) {
+            tombstoneSet.delete(id);
+            this.db.deletedTransactionIds = this.db.deletedTransactionIds.filter(
+              (existing) => this.normalizeTombstoneId(existing) !== id
+            );
+            tombstonesChanged = true;
+          }
+        }
+        if (tombstonesChanged && this.db.deletedTransactionIds.length > 2500) {
+          this.db.deletedTransactionIds = this.db.deletedTransactionIds.slice(
+            this.db.deletedTransactionIds.length - 2500
+          );
+        }
+      }
       this.reconcileRelationalIntegrity();
       this.synchronizeVirtualAccounts();
       this.saveDirect(this.db);
-      supabaseSyncEngine.markLocalMutation(this.db);
+      supabaseSyncEngine.markLocalMutation(this.db, { allowOverwrite: true });
     } finally {
       this.isWriting = false;
     }
-    const syncWaitMs = 1e4;
+    const syncWaitMs = 15e3;
     try {
-      await supabaseSyncEngine.flushSync(this.db, syncWaitMs);
+      await supabaseSyncEngine.flushSync(this.db, syncWaitMs, { allowOverwrite: true });
     } catch (syncErr) {
       console.warn("[DB] Supabase immediate flush warning:", syncErr);
     }
@@ -5171,10 +5818,17 @@ function generateId(prefix) {
 }
 var TransactionService = class {
   /**
+   * Helper: Detect whether a Rekening is Rekening Titip Uang Karyawan (dana PT dititipkan ke karyawan dipercaya)
+   */
+  static isRekeningTitipAccount(rek) {
+    if (!rek) return false;
+    return Boolean(rek.isRekeningTitip || rek.kategori === "REKENING_TITIP");
+  }
+  /**
    * Helper: Detect whether a Rekening is an Anak Perusahaan / Subsidiary-Mitra account (e.g. DP Parabot)
    */
   static isAnakPerusahaanRekening(rek) {
-    if (!rek) return false;
+    if (!rek || this.isRekeningTitipAccount(rek)) return false;
     return Boolean(
       rek.isAnakPerusahaan || rek.kategori === "ANAK_PERUSAHAAN" || rek.kode === "REK-DPPARABO"
     );
@@ -5331,10 +5985,64 @@ var TransactionService = class {
         finalRekeningTujuan = bankAcc.kode;
         statusPembayaran = "LUNAS";
         sisaPiutang = 0;
-      } else if (params.metode === "KASBON") {
+      }
+      let resolvedDpNominal = 0;
+      let resolvedDpMetode = void 0;
+      let resolvedDpRekeningTujuan = void 0;
+      let resolvedDpRekNama = void 0;
+      let idBayarBonDp = void 0;
+      if (params.metode === "KASBON") {
         finalRekeningTujuan = "BON01";
         statusPembayaran = "BELUM_BAYAR";
-        sisaPiutang = totalNominal;
+        const rawDp = Math.max(0, Math.round(Number(params.dpNominal) || 0));
+        if (rawDp > 0) {
+          if (totalNominal <= 0) {
+            throw new Error("Tidak dapat mencatat DP pada transaksi dengan total tagihan Rp 0");
+          }
+          if (rawDp >= totalNominal) {
+            throw new Error(
+              `Nominal DP (Rp ${rawDp.toLocaleString("id-ID")}) sama dengan atau melebihi total tagihan (Rp ${totalNominal.toLocaleString("id-ID")}). Gunakan metode TUNAI atau TRANSFER (Lunas) saja.`
+            );
+          }
+          const dpMet = params.dpMetode === "TRANSFER" ? "TRANSFER" : "TUNAI";
+          if (dpMet === "TUNAI") {
+            const kasAcc = db.rekening.find((r) => r.kode === "KAS01");
+            if (!kasAcc) throw new Error("Rekening KAS01 tidak ditemukan");
+            kasAcc.saldoSaatIni += rawDp;
+            resolvedDpNominal = rawDp;
+            resolvedDpMetode = "TUNAI";
+            resolvedDpRekeningTujuan = "KAS01";
+            resolvedDpRekNama = kasAcc.nama;
+          } else {
+            const dpRekKode = String(params.dpRekeningTujuan || "").trim();
+            if (!dpRekKode || dpRekKode === "KAS01" || dpRekKode === "BON01" || dpRekKode === "TIT01" || dpRekKode === "SINKRON" || dpRekKode === "INTERNAL_PT" || dpRekKode === "PENGELUARAN") {
+              throw new Error(
+                "Pilih rekening bank tujuan transfer untuk DP yang valid (bukan Kas Tunai / Virtual)"
+              );
+            }
+            const dpBankAcc = db.rekening.find((r) => r.kode === dpRekKode);
+            if (!dpBankAcc) {
+              throw new Error(`Rekening penerima DP (${dpRekKode}) tidak ditemukan`);
+            }
+            if (dpBankAcc.kategori === "OPERASIONAL_DIVISI") {
+              throw new Error(
+                `Buku "${dpBankAcc.nama}" adalah buku tracking divisi, bukan rekening bank fisik. Pilih rekening bank riil penerima DP.`
+              );
+            }
+            if (dpBankAcc.status !== "AKTIF") {
+              throw new Error(`Rekening ${dpBankAcc.nama} tidak aktif`);
+            }
+            dpBankAcc.saldoSaatIni += rawDp;
+            resolvedDpNominal = rawDp;
+            resolvedDpMetode = "TRANSFER";
+            resolvedDpRekeningTujuan = dpBankAcc.kode;
+            resolvedDpRekNama = dpBankAcc.nama;
+          }
+          sisaPiutang = totalNominal - resolvedDpNominal;
+          idBayarBonDp = generateId("BYB");
+        } else {
+          sisaPiutang = totalNominal;
+        }
       }
       const resolveStoreSaleDivisi = () => {
         if (isTanpaDivisi(params.divisi)) return TANPA_DIVISI_VALUE;
@@ -5419,24 +6127,69 @@ var TransactionService = class {
         totalLabaKotor,
         statusPembayaran,
         sisaPiutang,
+        ...resolvedDpNominal > 0 ? {
+          dpNominal: resolvedDpNominal,
+          dpMetode: resolvedDpMetode,
+          dpRekeningTujuan: resolvedDpRekeningTujuan,
+          idBayarBonDp
+        } : {},
         isNotaNgunci: false,
         kategoriPengeluaran: resolvedKategoriPengeluaran,
         idPengeluaranTerkait,
         idInventaris: params.idInventaris || void 0,
-        keterangan: params.keterangan || (isInternalSale ? `Pemakaian Kebutuhan Internal PT Wijaya Agro (Harga Rp 0)` : isPemakaianPengeluaran ? `Pemakaian Stok Gudang ke Pengeluaran [${resolvedKategoriPengeluaran}]` : isSinkronSale ? `Penjualan Lunas SINKRON (Tanpa Uang Masuk Kas/Bank)` : params.metode === "KASBON" ? `Penjualan Kasbon (${tipePembeli})` : `Penjualan Barang Toko (${tipePembeli})`),
+        keterangan: params.keterangan || (isInternalSale ? `Pemakaian Kebutuhan Internal PT Wijaya Agro (Harga Rp 0)` : isPemakaianPengeluaran ? `Pemakaian Stok Gudang ke Pengeluaran [${resolvedKategoriPengeluaran}]` : isSinkronSale ? `Penjualan Lunas SINKRON (Tanpa Uang Masuk Kas/Bank)` : params.metode === "KASBON" ? resolvedDpNominal > 0 ? `Penjualan Kasbon dengan DP Rp ${resolvedDpNominal.toLocaleString("id-ID")} (${resolvedDpMetode === "TUNAI" ? "Tunai KAS01" : `Transfer ${resolvedDpRekeningTujuan}`}) \xB7 Sisa Bon Rp ${sisaPiutang.toLocaleString("id-ID")}` : `Penjualan Kasbon (${tipePembeli})` : `Penjualan Barang Toko (${tipePembeli})`),
         fotoNota: params.attachment_url || params.fotoNota || void 0,
         attachment_url: params.attachment_url || params.fotoNota || void 0,
         createdAt: iso
       };
+      const existingOpenBonMitra = resolvedDpNominal > 0 && finalMitraId !== "UMUM" ? (db.penjualan || []).filter((p) => p.idMitra === finalMitraId && p.metode === "KASBON" && (p.sisaPiutang || 0) > 0).reduce((s, p) => s + (Number(p.sisaPiutang) || 0), 0) + (db.penjualanHasilBumi || []).filter((j) => j.idMitra === finalMitraId && j.metodePembayaran === "PIUTANG" && (j.sisaPiutang || 0) > 0).reduce((s, j) => s + (Number(j.sisaPiutang) || 0), 0) + (db.kasbonUang || []).filter((k) => k.idMitra === finalMitraId && (k.sisaKasbon || 0) > 0).reduce((s, k) => s + (Number(k.sisaKasbon) || 0), 0) : 0;
       db.penjualan.unshift(penjualanRecord);
-      const logMethodText = penjualanRecord.metode === "INTERNAL_PT" ? "PEMAKAIAN INTERNAL PT (Rp 0)" : penjualanRecord.metode === "PEMAKAIAN_PENGELUARAN" ? `PEMAKAIAN STOK -> PENGELUARAN (${resolvedKategoriPengeluaran})` : penjualanRecord.metode === "SINKRON" ? "SINKRON (LUNAS NON-TUNAI)" : penjualanRecord.metode;
+      if (resolvedDpNominal > 0 && idBayarBonDp && resolvedDpMetode && resolvedDpRekeningTujuan) {
+        const dpCreatedAt = new Date(new Date(iso).getTime() + 1).toISOString();
+        const totalBonSebelumDp = existingOpenBonMitra + totalNominal;
+        const sisaBonSetelahDp = Math.max(0, totalBonSebelumDp - resolvedDpNominal);
+        const dpKetExtra = params.keterangan?.trim() ? ` \u2014 ${params.keterangan.trim()}` : "";
+        const dpBayarBonRecord = {
+          idTransaksi: idBayarBonDp,
+          tanggal: finalTanggal,
+          jam,
+          idMitra: finalMitraId,
+          namaMitra: finalMitraNama,
+          totalBonSebelum: totalBonSebelumDp,
+          totalBonAwalKotor: totalBonSebelumDp,
+          nominalBayar: resolvedDpNominal,
+          sisaBonSetelah: sisaBonSetelahDp,
+          idNotaTarget: noPenjualan,
+          metode: resolvedDpMetode,
+          rekeningTujuan: resolvedDpRekeningTujuan,
+          isDpPenjualan: true,
+          noPenjualanTerkait: noPenjualan,
+          alokasi: [
+            {
+              jenis: "KASBON_BARANG",
+              refId: noPenjualan,
+              nominalSebelum: totalNominal,
+              nominalDibayar: resolvedDpNominal,
+              nominalSisa: sisaPiutang,
+              isNotaNgunci: false
+            }
+          ],
+          keterangan: `DP Penjualan Kasbon [${noPenjualan}] (${resolvedDpMetode === "TUNAI" ? "Tunai KAS01" : `Transfer ${resolvedDpRekNama || resolvedDpRekeningTujuan}`})${dpKetExtra}`,
+          fotoNota: params.attachment_url || params.fotoNota || void 0,
+          attachment_url: params.attachment_url || params.fotoNota || void 0,
+          createdAt: dpCreatedAt
+        };
+        if (!Array.isArray(db.bayarBon)) db.bayarBon = [];
+        db.bayarBon.unshift(dpBayarBonRecord);
+      }
+      const logMethodText = penjualanRecord.metode === "INTERNAL_PT" ? "PEMAKAIAN INTERNAL PT (Rp 0)" : penjualanRecord.metode === "PEMAKAIAN_PENGELUARAN" ? `PEMAKAIAN STOK -> PENGELUARAN (${resolvedKategoriPengeluaran})` : penjualanRecord.metode === "SINKRON" ? "SINKRON (LUNAS NON-TUNAI)" : penjualanRecord.metode === "KASBON" && resolvedDpNominal > 0 ? `KASBON + DP Rp ${resolvedDpNominal.toLocaleString("id-ID")} (${resolvedDpMetode} ${resolvedDpRekeningTujuan}, Sisa Bon Rp ${sisaPiutang.toLocaleString("id-ID")})` : penjualanRecord.metode;
       this.addAuditLog(
         db,
         "CREATE",
         noPenjualan,
         `Penjualan ${logMethodText} [${tipePembeli} | Divisi: ${finalDivisi} | Rek: ${finalRekeningTujuan}] kepada ${finalMitraNama} (${processedItems.length} item) - Nilai: Rp ${totalNominal.toLocaleString("id-ID")}, Modal HPP: Rp ${totalModalHpp.toLocaleString("id-ID")}`,
         totalNominal,
-        finalRekeningTujuan
+        resolvedDpNominal > 0 && resolvedDpRekeningTujuan ? resolvedDpRekeningTujuan : finalRekeningTujuan
       );
       return penjualanRecord;
     });
@@ -5755,9 +6508,20 @@ var TransactionService = class {
   // ==========================================
   // 1C. LAPORAN LABA RUGI PER DIVISI & REFERENSI PRODUK
   // ==========================================
-  static getLabaRugiDivisiSummary() {
+  static getLabaRugiDivisiSummary(periodFilter) {
     dbManager.synchronizeDivisiAccounts();
     const db = dbManager.get();
+    const filterBulan = Number(periodFilter?.bulan) || 0;
+    const filterTahun = Number(periodFilter?.tahun) || 0;
+    const hasPeriodFilter = filterBulan >= 1 && filterBulan <= 12 && filterTahun >= 2e3;
+    const matchesPeriodDate = (tanggal) => {
+      if (!hasPeriodFilter) return true;
+      const parts = String(tanggal || "").trim().split("/");
+      if (parts.length !== 3) return false;
+      const m = Number(parts[1]);
+      const y = Number(parts[2]);
+      return m === filterBulan && y === filterTahun;
+    };
     const allDivisi = dbManager.getDivisiList().filter((d) => !isExcludedFromDivisi(d.nama) && !isExcludedFromDivisi(d.id));
     const norm = (s) => String(s || "").trim().toLowerCase();
     const produkMap = new Map((db.produk || []).map((p) => [p.kode, p]));
@@ -5832,6 +6596,7 @@ var TransactionService = class {
       const rek = db.rekening.find((r) => r.kode === div.kodeRekening);
       const penjualanTokoDiv = [];
       for (const p of db.penjualan || []) {
+        if (!matchesPeriodDate(p.tanggal)) continue;
         if (p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang) continue;
         if (Array.isArray(p.items) && p.items.length > 0) {
           const matchingItems = p.items.filter(
@@ -5850,7 +6615,7 @@ var TransactionService = class {
         }
       }
       const penjualanHbDiv = (db.penjualanHasilBumi || []).filter(
-        (j) => resolveHasilBumiDivNorm(j.divisi) === targetNorm
+        (j) => matchesPeriodDate(j.tanggal) && resolveHasilBumiDivNorm(j.divisi) === targetNorm
       );
       let omzetPenjualanToko = 0;
       let rawHppToko = 0;
@@ -5891,6 +6656,7 @@ var TransactionService = class {
       let pelunasanBonKasDiv = 0;
       const pelunasanEntriesDiv = [];
       for (const b of db.bayarBon || []) {
+        if (!matchesPeriodDate(b.tanggal)) continue;
         if (b.metode !== "TUNAI" && b.metode !== "TRANSFER") continue;
         if (b.isKompensasiTitipan || b.isPotongGaji) continue;
         for (const alok of b.alokasi || []) {
@@ -5918,10 +6684,10 @@ var TransactionService = class {
         }
       }
       const brilinkMasukDiv = (db.brilink || []).filter(
-        (br) => !isTanpaDivisi(br.divisi) && norm(cleanDiv(br.divisi) || "BRILink") === targetNorm && br.jenisBrilink === "TARIK_TUNAI" && (Number(br.nominalAdmin) || 0) > 0
+        (br) => matchesPeriodDate(br.tanggal) && !isTanpaDivisi(br.divisi) && norm(cleanDiv(br.divisi) || "BRILink") === targetNorm && br.jenisBrilink === "TARIK_TUNAI" && (Number(br.nominalAdmin) || 0) > 0
       );
       const brilinkKeluarDiv = (db.brilink || []).filter(
-        (br) => !isTanpaDivisi(br.divisi) && norm(cleanDiv(br.divisi) || "BRILink") === targetNorm && br.jenisBrilink === "TUKAR_CASH" && (Number(br.nominalAdmin) || 0) > 0
+        (br) => matchesPeriodDate(br.tanggal) && !isTanpaDivisi(br.divisi) && norm(cleanDiv(br.divisi) || "BRILink") === targetNorm && br.jenisBrilink === "TUKAR_CASH" && (Number(br.nominalAdmin) || 0) > 0
       );
       const adminMasukBrilinkDiv = brilinkMasukDiv.reduce(
         (s, br) => s + (Number(br.nominalAdmin) || 0),
@@ -5932,18 +6698,26 @@ var TransactionService = class {
         0
       );
       const uangMasukDiv = (db.uangMasuk || []).filter(
-        (um) => !isTanpaDivisi(um.divisi) && norm(cleanDiv(um.divisi) || "PT Wijaya Agro Perkasa") === targetNorm && um.metode !== "PIUTANG" && um.rekeningTujuan !== "BON01" && (Number(um.nominal) || 0) > 0
+        (um) => matchesPeriodDate(um.tanggal) && !isTanpaDivisi(um.divisi) && norm(cleanDiv(um.divisi) || "PT Wijaya Agro Perkasa") === targetNorm && !isExcludedUangMasukFromDivisiCashflow(um) && (Number(um.nominal) || 0) > 0
       );
       const nominalUangMasukDiv = uangMasukDiv.reduce(
         (s, um) => s + (Number(um.nominal) || 0),
         0
       );
-      const totalOmzetPenjualan = omzetPenjualanToko + omzetPenjualanHasilBumi + adminMasukBrilinkDiv + nominalUangMasukDiv;
-      const penjualanKasMasuk = kasPenjualanToko + kasPenjualanHb + pelunasanBonKasDiv + adminMasukBrilinkDiv + nominalUangMasukDiv;
+      const suratJalanPtEntriesDiv = targetNorm === norm("PT Wijaya Agro Perkasa") ? computeSuratJalanKeuntunganPtEntries(db.suratJalan, db.uangMasuk).filter(
+        (e) => matchesPeriodDate(e.tanggal)
+      ) : [];
+      const nominalKeuntunganSjPtDiv = suratJalanPtEntriesDiv.reduce(
+        (s, e) => s + e.nominal,
+        0
+      );
+      const totalOmzetPenjualan = omzetPenjualanToko + omzetPenjualanHasilBumi + adminMasukBrilinkDiv + nominalUangMasukDiv + nominalKeuntunganSjPtDiv;
+      const penjualanKasMasuk = kasPenjualanToko + kasPenjualanHb + pelunasanBonKasDiv + adminMasukBrilinkDiv + nominalUangMasukDiv + nominalKeuntunganSjPtDiv;
       const piutangPenjualanAktif = piutangToko + piutangHb;
-      const jumlahNotaPenjualan = penjualanTokoDiv.length + penjualanHbDiv.length + brilinkMasukDiv.length + uangMasukDiv.length;
+      const jumlahNotaPenjualan = penjualanTokoDiv.length + penjualanHbDiv.length + brilinkMasukDiv.length + uangMasukDiv.length + suratJalanPtEntriesDiv.length;
       const pembelianBarangDiv = [];
       for (const pb of db.pembelianBarang || []) {
+        if (!matchesPeriodDate(pb.tanggal)) continue;
         if ((Number(pb.totalNominal) || 0) <= 0) continue;
         if (Array.isArray(pb.items) && pb.items.length > 0) {
           const matchingItems = pb.items.filter(
@@ -5961,7 +6735,7 @@ var TransactionService = class {
         }
       }
       const pembelianHbDiv = (db.pembelianHasilBumi || []).filter(
-        (phb) => resolveHasilBumiDivNorm(phb.divisi) === targetNorm && phb.komoditasKode !== "PINJAMAN_DANA" && phb.komoditasKode !== "TITIP_DANA" && phb.komoditasKode !== "NOTA_SILANG" && !phb.isNotaSilang && !String(phb.komoditasNama || "").toLowerCase().includes("pinjaman uang") && !phb.isBelumPutusHarga && (phb.totalNominal || 0) > 0
+        (phb) => matchesPeriodDate(phb.tanggal) && resolveHasilBumiDivNorm(phb.divisi) === targetNorm && phb.komoditasKode !== "PINJAMAN_DANA" && phb.komoditasKode !== "TITIP_DANA" && phb.komoditasKode !== "NOTA_SILANG" && !phb.isNotaSilang && !String(phb.komoditasNama || "").toLowerCase().includes("pinjaman uang") && !phb.isBelumPutusHarga && (phb.totalNominal || 0) > 0
       );
       const modalPembelianBarang = pembelianBarangDiv.reduce(
         (s, pb) => s + (Number(pb.totalNominal) || 0),
@@ -5986,10 +6760,10 @@ var TransactionService = class {
       const labaKotorDagang = Math.round(totalOmzetPenjualan - modalTerpakaiHpp);
       const marginKotorPersen = totalOmzetPenjualan > 0 ? Math.round(labaKotorDagang / totalOmzetPenjualan * 1e3) / 10 : 0;
       const pengeluaranDiv = (db.pengeluaran || []).filter(
-        (ex) => resolveBebanDivNorm(ex.divisi, ex.rekeningSumber) === targetNorm
+        (ex) => matchesPeriodDate(ex.tanggal) && resolveBebanDivNorm(ex.divisi, ex.rekeningSumber) === targetNorm
       );
       const gajiDiv = (db.penggajian || []).filter(
-        (gj) => resolveBebanDivNorm(gj.divisi, gj.rekeningSumber) === targetNorm
+        (gj) => matchesPeriodDate(gj.tanggal) && resolveBebanDivNorm(gj.divisi, gj.rekeningSumber) === targetNorm
       );
       const biayaPengeluaranOperasional = pengeluaranDiv.reduce((s, ex) => s + (Number(ex.nominal) || 0), 0) + adminKeluarBrilinkDiv;
       const biayaGajiKaryawan = gajiDiv.reduce(
@@ -6074,6 +6848,20 @@ var TransactionService = class {
           metode: um.metode,
           nominal: Number(um.nominal) || 0,
           _ts: toTimestamp(um.tanggal, um.jam, um.createdAt)
+        });
+      }
+      for (const sjPt of suratJalanPtEntriesDiv) {
+        rawRincian.push({
+          id: sjPt.id,
+          tanggal: sjPt.tanggal,
+          jam: sjPt.jam,
+          arus: "MASUK",
+          kategori: "PENJUALAN",
+          keterangan: sjPt.keterangan,
+          pihakTerkait: sjPt.buyerKode ? `${sjPt.namaMitra} (${sjPt.buyerKode})` : sjPt.namaMitra,
+          metode: sjPt.rekeningFisik,
+          nominal: sjPt.nominal,
+          _ts: toTimestamp(sjPt.tanggal, sjPt.jam, sjPt.createdAt)
         });
       }
       for (const pel of pelunasanEntriesDiv) {
@@ -6448,8 +7236,11 @@ var TransactionService = class {
         finalRekeningSumber = "SINKRON";
         status = "LUNAS";
       }
-      komoditas.stok += beratBersih;
-      komoditas.updateTerakhir = iso;
+      const isTitipNonFisik = Boolean(isBelumPutus && params.isTitipNonFisik);
+      if (!isTitipNonFisik) {
+        komoditas.stok += beratBersih;
+        komoditas.updateTerakhir = iso;
+      }
       const finalDivisi = isTanpaDivisi(params.divisi) ? TANPA_DIVISI_VALUE : params.divisi?.trim() || "Gudang Wijaya Agro";
       const noPembelian = generateId("PHB");
       const pembelianRecord = {
@@ -6470,13 +7261,14 @@ var TransactionService = class {
         rekeningSumber: finalRekeningSumber,
         status,
         isBelumPutusHarga: isBelumPutus,
+        ...isTitipNonFisik ? { isTitipNonFisik: true } : {},
         statusHarga: isBelumPutus ? "BELUM_PUTUS_HARGA" : "HARGA_PUTUS",
         fotoNota: params.attachment_url || params.fotoNota || "",
         attachment_url: params.attachment_url || params.fotoNota || void 0,
         isNotaLalu: params.isNotaLalu || false,
         noNotaLalu: params.noNotaLalu || "",
         tanggalNotaLalu: params.tanggalNotaLalu || "",
-        keterangan: params.keterangan || (isBelumPutus ? `Pembelian ${komoditas.nama} dari ${finalMitraNama} - Titip Timbang (Belum Putus Harga)` : `Pembelian ${komoditas.nama} dari ${finalMitraNama}`),
+        keterangan: params.keterangan || (isBelumPutus ? isTitipNonFisik ? `Titip Lama ${komoditas.nama} (Fisik Tidak di Gudang) dari ${finalMitraNama} - Belum Putus Harga` : `Pembelian ${komoditas.nama} dari ${finalMitraNama} - Titip Timbang (Belum Putus Harga)` : `Pembelian ${komoditas.nama} dari ${finalMitraNama}`),
         createdAt: iso
       };
       db.pembelianHasilBumi.unshift(pembelianRecord);
@@ -6584,6 +7376,7 @@ var TransactionService = class {
           hargaPerKg: isBelumPutus ? 0 : it.hargaPerKg || 0,
           totalNominal,
           isBelumPutus,
+          isTitipNonFisik: Boolean(isBelumPutus && it.isTitipNonFisik),
           keteranganItem: it.keteranganItem
         });
       }
@@ -6634,8 +7427,10 @@ var TransactionService = class {
       const createdRecords = [];
       for (let idx = 0; idx < preparedRows.length; idx++) {
         const row = preparedRows[idx];
-        row.komoditas.stok += row.beratBersih;
-        row.komoditas.updateTerakhir = iso;
+        if (!row.isTitipNonFisik) {
+          row.komoditas.stok += row.beratBersih;
+          row.komoditas.updateTerakhir = iso;
+        }
         const rowMetode = row.isBelumPutus ? "TITIP" : params.metodePembayaran;
         const rowRekening = row.isBelumPutus || params.metodePembayaran === "TITIP" ? "TIT01" : params.metodePembayaran === "SINKRON" ? "SINKRON" : paidRekeningKode;
         const rowStatus = row.isBelumPutus ? "BELUM_PUTUS_HARGA" : params.metodePembayaran === "TITIP" ? "TITIP" : "LUNAS";
@@ -6659,9 +7454,10 @@ var TransactionService = class {
           rekeningSumber: rowRekening,
           status: rowStatus,
           isBelumPutusHarga: row.isBelumPutus,
+          ...row.isTitipNonFisik ? { isTitipNonFisik: true } : {},
           statusHarga: row.isBelumPutus ? "BELUM_PUTUS_HARGA" : "HARGA_PUTUS",
           fotoNota: params.fotoNota || "",
-          keterangan: row.keteranganItem?.trim() || params.keterangan?.trim() || (row.isBelumPutus ? `Pembelian ${row.komoditas.nama} dari ${finalMitraNama} [Keranjang ${batchId}] - Belum Putus Harga` : `Pembelian ${row.komoditas.nama} dari ${finalMitraNama} [Keranjang ${batchId}]`),
+          keterangan: row.keteranganItem?.trim() || params.keterangan?.trim() || (row.isBelumPutus ? row.isTitipNonFisik ? `Titip Lama ${row.komoditas.nama} (Fisik Tidak di Gudang) dari ${finalMitraNama} [Keranjang ${batchId}] - Belum Putus Harga` : `Pembelian ${row.komoditas.nama} dari ${finalMitraNama} [Keranjang ${batchId}] - Belum Putus Harga` : `Pembelian ${row.komoditas.nama} dari ${finalMitraNama} [Keranjang ${batchId}]`),
           createdAt: iso
         };
         createdRecords.push(rec);
@@ -6696,7 +7492,10 @@ var TransactionService = class {
   static computeNetMutasiKasirLedger(db, kodeKasir = "KAS01", includeOpname = true) {
     let net = 0;
     for (const p of db.penjualan || []) {
-      if (p.metode === "KASBON" || p.metode === "SINKRON" || p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang || p.rekeningTujuan === "INTERNAL_PT" || p.rekeningTujuan === "SINKRON" || p.rekeningTujuan === "PENGELUARAN") {
+      const isNotaSilangLunasKasPt = Boolean(
+        p.isNotaSilang && p.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (p.metode === "TUNAI" || p.metode === "TRANSFER")
+      );
+      if (p.metode === "KASBON" || p.metode === "SINKRON" || p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang && !isNotaSilangLunasKasPt || p.rekeningTujuan === "INTERNAL_PT" || p.rekeningTujuan === "SINKRON" || p.rekeningTujuan === "PENGELUARAN") {
         continue;
       }
       const nom = Math.round(Number(p.totalNominal) || 0);
@@ -6800,6 +7599,15 @@ var TransactionService = class {
       if (nom <= 0) continue;
       if (this.isKasirPayrollRecord(db, g, kodeKasir)) net -= nom;
     }
+    for (const sj of db.suratJalan || []) {
+      if (sj.sumberBarang === "STOK_HB_PT" || sj.statusPembayaranMitra !== "LUNAS" || sj.catatArusKasBayarMitra !== true) {
+        continue;
+      }
+      const nom = Math.round(Number(sj.nominalBayarMitraAktual ?? sj.jumlahPembayaranMitra) || 0);
+      if (nom <= 0) continue;
+      const rekKode = sj.rekeningBayarMitraKode || sj.rekeningPtKode || "";
+      if (rekKode === kodeKasir) net -= nom;
+    }
     for (const t of db.transferRekening || []) {
       if (t.status && t.status !== "BERHASIL") continue;
       const nom = Math.round(Number(t.nominal) || 0);
@@ -6866,10 +7674,17 @@ var TransactionService = class {
       }
       const target = db.pembelianHasilBumi[idx];
       if ((target.isNotaSilang || target.komoditasKode === "NOTA_SILANG") && target.idNotaSilangRef) {
+        const pairedSale = (db.penjualan || []).find((p) => p.noPenjualan === target.idNotaSilangRef);
+        if (pairedSale && pairedSale.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (pairedSale.metode === "TUNAI" || pairedSale.metode === "TRANSFER") && pairedSale.rekeningTujuan && pairedSale.rekeningTujuan !== "BON01" && pairedSale.rekeningTujuan !== "TIT01" && pairedSale.rekeningTujuan !== "SINKRON") {
+          const rek = db.rekening.find((r) => r.kode === pairedSale.rekeningTujuan);
+          if (rek && !rek.isVirtual) {
+            rek.saldoSaatIni -= Math.round(Number(pairedSale.totalNominal) || 0);
+          }
+        }
         db.penjualan = (db.penjualan || []).filter((p) => p.noPenjualan !== target.idNotaSilangRef);
       }
       const beratBersih = Number(target.beratBersih) || 0;
-      if (beratBersih > 0 && target.komoditasKode !== "PINJAMAN_DANA" && target.komoditasKode !== "TITIP_DANA" && target.komoditasKode !== "NOTA_SILANG" && !target.isNotaSilang) {
+      if (beratBersih > 0 && target.komoditasKode !== "PINJAMAN_DANA" && target.komoditasKode !== "TITIP_DANA" && target.komoditasKode !== "NOTA_SILANG" && !target.isNotaSilang && !target.isTitipNonFisik) {
         const kom = (db.stokHasilBumi || []).find(
           (k) => String(k.kode || "").trim().toUpperCase() === String(target.komoditasKode || "").trim().toUpperCase() || String(k.nama || "").trim().toUpperCase() === String(target.komoditasNama || "").trim().toUpperCase()
         );
@@ -6921,18 +7736,28 @@ var TransactionService = class {
   static async processNotaSilang(params) {
     return await dbManager.executeTransaction((db) => {
       const { tanggal: todayDmy, jam, iso } = getWIBDateTime();
+      const modeNotaSilang = params.modeNotaSilang === "SESAMA_MITRA" ? "SESAMA_MITRA" : params.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" ? "BAYAR_LUNAS_KAS_PT" : params.modeNotaSilang === "PROYEK_BERSAMA" ? "PROYEK_BERSAMA" : "ANAK_PERUSAHAAN";
+      const isModeLunasKasPt = modeNotaSilang === "BAYAR_LUNAS_KAS_PT";
+      const isModeProyekBersama = modeNotaSilang === "PROYEK_BERSAMA";
+      const statusProyek = params.statusProyek === "LUNAS_SINKRON" ? "LUNAS_SINKRON" : "BON_PROYEK";
+      const isProyekLunasSinkron = isModeProyekBersama && statusProyek === "LUNAS_SINKRON";
       const resolvedIdMitraPengambil = String(params.idMitraPengambil || params.idMitra || "").trim();
-      if (!resolvedIdMitraPengambil) {
-        throw new Error("Pilih Mitra pengambil barang terlebih dahulu");
+      const isUmumBuyer = isModeLunasKasPt && (params.tipePembeli === "UMUM" || !resolvedIdMitraPengambil || resolvedIdMitraPengambil.toUpperCase() === "UMUM");
+      let mitra;
+      if (!isUmumBuyer) {
+        if (!resolvedIdMitraPengambil) {
+          throw new Error("Pilih Mitra pengambil barang terlebih dahulu");
+        }
+        mitra = db.mitra.find((m) => m.id === resolvedIdMitraPengambil);
+        if (!mitra) {
+          throw new Error("Data Mitra pengambil barang tidak ditemukan");
+        }
+        if (mitra.status !== "AKTIF") {
+          throw new Error(`Mitra ${mitra.nama} berstatus NONAKTIF`);
+        }
       }
-      const mitra = db.mitra.find((m) => m.id === resolvedIdMitraPengambil);
-      if (!mitra) {
-        throw new Error("Data Mitra pengambil barang tidak ditemukan");
-      }
-      if (mitra.status !== "AKTIF") {
-        throw new Error(`Mitra ${mitra.nama} berstatus NONAKTIF`);
-      }
-      const modeNotaSilang = params.modeNotaSilang === "SESAMA_MITRA" ? "SESAMA_MITRA" : "ANAK_PERUSAHAAN";
+      const pembeliId = mitra ? mitra.id : "UMUM";
+      const pembeliNama = mitra ? mitra.nama : String(params.namaPembeliUmum || "").trim() || "Customer Umum";
       const anakPerusahaan = modeNotaSilang === "SESAMA_MITRA" ? params.idMitraAnakPerusahaan ? db.mitra.find((m) => m.id === params.idMitraAnakPerusahaan) : void 0 : params.idMitraAnakPerusahaan ? db.mitra.find((m) => m.id === params.idMitraAnakPerusahaan) : db.mitra.find(
         (m) => m.id === "MTR-DPPARABOT" || m.isAnakPerusahaan || m.role === "ANAK_PERUSAHAAN" || m.nama.toLowerCase().includes("dp parabot") || m.nama.toLowerCase().includes("devi parabot")
       );
@@ -6941,8 +7766,27 @@ var TransactionService = class {
           modeNotaSilang === "SESAMA_MITRA" ? "Pilih Mitra Penyedia Barang / Pihak Kredit untuk Nota Silang Sesama Mitra" : "Akun Anak Perusahaan (misal DP Parabot) tidak ditemukan di Master Mitra"
         );
       }
-      if (anakPerusahaan.id === mitra.id) {
+      if (mitra && anakPerusahaan.id === mitra.id) {
         throw new Error("Mitra pengambil tidak boleh sama dengan pihak penyedia barang pada Nota Silang");
+      }
+      const metodeBayarKasPt = params.metodeBayarKasPt === "TRANSFER" ? "TRANSFER" : "TUNAI";
+      let rekeningKasPtObj;
+      if (isModeLunasKasPt) {
+        const targetRekKode = String(params.rekeningTujuanKasPt || "").trim() || (metodeBayarKasPt === "TUNAI" ? "KAS01" : "");
+        rekeningKasPtObj = db.rekening.find(
+          (r) => r.kode.toUpperCase() === targetRekKode.toUpperCase()
+        );
+        if (!rekeningKasPtObj) {
+          throw new Error(
+            targetRekKode ? `Rekening kas/bank PT "${targetRekKode}" tidak ditemukan` : "Pilih rekening kas/bank PT penerima uang terlebih dahulu"
+          );
+        }
+        if (rekeningKasPtObj.isVirtual || rekeningKasPtObj.kode === "BON01" || rekeningKasPtObj.kode === "TIT01") {
+          throw new Error(`Rekening "${rekeningKasPtObj.nama}" bersifat virtual, pilih Rekening Kas/Bank riil perusahaan`);
+        }
+        if (rekeningKasPtObj.status !== "AKTIF") {
+          throw new Error(`Rekening "${rekeningKasPtObj.nama}" berstatus NONAKTIF`);
+        }
       }
       if (!Array.isArray(params.items) || params.items.length === 0) {
         throw new Error("Keranjang barang Nota Silang wajib berisi minimal 1 item (Nama Barang, Qty, Harga)");
@@ -6982,7 +7826,7 @@ var TransactionService = class {
         }
       }
       const noNotaSilang = generateId("NSL");
-      const noRefAnakPerusahaan = `${noNotaSilang}-${modeNotaSilang === "SESAMA_MITRA" ? "MTR" : "DPP"}`;
+      const noRefAnakPerusahaan = isModeProyekBersama ? "LUNAS-SINKRON-DP" : `${noNotaSilang}-${modeNotaSilang === "SESAMA_MITRA" ? "MTR" : "DPP"}`;
       const cleanNoNotaToko = params.noNotaToko?.trim() || "";
       const rincianRingkas = normalizedItems.map((it) => `${it.namaBarang}${it.qty > 1 ? ` (${it.qty} ${it.satuan})` : ""}`).join(", ");
       const finalKeterangan = params.keterangan?.trim() || rincianRingkas;
@@ -6993,6 +7837,9 @@ var TransactionService = class {
       );
       const totalNominalMitra = totalTagihanMitraItems + tambahanMusimanGlobal;
       const totalLabaMarkup = totalNominalMitra - totalHppDPParabot;
+      if (isModeLunasKasPt && rekeningKasPtObj) {
+        rekeningKasPtObj.saldoSaatIni += totalNominalMitra;
+      }
       const penjualanItems = normalizedItems.map((it) => ({
         kodeProduk: "NOTA-SILANG",
         namaProduk: it.namaBarang,
@@ -7004,23 +7851,23 @@ var TransactionService = class {
         subtotal: it.subtotalJual,
         labaKotor: it.subtotalJual - it.subtotal
       }));
-      const labelPrefix = modeNotaSilang === "SESAMA_MITRA" ? `Nota Silang Sesama Mitra (${anakPerusahaan.nama})` : `Nota Silang ${anakPerusahaan.nama}`;
+      const labelPrefix = modeNotaSilang === "SESAMA_MITRA" ? `Nota Silang Sesama Mitra (${anakPerusahaan.nama})` : isModeLunasKasPt ? `Nota Silang Lunas ${anakPerusahaan.nama} (${metodeBayarKasPt} \u2192 ${rekeningKasPtObj.nama})` : isModeProyekBersama ? `Proyek Bersama (${anakPerusahaan.nama} \xB7 Lunas Sinkron)` : `Nota Silang ${anakPerusahaan.nama}`;
       const mitraBonRecord = {
         noPenjualan: noNotaSilang,
         tanggal: finalTanggal,
         jam,
-        idMitra: mitra.id,
-        namaMitra: mitra.nama,
-        tipePembeli: "REKANAN",
+        idMitra: pembeliId,
+        namaMitra: pembeliNama,
+        tipePembeli: mitra ? "REKANAN" : "UMUM",
         divisi: "PT Wijaya Agro Perkasa",
-        metode: "KASBON",
-        rekeningTujuan: "BON01",
+        metode: isModeLunasKasPt ? metodeBayarKasPt : isProyekLunasSinkron ? "SINKRON" : "KASBON",
+        rekeningTujuan: isModeLunasKasPt ? rekeningKasPtObj.kode : isProyekLunasSinkron ? "SINKRON" : "BON01",
         items: penjualanItems,
         totalModalHpp: totalHppDPParabot,
         totalNominal: totalNominalMitra,
         totalLabaKotor: totalLabaMarkup,
-        statusPembayaran: "BELUM_BAYAR",
-        sisaPiutang: totalNominalMitra,
+        statusPembayaran: isModeLunasKasPt || isProyekLunasSinkron ? "LUNAS" : "BELUM_BAYAR",
+        sisaPiutang: isModeLunasKasPt || isProyekLunasSinkron ? 0 : totalNominalMitra,
         isNotaNgunci: false,
         isNotaSilang: true,
         modeNotaSilang,
@@ -7040,77 +7887,89 @@ var TransactionService = class {
         harga: it.harga,
         subtotal: it.subtotal
       }));
-      const anakPerusahaanCreditRecord = {
-        noPembelian: noRefAnakPerusahaan,
-        tanggal: finalTanggal,
-        jam,
-        idMitra: anakPerusahaan.id,
-        namaMitra: anakPerusahaan.nama,
-        komoditasKode: "NOTA_SILANG",
-        komoditasNama: mitra.nama.toUpperCase(),
-        beratKotor: 0,
-        potonganRafaksi: 0,
-        beratBersih: 0,
-        hargaPerKg: 0,
-        totalNominal: totalHppDPParabot,
-        // Murni harga beli DP Parabot tanpa markup!
-        divisi: "PT Wijaya Agro Perkasa",
-        metodePembayaran: "TITIP",
-        rekeningSumber: "TIT01",
-        status: "TITIP",
-        isBelumPutusHarga: false,
-        statusHarga: "HARGA_PUTUS",
-        fotoNota: params.attachment_url || params.fotoNota || "",
-        attachment_url: params.attachment_url || params.fotoNota || void 0,
-        isNotaSilang: true,
-        modeNotaSilang,
-        idNotaSilangRef: noNotaSilang,
-        idMitraPengambil: mitra.id,
-        namaMitraPengambil: mitra.nama,
-        noNotaToko: cleanNoNotaToko || void 0,
-        itemsNotaSilang: itemsDPParabot,
-        keterangan: `${mitra.nama.toUpperCase()} \u2014 ${finalKeterangan}${cleanNoNotaToko ? ` [Nota #${cleanNoNotaToko}]` : ""}`,
-        createdAt: iso
-      };
-      db.pembelianHasilBumi.unshift(anakPerusahaanCreditRecord);
+      let anakPerusahaanCreditRecord = null;
+      if (!isModeProyekBersama) {
+        anakPerusahaanCreditRecord = {
+          noPembelian: noRefAnakPerusahaan,
+          tanggal: finalTanggal,
+          jam,
+          idMitra: anakPerusahaan.id,
+          namaMitra: anakPerusahaan.nama,
+          komoditasKode: "NOTA_SILANG",
+          komoditasNama: isModeLunasKasPt ? `${pembeliNama.toUpperCase()} (LUNAS \u2192 ${rekeningKasPtObj.kode})` : pembeliNama.toUpperCase(),
+          beratKotor: 0,
+          potonganRafaksi: 0,
+          beratBersih: 0,
+          hargaPerKg: 0,
+          totalNominal: totalHppDPParabot,
+          // Murni harga beli / hak DP Parabot tanpa markup!
+          divisi: "PT Wijaya Agro Perkasa",
+          metodePembayaran: "TITIP",
+          rekeningSumber: "TIT01",
+          status: "TITIP",
+          isBelumPutusHarga: false,
+          statusHarga: "HARGA_PUTUS",
+          fotoNota: params.attachment_url || params.fotoNota || "",
+          attachment_url: params.attachment_url || params.fotoNota || void 0,
+          isNotaSilang: true,
+          modeNotaSilang,
+          idNotaSilangRef: noNotaSilang,
+          idMitraPengambil: pembeliId,
+          namaMitraPengambil: pembeliNama,
+          noNotaToko: cleanNoNotaToko || void 0,
+          itemsNotaSilang: itemsDPParabot,
+          keterangan: isModeLunasKasPt ? `${pembeliNama.toUpperCase()} [BAYAR ${metodeBayarKasPt} \u2192 ${rekeningKasPtObj.kode}] \u2014 ${finalKeterangan}${cleanNoNotaToko ? ` [Nota #${cleanNoNotaToko}]` : ""}` : `${pembeliNama.toUpperCase()} \u2014 ${finalKeterangan}${cleanNoNotaToko ? ` [Nota #${cleanNoNotaToko}]` : ""}`,
+          createdAt: iso
+        };
+        db.pembelianHasilBumi.unshift(anakPerusahaanCreditRecord);
+      }
       this.addAuditLog(
         db,
         "CREATE",
         noNotaSilang,
-        `Nota Silang (${modeNotaSilang === "SESAMA_MITRA" ? "Sesama Mitra" : "Anak Perusahaan"}): Mitra "${mitra.nama}" ambil barang dari "${anakPerusahaan.nama}" (${normalizedItems.length} item) senilai Piutang Mitra Rp ${totalNominalMitra.toLocaleString("id-ID")} & Hutang ke ${anakPerusahaan.nama} Rp ${totalHppDPParabot.toLocaleString("id-ID")}${totalLabaMarkup > 0 ? ` (Laba Markup PT: Rp ${totalLabaMarkup.toLocaleString("id-ID")})` : ""}`,
+        isModeProyekBersama ? `Proyek Bersama (${anakPerusahaan.nama} \xB7 Lunas Sinkron): Material untuk "${pembeliNama}" (${normalizedItems.length} item) senilai Rp ${totalNominalMitra.toLocaleString("id-ID")} [${isProyekLunasSinkron ? "LUNAS SINKRON" : "AKUMULASI BIAYA PROYEK"}] \u2014 Buku ${anakPerusahaan.nama} tidak ditambah hutang & Kas PT Rp 0` : isModeLunasKasPt ? `Nota Silang Lunas (${anakPerusahaan.nama}): "${pembeliNama}" bayar ${metodeBayarKasPt} Rp ${totalNominalMitra.toLocaleString("id-ID")} masuk ke ${rekeningKasPtObj.nama} (${rekeningKasPtObj.kode}) & tercatat Hutang PT ke ${anakPerusahaan.nama} Rp ${totalHppDPParabot.toLocaleString("id-ID")} (${normalizedItems.length} item)` : `Nota Silang (${modeNotaSilang === "SESAMA_MITRA" ? "Sesama Mitra" : "Anak Perusahaan"}): Mitra "${pembeliNama}" ambil barang dari "${anakPerusahaan.nama}" (${normalizedItems.length} item) senilai Piutang Mitra Rp ${totalNominalMitra.toLocaleString("id-ID")} & Hutang ke ${anakPerusahaan.nama} Rp ${totalHppDPParabot.toLocaleString("id-ID")}${totalLabaMarkup > 0 ? ` (Laba Markup PT: Rp ${totalLabaMarkup.toLocaleString("id-ID")})` : ""}`,
         totalNominalMitra,
-        "BON01"
+        isModeLunasKasPt ? rekeningKasPtObj.kode : isProyekLunasSinkron ? "SINKRON" : "BON01"
       );
       dbManager.synchronizeVirtualAccounts();
       return {
         noNotaSilang,
         noRefAnakPerusahaan,
         modeNotaSilang,
+        statusProyek: isModeProyekBersama ? statusProyek : void 0,
+        metodeBayarKasPt: isModeLunasKasPt ? metodeBayarKasPt : void 0,
+        rekeningTujuanKasPt: isModeLunasKasPt ? rekeningKasPtObj.kode : void 0,
+        rekeningTujuanNama: isModeLunasKasPt ? rekeningKasPtObj.nama : void 0,
         tanggal: finalTanggal,
         jam,
-        idMitra: mitra.id,
-        namaMitra: mitra.nama,
+        idMitra: pembeliId,
+        namaMitra: pembeliNama,
         idMitraAnakPerusahaan: anakPerusahaan.id,
         namaAnakPerusahaan: anakPerusahaan.nama,
         noNotaToko: cleanNoNotaToko || void 0,
         items: itemsDPParabot,
         totalNominal: totalNominalMitra,
-        sisaPiutangMitra: totalNominalMitra,
-        statusPiutangMitra: "BELUM_BAYAR",
+        sisaPiutangMitra: isModeLunasKasPt || isProyekLunasSinkron ? 0 : totalNominalMitra,
+        statusPiutangMitra: isModeLunasKasPt || isProyekLunasSinkron ? "LUNAS" : "BELUM_BAYAR",
         keterangan: finalKeterangan,
         fotoNota: params.attachment_url || params.fotoNota,
         attachment_url: params.attachment_url || params.fotoNota,
         createdAt: iso,
         penjualanMitra: mitraBonRecord,
         bukuAnakPerusahaan: anakPerusahaanCreditRecord,
-        mitraPengambilNama: mitra.nama,
+        mitraPengambilNama: pembeliNama,
         anakPerusahaanNama: anakPerusahaan.nama
       };
     });
   }
   static getNotaSilangList() {
     const db = dbManager.get();
-    const silangSales = (db.penjualan || []).filter((p) => Boolean(p.isNotaSilang));
+    const silangSales = sortTransactionsByDateDesc(
+      (db.penjualan || []).filter((p) => Boolean(p.isNotaSilang))
+    );
+    const rekNameMap = new Map(
+      (db.rekening || []).map((r) => [r.kode.toUpperCase(), r.nama])
+    );
     return silangSales.map((p) => {
       const paired = (db.pembelianHasilBumi || []).find(
         (b) => b.idNotaSilangRef === p.noPenjualan || b.noPembelian === `${p.noPenjualan}-DPP` || b.noPembelian === `${p.noPenjualan}-MTR`
@@ -7119,10 +7978,17 @@ var TransactionService = class {
       const mitraTujuanObj = (db.mitra || []).find((m) => m.id === idTujuan);
       const isAnak = idTujuan === "MTR-DPPARABOT" || Boolean(mitraTujuanObj?.isAnakPerusahaan) || mitraTujuanObj?.role === "ANAK_PERUSAHAAN" || Boolean(mitraTujuanObj?.nama?.toLowerCase().includes("parabot"));
       const resolvedMode = p.modeNotaSilang || paired?.modeNotaSilang || (isAnak ? "ANAK_PERUSAHAAN" : "SESAMA_MITRA");
+      const isLunasKasPt = resolvedMode === "BAYAR_LUNAS_KAS_PT";
+      const isProyekBersama = resolvedMode === "PROYEK_BERSAMA";
+      const rekKode = isLunasKasPt ? p.rekeningTujuan || "KAS01" : void 0;
       return {
         noNotaSilang: p.noPenjualan,
-        noRefAnakPerusahaan: paired?.noPembelian || `${p.noPenjualan}-DPP`,
+        noRefAnakPerusahaan: isProyekBersama ? "LUNAS-SINKRON-DP" : paired?.noPembelian || `${p.noPenjualan}-DPP`,
         modeNotaSilang: resolvedMode,
+        statusProyek: isProyekBersama ? p.metode === "SINKRON" ? "LUNAS_SINKRON" : "BON_PROYEK" : void 0,
+        metodeBayarKasPt: isLunasKasPt ? p.metode === "TRANSFER" ? "TRANSFER" : "TUNAI" : void 0,
+        rekeningTujuanKasPt: rekKode,
+        rekeningTujuanNama: rekKode ? rekNameMap.get(rekKode.toUpperCase()) || rekKode : void 0,
         tanggal: p.tanggal,
         jam: p.jam,
         idMitra: p.idMitra,
@@ -7157,10 +8023,18 @@ var TransactionService = class {
       }
       const target = db.penjualan[pIdx];
       const realNo = target.noPenjualan;
-      if ((target.sisaPiutang || 0) < target.totalNominal) {
+      const isLunasKasPt = target.modeNotaSilang === "BAYAR_LUNAS_KAS_PT";
+      const isProyekSinkronLunas = target.modeNotaSilang === "PROYEK_BERSAMA" && target.metode === "SINKRON";
+      if (!isLunasKasPt && !isProyekSinkronLunas && (target.sisaPiutang || 0) < target.totalNominal) {
         throw new Error(
           `Nota Silang ${realNo} sudah memiliki riwayat angsuran/pelunasan dari mitra sehingga tidak dapat dihapus langsung.`
         );
+      }
+      if (isLunasKasPt && (target.metode === "TUNAI" || target.metode === "TRANSFER") && target.rekeningTujuan && target.rekeningTujuan !== "BON01" && target.rekeningTujuan !== "TIT01" && target.rekeningTujuan !== "SINKRON") {
+        const rek = db.rekening.find((r) => r.kode === target.rekeningTujuan);
+        if (rek && !rek.isVirtual) {
+          rek.saldoSaatIni -= Math.round(Number(target.totalNominal) || 0);
+        }
       }
       db.penjualan.splice(pIdx, 1);
       db.pembelianHasilBumi = (db.pembelianHasilBumi || []).filter(
@@ -7170,9 +8044,9 @@ var TransactionService = class {
         db,
         "VOID",
         realNo,
-        `Pembatalan Nota Silang ${realNo} (${target.namaMitra} <-> ${target.namaAnakPerusahaan || "DP Parabot"}) senilai Rp ${target.totalNominal.toLocaleString("id-ID")}`,
+        isLunasKasPt ? `Pembatalan Nota Silang Lunas ${realNo} (${target.namaMitra} \u2192 ${target.namaAnakPerusahaan || "DP Parabot"}) senilai Rp ${target.totalNominal.toLocaleString("id-ID")} (Saldo ${target.rekeningTujuan || "KAS01"} & Hutang ke ${target.namaAnakPerusahaan || "DP Parabot"} dikembalikan)` : `Pembatalan Nota Silang ${realNo} (${target.namaMitra} <-> ${target.namaAnakPerusahaan || "DP Parabot"}) senilai Rp ${target.totalNominal.toLocaleString("id-ID")}`,
         target.totalNominal,
-        "BON01"
+        isLunasKasPt ? target.rekeningTujuan || "KAS01" : "BON01"
       );
       dbManager.synchronizeVirtualAccounts();
       return { success: true, message: `Nota Silang ${realNo} berhasil dibatalkan` };
@@ -7286,6 +8160,98 @@ var TransactionService = class {
   // Mengurangi stok fisik gudang (Ready Gudang), menghitung HPP murni dari rata-rata modal beli,
   // serta mencatat uang masuk Kas/Bank atau Piutang Pabrik/Bandar
   // ==========================================
+  static syncLinkedPenjualanHbToRekapCtr(db, jhb, opts) {
+    if (!Array.isArray(db.rekapCtr) || db.rekapCtr.length === 0) return;
+    if (opts?.remove) {
+      for (const ctr of db.rekapCtr) {
+        if (Array.isArray(ctr.rows)) {
+          ctr.rows = ctr.rows.filter(
+            (r) => !(r.sourceType === "PENJUALAN_HB" && r.sourceRefId === jhb.noPenjualan)
+          );
+        }
+      }
+      return;
+    }
+    let existingRow;
+    for (const ctr of db.rekapCtr) {
+      const found = (ctr.rows || []).find(
+        (r) => r.sourceRefId === jhb.noPenjualan && (r.sourceType === "PENJUALAN_HB" || r.isStokHbPt)
+      );
+      if (found) {
+        existingRow = found;
+        break;
+      }
+    }
+    const targetCtr = jhb.rekapCtrId ? db.rekapCtr.find((c) => c.id === jhb.rekapCtrId) : void 0;
+    if (!existingRow && !targetCtr) {
+      return;
+    }
+    const qtyAwal = Math.round((Number(jhb.beratBersih) || Number(jhb.beratKotor) || 0) * 100) / 100;
+    const qtyAkhir = Number(jhb.tonaseAkhir) > 0 ? Math.round(Number(jhb.tonaseAkhir) * 100) / 100 : qtyAwal;
+    const isBelumPutus = jhb.metodePembayaran === "BELUM_PUTUS_HARGA" && jhb.statusPembayaran !== "LUNAS" && jhb.statusUangMasuk !== "LUNAS";
+    const isPiutang = jhb.metodePembayaran === "PIUTANG" && (Number(jhb.sisaPiutang) || 0) > 0;
+    const isSettled = !isBelumPutus && !isPiutang;
+    const terkumpul = Number(jhb.nominalUangMasukTerkumpul) || 0;
+    let resolvedHargaPerKg = 0;
+    if (isBelumPutus && terkumpul <= 0) {
+      resolvedHargaPerKg = 0;
+    } else if (opts?.hargaDealPerKg && opts.hargaDealPerKg > 0) {
+      resolvedHargaPerKg = Math.round(opts.hargaDealPerKg * 100) / 100;
+    } else if (Number(jhb.hargaJualPerKg) > 0) {
+      resolvedHargaPerKg = Math.round(Number(jhb.hargaJualPerKg) * 100) / 100;
+    } else if (qtyAkhir > 0 && (Number(jhb.totalNominal) || terkumpul) > 0) {
+      resolvedHargaPerKg = Math.round((Number(jhb.totalNominal) || terkumpul) / qtyAkhir * 100) / 100;
+    }
+    const statusPencairan = isSettled ? "LUNAS" : "PENDING";
+    const defaultKet = isBelumPutus ? "MENUNGGU PUTUS HARGA" : isPiutang ? "PIUTANG BUYER" : "";
+    if (existingRow) {
+      existingRow.qtyAwal = qtyAwal;
+      existingRow.qtyAkhir = qtyAkhir;
+      existingRow.qtySuplayer = qtyAkhir;
+      existingRow.statusPencairan = statusPencairan;
+      if (existingRow.rendemen === 100 || existingRow.rendemen === 0 || existingRow.basisWap === 0) {
+        existingRow.basisWap = resolvedHargaPerKg;
+        existingRow.basisSuplayer = resolvedHargaPerKg;
+        if (!existingRow.rendemen) existingRow.rendemen = 100;
+      }
+      if (isSettled) {
+        if (existingRow.keterangan === "MENUNGGU PUTUS HARGA" || existingRow.keterangan === "PIUTANG BUYER") {
+          existingRow.keterangan = "";
+        }
+      } else if (!existingRow.keterangan) {
+        existingRow.keterangan = defaultKet;
+      }
+      return;
+    }
+    if (targetCtr) {
+      if (!Array.isArray(targetCtr.rows)) targetCtr.rows = [];
+      if (targetCtr.rows.length === 1 && targetCtr.rows[0].sourceType === "MANUAL" && !String(targetCtr.rows[0].namaSuplayer || "").trim() && (Number(targetCtr.rows[0].qtyAkhir) || 0) === 0 && (Number(targetCtr.rows[0].basisWap) || 0) === 0) {
+        targetCtr.rows = [];
+      }
+      const plat = (jhb.noSuratJalan || "").trim().toUpperCase();
+      targetCtr.rows.push({
+        id: `CTR-HB-${jhb.noPenjualan}`,
+        basisWap: resolvedHargaPerKg,
+        basisSuplayer: resolvedHargaPerKg,
+        namaSuplayer: "STOK HB (PT WAP)",
+        idMitra: "STOK_HB_PT",
+        qtySuplayer: qtyAkhir,
+        tglMasuk: jhb.tanggal,
+        truck: plat,
+        qtyAwal,
+        qtyAkhir,
+        rendemen: 100,
+        pajakNominal: 0,
+        komisiNominal: 0,
+        cekList: false,
+        statusPencairan,
+        sourceType: "PENJUALAN_HB",
+        sourceRefId: jhb.noPenjualan,
+        isStokHbPt: true,
+        keterangan: defaultKet
+      });
+    }
+  }
   static async processPenjualanHasilBumi(params) {
     return await dbManager.executeTransaction((db) => {
       const { tanggal: todayWib, jam, iso } = getWIBDateTime();
@@ -7313,11 +8279,26 @@ var TransactionService = class {
       if (beratBersih <= 0) {
         throw new Error("Berat bersih hasil timbangan harus lebih dari 0 Kg");
       }
-      const stokTersedia = Math.max(0, Number(komoditas.stok) || 0);
-      const allowOverStock = isBelumPutusHarga || Boolean(params.allowOverStockMuat);
-      if (!allowOverStock && stokTersedia < beratBersih) {
+      const finalTanggal = normalizeDateToDmy(params.tanggal, todayWib);
+      const saleDateKey = parseTanggalSortKey(finalTanggal);
+      const movingAvgAtDate = calculateHbMovingAverage(
+        komoditas,
+        db.pembelianHasilBumi,
+        db.penjualanHasilBumi,
+        { maxDateKey: saleDateKey }
+      );
+      const movingAvgFull = calculateHbMovingAverage(
+        komoditas,
+        db.pembelianHasilBumi,
+        db.penjualanHasilBumi
+      );
+      const stokPadaTanggal = Number(movingAvgAtDate.stokReadyKg) || 0;
+      const hasSisaFisikAktual = params.sisaFisikAktualKg !== void 0 && params.sisaFisikAktualKg !== null && Number.isFinite(Number(params.sisaFisikAktualKg)) && Number(params.sisaFisikAktualKg) >= 0;
+      const biarkanStokMinus = Boolean(params.biarkanStokMinus) && !hasSisaFisikAktual;
+      const allowOverStock = isBelumPutusHarga || Boolean(params.allowOverStockMuat) || biarkanStokMinus || hasSisaFisikAktual;
+      if (!allowOverStock && Math.max(0, stokPadaTanggal) < beratBersih) {
         throw new Error(
-          `Stok Ready Gudang tidak mencukupi untuk "${komoditas.nama}". Ready di gudang: ${stokTersedia.toLocaleString(
+          `Stok Ready Gudang per ${finalTanggal} tidak mencukupi untuk "${komoditas.nama}". Ready buku: ${stokPadaTanggal.toLocaleString(
             "id-ID"
           )} ${komoditas.satuan}, akan dijual: ${beratBersih.toLocaleString("id-ID")} ${komoditas.satuan}`
         );
@@ -7341,12 +8322,7 @@ var TransactionService = class {
       if (params.metodePembayaran === "PIUTANG" && finalMitraId === "UMUM") {
         throw new Error("Metode PIUTANG (Tempo) hanya berlaku untuk Mitra / Pabrik yang terdaftar di Master Mitra");
       }
-      const movingAvg = calculateHbMovingAverage(
-        komoditas,
-        db.pembelianHasilBumi,
-        db.penjualanHasilBumi
-      );
-      const modalRataRataPerKg = movingAvg.rataRataModalTerkini > 0 ? movingAvg.rataRataModalTerkini : Math.max(0, Math.round(rawHargaJualInput));
+      const modalRataRataPerKg = movingAvgAtDate.rataRataModalTerkini > 0 ? movingAvgAtDate.rataRataModalTerkini : movingAvgFull.rataRataModalTerkini > 0 ? movingAvgFull.rataRataModalTerkini : Math.max(0, Math.round(rawHargaJualInput));
       const hargaJualPerKg = isBelumPutusHarga ? modalRataRataPerKg : rawHargaJualInput;
       const totalModalHpp = Math.round(beratBersih * modalRataRataPerKg);
       const nilaiModalPengurangStok = totalModalHpp;
@@ -7392,20 +8368,38 @@ var TransactionService = class {
         statusPembayaran = "LUNAS";
         sisaPiutang = 0;
       }
-      const stokGudangSebelum = stokTersedia;
-      const selisihTimbangMuatKg = beratBersih > stokTersedia ? Math.round((beratBersih - stokTersedia) * 100) / 100 : 0;
-      const isHabisMuatSusutFlag = Boolean(params.isHabisMuatSusut || beratBersih >= stokTersedia);
-      const beratSusutKg = beratBersih > stokTersedia ? selisihTimbangMuatKg : params.isHabisMuatSusut && stokTersedia > beratBersih ? Math.round((stokTersedia - beratBersih) * 100) / 100 : 0;
-      const stokGudangSetelah = isHabisMuatSusutFlag ? 0 : Math.max(0, Math.round((stokTersedia - beratBersih) * 100) / 100);
-      komoditas.stok = stokGudangSetelah;
-      if (modalRataRataPerKg > 0) {
-        komoditas.hargaBeliStandar = modalRataRataPerKg;
+      const stokGudangSebelum = stokPadaTanggal;
+      const sisaFisikAktualVal = hasSisaFisikAktual ? Math.round(Number(params.sisaFisikAktualKg) * 100) / 100 : void 0;
+      let isHabisMuatSusutFlag = false;
+      let beratSusutKg = 0;
+      let selisihLebihMuatKg = 0;
+      let stokGudangSetelah = 0;
+      if (sisaFisikAktualVal !== void 0) {
+        stokGudangSetelah = sisaFisikAktualVal;
+        const expectedSisaBuku = Math.round((stokPadaTanggal - beratBersih) * 100) / 100;
+        const varianceKg = Math.round((sisaFisikAktualVal - expectedSisaBuku) * 100) / 100;
+        if (varianceKg > 0) {
+          selisihLebihMuatKg = varianceKg;
+        } else if (varianceKg < 0) {
+          beratSusutKg = Math.abs(varianceKg);
+        }
+        isHabisMuatSusutFlag = sisaFisikAktualVal === 0;
+      } else if (biarkanStokMinus) {
+        stokGudangSetelah = Math.round((stokPadaTanggal - beratBersih) * 100) / 100;
+        selisihLebihMuatKg = beratBersih > stokPadaTanggal ? Math.round((beratBersih - stokPadaTanggal) * 100) / 100 : 0;
+        beratSusutKg = 0;
+        isHabisMuatSusutFlag = false;
+      } else {
+        isHabisMuatSusutFlag = Boolean(params.isHabisMuatSusut || beratBersih >= stokPadaTanggal);
+        selisihLebihMuatKg = beratBersih > stokPadaTanggal ? Math.round((beratBersih - stokPadaTanggal) * 100) / 100 : 0;
+        beratSusutKg = selisihLebihMuatKg === 0 && isHabisMuatSusutFlag && stokPadaTanggal > beratBersih ? Math.round((stokPadaTanggal - beratBersih) * 100) / 100 : 0;
+        stokGudangSetelah = isHabisMuatSusutFlag ? 0 : Math.max(0, Math.round((stokPadaTanggal - beratBersih) * 100) / 100);
       }
-      komoditas.updateTerakhir = iso;
-      const finalTanggal = normalizeDateToDmy(params.tanggal, todayWib);
+      const selisihTimbangMuatKg = selisihLebihMuatKg;
       const finalDivisi = isTanpaDivisi(params.divisi) ? TANPA_DIVISI_VALUE : params.divisi?.trim() || "PT Wijaya Agro Perkasa";
       const noPenjualan = generateId("JHB");
       const defaultKet = isBelumPutusHarga ? `Muat / Jual ${komoditas.nama} (${beratBersih.toLocaleString("id-ID")} Kg @ Rata-Rata Beli Rp ${modalRataRataPerKg.toLocaleString("id-ID")}/Kg) kepada ${finalMitraNama} \u2014 Uang Hasil Penjualan Lewat Uang Masuk` : `Penjualan Hasil Bumi ${komoditas.nama} (${beratBersih.toLocaleString("id-ID")} Kg) kepada ${finalMitraNama}`;
+      const chosenCtr = params.rekapCtrId && Array.isArray(db.rekapCtr) ? db.rekapCtr.find((c) => c.id === params.rekapCtrId) : void 0;
       const record = {
         noPenjualan,
         tanggal: finalTanggal,
@@ -7437,16 +8431,39 @@ var TransactionService = class {
         selisihTimbangMuatKg,
         isHabisMuatSusut: isHabisMuatSusutFlag,
         beratSusutKg,
+        ...sisaFisikAktualVal !== void 0 ? { sisaFisikAktualKg: sisaFisikAktualVal } : {},
+        ...biarkanStokMinus ? { biarkanStokMinus: true } : {},
+        ...selisihLebihMuatKg > 0 ? { selisihLebihMuatKg } : {},
         nominalUangMasukTerkumpul: isBelumPutusHarga ? 0 : totalNominal,
         statusUangMasuk: isBelumPutusHarga ? "BELUM_MASUK" : "LUNAS",
         idUangMasukList: [],
         noSuratJalan: params.noSuratJalan?.trim() || "",
+        ...chosenCtr ? {
+          rekapCtrId: chosenCtr.id,
+          rekapCtrNoUrut: chosenCtr.noUrut,
+          rekapCtrNoKontrak: chosenCtr.noKontrak?.trim() || params.rekapCtrNoKontrak?.trim() || void 0
+        } : {},
         stokGudangSebelum,
         stokGudangSetelah,
         keterangan: params.keterangan?.trim() || defaultKet,
         createdAt: iso
       };
       db.penjualanHasilBumi.unshift(record);
+      const updatedMovingAvg = calculateHbMovingAverage(
+        komoditas,
+        db.pembelianHasilBumi,
+        db.penjualanHasilBumi
+      );
+      komoditas.stok = updatedMovingAvg.stokReadyKg;
+      if (updatedMovingAvg.rataRataModalTerkini > 0) {
+        komoditas.hargaBeliStandar = updatedMovingAvg.rataRataModalTerkini;
+      } else if (modalRataRataPerKg > 0) {
+        komoditas.hargaBeliStandar = modalRataRataPerKg;
+      }
+      komoditas.updateTerakhir = iso;
+      if (chosenCtr) {
+        this.syncLinkedPenjualanHbToRekapCtr(db, record);
+      }
       dbManager.synchronizeVirtualAccounts();
       this.addAuditLog(
         db,
@@ -7456,9 +8473,9 @@ var TransactionService = class {
           "id-ID"
         )} Kg @ Rata-Rata Beli Rp ${modalRataRataPerKg.toLocaleString("id-ID")}/Kg (Pengurang Stok: Rp ${nilaiModalPengurangStok.toLocaleString(
           "id-ID"
-        )}) kepada ${finalMitraNama}. Sisa Ready Gudang: ${stokGudangSetelah.toLocaleString("id-ID")} Kg` : `Penjualan Hasil Bumi ${komoditas.nama} [Divisi: ${finalDivisi} | Rek: ${finalRekeningTujuan}]: ${beratBersih.toLocaleString(
+        )}) kepada ${finalMitraNama}. Sisa Setelah Muat: ${stokGudangSetelah.toLocaleString("id-ID")} Kg \xB7 Ready Terkini: ${komoditas.stok.toLocaleString("id-ID")} Kg` : `Penjualan Hasil Bumi ${komoditas.nama} [Divisi: ${finalDivisi} | Rek: ${finalRekeningTujuan}]: ${beratBersih.toLocaleString(
           "id-ID"
-        )} Kg @ Rp ${hargaJualPerKg.toLocaleString("id-ID")}/Kg kepada ${finalMitraNama} (${params.metodePembayaran}). Sisa Ready Gudang: ${stokGudangSetelah.toLocaleString("id-ID")} Kg`,
+        )} Kg @ Rp ${hargaJualPerKg.toLocaleString("id-ID")}/Kg kepada ${finalMitraNama} (${params.metodePembayaran}). Sisa Setelah Muat: ${stokGudangSetelah.toLocaleString("id-ID")} Kg \xB7 Ready Terkini: ${komoditas.stok.toLocaleString("id-ID")} Kg`,
         isBelumPutusHarga ? nilaiModalPengurangStok : totalNominal,
         finalRekeningTujuan
       );
@@ -7484,21 +8501,29 @@ var TransactionService = class {
           `Nota Muat / Jual ${noPenjualan} sudah menerima pencairan di menu Uang Masuk. Batalkan transaksi Uang Masuk terkait terlebih dahulu.`
         );
       }
-      const komoditas = (db.stokHasilBumi || []).find(
-        (k) => k.kode === record.komoditasKode || k.nama.toUpperCase().trim() === record.komoditasNama.toUpperCase().trim()
-      );
-      if (komoditas) {
-        const stokDikembalikan = record.stokGudangSebelum !== void 0 && record.stokGudangSetelah !== void 0 ? Math.max(0, Math.round((record.stokGudangSebelum - record.stokGudangSetelah) * 100) / 100) : record.beratBersih;
-        komoditas.stok = Math.round(((Number(komoditas.stok) || 0) + stokDikembalikan) * 100) / 100;
-        komoditas.updateTerakhir = iso;
-      }
       if ((record.metodePembayaran === "TUNAI" || record.metodePembayaran === "TRANSFER") && record.rekeningTujuan && (Number(record.totalNominal) || 0) > 0) {
         const rek = db.rekening.find((r) => r.kode === record.rekeningTujuan);
         if (rek) {
           rek.saldoSaatIni -= record.totalNominal;
         }
       }
+      this.syncLinkedPenjualanHbToRekapCtr(db, record, { remove: true });
       db.penjualanHasilBumi.splice(idx, 1);
+      const komoditas = (db.stokHasilBumi || []).find(
+        (k) => k.kode === record.komoditasKode || k.nama.toUpperCase().trim() === record.komoditasNama.toUpperCase().trim()
+      );
+      if (komoditas) {
+        const recalculated = calculateHbMovingAverage(
+          komoditas,
+          db.pembelianHasilBumi,
+          db.penjualanHasilBumi
+        );
+        komoditas.stok = recalculated.stokReadyKg;
+        if (recalculated.rataRataModalTerkini > 0) {
+          komoditas.hargaBeliStandar = recalculated.rataRataModalTerkini;
+        }
+        komoditas.updateTerakhir = iso;
+      }
       dbManager.synchronizeVirtualAccounts();
       this.addAuditLog(
         db,
@@ -7603,6 +8628,8 @@ var TransactionService = class {
       const readyGudangSaatIniKg = moving.stokReadyKg;
       const rataRataModalGudangPerKg = moving.rataRataModalTerkini;
       const nilaiModalReadyGudang = moving.totalNilaiModalTerkini;
+      const itemTotalMasukKumulatifKg = Math.round(hbPurchases.reduce((s, p) => s + (Number(p.beratBersih) || 0), 0) * 100) / 100;
+      const itemTotalTerjualKumulatifKg = Math.round(hbSales.reduce((s, j) => s + (Number(j.beratBersih) || 0), 0) * 100) / 100;
       return {
         kode: hb.kode,
         nama: hb.nama,
@@ -7622,8 +8649,8 @@ var TransactionService = class {
         readyGudangSaatIniKg,
         rataRataModalGudangPerKg,
         nilaiModalReadyGudang,
-        totalMasukKumulatifKg,
-        totalTerjualKumulatifKg
+        totalMasukKumulatifKg: itemTotalMasukKumulatifKg,
+        totalTerjualKumulatifKg: itemTotalTerjualKumulatifKg
       };
     });
     const filteredKomoditasForScope = kodeKomoditasFilter === "ALL" ? activeKomoditas : activeKomoditas.filter((h) => h.kode === kodeKomoditasFilter);
@@ -8069,11 +9096,134 @@ var TransactionService = class {
       mitra.isNotaNgunci = false;
     }
   }
+  static parseBonRefAndItemIndex(rawId) {
+    const clean = String(rawId || "").trim();
+    const match = clean.match(/^(.*)-IT(\d+)$/i);
+    if (match) {
+      const idx = parseInt(match[2], 10) - 1;
+      if (Number.isFinite(idx) && idx >= 0) {
+        return { parentRefId: match[1], itemIndex: idx };
+      }
+    }
+    return { parentRefId: clean, itemIndex: null };
+  }
+  static computePenjualanItemOpenBalances(db, p, fallbackLabel) {
+    const totalNota = Math.round(Number(p.totalNominal) || 0);
+    const sisaNotaInduk = Math.max(0, Math.round(Number(p.sisaPiutang) || 0));
+    const baseItems = (p.items || []).length > 0 ? p.items.map((it) => ({
+      nama: (it.namaProduk || "BARANG").trim().toUpperCase(),
+      qty: Number(it.qty) || 1,
+      satuan: (it.satuan || "PCS").trim().toUpperCase(),
+      harga: Math.round(Number(it.harga) || 0),
+      subtotal: Math.round(
+        Number(it.subtotal) || (Number(it.qty) || 1) * (Number(it.harga) || 0)
+      )
+    })) : [
+      {
+        nama: (fallbackLabel || `BELANJA ${p.namaAnakPerusahaan || "TOKO"}`).trim().toUpperCase(),
+        qty: 1,
+        satuan: "NOTA",
+        harga: totalNota,
+        subtotal: totalNota
+      }
+    ];
+    const sumBase = baseItems.reduce((s, it) => s + it.subtotal, 0);
+    if (baseItems.length > 0 && sumBase !== totalNota && totalNota > 0) {
+      const lastIdx = baseItems.length - 1;
+      const prevSum = sumBase - baseItems[lastIdx].subtotal;
+      const adjustedSub = Math.max(0, totalNota - prevSum);
+      baseItems[lastIdx] = {
+        ...baseItems[lastIdx],
+        subtotal: adjustedSub,
+        harga: baseItems[lastIdx].qty > 0 ? Math.round(adjustedSub / baseItems[lastIdx].qty) : baseItems[lastIdx].harga
+      };
+    }
+    const explicitPaidByIdx = /* @__PURE__ */ new Map();
+    for (const bb of db.bayarBon || []) {
+      for (const a of bb.alokasi || []) {
+        if (String(a.refId || "").trim() !== p.noPenjualan) continue;
+        if (!Array.isArray(a.itemAlokasi)) continue;
+        for (const ia of a.itemAlokasi) {
+          const idx = Number(ia.itemIndex);
+          const nom = Math.max(0, Math.round(Number(ia.nominalDibayar) || 0));
+          if (Number.isInteger(idx) && idx >= 0 && nom > 0) {
+            explicitPaidByIdx.set(idx, (explicitPaidByIdx.get(idx) || 0) + nom);
+          }
+        }
+      }
+    }
+    const totalPaidOnNota = Math.max(0, totalNota - sisaNotaInduk);
+    const paidArr = baseItems.map(
+      (it, idx) => Math.min(it.subtotal, explicitPaidByIdx.get(idx) || 0)
+    );
+    const sumExplicit = paidArr.reduce((s, v) => s + v, 0);
+    if (totalPaidOnNota > sumExplicit) {
+      let unattributed = totalPaidOnNota - sumExplicit;
+      for (let i = 0; i < baseItems.length && unattributed > 0; i++) {
+        const room = Math.max(0, baseItems[i].subtotal - paidArr[i]);
+        const add = Math.min(room, unattributed);
+        paidArr[i] += add;
+        unattributed -= add;
+      }
+    } else if (totalPaidOnNota < sumExplicit) {
+      let excess = sumExplicit - totalPaidOnNota;
+      for (let i = baseItems.length - 1; i >= 0 && excess > 0; i--) {
+        const sub = Math.min(paidArr[i], excess);
+        paidArr[i] -= sub;
+        excess -= sub;
+      }
+    }
+    return baseItems.map((it, idx) => ({
+      itemIndex: idx,
+      rowId: baseItems.length > 1 ? `${p.noPenjualan}-IT${idx + 1}` : p.noPenjualan,
+      nama: it.nama,
+      qty: it.qty,
+      satuan: it.satuan,
+      harga: it.harga,
+      subtotal: it.subtotal,
+      paid: paidArr[idx],
+      sisa: Math.max(0, it.subtotal - paidArr[idx])
+    }));
+  }
   static allocateMitraBonFifo(db, mitraId, amountToAllocate, options) {
     if (amountToAllocate <= 0) return [];
     const mitra = (db.mitra || []).find((m) => m.id === mitraId);
     const isNoteNgunci = (flag) => flag !== void 0 ? Boolean(flag) : Boolean(mitra?.isNotaNgunci);
     const cleanTargetId = options?.idNotaTarget ? String(options.idNotaTarget).trim() : "";
+    const cleanTargetIds = Array.from(
+      new Set(
+        (options?.targetBonIds || []).map((id) => String(id || "").trim()).filter(Boolean)
+      )
+    );
+    const targetFullRefIds = /* @__PURE__ */ new Set();
+    const targetItemIndicesByRef = /* @__PURE__ */ new Map();
+    const targetOrderMap = /* @__PURE__ */ new Map();
+    cleanTargetIds.forEach((rawId, idx) => {
+      const parsed = this.parseBonRefAndItemIndex(rawId);
+      if (!targetOrderMap.has(parsed.parentRefId)) {
+        targetOrderMap.set(parsed.parentRefId, idx);
+      }
+      if (parsed.itemIndex === null) {
+        targetFullRefIds.add(parsed.parentRefId);
+      } else {
+        const arr = targetItemIndicesByRef.get(parsed.parentRefId) || [];
+        if (!arr.includes(parsed.itemIndex)) arr.push(parsed.itemIndex);
+        targetItemIndicesByRef.set(parsed.parentRefId, arr);
+      }
+    });
+    const stayFullRefIds = /* @__PURE__ */ new Set();
+    const stayItemIndicesByRef = /* @__PURE__ */ new Map();
+    for (const rawId of options?.stayBonIds || []) {
+      const parsed = this.parseBonRefAndItemIndex(rawId);
+      if (!parsed.parentRefId) continue;
+      if (parsed.itemIndex === null) {
+        stayFullRefIds.add(parsed.parentRefId);
+      } else {
+        const set = stayItemIndicesByRef.get(parsed.parentRefId) || /* @__PURE__ */ new Set();
+        set.add(parsed.itemIndex);
+        stayItemIndicesByRef.set(parsed.parentRefId, set);
+      }
+    }
     const outstandingPenjualan = (db.penjualan || []).filter(
       (p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR" && p.sisaPiutang > 0
     );
@@ -8083,14 +9233,15 @@ var TransactionService = class {
     const outstandingKasbonUang = (db.kasbonUang || []).filter(
       (k) => k.idMitra === mitraId && k.status !== "LUNAS" && k.sisaKasbon > 0
     );
-    const allBons = [
+    const rawBons = [
       ...outstandingPenjualan.map((p) => ({
         jenis: "KASBON_BARANG",
         refId: p.noPenjualan,
         sisa: p.sisaPiutang,
         createdAt: p.createdAt,
         isNgunci: isNoteNgunci(p.isNotaNgunci),
-        sourceObj: p
+        sourceObj: p,
+        isPenjualanToko: true
       })),
       ...outstandingPenjualanHb.map((j) => ({
         jenis: "KASBON_BARANG",
@@ -8108,7 +9259,25 @@ var TransactionService = class {
         isNgunci: isNoteNgunci(k.isNotaNgunci),
         sourceObj: k
       }))
-    ].sort((a, b) => {
+    ];
+    const hasAnyStay = stayFullRefIds.size > 0 || stayItemIndicesByRef.size > 0;
+    let candidateBons = rawBons;
+    if (cleanTargetIds.length > 0 && options?.strictTargetOnly) {
+      candidateBons = candidateBons.filter((b) => targetOrderMap.has(b.refId));
+    } else if (hasAnyStay && options?.strictExcludeStay) {
+      candidateBons = candidateBons.filter((b) => !stayFullRefIds.has(b.refId));
+    }
+    const allBons = candidateBons.sort((a, b) => {
+      if (hasAnyStay) {
+        const aFullStay = stayFullRefIds.has(a.refId) ? 2 : stayItemIndicesByRef.has(a.refId) ? 1 : 0;
+        const bFullStay = stayFullRefIds.has(b.refId) ? 2 : stayItemIndicesByRef.has(b.refId) ? 1 : 0;
+        if (aFullStay !== bFullStay) return aFullStay - bFullStay;
+      }
+      if (cleanTargetIds.length > 0) {
+        const aIdx = targetOrderMap.has(a.refId) ? targetOrderMap.get(a.refId) : Number.MAX_SAFE_INTEGER;
+        const bIdx = targetOrderMap.has(b.refId) ? targetOrderMap.get(b.refId) : Number.MAX_SAFE_INTEGER;
+        if (aIdx !== bIdx) return aIdx - bIdx;
+      }
       if (cleanTargetId) {
         const aTarget = a.refId === cleanTargetId ? 1 : 0;
         const bTarget = b.refId === cleanTargetId ? 1 : 0;
@@ -8124,7 +9293,52 @@ var TransactionService = class {
     for (const bon of allBons) {
       if (remainingPayment <= 0) break;
       const nominalSebelum = bon.sisa;
-      const alokasiNominal = Math.min(remainingPayment, nominalSebelum);
+      let maxPayableForBon = nominalSebelum;
+      let itemAlokasi;
+      if (bon.isPenjualanToko) {
+        const pj = bon.sourceObj;
+        const stayItemSet = stayItemIndicesByRef.get(bon.refId);
+        const targetItemList = targetItemIndicesByRef.get(bon.refId);
+        if (options?.strictTargetOnly && targetItemList && targetItemList.length > 0 && !targetFullRefIds.has(bon.refId)) {
+          const itemBalances = this.computePenjualanItemOpenBalances(db, pj);
+          const orderedPayable = targetItemList.map((idx) => itemBalances.find((it) => it.itemIndex === idx)).filter((it) => Boolean(it && it.sisa > 0));
+          maxPayableForBon = orderedPayable.reduce((s, it) => s + it.sisa, 0);
+          if (maxPayableForBon <= 0) continue;
+          const toPay = Math.min(remainingPayment, maxPayableForBon);
+          let remItemPay = toPay;
+          const splits = [];
+          for (const it of orderedPayable) {
+            if (remItemPay <= 0) break;
+            const take = Math.min(remItemPay, it.sisa);
+            if (take > 0) {
+              splits.push({ itemIndex: it.itemIndex, nominalDibayar: take });
+              remItemPay -= take;
+            }
+          }
+          if (splits.length > 0) itemAlokasi = splits;
+        } else if (stayItemSet && stayItemSet.size > 0) {
+          const itemBalances = this.computePenjualanItemOpenBalances(db, pj);
+          const nonStayItems = itemBalances.filter((it) => it.sisa > 0 && !stayItemSet.has(it.itemIndex));
+          const stayItems = itemBalances.filter((it) => it.sisa > 0 && stayItemSet.has(it.itemIndex));
+          const orderedItems = options?.strictExcludeStay ? nonStayItems : [...nonStayItems, ...stayItems];
+          maxPayableForBon = orderedItems.reduce((s, it) => s + it.sisa, 0);
+          if (maxPayableForBon <= 0) continue;
+          const toPay = Math.min(remainingPayment, maxPayableForBon);
+          let remItemPay = toPay;
+          const splits = [];
+          for (const it of orderedItems) {
+            if (remItemPay <= 0) break;
+            const take = Math.min(remItemPay, it.sisa);
+            if (take > 0) {
+              splits.push({ itemIndex: it.itemIndex, nominalDibayar: take });
+              remItemPay -= take;
+            }
+          }
+          if (splits.length > 0) itemAlokasi = splits;
+        }
+      }
+      const alokasiNominal = Math.min(remainingPayment, maxPayableForBon);
+      if (alokasiNominal <= 0) continue;
       const nominalSisa = nominalSebelum - alokasiNominal;
       if (bon.jenis === "KASBON_BARANG") {
         const pj = bon.sourceObj;
@@ -8146,7 +9360,8 @@ var TransactionService = class {
         nominalSebelum,
         nominalDibayar: alokasiNominal,
         nominalSisa,
-        isNotaNgunci: bon.isNgunci
+        isNotaNgunci: bon.isNgunci,
+        ...itemAlokasi ? { itemAlokasi } : {}
       });
       remainingPayment -= alokasiNominal;
     }
@@ -8460,6 +9675,8 @@ var TransactionService = class {
       }
       const isSumberAnak = this.isAnakPerusahaanRekening(sumberAcc);
       const isTujuanAnak = this.isAnakPerusahaanRekening(tujuanAcc);
+      const isSumberTitip = this.isRekeningTitipAccount(sumberAcc);
+      const isTujuanTitip = this.isRekeningTitipAccount(tujuanAcc);
       if (!isSumberAnak && sumberAcc.saldoSaatIni < params.nominal) {
         throw new Error(
           `Saldo rekening sumber ${sumberAcc.nama} (${sumberAcc.kode}) tidak mencukupi! Saldo saat ini: Rp ${sumberAcc.saldoSaatIni.toLocaleString(
@@ -8471,6 +9688,8 @@ var TransactionService = class {
       tujuanAcc.saldoSaatIni += params.nominal;
       let idMitraTerkait;
       let namaMitraTerkait;
+      let idKaryawanTerkait;
+      let namaKaryawanTerkait;
       let tipeMutasiAfiliasi;
       if (isTujuanAnak && !isSumberAnak) {
         idMitraTerkait = tujuanAcc.idMitraTerkait || "MTR-DPPARABOT";
@@ -8484,8 +9703,26 @@ var TransactionService = class {
         idMitraTerkait = tujuanAcc.idMitraTerkait || sumberAcc.idMitraTerkait;
         namaMitraTerkait = tujuanAcc.namaMitraTerkait || tujuanAcc.nama;
         tipeMutasiAfiliasi = "ANTAR_ANAK_PERUSAHAAN";
+      } else if (isTujuanTitip && !isSumberTitip) {
+        idKaryawanTerkait = tujuanAcc.idKaryawanTerkait;
+        namaKaryawanTerkait = tujuanAcc.namaKaryawanTerkait || tujuanAcc.atasNama;
+        idMitraTerkait = tujuanAcc.idMitraTerkait;
+        namaMitraTerkait = tujuanAcc.namaMitraTerkait || namaKaryawanTerkait || tujuanAcc.nama;
+        tipeMutasiAfiliasi = "TITIP_UANG_KARYAWAN";
+      } else if (isSumberTitip && !isTujuanTitip) {
+        idKaryawanTerkait = sumberAcc.idKaryawanTerkait;
+        namaKaryawanTerkait = sumberAcc.namaKaryawanTerkait || sumberAcc.atasNama;
+        idMitraTerkait = sumberAcc.idMitraTerkait;
+        namaMitraTerkait = sumberAcc.namaMitraTerkait || namaKaryawanTerkait || sumberAcc.nama;
+        tipeMutasiAfiliasi = "KEMBALIKAN_TITIP_KARYAWAN";
+      } else if (isSumberTitip && isTujuanTitip) {
+        idKaryawanTerkait = tujuanAcc.idKaryawanTerkait || sumberAcc.idKaryawanTerkait;
+        namaKaryawanTerkait = tujuanAcc.namaKaryawanTerkait || tujuanAcc.atasNama;
+        idMitraTerkait = tujuanAcc.idMitraTerkait || sumberAcc.idMitraTerkait;
+        namaMitraTerkait = tujuanAcc.namaMitraTerkait || namaKaryawanTerkait || tujuanAcc.nama;
+        tipeMutasiAfiliasi = "ANTAR_REKENING_TITIP";
       }
-      const defaultKet = tipeMutasiAfiliasi === "SIMPAN_KE_ANAK_PERUSAHAAN" ? `Transfer Pembayaran / Talangan dari ${sumberAcc.nama} ke Anak Perusahaan ${namaMitraTerkait} (Dicatat sebagai Piutang Anak Perusahaan ke Perusahaan)` : tipeMutasiAfiliasi === "TARIK_DARI_ANAK_PERUSAHAAN" ? `Setoran / Pengembalian Dana dari Anak Perusahaan ${namaMitraTerkait} ke ${tujuanAcc.nama} (Mengurangi Piutang / Menambah Titipan Anak Perusahaan)` : "Pemindahan dana operasional internal";
+      const defaultKet = tipeMutasiAfiliasi === "SIMPAN_KE_ANAK_PERUSAHAAN" ? `Transfer Pembayaran / Talangan dari ${sumberAcc.nama} ke Anak Perusahaan ${namaMitraTerkait} (Dicatat sebagai Piutang Anak Perusahaan ke Perusahaan)` : tipeMutasiAfiliasi === "TARIK_DARI_ANAK_PERUSAHAAN" ? `Setoran / Pengembalian Dana dari Anak Perusahaan ${namaMitraTerkait} ke ${tujuanAcc.nama} (Mengurangi Piutang / Menambah Titipan Anak Perusahaan)` : tipeMutasiAfiliasi === "TITIP_UANG_KARYAWAN" ? `Penitipan Dana Perusahaan dari ${sumberAcc.nama} ke Rekening Titip ${tujuanAcc.nama} (Pemegang: ${namaKaryawanTerkait || "-"})` : tipeMutasiAfiliasi === "KEMBALIKAN_TITIP_KARYAWAN" ? `Pengembalian Dana Titip dari ${sumberAcc.nama} (Pemegang: ${namaKaryawanTerkait || "-"}) ke ${tujuanAcc.nama}` : "Pemindahan dana operasional internal";
       const noTransfer = generateId("TRF");
       const transferRecord = {
         noTransfer,
@@ -8498,15 +9735,20 @@ var TransactionService = class {
         status: "BERHASIL",
         ...idMitraTerkait ? { idMitraTerkait } : {},
         ...namaMitraTerkait ? { namaMitraTerkait } : {},
+        ...idKaryawanTerkait ? { idKaryawanTerkait } : {},
+        ...namaKaryawanTerkait ? { namaKaryawanTerkait } : {},
         ...tipeMutasiAfiliasi ? { tipeMutasiAfiliasi } : {},
         createdAt: iso
       };
       db.transferRekening.unshift(transferRecord);
+      const isTitipLog = tipeMutasiAfiliasi === "TITIP_UANG_KARYAWAN" || tipeMutasiAfiliasi === "KEMBALIKAN_TITIP_KARYAWAN" || tipeMutasiAfiliasi === "ANTAR_REKENING_TITIP";
       this.addAuditLog(
         db,
         "TRANSFER",
         noTransfer,
-        idMitraTerkait ? `1 Transaksi Terpadu (Rekening & Mitra Anak Perusahaan ${namaMitraTerkait}): ${sumberAcc.nama} (${sumberAcc.kode}) -> ${tujuanAcc.nama} (${tujuanAcc.kode}) sebesar Rp ${params.nominal.toLocaleString(
+        isTitipLog ? `Mutasi Rekening Titip Uang (Pemegang: ${namaKaryawanTerkait || "-"}): ${sumberAcc.nama} (${sumberAcc.kode}) -> ${tujuanAcc.nama} (${tujuanAcc.kode}) sebesar Rp ${params.nominal.toLocaleString(
+          "id-ID"
+        )}. Ket: ${transferRecord.keterangan}` : idMitraTerkait ? `1 Transaksi Terpadu (Rekening & Mitra Anak Perusahaan ${namaMitraTerkait}): ${sumberAcc.nama} (${sumberAcc.kode}) -> ${tujuanAcc.nama} (${tujuanAcc.kode}) sebesar Rp ${params.nominal.toLocaleString(
           "id-ID"
         )}. Ket: ${transferRecord.keterangan}` : `Transfer Antar Rekening: ${sumberAcc.nama} (${sumberAcc.kode}) -> ${tujuanAcc.nama} (${tujuanAcc.kode}) sebesar Rp ${params.nominal.toLocaleString(
           "id-ID"
@@ -8515,6 +9757,564 @@ var TransactionService = class {
         `${sumberAcc.kode} -> ${tujuanAcc.kode}`
       );
       return transferRecord;
+    });
+  }
+  /**
+   * Audit lengkap Rekening Titip Uang Karyawan:
+   * Merinci seluruh dana PT yang dititipkan (+) dan seluruh pembelanjaan / setoran balik (-).
+   */
+  static getRekeningTitipAudit(params) {
+    const db = dbManager.get();
+    const targetKode = params?.kodeRekening ? String(params.kodeRekening).toUpperCase().trim() : void 0;
+    let targetKryId = params?.idKaryawan ? String(params.idKaryawan).trim() : void 0;
+    let targetMitraId = params?.idMitra ? String(params.idMitra).trim() : void 0;
+    if (targetMitraId && !targetKryId) {
+      const mtr = (db.mitra || []).find((m) => m.id === targetMitraId);
+      const kry = (db.karyawan || []).find(
+        (k) => k.idMitraTerkait === targetMitraId || mtr?.idKaryawanTerkait && k.id === mtr.idKaryawanTerkait || mtr && !mtr.isAnakPerusahaan && mtr.role !== "ANAK_PERUSAHAAN" && k.nama.trim().toLowerCase() === mtr.nama.trim().toLowerCase()
+      );
+      if (kry) targetKryId = kry.id;
+    }
+    if (targetKryId && !targetMitraId) {
+      const kry = (db.karyawan || []).find((k) => k.id === targetKryId);
+      if (kry?.idMitraTerkait) targetMitraId = kry.idMitraTerkait;
+    }
+    const titipAccounts = (db.rekening || []).filter((r) => {
+      if (!this.isRekeningTitipAccount(r)) return false;
+      if (targetKode && r.kode.toUpperCase() !== targetKode) return false;
+      if (targetKryId || targetMitraId) {
+        const matchKry = targetKryId && r.idKaryawanTerkait === targetKryId;
+        const matchMtr = targetMitraId && r.idMitraTerkait === targetMitraId;
+        return Boolean(matchKry || matchMtr);
+      }
+      return true;
+    });
+    const parseDmyMs = (tgl, jm, createdAt) => {
+      const norm = normalizeDateToDmy(tgl, "");
+      const parts = norm.split("/").map(Number);
+      const [hh, min, ss] = String(jm || "00:00:00").split(":").map(Number);
+      if (parts.length === 3 && parts[2] && parts[1] && parts[0]) {
+        return new Date(parts[2], parts[1] - 1, parts[0], hh || 0, min || 0, ss || 0).getTime();
+      }
+      if (createdAt && createdAt.includes("T")) {
+        const ms = new Date(createdAt).getTime();
+        if (!Number.isNaN(ms)) return ms;
+      }
+      return 0;
+    };
+    const getRekName = (kode) => {
+      if (!kode) return "-";
+      const found = db.rekening.find((r) => r.kode === kode);
+      return found ? `${found.nama} (${found.kode})` : kode;
+    };
+    return titipAccounts.map((rek) => {
+      const rekKode = rek.kode;
+      const linkedKry = (db.karyawan || []).find((k) => k.id === rek.idKaryawanTerkait);
+      const linkedMtr = (db.mitra || []).find(
+        (m) => m.id === (rek.idMitraTerkait || linkedKry?.idMitraTerkait)
+      );
+      const rows = [];
+      const saldoAwal = Math.round(Number(rek.saldoAwal) || 0);
+      if (saldoAwal !== 0) {
+        rows.push({
+          id: `SALDO-AWAL-${rekKode}`,
+          tanggal: "01/01/2026",
+          jam: "00:00:00",
+          arah: saldoAwal >= 0 ? "MASUK" : "KEMBALI",
+          jenis: "Saldo Awal Rekening Titip",
+          modulSumber: "SALDO_AWAL",
+          pihakAtauRekeningLawan: "Pembukuan Awal PT",
+          uraian: `Saldo awal pembukuan Rekening Titip ${rek.nama} (${rekKode})`,
+          nominalMasuk: saldoAwal > 0 ? saldoAwal : 0,
+          nominalKeluar: saldoAwal < 0 ? Math.abs(saldoAwal) : 0,
+          createdAt: "2026-01-01T00:00:00.000Z"
+        });
+      }
+      for (const trf of db.transferRekening || []) {
+        if (trf.status !== "BERHASIL") continue;
+        const nom = Math.round(Number(trf.nominal) || 0);
+        if (nom <= 0) continue;
+        if (trf.rekeningTujuan === rekKode) {
+          rows.push({
+            id: trf.noTransfer,
+            tanggal: normalizeDateToDmy(trf.tanggal, trf.tanggal),
+            jam: trf.jam || "00:00:00",
+            arah: "MASUK",
+            jenis: "Titip / Transfer Dana Masuk",
+            modulSumber: "TRANSFER_MASUK",
+            pihakAtauRekeningLawan: getRekName(trf.rekeningSumber),
+            uraian: `Dana dititipkan dari ${getRekName(trf.rekeningSumber)}`,
+            catatan: trf.keterangan || void 0,
+            nominalMasuk: nom,
+            nominalKeluar: 0,
+            detailItems: [
+              {
+                nama: `Transfer Masuk dari ${getRekName(trf.rekeningSumber)}`,
+                qty: 1,
+                satuan: "Transfer",
+                harga: nom,
+                subtotal: nom
+              }
+            ],
+            createdAt: trf.createdAt
+          });
+        } else if (trf.rekeningSumber === rekKode) {
+          rows.push({
+            id: trf.noTransfer,
+            tanggal: normalizeDateToDmy(trf.tanggal, trf.tanggal),
+            jam: trf.jam || "00:00:00",
+            arah: "KEMBALI",
+            jenis: "Pengembalian Dana ke PT",
+            modulSumber: "TRANSFER_KEMBALI",
+            pihakAtauRekeningLawan: getRekName(trf.rekeningTujuan),
+            uraian: `Setor / kembalikan dana titip ke ${getRekName(trf.rekeningTujuan)}`,
+            catatan: trf.keterangan || void 0,
+            nominalMasuk: 0,
+            nominalKeluar: nom,
+            detailItems: [
+              {
+                nama: `Transfer Balik ke ${getRekName(trf.rekeningTujuan)}`,
+                qty: 1,
+                satuan: "Transfer",
+                harga: nom,
+                subtotal: nom
+              }
+            ],
+            createdAt: trf.createdAt
+          });
+        }
+      }
+      for (const um of db.uangMasuk || []) {
+        if (um.rekeningTujuan === rekKode && um.metode !== "SINKRON") {
+          const nom = Math.round(Number(um.nominal) || 0);
+          if (nom <= 0) continue;
+          rows.push({
+            id: um.idTransaksi,
+            tanggal: normalizeDateToDmy(um.tanggal, um.tanggal),
+            jam: um.jam || "00:00:00",
+            arah: "MASUK",
+            jenis: `Uang Masuk (${um.kategori || "Lainnya"})`,
+            modulSumber: "UANG_MASUK",
+            pihakAtauRekeningLawan: um.namaPengirim || um.pengirim || um.divisi || "Penerimaan Dana",
+            uraian: um.keterangan || `Uang masuk ke ${rekKode}`,
+            catatan: um.keterangan,
+            divisi: um.divisi,
+            nominalMasuk: nom,
+            nominalKeluar: 0,
+            createdAt: um.createdAt
+          });
+        }
+      }
+      for (const pj of db.penjualan || []) {
+        const isNotaSilangLunasKasPt = Boolean(
+          pj.isNotaSilang && pj.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (pj.metode === "TUNAI" || pj.metode === "TRANSFER")
+        );
+        if (pj.rekeningTujuan === rekKode && pj.metode !== "KASBON" && pj.metode !== "SINKRON" && pj.metode !== "INTERNAL_PT" && pj.metode !== "PEMAKAIAN_PENGELUARAN" && (!pj.isNotaSilang || isNotaSilangLunasKasPt)) {
+          const nom = Math.round(Number(pj.totalNominal) || 0);
+          if (nom <= 0) continue;
+          rows.push({
+            id: pj.noPenjualan,
+            tanggal: normalizeDateToDmy(pj.tanggal, pj.tanggal),
+            jam: pj.jam || "00:00:00",
+            arah: "MASUK",
+            jenis: isNotaSilangLunasKasPt ? `Titipan Lunas ${pj.namaAnakPerusahaan || "DP Parabot"}` : "Penerimaan Penjualan Barang",
+            modulSumber: "PENJUALAN",
+            pihakAtauRekeningLawan: isNotaSilangLunasKasPt ? `${pj.namaMitra || "Customer Umum"} \u2192 ${pj.namaAnakPerusahaan || "DP Parabot"}` : pj.namaMitra || "Customer",
+            uraian: isNotaSilangLunasKasPt ? `Terima lunas belanja ${pj.namaAnakPerusahaan || "DP Parabot"} a.n. ${pj.namaMitra || "Customer Umum"} (${(pj.items || []).map((i) => `${i.namaProduk} x${i.qty}`).join(", ")})` : `Penjualan barang toko ke ${pj.namaMitra || "Customer"} (${(pj.items || []).map((i) => `${i.namaProduk} x${i.qty}`).join(", ")})`,
+            catatan: pj.keterangan,
+            divisi: pj.divisi,
+            nominalMasuk: nom,
+            nominalKeluar: 0,
+            detailItems: (pj.items || []).map((i) => ({
+              nama: i.namaProduk,
+              qty: i.qty,
+              satuan: i.satuan,
+              harga: i.harga,
+              subtotal: i.subtotal
+            })),
+            createdAt: pj.createdAt
+          });
+        }
+      }
+      for (const jhb of db.penjualanHasilBumi || []) {
+        if (jhb.rekeningTujuan === rekKode && jhb.metodePembayaran !== "PIUTANG" && jhb.metodePembayaran !== "BELUM_PUTUS_HARGA" && jhb.metodePembayaran !== "SINKRON") {
+          const nom = Math.round(Number(jhb.totalNominal) || 0);
+          if (nom <= 0) continue;
+          const qtyKg = Number(jhb.tonaseAkhir) > 0 ? Number(jhb.tonaseAkhir) : Number(jhb.beratBersih) || 0;
+          rows.push({
+            id: jhb.noPenjualan,
+            tanggal: normalizeDateToDmy(jhb.tanggal, jhb.tanggal),
+            jam: jhb.jam || "00:00:00",
+            arah: "MASUK",
+            jenis: "Penerimaan Jual Hasil Bumi",
+            modulSumber: "PENJUALAN",
+            pihakAtauRekeningLawan: jhb.namaMitra || "Buyer",
+            uraian: `Penjualan ${jhb.komoditasNama} (${qtyKg.toLocaleString("id-ID")} Kg) ke ${jhb.namaMitra || "Buyer"}`,
+            catatan: jhb.keterangan,
+            divisi: jhb.divisi,
+            nominalMasuk: nom,
+            nominalKeluar: 0,
+            detailItems: [
+              {
+                nama: jhb.komoditasNama,
+                qty: qtyKg || 1,
+                satuan: "Kg",
+                harga: jhb.hargaJualPerKg,
+                subtotal: nom
+              }
+            ],
+            createdAt: jhb.createdAt
+          });
+        }
+      }
+      for (const bb of db.bayarBon || []) {
+        if (bb.rekeningTujuan === rekKode && bb.metode !== "SINKRON" && bb.metode !== "KOMPENSASI_TITIP" && bb.metode !== "POTONG_GAJI" && !bb.isKompensasiTitipan && !bb.isPotongGaji && !bb.isSuratJalanPotongBon) {
+          const nom = Math.round(Number(bb.nominalBayar) || 0);
+          if (nom <= 0) continue;
+          rows.push({
+            id: bb.idTransaksi,
+            tanggal: normalizeDateToDmy(bb.tanggal, bb.tanggal),
+            jam: bb.jam || "00:00:00",
+            arah: "MASUK",
+            jenis: "Setoran Bayar Bon Mitra",
+            modulSumber: "BAYAR_BON",
+            pihakAtauRekeningLawan: bb.namaMitra || "Mitra",
+            uraian: `Pelunasan bon dari ${bb.namaMitra || "Mitra"} masuk ke ${rekKode}`,
+            catatan: bb.keterangan,
+            nominalMasuk: nom,
+            nominalKeluar: 0,
+            createdAt: bb.createdAt
+          });
+        }
+      }
+      for (const pb of db.pembelianHasilBumi || []) {
+        if (pb.rekeningSumber === rekKode && pb.metodePembayaran !== "TITIP" && pb.metodePembayaran !== "SINKRON" && !pb.isNotaSilang && pb.komoditasKode !== "NOTA_SILANG") {
+          const nom = Math.round(Number(pb.totalNominal) || 0);
+          if (nom <= 0) continue;
+          const isPinjaman = pb.komoditasKode === "PINJAMAN_DANA" || Boolean(pb.komoditasNama?.includes("Pinjaman Uang"));
+          rows.push({
+            id: pb.noPembelian,
+            tanggal: normalizeDateToDmy(pb.tanggal, pb.tanggal),
+            jam: pb.jam || "00:00:00",
+            arah: isPinjaman ? "MASUK" : "BELANJA",
+            jenis: isPinjaman ? "Penerimaan Pinjaman Dana" : "Beli Hasil Bumi",
+            modulSumber: "PEMBELIAN_HASIL_BUMI",
+            pihakAtauRekeningLawan: pb.namaMitra || "Suplayer / Petani",
+            uraian: isPinjaman ? `Terima pinjaman dana dari ${pb.namaMitra} ke ${rekKode}` : `Beli ${pb.komoditasNama} (${Number(pb.beratBersih || 0).toLocaleString("id-ID")} Kg) dari ${pb.namaMitra}`,
+            catatan: pb.keterangan,
+            divisi: pb.divisi,
+            nominalMasuk: isPinjaman ? nom : 0,
+            nominalKeluar: isPinjaman ? 0 : nom,
+            detailItems: [
+              {
+                nama: isPinjaman ? `Pinjaman Dana (${pb.namaMitra})` : `${pb.komoditasNama} \u2014 ${pb.namaMitra}`,
+                qty: Number(pb.beratBersih) > 0 ? Number(pb.beratBersih) : 1,
+                satuan: Number(pb.beratBersih) > 0 ? "Kg" : "Trx",
+                harga: Number(pb.beratBersih) > 0 ? pb.hargaPerKg : nom,
+                subtotal: nom
+              }
+            ],
+            createdAt: pb.createdAt
+          });
+        }
+      }
+      for (const kpb of db.pembelianBarang || []) {
+        if (kpb.rekeningSumber === rekKode && kpb.metodePembayaran !== "HUTANG" && kpb.metodePembayaran !== "SINKRON") {
+          const nom = Math.round(Number(kpb.totalNominal) || 0);
+          if (nom <= 0) continue;
+          const rincian = (kpb.items || []).map((i) => `${i.namaProduk} (${i.qty} ${i.satuan})`).join(", ");
+          rows.push({
+            id: kpb.noPembelian,
+            tanggal: normalizeDateToDmy(kpb.tanggal, kpb.tanggal),
+            jam: kpb.jam || "00:00:00",
+            arah: "BELANJA",
+            jenis: "Kulakan / Beli Barang",
+            modulSumber: "PEMBELIAN_BARANG",
+            pihakAtauRekeningLawan: kpb.namaMitra || "Supplier",
+            uraian: `Belanja barang dari ${kpb.namaMitra || "Supplier"}: ${rincian || kpb.keterangan || "-"}`,
+            catatan: kpb.keterangan,
+            divisi: kpb.divisi,
+            nominalMasuk: 0,
+            nominalKeluar: nom,
+            detailItems: (kpb.items || []).map((i) => ({
+              nama: i.namaProduk,
+              qty: i.qty,
+              satuan: i.satuan,
+              harga: i.hargaBeliSatuan,
+              subtotal: i.subtotal
+            })),
+            createdAt: kpb.createdAt
+          });
+        }
+      }
+      for (const exp of db.pengeluaran || []) {
+        if (exp.rekeningSumber === rekKode && !exp.isNonKas && exp.rekeningSumber !== "SINKRON" && exp.rekeningSumber !== "STOK_INTERNAL") {
+          const nom = Math.round(Number(exp.nominal) || 0);
+          if (nom <= 0) continue;
+          const expQty = Number(exp.qty) > 0 ? Number(exp.qty) : 1;
+          const expSatuan = String(exp.satuan || "").trim() || "Biaya";
+          const expHarga = Number(exp.hargaSatuan) > 0 ? Math.round(Number(exp.hargaSatuan)) : expQty > 0 ? Math.round(nom / expQty) : nom;
+          const cleanKat = String(exp.kategori || "Operasional").trim();
+          const cleanKet = String(exp.keterangan || "").trim() || cleanKat;
+          rows.push({
+            id: exp.idTransaksi,
+            tanggal: normalizeDateToDmy(exp.tanggal, exp.tanggal),
+            jam: exp.jam || "00:00:00",
+            arah: "BELANJA",
+            jenis: `Pengeluaran (${cleanKat})`,
+            modulSumber: "PENGELUARAN",
+            pihakAtauRekeningLawan: exp.divisi || "Operasional PT",
+            uraian: `[${exp.divisi || "Operasional"}] ${cleanKat}: ${cleanKet}`,
+            catatan: exp.keterangan,
+            divisi: exp.divisi,
+            nominalMasuk: 0,
+            nominalKeluar: nom,
+            detailItems: [
+              {
+                nama: cleanKet,
+                qty: expQty,
+                satuan: expSatuan,
+                harga: expHarga,
+                subtotal: nom
+              }
+            ],
+            createdAt: exp.createdAt
+          });
+        }
+      }
+      for (const g of db.penggajian || []) {
+        if (g.rekeningSumber === rekKode && g.metodePembayaran !== "SINKRON") {
+          const nom = Math.round(Number(g.gajiBersihDibayar) || 0);
+          if (nom <= 0) continue;
+          rows.push({
+            id: g.id,
+            tanggal: normalizeDateToDmy(g.tanggal, g.tanggal),
+            jam: g.jam || "00:00:00",
+            arah: "BELANJA",
+            jenis: "Bayar Gaji / Upah",
+            modulSumber: "PENGGAJIAN",
+            pihakAtauRekeningLawan: g.namaKaryawan || "Karyawan",
+            uraian: `Pembayaran gaji ${g.namaKaryawan} (${g.divisi || "-"} \xB7 ${g.periodeBulan || "-"})`,
+            catatan: g.keterangan,
+            divisi: g.divisi,
+            nominalMasuk: 0,
+            nominalKeluar: nom,
+            detailItems: [
+              {
+                nama: `Gaji ${g.namaKaryawan} (${g.periodeBulan})`,
+                qty: 1,
+                satuan: "Slip",
+                harga: nom,
+                subtotal: nom
+              }
+            ],
+            createdAt: `${g.tanggal} ${g.jam}`
+          });
+        }
+      }
+      for (const ku of db.kasbonUang || []) {
+        if (ku.rekeningSumber === rekKode && !ku.isNotaLalu && ku.metode !== "SINKRON") {
+          const nom = Math.round(Number(ku.nominal) || 0);
+          if (nom <= 0) continue;
+          rows.push({
+            id: ku.idTransaksi,
+            tanggal: normalizeDateToDmy(ku.tanggal, ku.tanggal),
+            jam: ku.jam || "00:00:00",
+            arah: "BELANJA",
+            jenis: "Pencairan Kasbon Mitra",
+            modulSumber: "KASBON_UANG",
+            pihakAtauRekeningLawan: ku.namaMitra || "Mitra",
+            uraian: `Kasbon uang untuk ${ku.namaMitra || "Mitra"}${ku.keterangan ? ` \u2014 ${ku.keterangan}` : ""}`,
+            catatan: ku.keterangan,
+            nominalMasuk: 0,
+            nominalKeluar: nom,
+            createdAt: ku.createdAt
+          });
+        }
+      }
+      for (const pt of db.pencairanTitipan || []) {
+        if (pt.rekeningSumber === rekKode && pt.metodePembayaran !== "SINKRON" && pt.metodePembayaran !== "KOMPENSASI_BON" && !pt.isKompensasiBon) {
+          const nom = Math.round(Number(pt.nominalPencairan) || 0);
+          if (nom <= 0) continue;
+          rows.push({
+            id: pt.idPencairan,
+            tanggal: normalizeDateToDmy(pt.tanggal, pt.tanggal),
+            jam: pt.jam || "00:00:00",
+            arah: "BELANJA",
+            jenis: "Bayar / Pencairan Titipan Mitra",
+            modulSumber: "PENCAIRAN_TITIPAN",
+            pihakAtauRekeningLawan: pt.namaMitra || "Mitra",
+            uraian: `Pencairan uang titip hasil panen untuk ${pt.namaMitra || "Mitra"}${pt.keterangan ? ` \u2014 ${pt.keterangan}` : ""}`,
+            catatan: pt.keterangan,
+            nominalMasuk: 0,
+            nominalKeluar: nom,
+            createdAt: pt.createdAt
+          });
+        }
+      }
+      for (const sj of db.suratJalan || []) {
+        const rekBayar = sj.rekeningBayarMitraKode || sj.rekeningPtKode || "";
+        if (sj.sumberBarang !== "STOK_HB_PT" && sj.statusPembayaranMitra === "LUNAS" && sj.catatArusKasBayarMitra === true && rekBayar === rekKode) {
+          const nom = Math.round(Number(sj.nominalBayarMitraAktual ?? sj.jumlahPembayaranMitra) || 0);
+          if (nom <= 0) continue;
+          rows.push({
+            id: sj.noInvoice || sj.id,
+            tanggal: normalizeDateToDmy(sj.tanggalBayarMitra || sj.tanggal, sj.tanggal),
+            jam: sj.jamBayarMitra || sj.jam || "00:00:00",
+            arah: "BELANJA",
+            jenis: "Bayar Hak Mitra Surat Jalan",
+            modulSumber: "SURAT_JALAN_BAYAR_MITRA",
+            pihakAtauRekeningLawan: sj.namaMitra || "Mitra",
+            uraian: `Pelunasan hak mitra Surat Jalan ${sj.noInvoice} (${sj.komoditasNama} \xB7 ${Number(sj.tonaseAkhirKg || 0).toLocaleString("id-ID")} Kg)`,
+            catatan: sj.catatan,
+            divisi: "PT Wijaya Agro Perkasa",
+            nominalMasuk: 0,
+            nominalKeluar: nom,
+            createdAt: sj.createdAt
+          });
+        }
+      }
+      for (const br of db.brilink || []) {
+        const nomAdmin = Math.round(Number(br.nominalAdmin) || 0);
+        const nomPokok = Math.round(Number(br.nominalPokok) || 0);
+        const rekAdm = br.rekeningAdmin || "KAS01";
+        const rekKas = br.rekeningKasTunai || "KAS01";
+        const rekBank = br.rekeningBank || "";
+        let delta = 0;
+        if (br.jenisBrilink === "TARIK_TUNAI") {
+          if (nomPokok > 0 && rekBank === rekKode) delta += nomPokok;
+          if (nomPokok > 0 && rekKas === rekKode) delta -= nomPokok;
+          if (nomAdmin > 0 && rekAdm === rekKode) delta += nomAdmin;
+        } else {
+          if (nomPokok > 0 && rekBank === rekKode) delta -= nomPokok;
+          if (nomPokok > 0 && rekKas === rekKode) delta += nomPokok;
+          if (nomAdmin > 0 && rekAdm === rekKode) delta -= nomAdmin;
+        }
+        if (delta !== 0) {
+          rows.push({
+            id: br.idTransaksi,
+            tanggal: normalizeDateToDmy(br.tanggal, br.tanggal),
+            jam: br.jam || "00:00:00",
+            arah: delta > 0 ? "MASUK" : "BELANJA",
+            jenis: `BRILink (${br.jenisBrilink})`,
+            modulSumber: "BRILINK",
+            pihakAtauRekeningLawan: br.namaPelanggan || "Nasabah BRILink",
+            uraian: `Transaksi BRILink ${br.jenisBrilink} \u2014 ${br.namaPelanggan || "-"}`,
+            catatan: br.keterangan,
+            divisi: "BRILink",
+            nominalMasuk: delta > 0 ? delta : 0,
+            nominalKeluar: delta < 0 ? Math.abs(delta) : 0,
+            createdAt: br.createdAt
+          });
+        }
+      }
+      rows.sort((a, b) => {
+        const ta = parseDmyMs(a.tanggal, a.jam, a.createdAt);
+        const tb = parseDmyMs(b.tanggal, b.jam, b.createdAt);
+        if (ta !== tb) return ta - tb;
+        return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+      });
+      const expGroupMap = /* @__PURE__ */ new Map();
+      for (const row of rows) {
+        if (row.modulSumber === "PENGELUARAN" && row.arah === "BELANJA") {
+          const gKey = [
+            row.tanggal,
+            String(row.divisi || row.pihakAtauRekeningLawan || "").trim().toUpperCase(),
+            String(row.jenis || "").trim().toUpperCase()
+          ].join("||");
+          const arr = expGroupMap.get(gKey) || [];
+          arr.push(row);
+          expGroupMap.set(gKey, arr);
+        }
+      }
+      const emittedExpGroups = /* @__PURE__ */ new Set();
+      const consolidatedRows = [];
+      for (const row of rows) {
+        if (row.modulSumber === "PENGELUARAN" && row.arah === "BELANJA") {
+          const gKey = [
+            row.tanggal,
+            String(row.divisi || row.pihakAtauRekeningLawan || "").trim().toUpperCase(),
+            String(row.jenis || "").trim().toUpperCase()
+          ].join("||");
+          if (emittedExpGroups.has(gKey)) continue;
+          emittedExpGroups.add(gKey);
+          const cluster = expGroupMap.get(gKey) || [row];
+          if (cluster.length >= 2) {
+            const first = cluster[0];
+            const last = cluster[cluster.length - 1];
+            const totalKeluar = cluster.reduce((s, c) => s + c.nominalKeluar, 0);
+            const firstHm = String(first.jam || "00:00:00").slice(0, 5);
+            const lastHm = String(last.jam || "00:00:00").slice(0, 5);
+            const jamRange = firstHm !== lastHm ? `${firstHm}\u2013${lastHm}` : first.jam;
+            const katLabel = String(first.jenis || "").replace(/^Pengeluaran\s*\(/i, "").replace(/\)$/, "").trim();
+            const mergedDetails = cluster.flatMap((c) => c.detailItems || []);
+            consolidatedRows.push({
+              ...first,
+              jam: jamRange,
+              uraian: `[${first.divisi || "Operasional"}] ${katLabel || first.jenis} \u2014 Gabungan ${cluster.length} Rincian`,
+              catatan: void 0,
+              nominalKeluar: totalKeluar,
+              detailItems: mergedDetails,
+              mergedIds: cluster.map((c) => c.id),
+              mergedCount: cluster.length
+            });
+          } else {
+            consolidatedRows.push(row);
+          }
+        } else {
+          consolidatedRows.push(row);
+        }
+      }
+      let running = 0;
+      let totalDititipkanMasuk = 0;
+      let totalDibelanjakanKeluar = 0;
+      let totalDikembalikanKePt = 0;
+      let jumlahTransaksiMasuk = 0;
+      let jumlahTransaksiBelanja = 0;
+      let jumlahTransaksiKembali = 0;
+      const mutasi = consolidatedRows.map((row) => {
+        running += row.nominalMasuk - row.nominalKeluar;
+        if (row.modulSumber !== "SALDO_AWAL") {
+          if (row.arah === "MASUK") {
+            totalDititipkanMasuk += row.nominalMasuk;
+            jumlahTransaksiMasuk += 1;
+          } else if (row.arah === "KEMBALI") {
+            totalDikembalikanKePt += row.nominalKeluar;
+            jumlahTransaksiKembali += 1;
+          } else {
+            totalDibelanjakanKeluar += row.nominalKeluar;
+            jumlahTransaksiBelanja += 1;
+          }
+        }
+        return {
+          ...row,
+          saldoSetelah: running
+        };
+      });
+      const totalKeluarKeseluruhan = totalDibelanjakanKeluar + totalDikembalikanKePt;
+      return {
+        kodeRekening: rek.kode,
+        namaRekening: rek.nama,
+        nomorRekening: rek.nomorRekening || "-",
+        atasNama: rek.atasNama || "-",
+        status: rek.status || "AKTIF",
+        keterangan: rek.keterangan,
+        idKaryawanTerkait: linkedKry?.id || rek.idKaryawanTerkait,
+        namaKaryawanTerkait: linkedKry?.nama || rek.namaKaryawanTerkait || rek.atasNama,
+        idMitraTerkait: linkedMtr?.id || rek.idMitraTerkait,
+        namaMitraTerkait: linkedMtr?.nama || rek.namaMitraTerkait || linkedKry?.nama,
+        saldoAwal,
+        totalDititipkanMasuk,
+        totalDibelanjakanKeluar,
+        totalDikembalikanKePt,
+        totalKeluarKeseluruhan,
+        saldoSaatIni: Math.round(Number(rek.saldoSaatIni) || 0),
+        saldoTeoritis: running,
+        jumlahTransaksiMasuk,
+        jumlahTransaksiBelanja,
+        jumlahTransaksiKembali,
+        mutasi
+      };
     });
   }
   static {
@@ -8551,7 +10351,7 @@ var TransactionService = class {
       };
     }
     const isRealPayableAccount = (r) => Boolean(
-      r && r.status === "AKTIF" && !r.isVirtual && r.kode !== "BON01" && r.kode !== "TIT01" && r.kode !== "SINKRON" && r.kategori !== "OPERASIONAL_DIVISI" && (!r.kode.startsWith("REK-") || this.isAnakPerusahaanRekening(r))
+      r && r.status === "AKTIF" && !r.isVirtual && r.kode !== "BON01" && r.kode !== "TIT01" && r.kode !== "SINKRON" && r.kategori !== "OPERASIONAL_DIVISI" && (!r.kode.startsWith("REK-") || this.isAnakPerusahaanRekening(r) || this.isRekeningTitipAccount(r))
     );
     if (metInput === "TUNAI") {
       const kas = db.rekening.find((r) => r.kode === "KAS01" && r.status === "AKTIF");
@@ -9243,6 +11043,10 @@ var TransactionService = class {
       totalHakUpahBelumCair,
       saldoBersihTerpadu
     };
+    const rekeningTitipList = this.getRekeningTitipAudit({
+      idKaryawan: item.id,
+      idMitra: mitraId
+    });
     return {
       karyawan: item,
       logHarian,
@@ -9251,7 +11055,8 @@ var TransactionService = class {
       riwayatKasbonUang,
       riwayatBayarBon,
       riwayatUangTitip,
-      ringkasanUangTitip
+      ringkasanUangTitip,
+      ...rekeningTitipList.length > 0 ? { rekeningTitipList } : {}
     };
   }
   /**
@@ -9295,7 +11100,12 @@ var TransactionService = class {
       } else if (persentase > 0 && totalKasbonAwal > 0) {
         potonganKasbon = Math.min(Math.round(totalKasbonAwal * persentase / 100), totalKasbonAwal, totalUpahKotor);
       }
-      const gajiBersihDibayar = totalUpahKotor - potonganKasbon;
+      const hakGajiSetelahPotongBon = Math.max(0, totalUpahKotor - potonganKasbon);
+      const nominalDititipkan = Math.min(
+        Math.max(0, Math.round(Number(params.nominalDititipkan) || 0)),
+        hakGajiSetelahPotongBon
+      );
+      const gajiBersihDibayar = Math.max(0, hakGajiSetelahPotongBon - nominalDititipkan);
       const resolvedRek = this.resolvePayrollRekeningSumber(
         db,
         params.rekeningSumber,
@@ -9305,7 +11115,7 @@ var TransactionService = class {
         throw new Error(
           `Saldo rekening ${resolvedRek.rekeningObj.nama} (Rp ${resolvedRek.rekeningObj.saldoSaatIni.toLocaleString(
             "id-ID"
-          )}) tidak mencukupi untuk pembayaran gaji bersih Rp ${gajiBersihDibayar.toLocaleString("id-ID")}`
+          )}) tidak mencukupi untuk uang gaji yang diambil sebesar Rp ${gajiBersihDibayar.toLocaleString("id-ID")}`
         );
       }
       let idBayarBonTerkait;
@@ -9341,12 +11151,61 @@ var TransactionService = class {
       if (!resolvedRek.isSinkron && resolvedRek.rekeningObj && gajiBersihDibayar > 0) {
         resolvedRek.rekeningObj.saldoSaatIni -= gajiBersihDibayar;
       }
-      const finalRekKode = resolvedRek.kode;
+      const finalRekKode = nominalDititipkan > 0 && gajiBersihDibayar === 0 && !resolvedRek.isSinkron ? "TIT01" : resolvedRek.kode;
       const finalMetode = resolvedRek.metode;
       const idPayroll = generateId("GAJI");
       const slipNomor = `SLIP/WA/${targetTanggal.replace(/\//g, "")}/${idPayroll.slice(-4)}`;
       const resolvedTipeGaji = params.tipeGaji || (params.periodeBulan ? "BULANAN" : "HARIAN");
       const resolvedPeriode = params.periodeBulan || (pendingList.length > 0 ? `Settlement ${pendingList.length} Hari Kerja - ${targetTanggal}` : `Penggajian Bulanan - ${targetTanggal}`);
+      let idTitipanGajiTerkait;
+      if (nominalDititipkan > 0) {
+        if (!db.mitra) db.mitra = [];
+        let linkedMitra = db.mitra.find((m) => m.id === mitraId);
+        if (!linkedMitra) {
+          linkedMitra = {
+            id: mitraId,
+            kode: kry.nik || mitraId,
+            nama: kry.nama,
+            role: "KARYAWAN",
+            isKaryawan: true,
+            idKaryawanTerkait: kry.id,
+            telepon: kry.telepon || "",
+            alamat: kry.alamat || "",
+            fotoUrl: kry.fotoUrl,
+            status: "AKTIF"
+          };
+          db.mitra.push(linkedMitra);
+        }
+        if (!kry.idMitraTerkait) {
+          kry.idMitraTerkait = linkedMitra.id;
+        }
+        const noTitipGaji = generateId("TTG");
+        idTitipanGajiTerkait = noTitipGaji;
+        if (!db.pembelianHasilBumi) db.pembelianHasilBumi = [];
+        db.pembelianHasilBumi.unshift({
+          noPembelian: noTitipGaji,
+          tanggal: targetTanggal,
+          jam,
+          idMitra: linkedMitra.id,
+          namaMitra: kry.nama,
+          divisi,
+          komoditasKode: "TITIP_DANA",
+          komoditasNama: "Titipan Sisa Gaji",
+          beratKotor: 0,
+          potonganRafaksi: 0,
+          beratBersih: 0,
+          hargaPerKg: 0,
+          totalNominal: nominalDititipkan,
+          metodePembayaran: "TITIP",
+          rekeningSumber: "TIT01",
+          status: "TITIP",
+          isTitipNonFisik: true,
+          isNotaLalu: false,
+          noNotaLalu: slipNomor,
+          keterangan: `Titipan Sisa Gaji (${resolvedPeriode}) \xB7 Slip ${slipNomor}${gajiBersihDibayar > 0 ? ` \xB7 Diambil ${finalMetode} Rp ${gajiBersihDibayar.toLocaleString("id-ID")}` : " \xB7 100% Dititipkan"}`,
+          createdAt: iso
+        });
+      }
       const payrollRecord = {
         id: idPayroll,
         slipNomor,
@@ -9368,6 +11227,9 @@ var TransactionService = class {
         persentasePotongKasbon: persentase,
         potonganKasbon,
         sisaKasbonAkhir: totalKasbonAwal - potonganKasbon,
+        hakGajiSetelahPotongBon,
+        nominalDititipkan,
+        ...idTitipanGajiTerkait ? { idTitipanGajiTerkait } : {},
         gajiBersihDibayar,
         metodePembayaran: finalMetode,
         rekeningSumber: finalRekKode,
@@ -9375,7 +11237,7 @@ var TransactionService = class {
           jumlahHariKerja: pendingList.length,
           daftarUpahHarianIds: pendingList.map((u) => u.id)
         } : {},
-        keterangan: params.keterangan || (pendingList.length > 0 ? `Pembayaran Gaji / Upah (${pendingList.length} Hari Kerja \xB7 ${resolvedPeriode}) Karyawan ${kry.nama}` : `Pembayaran Gaji (${resolvedPeriode}) Karyawan ${kry.nama}`),
+        keterangan: params.keterangan || (pendingList.length > 0 ? `Pembayaran Gaji / Upah (${pendingList.length} Hari Kerja \xB7 ${resolvedPeriode}) Karyawan ${kry.nama}${nominalDititipkan > 0 ? ` \xB7 Dititipkan Rp ${nominalDititipkan.toLocaleString("id-ID")}` : ""}` : `Pembayaran Gaji (${resolvedPeriode}) Karyawan ${kry.nama}${nominalDititipkan > 0 ? ` \xB7 Dititipkan Rp ${nominalDititipkan.toLocaleString("id-ID")}` : ""}`),
         idBayarBonTerkait
       };
       db.penggajian.unshift(payrollRecord);
@@ -9386,13 +11248,14 @@ var TransactionService = class {
         u.tanggalDibayar = targetTanggal;
       }
       dbManager.synchronizeVirtualAccounts();
+      dbManager.synchronizeDivisiAccounts();
       this.addAuditLog(
         db,
         "PAYROLL",
         idPayroll,
-        `Pembayaran Gaji Karyawan ${kry.nama} (${kry.nik}) [Periode: ${resolvedPeriode} | Tgl Cair: ${targetTanggal}]. Total Gaji Kotor: Rp ${totalUpahKotor.toLocaleString(
+        `Pembayaran Gaji Karyawan ${kry.nama} (${kry.nik}) [Periode: ${resolvedPeriode} | Tgl Cair: ${targetTanggal}]. Gaji Kotor: Rp ${totalUpahKotor.toLocaleString(
           "id-ID"
-        )}, Potong Bon: Rp ${potonganKasbon.toLocaleString("id-ID")}, Bersih Dibayar: Rp ${gajiBersihDibayar.toLocaleString("id-ID")} via ${resolvedRek.nama} (${finalRekKode})`,
+        )}, Potong Bon: Rp ${potonganKasbon.toLocaleString("id-ID")}${nominalDititipkan > 0 ? `, Dititipkan: Rp ${nominalDititipkan.toLocaleString("id-ID")}` : ""}, Diambil Cash/TF: Rp ${gajiBersihDibayar.toLocaleString("id-ID")} via ${resolvedRek.nama} (${finalRekKode})`,
         gajiBersihDibayar,
         finalRekKode
       );
@@ -9809,15 +11672,16 @@ var TransactionService = class {
         }
       }
       const uangMasukDivList = (db.uangMasuk || []).filter(
-        (um) => !isTanpaDivisi(um.divisi) && norm(cleanDiv(um.divisi) || "PT Wijaya Agro Perkasa") === targetNorm && um.metode !== "SINKRON" && um.rekeningTujuan !== "SINKRON" && um.metode !== "PIUTANG" && um.rekeningTujuan !== "BON01" && (Number(um.nominal) || 0) > 0
+        (um) => !isTanpaDivisi(um.divisi) && norm(cleanDiv(um.divisi) || "PT Wijaya Agro Perkasa") === targetNorm && !isExcludedUangMasukFromDivisiCashflow(um) && (Number(um.nominal) || 0) > 0
       );
+      const suratJalanPtEntries = targetNorm === norm("PT Wijaya Agro Perkasa") ? computeSuratJalanKeuntunganPtEntries(db.suratJalan, db.uangMasuk) : [];
       const brilinkMasukDivList = (db.brilink || []).filter(
         (br) => !isTanpaDivisi(br.divisi) && norm(cleanDiv(br.divisi) || "BRILink") === targetNorm && br.jenisBrilink === "TARIK_TUNAI" && (Number(br.nominalAdmin) || 0) > 0
       );
       const brilinkKeluarDivList = (db.brilink || []).filter(
         (br) => !isTanpaDivisi(br.divisi) && norm(cleanDiv(br.divisi) || "BRILink") === targetNorm && br.jenisBrilink === "TUKAR_CASH" && (Number(br.nominalAdmin) || 0) > 0
       );
-      const totalPenjualanMasuk = penjualanTokoList.reduce((sum, p) => sum + (Number(p.totalNominal) || 0), 0) + penjualanHasilBumiList.reduce((sum, j) => sum + (Number(j.totalNominal) || 0), 0) + uangMasukDivList.reduce((sum, um) => sum + (Number(um.nominal) || 0), 0) + brilinkMasukDivList.reduce((sum, br) => sum + (Number(br.nominalAdmin) || 0), 0) + totalPelunasanBonBarang;
+      const totalPenjualanMasuk = penjualanTokoList.reduce((sum, p) => sum + (Number(p.totalNominal) || 0), 0) + penjualanHasilBumiList.reduce((sum, j) => sum + (Number(j.totalNominal) || 0), 0) + uangMasukDivList.reduce((sum, um) => sum + (Number(um.nominal) || 0), 0) + suratJalanPtEntries.reduce((sum, e) => sum + e.nominal, 0) + brilinkMasukDivList.reduce((sum, br) => sum + (Number(br.nominalAdmin) || 0), 0) + totalPelunasanBonBarang;
       const pembelianBarangList = [];
       for (const pb of db.pembelianBarang || []) {
         if (pb.metodePembayaran !== "TUNAI" && pb.metodePembayaran !== "TRANSFER" || (Number(pb.totalNominal) || 0) <= 0) {
@@ -9922,6 +11786,22 @@ var TransactionService = class {
           pihakTerkait: um.namaPengirim,
           rekeningFisik: um.rekeningTujuan,
           _sortIso: um.createdAt
+        });
+      }
+      for (const sjPt of suratJalanPtEntries) {
+        rawMutasi.push({
+          id: sjPt.id,
+          tanggal: sjPt.tanggal,
+          jam: sjPt.jam,
+          jenis: "PENJUALAN_MASUK",
+          keterangan: sjPt.keterangan,
+          masuk: sjPt.nominal,
+          keluar: 0,
+          saldoSetelah: 0,
+          refId: sjPt.noInvoice,
+          pihakTerkait: sjPt.buyerKode ? `${sjPt.namaMitra} (${sjPt.buyerKode})` : sjPt.namaMitra,
+          rekeningFisik: sjPt.rekeningFisik,
+          _sortIso: sjPt.createdAt
         });
       }
       for (const br of brilinkMasukDivList) {
@@ -10118,8 +11998,11 @@ var TransactionService = class {
     const db = dbManager.get();
     const mitra = db.mitra.find((m) => m.id === idMitra);
     if (!mitra) throw new Error("Mitra tidak ditemukan");
-    const linkedRek = mitra.kodeRekeningTerkait && db.rekening.find((r) => r.kode === mitra.kodeRekeningTerkait) || db.rekening.find((r) => r.idMitraTerkait === mitra.id && this.isAnakPerusahaanRekening(r));
-    const isAnakPerusahaan = Boolean(mitra.isAnakPerusahaan || mitra.role === "ANAK_PERUSAHAAN" || linkedRek);
+    const linkedRekCandidate = mitra.kodeRekeningTerkait && db.rekening.find((r) => r.kode === mitra.kodeRekeningTerkait) || db.rekening.find((r) => r.idMitraTerkait === mitra.id && this.isAnakPerusahaanRekening(r));
+    const linkedRek = linkedRekCandidate && this.isAnakPerusahaanRekening(linkedRekCandidate) ? linkedRekCandidate : void 0;
+    const isAnakPerusahaan = Boolean(
+      !linkedRekCandidate || this.isAnakPerusahaanRekening(linkedRekCandidate) ? mitra.isAnakPerusahaan || mitra.role === "ANAK_PERUSAHAAN" || linkedRek : false
+    );
     const saldoRekeningAnakLive = isAnakPerusahaan && linkedRek ? Math.round(Number(linkedRek.saldoSaatIni) || 0) : 0;
     const piutangTransferAnakPerusahaan = saldoRekeningAnakLive > 0 ? saldoRekeningAnakLive : 0;
     const talanganTransferAnakPerusahaan = saldoRekeningAnakLive < 0 ? Math.abs(saldoRekeningAnakLive) : 0;
@@ -10193,6 +12076,7 @@ var TransactionService = class {
         const isSilang = Boolean(p.isNotaSilang);
         const anakLabel = p.namaAnakPerusahaan || "DP Parabot";
         const isSesamaMitra = p.modeNotaSilang === "SESAMA_MITRA";
+        const isProyekBersama = p.modeNotaSilang === "PROYEK_BERSAMA";
         const notaTokoSuffix = p.noNotaToko ? ` [Nota #${p.noNotaToko}]` : "";
         let catatanUser;
         if (isSilang && p.keterangan) {
@@ -10230,27 +12114,28 @@ var TransactionService = class {
               harga: baseItems[lastIdx].qty > 0 ? Math.round(Math.max(0, baseItems[lastIdx].subtotal + diffTotal) / baseItems[lastIdx].qty) : baseItems[lastIdx].harga
             };
           }
-          const totalNota = Math.round(Number(p.totalNominal) || 0);
           const sisaNotaInduk = Math.max(0, Math.round(Number(p.sisaPiutang) || 0));
-          let remainingPaidOnNota = Math.max(0, totalNota - sisaNotaInduk);
+          const itemBalances = this.computePenjualanItemOpenBalances(
+            db,
+            p,
+            catatanUser || `BELANJA ${anakLabel}`
+          );
           const ketBelanjaParts = [
-            isSesamaMitra ? `NOTA SILANG ${anakLabel.toUpperCase()}` : `BELANJA ${anakLabel.toUpperCase()}`,
+            isProyekBersama ? `PROYEK BERSAMA ${anakLabel.toUpperCase()} (LUNAS SINKRON DI ${anakLabel.toUpperCase()})` : isSesamaMitra ? `NOTA SILANG ${anakLabel.toUpperCase()}` : `BELANJA ${anakLabel.toUpperCase()}`,
             catatanUser ? catatanUser.toUpperCase() : "",
             p.noNotaToko ? `#${p.noNotaToko}` : ""
           ].filter(Boolean);
           const ketBelanjaText = ketBelanjaParts.join(" \xB7 ");
-          baseItems.forEach((it, idx) => {
-            const paidHere = Math.min(remainingPaidOnNota, it.subtotal);
-            remainingPaidOnNota = Math.max(0, remainingPaidOnNota - paidHere);
-            const sisaItem = Math.max(0, it.subtotal - paidHere);
-            const rowId = baseItems.length > 1 ? `${p.noPenjualan}-IT${idx + 1}` : p.noPenjualan;
+          itemBalances.forEach((it) => {
+            const sisaItem = it.sisa;
+            const rowId = it.rowId;
             timeline.push({
               id: rowId,
               idTransaksiInduk: p.noPenjualan,
               tanggal: p.tanggal,
               jam: p.jam,
               createdAt: p.createdAt,
-              jenis: isSesamaMitra ? `NOTA SILANG MITRA (${anakLabel.toUpperCase()})` : `NOTA SILANG (${anakLabel.toUpperCase()})`,
+              jenis: isProyekBersama ? `PROYEK BERSAMA (${anakLabel.toUpperCase()} \xB7 LUNAS SINKRON)` : isSesamaMitra ? `NOTA SILANG MITRA (${anakLabel.toUpperCase()})` : `NOTA SILANG (${anakLabel.toUpperCase()})`,
               keterangan: `${it.nama} \u2014 ${ketBelanjaText}`,
               catatanTransaksi: ketBelanjaText,
               qtyDisplay: `${it.qty} ${it.satuan}`,
@@ -10282,13 +12167,15 @@ var TransactionService = class {
           });
         } else {
           const sisaP = Math.max(0, Number(p.sisaPiutang) || 0);
+          const dpNom = Math.max(0, Number(p.dpNominal) || 0);
+          const dpSuffix = dpNom > 0 ? ` \xB7 DP Rp ${dpNom.toLocaleString("id-ID")} (${p.dpMetode || "TUNAI"}${p.dpRekeningTujuan ? ` ${p.dpRekeningTujuan}` : ""})` : "";
           timeline.push({
             id: p.noPenjualan,
             tanggal: p.tanggal,
             jam: p.jam,
             createdAt: p.createdAt,
             jenis: "PENJUALAN KASBON",
-            keterangan: `Kasbon Barang${notaTokoSuffix}: ${rincianText}${catatanUser ? ` \u2014 Ket: ${catatanUser}` : ""}`,
+            keterangan: `Kasbon Barang${notaTokoSuffix}: ${rincianText}${dpSuffix}${catatanUser ? ` \u2014 Ket: ${catatanUser}` : ""}`,
             catatanTransaksi: catatanUser,
             qtyDisplay,
             hargaSatuanDisplay,
@@ -10309,24 +12196,91 @@ var TransactionService = class {
         }
       } else {
         const catatanUser = extractUserCatatan(p.keterangan);
-        timeline.push({
-          id: p.noPenjualan,
-          tanggal: p.tanggal,
-          jam: p.jam,
-          createdAt: p.createdAt,
-          jenis: p.metode === "SINKRON" ? "PENJUALAN SINKRON (LUNAS NON-TUNAI)" : p.metode === "PEMAKAIAN_PENGELUARAN" ? `PEMAKAIAN KE PENGELUARAN (${p.kategoriPengeluaran || "OPERASIONAL"})` : `PENJUALAN ${p.metode}`,
-          keterangan: p.metode === "SINKRON" ? `Penjualan Lunas SINKRON (Tanpa Uang Masuk): ${rincianText}` : `Penjualan Lunas (${p.metode}) via ${p.rekeningTujuan}: ${rincianText}`,
-          catatanTransaksi: catatanUser,
-          qtyDisplay,
-          hargaSatuanDisplay,
-          itemsDetail,
-          debet: 0,
-          kredit: 0,
-          metodePembayaran: p.metode,
-          rekeningKode: p.rekeningTujuan,
-          statusTransaksi: p.metode === "SINKRON" ? "SINKRON" : "LUNAS",
-          nominalTransaksi: p.totalNominal
-        });
+        const isSilangLunas = Boolean(p.isNotaSilang && p.modeNotaSilang === "BAYAR_LUNAS_KAS_PT");
+        const isProyekSinkron = Boolean(p.isNotaSilang && p.modeNotaSilang === "PROYEK_BERSAMA");
+        const anakLabel = p.namaAnakPerusahaan || "DP Parabot";
+        if (isProyekSinkron) {
+          const baseItems = p.items.length > 0 ? p.items.map((it) => ({
+            nama: (it.namaProduk || "BARANG").trim().toUpperCase(),
+            qty: Number(it.qty) || 1,
+            satuan: (it.satuan || "PCS").trim().toUpperCase(),
+            harga: Math.round(Number(it.harga) || 0),
+            subtotal: Math.round(
+              Number(it.subtotal) || (Number(it.qty) || 1) * (Number(it.harga) || 0)
+            )
+          })) : [
+            {
+              nama: (catatanUser || `MATERIAL ${anakLabel}`).trim().toUpperCase(),
+              qty: 1,
+              satuan: "NOTA",
+              harga: Math.round(Number(p.totalNominal) || 0),
+              subtotal: Math.round(Number(p.totalNominal) || 0)
+            }
+          ];
+          const ketParts = [
+            `PROYEK BERSAMA ${anakLabel.toUpperCase()} (LUNAS SINKRON)`,
+            catatanUser ? catatanUser.toUpperCase() : "",
+            p.noNotaToko ? `#${p.noNotaToko}` : ""
+          ].filter(Boolean);
+          const ketText = ketParts.join(" \xB7 ");
+          baseItems.forEach((it, idx) => {
+            const rowId = baseItems.length > 1 ? `${p.noPenjualan}-IT${idx + 1}` : p.noPenjualan;
+            timeline.push({
+              id: rowId,
+              idTransaksiInduk: p.noPenjualan,
+              tanggal: p.tanggal,
+              jam: p.jam,
+              createdAt: p.createdAt,
+              jenis: `PROYEK BERSAMA \xB7 LUNAS SINKRON (${anakLabel.toUpperCase()})`,
+              keterangan: `${it.nama} \u2014 ${ketText}`,
+              catatanTransaksi: ketText,
+              qtyDisplay: `${it.qty} ${it.satuan}`,
+              hargaSatuanDisplay: `Rp ${it.harga.toLocaleString("id-ID")}`,
+              itemsDetail: [
+                {
+                  nama: it.nama,
+                  qty: it.qty,
+                  satuan: it.satuan,
+                  harga: it.harga,
+                  subtotal: it.subtotal
+                }
+              ],
+              debet: 0,
+              kredit: 0,
+              fotoNota: p.fotoNota,
+              isNotaSilang: true,
+              noNotaToko: p.noNotaToko,
+              pihakNotaSilang: anakLabel,
+              metodePembayaran: "SINKRON",
+              rekeningKode: "SINKRON",
+              statusTransaksi: "SINKRON",
+              nominalTransaksi: it.subtotal
+            });
+          });
+        } else {
+          timeline.push({
+            id: p.noPenjualan,
+            tanggal: p.tanggal,
+            jam: p.jam,
+            createdAt: p.createdAt,
+            jenis: isSilangLunas ? `NOTA SILANG LUNAS (${anakLabel.toUpperCase()})` : p.metode === "SINKRON" ? "PENJUALAN SINKRON (LUNAS NON-TUNAI)" : p.metode === "PEMAKAIAN_PENGELUARAN" ? `PEMAKAIAN KE PENGELUARAN (${p.kategoriPengeluaran || "OPERASIONAL"})` : `PENJUALAN ${p.metode}`,
+            keterangan: isSilangLunas ? `Belanja Lunas ${anakLabel} (${p.metode} \u2192 ${p.rekeningTujuan}): ${rincianText}` : p.metode === "SINKRON" ? `Penjualan Lunas SINKRON (Tanpa Uang Masuk): ${rincianText}` : `Penjualan Lunas (${p.metode}) via ${p.rekeningTujuan}: ${rincianText}`,
+            catatanTransaksi: catatanUser,
+            qtyDisplay,
+            hargaSatuanDisplay,
+            itemsDetail,
+            debet: 0,
+            kredit: 0,
+            fotoNota: p.fotoNota,
+            isNotaSilang: isSilangLunas,
+            noNotaToko: p.noNotaToko,
+            pihakNotaSilang: isSilangLunas ? anakLabel : void 0,
+            metodePembayaran: p.metode,
+            rekeningKode: p.rekeningTujuan,
+            statusTransaksi: p.metode === "SINKRON" ? "SINKRON" : "LUNAS",
+            nominalTransaksi: p.totalNominal
+          });
+        }
       }
     }
     for (const jhb of (db.penjualanHasilBumi || []).filter((item) => item.idMitra === mitra.id)) {
@@ -10446,24 +12400,27 @@ var TransactionService = class {
       const pengurangNgunci = b.nominalPengurangNotaNgunci ?? (b.alokasi || []).filter((a) => a.isNotaNgunci).reduce((s, a) => s + (a.nominalDibayar || 0), 0);
       const infoNgunciSuffix = pengurangNgunci > 0 ? ` [Otomatis Mengurangi Nota Kunci: -Rp ${pengurangNgunci.toLocaleString("id-ID")}]` : "";
       const alokasiSummary = (b.alokasi || []).length > 0 ? ` \xB7 Alokasi: ${(b.alokasi || []).map((a) => `${a.refId} (${a.nominalSisa === 0 ? "LUNAS" : `Sisa Rp ${a.nominalSisa.toLocaleString("id-ID")}`})`).join(", ")}` : "";
+      const isDpPenjualan = Boolean(
+        b.isDpPenjualan || b.noPenjualanTerkait || /^DP Penjualan Kasbon/i.test(String(b.keterangan || "").trim())
+      );
       const baseCat = extractUserCatatan(b.keterangan);
       const hasBayarKeyword = Boolean(
-        baseCat && /bayar\s*bon|pelunasan|angsuran|cicil|kliring|potong\s*gaji/i.test(baseCat)
+        baseCat && /bayar\s*bon|pelunasan|angsuran|cicil|kliring|potong\s*gaji|dp\s*penjualan/i.test(baseCat)
       );
-      const displayBayarCat = isKliringSilang ? baseCat || "Bayar Bon (Kliring Silang Titipan)" : isPotongGaji ? baseCat || "Bayar Bon (Potong Gaji Karyawan)" : baseCat ? hasBayarKeyword ? baseCat : `Bayar Bon \xB7 ${baseCat}` : "Bayar Bon";
+      const displayBayarCat = isKliringSilang ? baseCat || "Bayar Bon (Kliring Silang Titipan)" : isPotongGaji ? baseCat || "Bayar Bon (Potong Gaji Karyawan)" : isDpPenjualan ? baseCat || `DP Penjualan Kasbon${b.noPenjualanTerkait ? ` (${b.noPenjualanTerkait})` : ""}` : baseCat ? hasBayarKeyword ? baseCat : `Bayar Bon \xB7 ${baseCat}` : "Bayar Bon";
       timeline.push({
         id: b.idTransaksi,
         tanggal: b.tanggal,
         jam: b.jam,
         createdAt: b.createdAt,
-        jenis: isKliringSilang ? "KLIRING SILANG (PELUNASAN BON)" : isSinkronBon ? "PEMBAYARAN BON (LUNAS SINKRON)" : isPotongGaji ? "PEMBAYARAN BON (POTONG GAJI)" : `PEMBAYARAN BON (${b.metode})`,
-        keterangan: isKliringSilang ? `Kliring Silang (Potong Saldo Titipan) - ${b.keterangan || "Pelunasan Bon"}${infoNgunciSuffix}${alokasiSummary}` : `Bayar Bon via (${bankMethodLabel}) - ${b.keterangan || "Pembayaran Nota"}${infoNgunciSuffix}${alokasiSummary}`,
+        jenis: isKliringSilang ? "KLIRING SILANG (PELUNASAN BON)" : isSinkronBon ? "PEMBAYARAN BON (LUNAS SINKRON)" : isPotongGaji ? "PEMBAYARAN BON (POTONG GAJI)" : isDpPenjualan ? `DP PENJUALAN KASBON (${b.metode})` : `PEMBAYARAN BON (${b.metode})`,
+        keterangan: isKliringSilang ? `Kliring Silang (Potong Saldo Titipan) - ${b.keterangan || "Pelunasan Bon"}${infoNgunciSuffix}${alokasiSummary}` : isDpPenjualan ? `DP Penjualan Kasbon via (${bankMethodLabel})${b.noPenjualanTerkait ? ` [${b.noPenjualanTerkait}]` : ""}${alokasiSummary}` : `Bayar Bon via (${bankMethodLabel}) - ${b.keterangan || "Pembayaran Nota"}${infoNgunciSuffix}${alokasiSummary}`,
         catatanTransaksi: displayBayarCat,
         qtyDisplay: "1 Trx",
         hargaSatuanDisplay: `Rp ${b.nominalBayar.toLocaleString("id-ID")}`,
         itemsDetail: [
           {
-            nama: isKliringSilang ? "Bayar Bon (Kliring Silang: Potong Titipan)" : isPotongGaji ? "Bayar Bon (Potong Gaji / Upah)" : `Bayar Bon (${bankMethodLabel})`,
+            nama: isKliringSilang ? "Bayar Bon (Kliring Silang: Potong Titipan)" : isPotongGaji ? "Bayar Bon (Potong Gaji / Upah)" : isDpPenjualan ? `DP Penjualan Kasbon (${bankMethodLabel})${b.noPenjualanTerkait ? ` \xB7 ${b.noPenjualanTerkait}` : ""}` : `Bayar Bon (${bankMethodLabel})`,
             qty: 1,
             satuan: "Trx",
             harga: b.nominalBayar,
@@ -10476,18 +12433,153 @@ var TransactionService = class {
         nominalTransaksi: b.nominalBayar,
         fotoNota: b.fotoBukti || b.fotoNota,
         _isBayarBonEntry: true,
+        _alokasi: Array.isArray(b.alokasi) ? b.alokasi : [],
         metodePembayaran: isKliringSilang ? "KLIRING_SILANG" : isPotongGaji ? "POTONG_GAJI" : isSinkronBon ? "SINKRON" : b.metode,
         rekeningKode: b.rekeningTujuan,
         statusTransaksi: isKliringSilang ? "KLIRING_SILANG" : isSinkronBon ? "SINKRON" : "LUNAS"
       });
     }
-    for (const pb of db.pembelianHasilBumi.filter((item) => item.idMitra === mitra.id)) {
+    const mitraPembelianHb = db.pembelianHasilBumi.filter((item) => item.idMitra === mitra.id);
+    const getHbBatchPrefix = (pb) => {
+      if (pb.batchId && String(pb.batchId).trim()) return String(pb.batchId).trim();
+      const match = String(pb.noPembelian || "").match(/^(BHB[A-Z0-9]+)-\d+$/i);
+      return match ? match[1] : "";
+    };
+    const isBatchGroupableHb = (pb) => {
+      const isSilang = Boolean(pb.isNotaSilang || pb.komoditasKode === "NOTA_SILANG");
+      const isPinjaman = !isSilang && (pb.komoditasKode === "PINJAMAN_DANA" || Boolean(pb.komoditasNama?.includes("Pinjaman Uang")));
+      const isNotaLalu = !isSilang && (Boolean(pb.isNotaLalu) || Boolean(pb.keterangan?.includes("Nota Lalu")) || pb.komoditasKode === "TITIP_DANA");
+      if (isSilang || isPinjaman || isNotaLalu) return false;
+      return Boolean(getHbBatchPrefix(pb));
+    };
+    const hbBatchGroups = /* @__PURE__ */ new Map();
+    for (const pb of mitraPembelianHb) {
+      if (!isBatchGroupableHb(pb)) continue;
+      const prefix = getHbBatchPrefix(pb);
+      const effectiveDate = pb.metodePembayaran === "TITIP" ? pb.tanggalNotaLalu || pb.tanggal : pb.tanggal;
+      const key = `${prefix}__${pb.metodePembayaran}__${effectiveDate}`;
+      const arr = hbBatchGroups.get(key) || [];
+      arr.push(pb);
+      hbBatchGroups.set(key, arr);
+    }
+    const processedHbBatchKeys = /* @__PURE__ */ new Set();
+    for (const pb of mitraPembelianHb) {
+      if (isBatchGroupableHb(pb)) {
+        const prefix = getHbBatchPrefix(pb);
+        const effectiveDate = pb.metodePembayaran === "TITIP" ? pb.tanggalNotaLalu || pb.tanggal : pb.tanggal;
+        const batchKey = `${prefix}__${pb.metodePembayaran}__${effectiveDate}`;
+        const groupRaw = hbBatchGroups.get(batchKey);
+        if (groupRaw && groupRaw.length > 1) {
+          if (processedHbBatchKeys.has(batchKey)) continue;
+          processedHbBatchKeys.add(batchKey);
+          const group = [...groupRaw].sort(
+            (a, b) => String(a.noPembelian || "").localeCompare(String(b.noPembelian || ""), "id")
+          );
+          const first = group[0];
+          const totalNominalBatch = group.reduce((s, g) => s + (Number(g.totalNominal) || 0), 0);
+          const totalBeratBatch = Math.round(group.reduce((s, g) => s + (Number(g.beratBersih) || 0), 0) * 100) / 100;
+          const uniqueNotes = Array.from(
+            new Set(group.map((g) => extractUserCatatan(g.keterangan)).filter(Boolean))
+          );
+          const combinedCatatan = uniqueNotes.length > 0 ? uniqueNotes.join(" \xB7 ") : void 0;
+          const allPhotos = Array.from(
+            new Set(
+              group.flatMap(
+                (g) => g.fotoNotaList && g.fotoNotaList.length > 0 ? g.fotoNotaList : g.fotoNota || g.attachment_url ? [g.fotoNota || g.attachment_url || ""] : []
+              ).filter(Boolean)
+            )
+          );
+          const combinedFoto = allPhotos.join("|||");
+          const batchItemIds = group.map((g) => g.noPembelian);
+          const itemsDetail = group.map((g) => {
+            const gBelumPutus = Boolean(g.isBelumPutusHarga || g.status === "BELUM_PUTUS_HARGA");
+            const gNonFisik = Boolean(gBelumPutus && g.isTitipNonFisik);
+            return {
+              nama: g.komoditasNama,
+              qty: g.beratBersih > 0 ? g.beratBersih : 1,
+              satuan: g.beratBersih > 0 ? "Kg" : "Titip",
+              harga: gBelumPutus ? 0 : g.beratBersih > 0 && (g.hargaPerKg || 0) > 0 ? g.hargaPerKg : g.totalNominal,
+              subtotal: gBelumPutus ? 0 : g.totalNominal,
+              idTransaksiItem: g.noPembelian,
+              ...gBelumPutus ? { isBelumPutusHarga: true } : {},
+              ...gNonFisik ? { isTitipNonFisik: true } : {}
+            };
+          });
+          const hasAnyBelumPutus = group.some(
+            (g) => Boolean(g.isBelumPutusHarga || g.status === "BELUM_PUTUS_HARGA")
+          );
+          const allBelumPutus = group.every(
+            (g) => Boolean(g.isBelumPutusHarga || g.status === "BELUM_PUTUS_HARGA")
+          );
+          const allNonFisik = hasAnyBelumPutus && group.every((g) => Boolean(g.isTitipNonFisik));
+          const beratBelumPutusBatch = Math.round(
+            group.filter((g) => Boolean(g.isBelumPutusHarga || g.status === "BELUM_PUTUS_HARGA")).reduce((s, g) => s + (Number(g.beratBersih) || 0), 0) * 100
+          ) / 100;
+          const rincianBatchText = group.map((g) => {
+            const gBelumPutus = Boolean(g.isBelumPutusHarga || g.status === "BELUM_PUTUS_HARGA");
+            return gBelumPutus ? `${g.komoditasNama} (${g.beratBersih} Kg \xB7 ${g.isTitipNonFisik ? "Titip Lama Non-Fisik" : "Belum Putus Harga"})` : `${g.komoditasNama} (${g.beratBersih} Kg @ Rp ${(g.hargaPerKg || 0).toLocaleString("id-ID")})`;
+          }).join(", ");
+          if (first.metodePembayaran === "TITIP") {
+            timeline.push({
+              id: prefix,
+              batchItemIds,
+              tanggal: effectiveDate,
+              jam: first.jam,
+              createdAt: first.createdAt,
+              jenis: allBelumPutus ? allNonFisik ? "TITIP LAMA NON-FISIK (BELUM PUTUS HARGA)" : "TITIP PANEN (BELUM PUTUS HARGA)" : "TITIP HASIL BUMI",
+              keterangan: `Titip Hasil Panen (${group.length} Komoditas, Total ${totalBeratBatch.toLocaleString("id-ID")} Kg): ${rincianBatchText}${combinedCatatan ? ` \u2014 ${combinedCatatan}` : ""}`,
+              catatanTransaksi: combinedCatatan,
+              qtyDisplay: `${totalBeratBatch.toLocaleString("id-ID")} Kg (${group.length} Item)`,
+              hargaSatuanDisplay: allBelumPutus ? "Belum Putus" : "Terlampir",
+              itemsDetail,
+              debet: 0,
+              kredit: 0,
+              nominalMutasiHak: totalNominalBatch,
+              kategoriMutasiHak: "TITIP_MASUK",
+              fotoNota: combinedFoto,
+              metodePembayaran: "TITIP",
+              rekeningKode: first.rekeningSumber || "TIT01",
+              statusTransaksi: allBelumPutus ? "BELUM_PUTUS_HARGA" : "TITIP",
+              nominalTransaksi: totalNominalBatch,
+              ...hasAnyBelumPutus ? {
+                isBelumPutusHarga: true,
+                ...allNonFisik ? { isTitipNonFisik: true } : {},
+                beratTitipBelumPutusKg: beratBelumPutusBatch
+              } : {}
+            });
+          } else {
+            const isSinkronPb = first.metodePembayaran === "SINKRON" || first.rekeningSumber === "SINKRON";
+            timeline.push({
+              id: prefix,
+              batchItemIds,
+              tanggal: effectiveDate,
+              jam: first.jam,
+              createdAt: first.createdAt,
+              jenis: isSinkronPb ? "BELI HASIL BUMI (LUNAS SINKRON)" : `BELI HASIL BUMI (${first.metodePembayaran})`,
+              keterangan: isSinkronPb ? `Pembelian Lunas SINKRON (${group.length} Komoditas, ${totalBeratBatch.toLocaleString("id-ID")} Kg): ${rincianBatchText}` : `Pembelian Lunas (${group.length} Komoditas, ${totalBeratBatch.toLocaleString("id-ID")} Kg) via ${first.rekeningSumber}: ${rincianBatchText}`,
+              catatanTransaksi: combinedCatatan,
+              qtyDisplay: `${totalBeratBatch.toLocaleString("id-ID")} Kg (${group.length} Item)`,
+              hargaSatuanDisplay: "Terlampir",
+              itemsDetail,
+              debet: 0,
+              kredit: 0,
+              fotoNota: combinedFoto,
+              metodePembayaran: first.metodePembayaran,
+              rekeningKode: first.rekeningSumber,
+              statusTransaksi: isSinkronPb ? "SINKRON" : "LUNAS",
+              nominalTransaksi: totalNominalBatch
+            });
+          }
+          continue;
+        }
+      }
       const fotoPb = pb.fotoNotaList && pb.fotoNotaList.length > 0 ? pb.fotoNotaList.join("|||") : pb.fotoNota || pb.attachment_url || "";
       if (pb.metodePembayaran === "TITIP") {
         const isSilang = Boolean(pb.isNotaSilang || pb.komoditasKode === "NOTA_SILANG");
         const isPinjaman = !isSilang && (pb.komoditasKode === "PINJAMAN_DANA" || pb.komoditasNama?.includes("Pinjaman Uang"));
-        const isNotaLalu = !isSilang && (pb.isNotaLalu || pb.keterangan?.includes("Nota Lalu") || pb.komoditasKode === "TITIP_DANA");
-        const noNotaLabel = pb.noNotaLalu ? ` [No. Nota: ${pb.noNotaLalu}]` : "";
+        const isTitipGaji = !isSilang && !isPinjaman && (Boolean(pb.noPembelian?.startsWith("TTG")) || pb.komoditasNama === "Titipan Sisa Gaji");
+        const isNotaLalu = !isSilang && !isTitipGaji && (pb.isNotaLalu || pb.keterangan?.includes("Nota Lalu") || pb.komoditasKode === "TITIP_DANA");
+        const noNotaLabel = pb.noNotaLalu && !isTitipGaji ? ` [No. Nota: ${pb.noNotaLalu}]` : "";
         if (isSilang) {
           const pengambilNama = (pb.namaMitraPengambil || pb.komoditasNama || "MITRA").trim();
           const pengambilUpper = pengambilNama.toUpperCase();
@@ -10537,13 +12629,14 @@ var TransactionService = class {
               pb.noNotaToko ? `#${pb.noNotaToko}` : ""
             ].filter(Boolean);
             const ketBarangText = ketParts.join(" \xB7 ");
+            const isLunasKasPtPb = pb.modeNotaSilang === "BAYAR_LUNAS_KAS_PT";
             timeline.push({
               id: rowId,
               idTransaksiInduk: pb.noPembelian,
               tanggal: pb.tanggal,
               jam: pb.jam,
               createdAt: pb.createdAt,
-              jenis: `NOTA SILANG (${pengambilUpper})`,
+              jenis: isLunasKasPtPb ? `NOTA SILANG LUNAS \u2192 KAS PT (${pengambilUpper})` : `NOTA SILANG (${pengambilUpper})`,
               keterangan: `${pengambilUpper} \u2014 ${ketBarangText}`,
               catatanTransaksi: ketBarangText,
               qtyDisplay: `${it.qty} ${it.satuan}`,
@@ -10569,7 +12662,11 @@ var TransactionService = class {
             });
           });
         } else {
-          const jenisLabel = isPinjaman ? "PINJAMAN UANG PT KE MITRA (SALDO TITIP)" : isNotaLalu ? "NOTA LALU (TITIPAN UANG/PANEN)" : "TITIP HASIL BUMI";
+          const isBelumPutusPb = Boolean(
+            !isPinjaman && !isTitipGaji && !isNotaLalu && (pb.isBelumPutusHarga || pb.status === "BELUM_PUTUS_HARGA")
+          );
+          const isTitipNonFisikPb = Boolean(isBelumPutusPb && pb.isTitipNonFisik);
+          const jenisLabel = isPinjaman ? "PINJAMAN UANG PT KE MITRA (SALDO TITIP)" : isTitipGaji ? "TITIPAN SISA GAJI" : isNotaLalu ? "NOTA LALU (TITIPAN UANG/PANEN)" : isTitipNonFisikPb ? "TITIP LAMA NON-FISIK (BELUM PUTUS HARGA)" : isBelumPutusPb ? "TITIP PANEN (BELUM PUTUS HARGA)" : "TITIP HASIL BUMI";
           const catatanUser = extractUserCatatan(pb.keterangan);
           timeline.push({
             id: pb.noPembelian,
@@ -10577,30 +12674,37 @@ var TransactionService = class {
             jam: pb.jam,
             createdAt: pb.createdAt,
             jenis: jenisLabel,
-            keterangan: isPinjaman ? `${pb.keterangan || "Pinjaman Uang dari PT ke Mitra (Masuk Saldo Titip)"}${noNotaLabel}` : isNotaLalu ? `${pb.keterangan || "Titipan Dana / Panen Masa Lalu"}${noNotaLabel}` : `Titip Hasil Panen ${pb.komoditasNama} (${pb.beratBersih} Kg @ Rp ${(pb.hargaPerKg || 0).toLocaleString("id-ID")}/Kg)${catatanUser ? ` \u2014 ${catatanUser}` : ""}`,
+            keterangan: isPinjaman ? `${pb.keterangan || "Pinjaman Uang dari PT ke Mitra (Masuk Saldo Titip)"}${noNotaLabel}` : isTitipGaji ? `${pb.keterangan || "Titipan Sisa Gaji (Masuk Saldo Titip)"}` : isNotaLalu ? `${pb.keterangan || "Titipan Dana / Panen Masa Lalu"}${noNotaLabel}` : isTitipNonFisikPb ? `Titip Lama ${pb.komoditasNama} (${pb.beratBersih} Kg \xB7 Fisik Tidak di Gudang \xB7 Belum Putus Harga)${catatanUser ? ` \u2014 ${catatanUser}` : ""}` : isBelumPutusPb ? `Titip Hasil Panen ${pb.komoditasNama} (${pb.beratBersih} Kg \xB7 Belum Putus Harga)${catatanUser ? ` \u2014 ${catatanUser}` : ""}` : `Titip Hasil Panen ${pb.komoditasNama} (${pb.beratBersih} Kg @ Rp ${(pb.hargaPerKg || 0).toLocaleString("id-ID")}/Kg)${catatanUser ? ` \u2014 ${catatanUser}` : ""}`,
             catatanTransaksi: catatanUser,
-            qtyDisplay: isPinjaman ? "Dana Tunai" : pb.beratBersih > 0 ? `${pb.beratBersih.toLocaleString("id-ID")} Kg` : "1 (Dana)",
-            hargaSatuanDisplay: pb.beratBersih > 0 && (pb.hargaPerKg || 0) > 0 ? `Rp ${(pb.hargaPerKg || 0).toLocaleString("id-ID")}` : `Rp ${pb.totalNominal.toLocaleString("id-ID")}`,
+            qtyDisplay: isPinjaman ? "Dana Tunai" : isTitipGaji ? "1 Slip" : pb.beratBersih > 0 ? `${pb.beratBersih.toLocaleString("id-ID")} Kg` : "1 (Dana)",
+            hargaSatuanDisplay: isBelumPutusPb ? "Belum Putus" : pb.beratBersih > 0 && (pb.hargaPerKg || 0) > 0 ? `Rp ${(pb.hargaPerKg || 0).toLocaleString("id-ID")}` : `Rp ${pb.totalNominal.toLocaleString("id-ID")}`,
             itemsDetail: [
               {
-                nama: isPinjaman ? `Pinjaman Uang dari PT ke Mitra (Masuk Saldo Titip)` : isNotaLalu ? `Titipan Uang / Panen Nota Lalu (${pb.noNotaLalu || "Nota Titip Lama"})` : `Hasil Panen: ${pb.komoditasNama}`,
+                nama: isPinjaman ? `Pinjaman Uang dari PT ke Mitra (Masuk Saldo Titip)` : isTitipGaji ? `Titipan Sisa Gaji (${pb.noNotaLalu || pb.noPembelian})` : isNotaLalu ? `Titipan Uang / Panen Nota Lalu (${pb.noNotaLalu || "Nota Titip Lama"})` : `Hasil Panen: ${pb.komoditasNama}`,
                 qty: pb.beratBersih > 0 ? pb.beratBersih : 1,
-                satuan: isPinjaman ? "Dana" : pb.beratBersih > 0 ? "Kg" : "Titip",
-                harga: pb.beratBersih > 0 && (pb.hargaPerKg || 0) > 0 ? pb.hargaPerKg : pb.totalNominal,
-                subtotal: pb.totalNominal
+                satuan: isPinjaman ? "Dana" : isTitipGaji ? "Slip" : pb.beratBersih > 0 ? "Kg" : "Titip",
+                harga: isBelumPutusPb ? 0 : pb.beratBersih > 0 && (pb.hargaPerKg || 0) > 0 ? pb.hargaPerKg : pb.totalNominal,
+                subtotal: isBelumPutusPb ? 0 : pb.totalNominal,
+                ...isBelumPutusPb ? { isBelumPutusHarga: true } : {},
+                ...isTitipNonFisikPb ? { isTitipNonFisik: true } : {}
               }
             ],
             debet: 0,
             kredit: 0,
-            nominalMutasiHak: pb.totalNominal,
+            nominalMutasiHak: isBelumPutusPb ? 0 : pb.totalNominal,
             kategoriMutasiHak: "TITIP_MASUK",
             fotoNota: fotoPb,
             isNotaLalu: isPinjaman ? true : isNotaLalu,
             noNotaLalu: pb.noNotaLalu,
             metodePembayaran: isPinjaman ? "PINJAMAN_DANA" : isNotaLalu ? "NOTA_LALU" : "TITIP",
             rekeningKode: pb.rekeningSumber || "TIT01",
-            statusTransaksi: "TITIP",
-            nominalTransaksi: pb.totalNominal
+            statusTransaksi: isBelumPutusPb ? "BELUM_PUTUS_HARGA" : "TITIP",
+            nominalTransaksi: isBelumPutusPb ? 0 : pb.totalNominal,
+            ...isBelumPutusPb ? {
+              isBelumPutusHarga: true,
+              ...isTitipNonFisikPb ? { isTitipNonFisik: true } : {},
+              beratTitipBelumPutusKg: Number(pb.beratBersih) || 0
+            } : {}
           });
         }
       } else {
@@ -10821,33 +12925,134 @@ var TransactionService = class {
       });
     }
     if (linkedKaryawan) {
+      const NAMA_BULAN_INDO = [
+        "Januari",
+        "Februari",
+        "Maret",
+        "April",
+        "Mei",
+        "Juni",
+        "Juli",
+        "Agustus",
+        "September",
+        "Oktober",
+        "November",
+        "Desember"
+      ];
+      const parseUpahMonthInfo = (tanggalKerja, createdAt) => {
+        const raw = String(tanggalKerja || "").trim();
+        const dmyParts = raw.split("/");
+        if (dmyParts.length === 3) {
+          const dd = Number(dmyParts[0]);
+          const mm = Number(dmyParts[1]);
+          const yyyy = Number(dmyParts[2]);
+          if (yyyy >= 2e3 && mm >= 1 && mm <= 12) {
+            return {
+              monthKey: `${yyyy}-${String(mm).padStart(2, "0")}`,
+              bulanLabel: `${NAMA_BULAN_INDO[mm - 1]} ${yyyy}`,
+              sortMs: new Date(yyyy, mm - 1, dd || 1).getTime()
+            };
+          }
+        }
+        const isoParts = raw.split("-");
+        if (isoParts.length === 3) {
+          const yyyy = Number(isoParts[0]);
+          const mm = Number(isoParts[1]);
+          const dd = Number(isoParts[2]);
+          if (yyyy >= 2e3 && mm >= 1 && mm <= 12) {
+            return {
+              monthKey: `${yyyy}-${String(mm).padStart(2, "0")}`,
+              bulanLabel: `${NAMA_BULAN_INDO[mm - 1]} ${yyyy}`,
+              sortMs: new Date(yyyy, mm - 1, dd || 1).getTime()
+            };
+          }
+        }
+        if (createdAt && createdAt.includes("T")) {
+          const dt = new Date(createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getFullYear();
+            const mm = dt.getMonth() + 1;
+            return {
+              monthKey: `${yyyy}-${String(mm).padStart(2, "0")}`,
+              bulanLabel: `${NAMA_BULAN_INDO[mm - 1]} ${yyyy}`,
+              sortMs: dt.getTime()
+            };
+          }
+        }
+        return {
+          monthKey: "LAINNYA",
+          bulanLabel: "Bulan Berjalan",
+          sortMs: 0
+        };
+      };
+      const groupedUpahMap = /* @__PURE__ */ new Map();
       for (const u of linkedUpahList) {
-        const jamUpah = u.createdAt && u.createdAt.includes("T") ? new Date(u.createdAt).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour12: false }).replace(/\./g, ":") : "08:00:00";
         const isPaid = u.status === "SUDAH_DIBAYAR";
-        const uraianTugas = u.item || u.keterangan || `Tugas Harian di ${u.divisi}`;
+        const info = parseUpahMonthInfo(u.tanggalKerja, u.createdAt);
+        const groupKey = `${info.monthKey}__${isPaid ? "CAIR" : "BELUM"}`;
+        let grp = groupedUpahMap.get(groupKey);
+        if (!grp) {
+          grp = {
+            monthKey: info.monthKey,
+            bulanLabel: info.bulanLabel,
+            isPaid,
+            entries: []
+          };
+          groupedUpahMap.set(groupKey, grp);
+        }
+        grp.entries.push(u);
+      }
+      for (const grp of groupedUpahMap.values()) {
+        const sortedEntries = [...grp.entries].sort((a, b) => {
+          const msA = parseUpahMonthInfo(a.tanggalKerja, a.createdAt).sortMs;
+          const msB = parseUpahMonthInfo(b.tanggalKerja, b.createdAt).sortMs;
+          if (msA !== msB) return msA - msB;
+          return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+        });
+        const firstEntry = sortedEntries[0];
+        const latestEntry = sortedEntries[sortedEntries.length - 1];
+        const totalNominalBulan = sortedEntries.reduce(
+          (sum, u) => sum + (Number(u.totalUpahHarian) || 0),
+          0
+        );
+        const uniqueDates = new Set(
+          sortedEntries.map((u) => String(u.tanggalKerja || "").trim()).filter(Boolean)
+        );
+        const jumlahHari = uniqueDates.size || sortedEntries.length;
+        const jumlahCatatan = sortedEntries.length;
+        const rentangTanggal = firstEntry?.tanggalKerja && latestEntry?.tanggalKerja ? firstEntry.tanggalKerja === latestEntry.tanggalKerja ? firstEntry.tanggalKerja : `${firstEntry.tanggalKerja} \u2013 ${latestEntry.tanggalKerja}` : "";
+        const jamUpah = latestEntry?.createdAt && latestEntry.createdAt.includes("T") ? new Date(latestEntry.createdAt).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour12: false }).replace(/\./g, ":") : "17:00:00";
+        const slipIds = Array.from(
+          new Set(sortedEntries.map((u) => u.idPayrollSettlement).filter(Boolean))
+        );
+        const paidDates = Array.from(
+          new Set(sortedEntries.map((u) => u.tanggalDibayar).filter(Boolean))
+        );
+        const rekapHariStr = jumlahCatatan > jumlahHari ? `${jumlahHari} hari (${jumlahCatatan} catatan upah)` : `${jumlahHari} hari kerja`;
+        const catatanRingkas = grp.isPaid ? `Rekap ${rekapHariStr}${rentangTanggal ? ` (${rentangTanggal})` : ""} \xB7 Sudah cair${paidDates.length > 0 ? ` tgl ${paidDates.join(", ")}` : ""}${slipIds.length > 0 ? ` (${slipIds.join(", ")})` : ""} \xB7 Detail harian di menu Gaji & Upah` : `Rekap ${rekapHariStr}${rentangTanggal ? ` (${rentangTanggal})` : ""} \xB7 Detail harian di menu Gaji & Upah`;
         timeline.push({
-          id: u.id,
-          tanggal: u.tanggalKerja,
+          id: grp.isPaid ? `GAJI-${grp.monthKey}-CAIR` : `GAJI-${grp.monthKey}`,
+          tanggal: latestEntry.tanggalKerja,
           jam: jamUpah,
-          createdAt: u.createdAt || u.tanggalKerja,
-          jenis: isPaid ? "UPAH KERJA (SUDAH CAIR)" : "UPAH KERJA (BELUM CAIR)",
-          keterangan: `[${u.divisi}] ${uraianTugas}${u.catatan ? ` (${u.catatan})` : ""} \u2014 ${isPaid ? `Sudah dibayarkan pada ${u.tanggalDibayar || "-"}${u.idPayrollSettlement ? ` (${u.idPayrollSettlement})` : ""}` : "Hak Gaji / Upah Karyawan Tercatat (Belum Dicairkan)"}`,
-          catatanTransaksi: extractUserCatatan(u.catatan || u.keterangan),
-          qtyDisplay: `${u.kuantiti !== void 0 ? u.kuantiti : 1} Hari`,
-          hargaSatuanDisplay: `Rp ${(u.totalUpahHarian || 0).toLocaleString("id-ID")}`,
+          createdAt: latestEntry.createdAt || latestEntry.tanggalKerja,
+          jenis: grp.isPaid ? "GAJI BULANAN (SUDAH CAIR)" : "GAJI BULANAN (BELUM CAIR)",
+          keterangan: `Gaji Bulan ${grp.bulanLabel} \u2014 ${catatanRingkas}`,
+          catatanTransaksi: catatanRingkas,
+          qtyDisplay: "1 Bulan",
+          hargaSatuanDisplay: `Rp ${totalNominalBulan.toLocaleString("id-ID")}`,
           itemsDetail: [
             {
-              nama: `Upah Kerja [${u.divisi}]: ${uraianTugas}`,
-              qty: u.kuantiti !== void 0 ? u.kuantiti : 1,
-              satuan: "Hari",
-              harga: u.harga !== void 0 ? u.harga : u.upahHarian || u.totalUpahHarian || 0,
-              subtotal: u.totalUpahHarian || 0
+              nama: `Gaji Bulan ${grp.bulanLabel}`,
+              qty: 1,
+              satuan: "Bulan",
+              harga: totalNominalBulan,
+              subtotal: totalNominalBulan
             }
           ],
           debet: 0,
           kredit: 0,
-          nominalMutasiHak: u.totalUpahHarian || 0,
-          kategoriMutasiHak: isPaid ? "UPAH_SUDAH_CAIR" : "UPAH_TERCATAT"
+          nominalMutasiHak: totalNominalBulan,
+          kategoriMutasiHak: grp.isPaid ? "UPAH_SUDAH_CAIR" : "UPAH_TERCATAT"
         });
       }
       for (const g of linkedPenggajianList) {
@@ -11251,41 +13456,34 @@ var TransactionService = class {
     let remainingPencairanFifo = totalPencairanMitra;
     let remainingAnakKreditOffset = saldoRekeningAnakLive > 0 ? totalPakaiDariAnakPerusahaan : 0;
     let remainingAnakDebetOffset = saldoRekeningAnakLive < 0 ? totalSimpanKeAnakPerusahaan : 0;
-    const totalNonAnakBonRemaining = Math.round(totalKasbonBarang + totalKasbonUang);
-    let lastBonZeroIdx = -1;
-    let cycleBonRunning = 0;
-    timeline.forEach((item, idx) => {
-      if (item._isAnakRekMutasi) return;
-      if (item.sisaPiutangNota !== void 0) {
-        cycleBonRunning += Number(item.debet) || 0;
-      } else if (item._isBayarBonEntry) {
-        cycleBonRunning -= Number(item.kredit) || 0;
-      } else {
-        return;
-      }
-      if (Math.round(cycleBonRunning) === 0) {
-        cycleBonRunning = 0;
-        lastBonZeroIdx = idx;
-      }
-    });
-    let activeCycleGrossDebet = 0;
-    let activeCycleBayarBon = 0;
-    let hasActiveCycleBayarBon = false;
-    if (totalNonAnakBonRemaining > 0) {
-      for (let idx = lastBonZeroIdx + 1; idx < timeline.length; idx++) {
-        const item = timeline[idx];
-        if (item._isAnakRekMutasi) continue;
-        if (item.sisaPiutangNota !== void 0) {
-          activeCycleGrossDebet += Number(item.debet) || 0;
-        } else if (item._isBayarBonEntry) {
-          activeCycleBayarBon += Number(item.kredit) || 0;
-          hasActiveCycleBayarBon = true;
+    const paidByTrackedBayarBonMap = /* @__PURE__ */ new Map();
+    timeline.forEach((item) => {
+      if (item._isBayarBonEntry && Array.isArray(item._alokasi)) {
+        for (const a of item._alokasi) {
+          const ref = String(a.refId || "").trim();
+          const dibayar = Math.max(0, Number(a.nominalDibayar) || 0);
+          if (ref && dibayar > 0) {
+            paidByTrackedBayarBonMap.set(ref, (paidByTrackedBayarBonMap.get(ref) || 0) + dibayar);
+          }
         }
       }
-    }
-    const showActiveBayarBonInBerjalan = totalNonAnakBonRemaining > 0 && hasActiveCycleBayarBon && Math.abs(Math.round(activeCycleGrossDebet - activeCycleBayarBon) - totalNonAnakBonRemaining) <= 1;
+    });
+    const shownPartialNoteRefIds = /* @__PURE__ */ new Set();
+    timeline.forEach((item) => {
+      if (item._isAnakRekMutasi || item.sisaPiutangNota === void 0 || item.idTransaksiInduk) {
+        return;
+      }
+      const debetVal = Math.max(0, Number(item.debet) || 0);
+      const sisaVal = Math.max(0, Number(item.sisaPiutangNota) || 0);
+      if (sisaVal > 0 && sisaVal < debetVal) {
+        const trackedPaid = paidByTrackedBayarBonMap.get(item.id) || 0;
+        if (trackedPaid > 0 && Math.abs(Math.round(debetVal - trackedPaid) - Math.round(sisaVal)) <= 1) {
+          shownPartialNoteRefIds.add(item.id);
+        }
+      }
+    });
     let runningBon = 0;
-    const history = timeline.map((item, idx) => {
+    const history = timeline.map((item) => {
       runningBon += item.debet - item.kredit;
       let piutangBerjalan = 0;
       let titipBerjalan = 0;
@@ -11303,25 +13501,37 @@ var TransactionService = class {
           titipBerjalan = Math.max(0, item.kredit - offset);
           isSaldoBerjalan = titipBerjalan > 0;
         }
-      } else if (showActiveBayarBonInBerjalan && idx > lastBonZeroIdx && item._isBayarBonEntry) {
-        titipBerjalan = Math.max(0, item.kredit || 0);
-        isSaldoBerjalan = titipBerjalan > 0;
-        isBayarBonSiklusBerjalan = isSaldoBerjalan;
+      } else if (item._isBayarBonEntry) {
+        const alokasiKeNotaParsialAktif = (item._alokasi || []).filter((a) => shownPartialNoteRefIds.has(String(a.refId || "").trim())).reduce((s, a) => s + Math.max(0, Number(a.nominalDibayar) || 0), 0);
+        if (alokasiKeNotaParsialAktif > 0) {
+          titipBerjalan = alokasiKeNotaParsialAktif;
+          isSaldoBerjalan = true;
+          isBayarBonSiklusBerjalan = true;
+        } else {
+          titipBerjalan = 0;
+          isSaldoBerjalan = false;
+        }
       } else if (item.jenis.startsWith("PEMBAYARAN BON") || item.jenis.startsWith("KLIRING SILANG (PELUNASAN BON)") || item.kredit > 0 && !item._isAnakRekMutasi) {
         titipBerjalan = 0;
         isSaldoBerjalan = false;
-      } else if (showActiveBayarBonInBerjalan && idx > lastBonZeroIdx && item.sisaPiutangNota !== void 0) {
-        piutangBerjalan = Math.max(0, Number(item.debet) || 0);
-        isSaldoBerjalan = piutangBerjalan > 0;
       } else if (item.sisaPiutangNota !== void 0) {
-        piutangBerjalan = Math.max(0, item.sisaPiutangNota || 0);
-        isSaldoBerjalan = piutangBerjalan > 0;
+        const sisaVal = Math.max(0, Number(item.sisaPiutangNota) || 0);
+        if (sisaVal <= 0) {
+          piutangBerjalan = 0;
+          isSaldoBerjalan = false;
+        } else if (!item.idTransaksiInduk && shownPartialNoteRefIds.has(item.id)) {
+          piutangBerjalan = Math.max(0, Number(item.debet) || 0);
+          isSaldoBerjalan = piutangBerjalan > 0;
+        } else {
+          piutangBerjalan = sisaVal;
+          isSaldoBerjalan = piutangBerjalan > 0;
+        }
       } else if (item.kategoriMutasiHak === "TITIP_MASUK") {
         const nomHak = Math.max(0, item.nominalMutasiHak || 0);
         const used = Math.min(remainingPencairanFifo, nomHak);
         remainingPencairanFifo -= used;
         titipBerjalan = Math.max(0, nomHak - used);
-        isSaldoBerjalan = titipBerjalan > 0;
+        isSaldoBerjalan = titipBerjalan > 0 || Boolean(item.isBelumPutusHarga);
       } else if (item.kategoriMutasiHak === "UPAH_TERCATAT") {
         titipBerjalan = Math.max(0, item.nominalMutasiHak || 0);
         isSaldoBerjalan = titipBerjalan > 0;
@@ -11362,18 +13572,29 @@ var TransactionService = class {
         metodePembayaran: item.metodePembayaran,
         rekeningKode: item.rekeningKode,
         statusTransaksi: item.statusTransaksi,
-        nominalTransaksi: item.nominalTransaksi
+        nominalTransaksi: item.nominalTransaksi,
+        ...item.batchItemIds && item.batchItemIds.length > 0 ? { batchItemIds: item.batchItemIds } : {},
+        ...item.isBelumPutusHarga ? {
+          isBelumPutusHarga: true,
+          ...item.isTitipNonFisik ? { isTitipNonFisik: true } : {},
+          beratTitipBelumPutusKg: item.beratTitipBelumPutusKg
+        } : {}
       };
     });
-    const historySaldoBerjalan = history.filter((h) => Boolean(h.isSaldoBerjalan)).sort((a, b) => {
-      const aBayar = a.isBayarBonSiklusBerjalan ? 1 : 0;
-      const bBayar = b.isBayarBonSiklusBerjalan ? 1 : 0;
-      return aBayar - bBayar;
-    });
+    const historySaldoBerjalan = sortTransactionsByDateAsc(
+      history.filter((h) => Boolean(h.isSaldoBerjalan))
+    );
     const historySelesai = history.filter((h) => !h.isSaldoBerjalan);
+    const openBelumPutusList = mitraPembelianHb.filter(
+      (pb) => Boolean(pb.isBelumPutusHarga || pb.status === "BELUM_PUTUS_HARGA") && !pb.isNotaSilang && pb.komoditasKode !== "PINJAMAN_DANA" && pb.komoditasKode !== "TITIP_DANA" && pb.komoditasKode !== "NOTA_SILANG"
+    );
+    const totalTitipBelumPutusKg = Math.round(
+      openBelumPutusList.reduce((s, pb) => s + (Number(pb.beratBersih) || 0), 0) * 100
+    ) / 100;
+    const jumlahNotaBelumPutusHarga = openBelumPutusList.length;
     const totalBayarBonSiklusBerjalan = historySaldoBerjalan.filter((h) => Boolean(h.isBayarBonSiklusBerjalan)).reduce((s, h) => s + (h.titipBerjalan || 0), 0);
-    const totalPiutangBerjalanTampil = showActiveBayarBonInBerjalan ? totalBonKeseluruhan + totalBayarBonSiklusBerjalan : totalBonKeseluruhan;
-    const totalTitipBerjalanTampil = showActiveBayarBonInBerjalan ? totalTitip + totalBayarBonSiklusBerjalan : totalTitip;
+    const totalPiutangBerjalanTampil = totalBonKeseluruhan + totalBayarBonSiklusBerjalan;
+    const totalTitipBerjalanTampil = totalTitip + totalBayarBonSiklusBerjalan;
     const posisiBersihTerpadu = totalTitip - totalBonKeseluruhan;
     const rekUtama = db.rekening.find(
       (r) => r.kode === (db.profilPerusahaan?.rekeningUtama || "KAS01")
@@ -11421,6 +13642,13 @@ var TransactionService = class {
         totalPakaiDariAnakPerusahaan,
         posisiBersihTerpadu
       } : {},
+      ...(() => {
+        const rekeningTitipList = this.getRekeningTitipAudit({
+          idKaryawan: linkedKaryawan?.id,
+          idMitra: mitra.id
+        });
+        return rekeningTitipList.length > 0 ? { rekeningTitipList } : {};
+      })(),
       totalKasbonBarang,
       totalKasbonUang,
       totalTitip,
@@ -11433,6 +13661,8 @@ var TransactionService = class {
       totalBayarBonSiklusBerjalan,
       totalPiutangBerjalanTampil,
       totalTitipBerjalanTampil,
+      totalTitipBelumPutusKg,
+      jumlahNotaBelumPutusHarga,
       isNotaNgunci: nominalNotaNgunci > 0 || Boolean(mitra.isNotaNgunci && totalBonKeseluruhan > 0),
       catatanNgunci: mitra.catatanNgunci,
       nominalNotaNgunci,
@@ -11470,7 +13700,8 @@ var TransactionService = class {
         (k) => k.idMitra === m.id && k.status !== "LUNAS" && (k.sisaKasbon || 0) > 0
       );
       const kasbonUang = unpaidKasbonUang.reduce((sum, k) => sum + (k.sisaKasbon || 0), 0);
-      const linkedRek = m.kodeRekeningTerkait && db.rekening.find((r) => r.kode === m.kodeRekeningTerkait) || db.rekening.find((r) => r.idMitraTerkait === m.id && this.isAnakPerusahaanRekening(r));
+      const linkedRekCandidate = m.kodeRekeningTerkait && db.rekening.find((r) => r.kode === m.kodeRekeningTerkait) || db.rekening.find((r) => r.idMitraTerkait === m.id && this.isAnakPerusahaanRekening(r));
+      const linkedRek = linkedRekCandidate && this.isAnakPerusahaanRekening(linkedRekCandidate) ? linkedRekCandidate : void 0;
       const isAnakPerusahaan = Boolean(m.isAnakPerusahaan || m.role === "ANAK_PERUSAHAAN" || linkedRek);
       const saldoRekAnak = isAnakPerusahaan && linkedRek ? Math.round(Number(linkedRek.saldoSaatIni) || 0) : 0;
       const piutangTransferAnak = saldoRekAnak > 0 ? saldoRekAnak : 0;
@@ -11787,7 +14018,7 @@ var TransactionService = class {
     });
     const recentTx = [];
     if (db.pembelianBarang) {
-      for (const pb of db.pembelianBarang.slice(0, 10)) {
+      for (const pb of sortTransactionsByDateDesc(db.pembelianBarang).slice(0, 10)) {
         recentTx.push({
           id: pb.noPembelian,
           tanggal: pb.tanggal,
@@ -11803,7 +14034,7 @@ var TransactionService = class {
         });
       }
     }
-    for (const p of db.penjualan.slice(0, 10)) {
+    for (const p of sortTransactionsByDateDesc(db.penjualan).slice(0, 10)) {
       recentTx.push({
         id: p.noPenjualan,
         tanggal: p.tanggal,
@@ -11817,7 +14048,7 @@ var TransactionService = class {
         status: p.statusPembayaran
       });
     }
-    for (const jhb of (db.penjualanHasilBumi || []).slice(0, 10)) {
+    for (const jhb of sortTransactionsByDateDesc(db.penjualanHasilBumi || []).slice(0, 10)) {
       recentTx.push({
         id: jhb.noPenjualan,
         tanggal: jhb.tanggal,
@@ -11831,22 +14062,82 @@ var TransactionService = class {
         status: jhb.statusPembayaran
       });
     }
-    for (const b of db.pembelianHasilBumi.slice(0, 10)) {
-      recentTx.push({
-        id: b.noPembelian,
-        tanggal: b.tanggal,
-        jam: b.jam,
-        createdAt: b.createdAt,
-        kategori: "PEMBELIAN_HASIL_BUMI",
-        label: `Beli ${b.komoditasNama} (${b.beratBersih} kg)`,
-        nominal: b.totalNominal,
-        pihakTerkait: b.namaMitra,
-        rekening: b.rekeningSumber,
-        status: b.status,
-        fotoNota: b.fotoNota
-      });
+    {
+      const phbSorted = sortTransactionsByDateDesc(db.pembelianHasilBumi || []);
+      const phbBatchMap = /* @__PURE__ */ new Map();
+      const phbOrderedUnits = [];
+      const seenBatchKeys = /* @__PURE__ */ new Set();
+      const getPhbBatchPrefix = (rec) => {
+        if (rec.isNotaSilang || rec.komoditasKode === "NOTA_SILANG" || rec.komoditasKode === "PINJAMAN_DANA") {
+          return null;
+        }
+        if (rec.batchId && rec.batchId.trim()) return rec.batchId.trim();
+        const m = String(rec.noPembelian || "").match(/^(BHB[A-Z0-9]+)-\d+$/i);
+        return m ? m[1] : null;
+      };
+      for (const b of phbSorted) {
+        const prefix = getPhbBatchPrefix(b);
+        if (prefix) {
+          const gKey = `${prefix}|${b.idMitra || b.namaMitra}|${b.metodePembayaran}|${b.tanggal}`;
+          const arr = phbBatchMap.get(gKey) || [];
+          arr.push(b);
+          phbBatchMap.set(gKey, arr);
+        }
+      }
+      for (const b of phbSorted) {
+        const prefix = getPhbBatchPrefix(b);
+        if (prefix) {
+          const gKey = `${prefix}|${b.idMitra || b.namaMitra}|${b.metodePembayaran}|${b.tanggal}`;
+          const group = phbBatchMap.get(gKey);
+          if (group && group.length >= 2) {
+            if (!seenBatchKeys.has(gKey)) {
+              seenBatchKeys.add(gKey);
+              phbOrderedUnits.push({ kind: "BATCH", prefix, items: group });
+            }
+            continue;
+          }
+        }
+        phbOrderedUnits.push({ kind: "SINGLE", rec: b });
+      }
+      for (const unit of phbOrderedUnits.slice(0, 10)) {
+        if (unit.kind === "BATCH") {
+          const first = unit.items[0];
+          const totalKg = Number(
+            unit.items.reduce((s, x) => s + (Number(x.beratBersih) || 0), 0).toFixed(2)
+          );
+          const totalNom = unit.items.reduce((s, x) => s + (Number(x.totalNominal) || 0), 0);
+          recentTx.push({
+            id: unit.prefix,
+            tanggal: first.tanggal,
+            jam: first.jam,
+            createdAt: first.createdAt,
+            kategori: "PEMBELIAN_HASIL_BUMI",
+            label: `Beli ${unit.items.length} Komoditas (${totalKg.toLocaleString("id-ID")} kg)`,
+            nominal: totalNom,
+            pihakTerkait: first.namaMitra,
+            rekening: first.rekeningSumber,
+            status: first.status,
+            fotoNota: unit.items.find((x) => x.fotoNota)?.fotoNota
+          });
+        } else {
+          const b = unit.rec;
+          recentTx.push({
+            id: b.noPembelian,
+            tanggal: b.tanggal,
+            jam: b.jam,
+            createdAt: b.createdAt,
+            kategori: "PEMBELIAN_HASIL_BUMI",
+            label: `Beli ${b.komoditasNama} (${b.beratBersih} kg)`,
+            nominal: b.totalNominal,
+            pihakTerkait: b.namaMitra,
+            rekening: b.rekeningSumber,
+            status: b.status,
+            fotoNota: b.fotoNota
+          });
+        }
+      }
     }
-    for (const k of db.kasbonUang.slice(0, 10)) {
+    for (const k of sortTransactionsByDateDesc(db.kasbonUang).slice(0, 10)) {
       recentTx.push({
         id: k.idTransaksi,
         tanggal: k.tanggal,
@@ -11860,7 +14151,7 @@ var TransactionService = class {
         status: k.status
       });
     }
-    for (const by of db.bayarBon.slice(0, 10)) {
+    for (const by of sortTransactionsByDateDesc(db.bayarBon).slice(0, 10)) {
       recentTx.push({
         id: by.idTransaksi,
         tanggal: by.tanggal,
@@ -11874,12 +14165,16 @@ var TransactionService = class {
         status: "LUNAS"
       });
     }
-    for (const t of db.transferRekening.slice(0, 10)) {
+    for (const t of sortTransactionsByDateDesc(db.transferRekening).slice(0, 10)) {
       const sRek = db.rekening.find((r) => r.kode === t.rekeningSumber);
       const dRek = db.rekening.find((r) => r.kode === t.rekeningTujuan);
-      const isAnakTx = Boolean(
+      const isTitipTx = Boolean(
+        t.tipeMutasiAfiliasi === "TITIP_UANG_KARYAWAN" || t.tipeMutasiAfiliasi === "KEMBALIKAN_TITIP_KARYAWAN" || t.tipeMutasiAfiliasi === "ANTAR_REKENING_TITIP" || this.isRekeningTitipAccount(sRek) || this.isRekeningTitipAccount(dRek)
+      );
+      const isAnakTx = !isTitipTx && Boolean(
         t.idMitraTerkait || this.isAnakPerusahaanRekening(sRek) || this.isAnakPerusahaanRekening(dRek)
       );
+      const namaPemegangTitip = t.namaKaryawanTerkait || (this.isRekeningTitipAccount(dRek) ? dRek?.namaKaryawanTerkait || dRek?.atasNama : sRek?.namaKaryawanTerkait || sRek?.atasNama) || "Karyawan";
       const namaAfiliasi = t.namaMitraTerkait || (this.isAnakPerusahaanRekening(dRek) ? dRek?.nama : this.isAnakPerusahaanRekening(sRek) ? sRek?.nama : "");
       recentTx.push({
         id: t.noTransfer,
@@ -11887,15 +14182,15 @@ var TransactionService = class {
         jam: t.jam,
         createdAt: t.createdAt,
         kategori: "TRANSFER_REKENING",
-        label: isAnakTx ? t.tipeMutasiAfiliasi === "TARIK_DARI_ANAK_PERUSAHAAN" || this.isAnakPerusahaanRekening(sRek) ? `Tarik/Talangan ${namaAfiliasi}` : `Simpan Dana ke ${namaAfiliasi}` : `Transfer ${t.rekeningSumber} -> ${t.rekeningTujuan}`,
+        label: isTitipTx ? this.isRekeningTitipAccount(dRek) && !this.isRekeningTitipAccount(sRek) ? `Titip Dana ke ${namaPemegangTitip}` : `Kembalikan Dana Titip ${namaPemegangTitip}` : isAnakTx ? t.tipeMutasiAfiliasi === "TARIK_DARI_ANAK_PERUSAHAAN" || this.isAnakPerusahaanRekening(sRek) ? `Tarik/Talangan ${namaAfiliasi}` : `Simpan Dana ke ${namaAfiliasi}` : `Transfer ${t.rekeningSumber} -> ${t.rekeningTujuan}`,
         nominal: t.nominal,
-        pihakTerkait: isAnakTx ? `${namaAfiliasi} (Anak Perusahaan & Mitra)` : "Internal PT Wijaya Agro",
+        pihakTerkait: isTitipTx ? `${namaPemegangTitip} (Rekening Titip Karyawan)` : isAnakTx ? `${namaAfiliasi} (Anak Perusahaan & Mitra)` : "Internal PT Wijaya Agro",
         rekening: `${t.rekeningSumber} -> ${t.rekeningTujuan}`,
         status: t.status
       });
     }
     if (db.penggajian) {
-      for (const g of db.penggajian.slice(0, 10)) {
+      for (const g of sortTransactionsByDateDesc(db.penggajian).slice(0, 10)) {
         recentTx.push({
           id: g.id,
           tanggal: g.tanggal,
@@ -11911,7 +14206,7 @@ var TransactionService = class {
       }
     }
     if (db.brilink) {
-      for (const br of db.brilink.slice(0, 10)) {
+      for (const br of sortTransactionsByDateDesc(db.brilink).slice(0, 10)) {
         recentTx.push({
           id: br.idTransaksi,
           tanggal: br.tanggal,
@@ -11928,7 +14223,7 @@ var TransactionService = class {
       }
     }
     if (db.uangMasuk) {
-      for (const um of db.uangMasuk.slice(0, 10)) {
+      for (const um of sortTransactionsByDateDesc(db.uangMasuk).slice(0, 10)) {
         recentTx.push({
           id: um.idTransaksi,
           tanggal: um.tanggal,
@@ -11944,7 +14239,11 @@ var TransactionService = class {
         });
       }
     }
-    recentTx.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    recentTx.sort((a, b) => {
+      const diff = parseTransactionDateTimeMs(b) - parseTransactionDateTimeMs(a);
+      if (diff !== 0) return diff;
+      return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+    });
     return {
       totalPenjualan,
       totalPenjualanHasilBumi,
@@ -11989,7 +14288,7 @@ var TransactionService = class {
       return false;
     };
     const penjualanHariIni = (db.penjualan || []).filter(
-      (p) => isSameDate(p.tanggal) && p.metode !== "KASBON" && p.metode !== "SINKRON" && p.metode !== "INTERNAL_PT" && p.metode !== "PEMAKAIAN_PENGELUARAN" && !p.isNotaSilang && p.rekeningTujuan !== "INTERNAL_PT" && p.rekeningTujuan !== "SINKRON" && p.rekeningTujuan !== "PENGELUARAN"
+      (p) => isSameDate(p.tanggal) && p.metode !== "KASBON" && p.metode !== "SINKRON" && p.metode !== "INTERNAL_PT" && p.metode !== "PEMAKAIAN_PENGELUARAN" && (!p.isNotaSilang || p.modeNotaSilang === "BAYAR_LUNAS_KAS_PT") && p.rekeningTujuan !== "INTERNAL_PT" && p.rekeningTujuan !== "SINKRON" && p.rekeningTujuan !== "PENGELUARAN"
     );
     const penjualanHasilBumiHariIni = (db.penjualanHasilBumi || []).filter(
       (j) => isSameDate(j.tanggal) && j.metodePembayaran !== "PIUTANG" && j.metodePembayaran !== "BELUM_PUTUS_HARGA" && j.metodePembayaran !== "SINKRON" && j.rekeningTujuan !== "SINKRON"
@@ -12293,7 +14592,7 @@ var TransactionService = class {
   }
   static getBrilinkList() {
     const db = dbManager.get();
-    return Array.isArray(db.brilink) ? db.brilink : [];
+    return sortTransactionsByDateDesc(db.brilink);
   }
   static async deleteBrilink(idTransaksi) {
     return dbManager.executeTransaction((db) => {
@@ -12363,7 +14662,7 @@ var TransactionService = class {
   // ==========================================
   static getUangMasukList() {
     const db = dbManager.get();
-    return Array.isArray(db.uangMasuk) ? db.uangMasuk : [];
+    return sortTransactionsByDateDesc(db.uangMasuk);
   }
   static async processUangMasuk(params) {
     return await dbManager.executeTransaction((db) => {
@@ -12531,6 +14830,9 @@ var TransactionService = class {
             linkedJhb.labaKotor = totalKesepakatan - modalPengurang;
           }
         }
+        this.syncLinkedPenjualanHbToRekapCtr(db, linkedJhb, {
+          hargaDealPerKg: hargaDealPerKg || hargaRealisasiPerKg
+        });
       }
       const infoTonaseKet = linkedJhb ? [
         `Muat Awal ${linkedJhb.beratBersih.toLocaleString("id-ID")} Kg`,
@@ -12594,6 +14896,14 @@ var TransactionService = class {
         throw new Error(`Transaksi Uang Masuk ${idTransaksi} tidak ditemukan`);
       }
       const target = db.uangMasuk[idx];
+      if (target.kategori === "SETTLEMENT_BUYER_SJ") {
+        const linkedSj = (db.suratJalan || []).find((s) => s.idUangMasukBuyer === idTransaksi);
+        if (linkedSj) {
+          throw new Error(
+            `Transaksi ${idTransaksi} adalah Uang Masuk Buyer untuk Invoice Surat Jalan ${linkedSj.noInvoice}. Silakan batalkan melalui tombol "Batalkan Terima Buyer" di menu Invoice Surat Jalan agar status invoice dan saldo bank tetap sinkron.`
+          );
+        }
+      }
       const isPiutangTarget = target.metode === "PIUTANG" || target.rekeningTujuan === "BON01";
       if (target.noPenjualanHasilBumi && Array.isArray(db.penjualanHasilBumi)) {
         const linkedJhb = db.penjualanHasilBumi.find(
@@ -12686,6 +14996,7 @@ var TransactionService = class {
               }
             }
           }
+          this.syncLinkedPenjualanHbToRekapCtr(db, linkedJhb);
         }
       }
       db.uangMasuk.splice(idx, 1);
@@ -12925,7 +15236,7 @@ var TransactionService = class {
   }
   static getPengeluaranList() {
     const db = dbManager.get();
-    return db.pengeluaran || [];
+    return sortTransactionsByDateDesc(db.pengeluaran);
   }
   static async deletePengeluaran(idTransaksi) {
     return dbManager.executeTransaction((db) => {
@@ -13126,7 +15437,7 @@ var TransactionService = class {
   }
   static getPencairanTitipanList() {
     const db = dbManager.get();
-    return db.pencairanTitipan || [];
+    return sortTransactionsByDateDesc(db.pencairanTitipan);
   }
   // ==========================================
   // 9. SINKRONISASI & EDIT DARI REKENING KORAN MITRA
@@ -13332,24 +15643,35 @@ var TransactionService = class {
     const list = [];
     for (const p of db.penjualan || []) {
       const isSilang = Boolean(p.isNotaSilang);
+      const isSilangLunasKasPt = Boolean(
+        isSilang && p.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (p.metode === "TUNAI" || p.metode === "TRANSFER")
+      );
+      const isSilangProyek = Boolean(isSilang && p.modeNotaSilang === "PROYEK_BERSAMA");
       const isBon = p.metode === "KASBON";
       const isSinkron = p.metode === "SINKRON" || p.rekeningTujuan === "SINKRON";
       const isPemakaianExp = p.metode === "PEMAKAIAN_PENGELUARAN" || p.rekeningTujuan === "PENGELUARAN";
       const isInternal = p.metode === "INTERNAL_PT" || p.rekeningTujuan === "INTERNAL_PT";
-      const isNonTunai = isBon || isSinkron || isPemakaianExp || isInternal || isSilang;
+      const isNonTunai = isBon || isSinkron || isPemakaianExp || isInternal || isSilang && !isSilangLunasKasPt;
       const rekKode = p.rekeningTujuan || (p.metode === "TUNAI" ? kodeKasir : "");
       const isKasir = !isNonTunai && (rekKode === kodeKasir || p.metode === "TUNAI");
       const itemsDesc = p.items?.map((i) => `${i.namaProduk} (${i.qty} ${i.satuan})`).join(", ") || "Penjualan Toko";
+      const penjualanItemsDetail = (p.items || []).map((i) => ({
+        nama: i.namaProduk,
+        qty: Number(i.qty) || 0,
+        satuan: i.satuan || "Pcs",
+        harga: Number(i.harga) || 0,
+        subtotal: Number(i.subtotal) || 0
+      }));
       list.push({
         id: p.noPenjualan,
         tanggal: normalizeDateStr(p.tanggal),
         jam: p.jam || "08:00",
         timestamp: p.createdAt || p.tanggal,
         jenis: isSilang ? "NOTA_SILANG" : "PENJUALAN",
-        jenisLabel: isSilang ? `Nota Silang (${p.namaAnakPerusahaan || "DP Parabot"})` : isInternal ? "Pemakaian Internal PT" : isPemakaianExp ? `Pemakaian Stok ke Pengeluaran (${p.kategoriPengeluaran || "Solar"})` : isSinkron ? "Penjualan Lunas SINKRON" : "Penjualan Toko",
+        jenisLabel: isSilangProyek ? `Proyek Bersama (${p.namaAnakPerusahaan || "DP Parabot"} \xB7 Sinkron)` : isSilangLunasKasPt ? `Nota Lunas ${p.namaAnakPerusahaan || "DP Parabot"} \u2192 Kas PT` : isSilang ? `Nota Silang (${p.namaAnakPerusahaan || "DP Parabot"})` : isInternal ? "Pemakaian Internal PT" : isPemakaianExp ? `Pemakaian Stok ke Pengeluaran (${p.kategoriPengeluaran || "Solar"})` : isSinkron ? "Penjualan Lunas SINKRON" : "Penjualan Toko",
         arusUang: isNonTunai ? "NON_TUNAI" : "MASUK",
-        arusUangLabel: isSilang ? "Nota Silang (Piutang Mitra <-> Anak Perusahaan)" : isBon ? "Piutang Bon (Non-Tunai)" : isSinkron ? "Lunas Sinkron (Tanpa Uang Masuk)" : isPemakaianExp ? "Lari ke Pengeluaran (Non-Kas)" : isInternal ? "Pemakaian Internal (Non-Tunai)" : "Uang Masuk (+)",
-        deskripsi: isSilang ? `${p.namaMitra} ambil di ${p.namaAnakPerusahaan || "DP Parabot"}: ${itemsDesc}` : `${itemsDesc} [${p.metode}]`,
+        arusUangLabel: isSilangProyek ? `Proyek Bersama (Lunas Sinkron di ${p.namaAnakPerusahaan || "DP Parabot"} \xB7 Non-Kas)` : isSilangLunasKasPt ? `Titipan Lunas ${p.namaAnakPerusahaan || "DP Parabot"} (+Kas/Bank PT)` : isSilang ? "Nota Silang (Piutang Mitra <-> Anak Perusahaan)" : isBon ? "Piutang Bon (Non-Tunai)" : isSinkron ? "Lunas Sinkron (Tanpa Uang Masuk)" : isPemakaianExp ? "Lari ke Pengeluaran (Non-Kas)" : isInternal ? "Pemakaian Internal (Non-Tunai)" : "Uang Masuk (+)",
+        deskripsi: isSilangProyek ? `[PROYEK BERSAMA \xB7 DP LUNAS SINKRON] ${p.namaMitra} ambil di ${p.namaAnakPerusahaan || "DP Parabot"}: ${itemsDesc}` : isSilangLunasKasPt ? `[BAYAR ${p.metode} \u2192 ${rekKode || kodeKasir}] ${p.namaMitra || "Customer Umum"} ambil di ${p.namaAnakPerusahaan || "DP Parabot"}: ${itemsDesc} (Hutang PT ke ${p.namaAnakPerusahaan || "DP Parabot"})` : isSilang ? `${p.namaMitra} ambil di ${p.namaAnakPerusahaan || "DP Parabot"}: ${itemsDesc}` : `${itemsDesc} [${p.metode}]`,
         pihakTerkait: p.namaMitra || "Pelanggan Umum",
         kategoriPihak: isInternal || isPemakaianExp ? "INTERNAL" : "MITRA",
         rekening: rekKode || kodeKasir,
@@ -13366,7 +15688,8 @@ var TransactionService = class {
         fotoBukti: p.attachment_url || p.fotoNota,
         fotoNota: p.attachment_url || p.fotoNota,
         attachment_url: p.attachment_url || p.fotoNota,
-        divisi: p.divisi
+        divisi: p.divisi,
+        itemsDetail: penjualanItemsDetail.length > 0 ? penjualanItemsDetail : void 0
       });
     }
     for (const jhb of db.penjualanHasilBumi || []) {
@@ -13403,45 +15726,126 @@ var TransactionService = class {
         divisi: jhb.divisi
       });
     }
-    for (const b of db.pembelianHasilBumi || []) {
-      if (b.isNotaSilang || b.komoditasKode === "NOTA_SILANG") continue;
-      const isPinjamanDana = b.komoditasKode === "PINJAMAN_DANA" || Boolean(b.komoditasNama?.includes("Pinjaman Uang"));
-      const isTitip = b.metodePembayaran === "TITIP" && !isPinjamanDana;
-      const isSinkronPhb = (b.metodePembayaran === "SINKRON" || b.rekeningSumber === "SINKRON") && !isPinjamanDana;
-      const isNonTunaiPhb = isTitip || isSinkronPhb;
-      if (isPinjamanDana) {
-        const hasRealCashIn = Boolean(b.rekeningSumber && b.rekeningSumber !== "TIT01" && b.rekeningSumber !== "SINKRON");
-        const isKasir = hasRealCashIn && b.rekeningSumber === kodeKasir;
-        list.push({
-          id: b.noPembelian,
-          tanggal: normalizeDateStr(b.tanggal),
-          jam: b.jam || "09:00",
-          timestamp: b.createdAt || b.tanggal,
-          jenis: "PEMBELIAN_HASIL_BUMI",
-          jenisLabel: "Pinjaman Dana dari Mitra",
-          arusUang: hasRealCashIn ? "MASUK" : "NON_TUNAI",
-          arusUangLabel: hasRealCashIn ? "Uang Masuk (+)" : "Saldo Titip (Non-Tunai)",
-          deskripsi: b.keterangan || `Pinjaman Uang PT dari Mitra ${b.namaMitra} (Masuk Saldo Titip)`,
-          pihakTerkait: b.namaMitra,
-          kategoriPihak: "MITRA",
-          rekening: b.rekeningSumber || kodeKasir,
-          nominal: b.totalNominal,
-          nominalMasuk: hasRealCashIn ? b.totalNominal : 0,
-          nominalKeluar: 0,
-          isArusKasKasir: isKasir && b.totalNominal > 0,
-          arahKasir: isKasir && b.totalNominal > 0 ? "MASUK" : "NON_KASIR",
-          arahKasirLabel: isKasir && b.totalNominal > 0 ? "Masuk Kasir (+)" : "Bukan Kasir",
-          nominalKasirMasuk: isKasir ? b.totalNominal : 0,
-          nominalKasirKeluar: 0,
-          metode: b.metodePembayaran,
-          status: b.status,
-          fotoBukti: b.attachment_url || b.fotoNota,
-          fotoNota: b.attachment_url || b.fotoNota,
-          attachment_url: b.attachment_url || b.fotoNota,
-          divisi: b.divisi
-        });
-      } else {
+    {
+      const allPhb = (db.pembelianHasilBumi || []).filter(
+        (b) => !(b.isNotaSilang || b.komoditasKode === "NOTA_SILANG")
+      );
+      const getPhbBatchPrefixAll = (b) => {
+        const isPinjamanDana = b.komoditasKode === "PINJAMAN_DANA" || Boolean(b.komoditasNama?.includes("Pinjaman Uang"));
+        if (isPinjamanDana || b.komoditasKode === "TITIP_DANA") return null;
+        if (b.batchId && b.batchId.trim()) return b.batchId.trim();
+        const m = String(b.noPembelian || "").match(/^(BHB[A-Z0-9]+)-\d+$/i);
+        return m ? m[1] : null;
+      };
+      const phbBatchGroups = /* @__PURE__ */ new Map();
+      for (const b of allPhb) {
+        const prefix = getPhbBatchPrefixAll(b);
+        if (prefix) {
+          const rekKey = b.rekeningSumber || (b.metodePembayaran === "TUNAI" ? kodeKasir : "");
+          const gKey = `${prefix}|${b.idMitra || b.namaMitra}|${b.metodePembayaran}|${rekKey}|${normalizeDateStr(b.tanggal)}`;
+          const arr = phbBatchGroups.get(gKey) || [];
+          arr.push(b);
+          phbBatchGroups.set(gKey, arr);
+        }
+      }
+      const processedPhbBatchKeys = /* @__PURE__ */ new Set();
+      for (const b of allPhb) {
+        const isPinjamanDana = b.komoditasKode === "PINJAMAN_DANA" || Boolean(b.komoditasNama?.includes("Pinjaman Uang"));
+        const isTitip = b.metodePembayaran === "TITIP" && !isPinjamanDana;
+        const isSinkronPhb = (b.metodePembayaran === "SINKRON" || b.rekeningSumber === "SINKRON") && !isPinjamanDana;
+        const isNonTunaiPhb = isTitip || isSinkronPhb;
+        if (isPinjamanDana) {
+          const hasRealCashIn = Boolean(b.rekeningSumber && b.rekeningSumber !== "TIT01" && b.rekeningSumber !== "SINKRON");
+          const isKasir2 = hasRealCashIn && b.rekeningSumber === kodeKasir;
+          list.push({
+            id: b.noPembelian,
+            tanggal: normalizeDateStr(b.tanggal),
+            jam: b.jam || "09:00",
+            timestamp: b.createdAt || b.tanggal,
+            jenis: "PEMBELIAN_HASIL_BUMI",
+            jenisLabel: "Pinjaman Dana dari Mitra",
+            arusUang: hasRealCashIn ? "MASUK" : "NON_TUNAI",
+            arusUangLabel: hasRealCashIn ? "Uang Masuk (+)" : "Saldo Titip (Non-Tunai)",
+            deskripsi: b.keterangan || `Pinjaman Uang PT dari Mitra ${b.namaMitra} (Masuk Saldo Titip)`,
+            pihakTerkait: b.namaMitra,
+            kategoriPihak: "MITRA",
+            rekening: b.rekeningSumber || kodeKasir,
+            nominal: b.totalNominal,
+            nominalMasuk: hasRealCashIn ? b.totalNominal : 0,
+            nominalKeluar: 0,
+            isArusKasKasir: isKasir2 && b.totalNominal > 0,
+            arahKasir: isKasir2 && b.totalNominal > 0 ? "MASUK" : "NON_KASIR",
+            arahKasirLabel: isKasir2 && b.totalNominal > 0 ? "Masuk Kasir (+)" : "Bukan Kasir",
+            nominalKasirMasuk: isKasir2 ? b.totalNominal : 0,
+            nominalKasirKeluar: 0,
+            metode: b.metodePembayaran,
+            status: b.status,
+            fotoBukti: b.attachment_url || b.fotoNota,
+            fotoNota: b.attachment_url || b.fotoNota,
+            attachment_url: b.attachment_url || b.fotoNota,
+            divisi: b.divisi
+          });
+          continue;
+        }
         const rekKode = b.rekeningSumber || (b.metodePembayaran === "TUNAI" ? kodeKasir : "");
+        const prefix = getPhbBatchPrefixAll(b);
+        const batchKey = prefix ? `${prefix}|${b.idMitra || b.namaMitra}|${b.metodePembayaran}|${rekKode}|${normalizeDateStr(b.tanggal)}` : null;
+        const batchGroup = batchKey ? phbBatchGroups.get(batchKey) : void 0;
+        if (batchKey && batchGroup && batchGroup.length >= 2) {
+          if (processedPhbBatchKeys.has(batchKey)) continue;
+          processedPhbBatchKeys.add(batchKey);
+          const sortedGroup = [...batchGroup].sort(
+            (x, y) => String(x.noPembelian || "").localeCompare(String(y.noPembelian || ""), void 0, { numeric: true })
+          );
+          const first = sortedGroup[0];
+          const totalNominalBatch = sortedGroup.reduce((s, g) => s + (Number(g.totalNominal) || 0), 0);
+          const totalBeratBatch = Number(
+            sortedGroup.reduce((s, g) => s + (Number(g.beratBersih) || 0), 0).toFixed(2)
+          );
+          const isKasir2 = !isNonTunaiPhb && (rekKode === kodeKasir || first.metodePembayaran === "TUNAI");
+          const firstFoto = sortedGroup.find((g) => g.attachment_url || g.fotoNota);
+          const fotoUrl = firstFoto ? firstFoto.attachment_url || firstFoto.fotoNota : void 0;
+          const divisiLabel = first.divisi && !isTanpaDivisi(first.divisi) ? ` \xB7 ${first.divisi}` : "";
+          const itemsSummary = sortedGroup.map((g) => `${g.komoditasNama} (${g.beratBersih} kg @ Rp ${(g.hargaPerKg || 0).toLocaleString("id-ID")})`).join(", ");
+          list.push({
+            id: prefix,
+            tanggal: normalizeDateStr(first.tanggal),
+            jam: first.jam || "09:00",
+            timestamp: first.createdAt || first.tanggal,
+            jenis: "PEMBELIAN_HASIL_BUMI",
+            jenisLabel: isSinkronPhb ? "Pembelian Hasil Bumi SINKRON" : "Pembelian Hasil Bumi",
+            arusUang: isNonTunaiPhb ? "NON_TUNAI" : "KELUAR",
+            arusUangLabel: isTitip ? "Titip Timbang (Hutang)" : isSinkronPhb ? "Lunas Sinkron (Non-Kas)" : "Uang Keluar (-)",
+            deskripsi: `Beli ${sortedGroup.length} Komoditas (${totalBeratBatch.toLocaleString("id-ID")} kg): ${itemsSummary}${divisiLabel}`,
+            pihakTerkait: first.namaMitra,
+            kategoriPihak: "MITRA",
+            rekening: rekKode || kodeKasir,
+            nominal: totalNominalBatch,
+            nominalMasuk: 0,
+            nominalKeluar: isNonTunaiPhb ? 0 : totalNominalBatch,
+            isArusKasKasir: isKasir2 && totalNominalBatch > 0,
+            arahKasir: isKasir2 && totalNominalBatch > 0 ? "KELUAR" : "NON_KASIR",
+            arahKasirLabel: isKasir2 && totalNominalBatch > 0 ? "Keluar Kasir (\u2212)" : "Bukan Kasir",
+            nominalKasirMasuk: 0,
+            nominalKasirKeluar: isKasir2 ? totalNominalBatch : 0,
+            metode: first.metodePembayaran,
+            status: first.status,
+            fotoBukti: fotoUrl,
+            fotoNota: fotoUrl,
+            attachment_url: fotoUrl,
+            divisi: first.divisi,
+            batchItemIds: sortedGroup.map((g) => g.noPembelian),
+            itemsDetail: sortedGroup.map((g) => ({
+              nama: g.komoditasNama,
+              qty: Number(g.beratBersih) || 0,
+              satuan: "Kg",
+              harga: Number(g.hargaPerKg) || 0,
+              subtotal: Number(g.totalNominal) || 0,
+              idTransaksiItem: g.noPembelian
+            }))
+          });
+          continue;
+        }
         const isKasir = !isNonTunaiPhb && (rekKode === kodeKasir || b.metodePembayaran === "TUNAI");
         list.push({
           id: b.noPembelian,
@@ -13480,6 +15884,13 @@ var TransactionService = class {
       const rekKode = pb.rekeningSumber || (pb.metodePembayaran === "TUNAI" ? kodeKasir : "");
       const isKasir = !isNonTunaiPb && (rekKode === kodeKasir || pb.metodePembayaran === "TUNAI");
       const itemsDesc = pb.items?.map((i) => `${i.namaProduk} (${i.qty} ${i.satuan})`).join(", ") || "Barang Dagangan";
+      const pembelianBarangItemsDetail = (pb.items || []).map((i) => ({
+        nama: i.namaProduk,
+        qty: Number(i.qty) || 0,
+        satuan: i.satuan || "Pcs",
+        harga: Number(i.hargaBeliSatuan) || 0,
+        subtotal: Number(i.subtotal) || 0
+      }));
       const supplierName = pb.namaMitra || pb.namaDistributorManual || "Pemasok / Distributor";
       list.push({
         id: pb.noPembelian,
@@ -13507,7 +15918,8 @@ var TransactionService = class {
         fotoBukti: pb.attachment_url || pb.fotoNota,
         fotoNota: pb.attachment_url || pb.fotoNota,
         attachment_url: pb.attachment_url || pb.fotoNota,
-        divisi: pb.divisi
+        divisi: pb.divisi,
+        itemsDetail: pembelianBarangItemsDetail.length > 0 ? pembelianBarangItemsDetail : void 0
       });
     }
     for (const k of db.kasbonUang || []) {
@@ -13578,41 +15990,138 @@ var TransactionService = class {
         attachment_url: by.attachment_url || by.fotoBukti || by.fotoNota
       });
     }
-    for (const exp of db.pengeluaran || []) {
+    const parseExpMs = (tglStr, jamStr, createdAtStr) => {
+      const m = normalizeDateStr(tglStr).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (m) {
+        const hm = String(jamStr || "00:00:00").match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+        const hh = hm ? Number(hm[1]) : 0;
+        const mm = hm ? Number(hm[2]) : 0;
+        const ss = hm && hm[3] ? Number(hm[3]) : 0;
+        return Date.UTC(Number(m[3]), Number(m[2]) - 1, Number(m[1]), hh, mm, ss);
+      }
+      const parsed = Date.parse(createdAtStr || "");
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+    const sortedExpenses = [...db.pengeluaran || []].sort(
+      (a, b) => parseExpMs(a.tanggal, a.jam, a.createdAt) - parseExpMs(b.tanggal, b.jam, b.createdAt)
+    );
+    const dailyExpClusters = /* @__PURE__ */ new Map();
+    const orderedExpKeys = [];
+    for (const exp of sortedExpenses) {
       const rawNom = Number(exp.nominal) || 0;
-      const absNom = Math.abs(rawNom);
+      const isNonKas = Boolean(exp.isNonKas) || exp.rekeningSumber === "SINKRON" || exp.rekeningSumber === "STOK_INTERNAL";
+      const isKurang = rawNom < 0 || exp.arahMutasi === "KURANG";
+      if (isKurang) {
+        orderedExpKeys.push({ key: `SINGLE::${exp.idTransaksi}`, single: exp });
+        continue;
+      }
+      const rekKode = exp.rekeningSumber || kodeKasir;
+      const gKey = [
+        normalizeDateStr(exp.tanggal),
+        String(exp.divisi || "").trim().toUpperCase(),
+        String(exp.kategori || "").trim().toUpperCase(),
+        rekKode,
+        isNonKas ? "NK" : "KAS"
+      ].join("||");
+      if (!dailyExpClusters.has(gKey)) {
+        dailyExpClusters.set(gKey, []);
+        orderedExpKeys.push({ key: gKey });
+      }
+      dailyExpClusters.get(gKey).push(exp);
+    }
+    for (const entry of orderedExpKeys) {
+      const expCluster = entry.single ? [entry.single] : dailyExpClusters.get(entry.key) || [];
+      if (expCluster.length === 0) continue;
+      const exp = expCluster[0];
+      const rawNom = Number(exp.nominal) || 0;
       const isNonKas = Boolean(exp.isNonKas) || exp.rekeningSumber === "SINKRON" || exp.rekeningSumber === "STOK_INTERNAL";
       const isKurang = rawNom < 0 || exp.arahMutasi === "KURANG";
       const rekKode = exp.rekeningSumber || kodeKasir;
-      const isKasir = !isNonKas && rekKode === kodeKasir && absNom > 0;
-      list.push({
-        id: exp.idTransaksi,
-        tanggal: normalizeDateStr(exp.tanggal),
-        jam: exp.jam || "14:00",
-        timestamp: exp.createdAt || exp.tanggal,
-        jenis: "PENGELUARAN_DIVISI",
-        jenisLabel: isNonKas ? `Pengeluaran Stok/Non-Kas (${exp.kategori})` : isKurang ? `Pengurangan/Pengembalian Pengeluaran (${exp.kategori})` : `Pengeluaran (${exp.kategori})`,
-        arusUang: isNonKas ? "NON_TUNAI" : isKurang ? "MASUK" : "KELUAR",
-        arusUangLabel: isNonKas ? "Pemakaian Stok / Sinkron (Non-Kas)" : isKurang ? "Koreksi Masuk (+)" : "Uang Keluar (-)",
-        deskripsi: `[${exp.divisi}] ${exp.kategori}: ${exp.keterangan}`,
-        pihakTerkait: exp.penerima || exp.divisi,
-        kategoriPihak: "DIVISI",
-        rekening: rekKode,
-        nominal: absNom,
-        nominalMasuk: !isNonKas && isKurang ? absNom : 0,
-        nominalKeluar: !isNonKas && !isKurang ? absNom : 0,
-        isArusKasKasir: isKasir,
-        arahKasir: !isKasir ? "NON_KASIR" : isKurang ? "MASUK" : "KELUAR",
-        arahKasirLabel: !isKasir ? "Bukan Kasir" : isKurang ? "Masuk Kasir (+)" : "Keluar Kasir (\u2212)",
-        nominalKasirMasuk: isKasir && isKurang ? absNom : 0,
-        nominalKasirKeluar: isKasir && !isKurang ? absNom : 0,
-        metode: isNonKas ? cleanNonKasLabel(rekKode) : rekKode === kodeKasir ? "TUNAI" : "TRANSFER",
-        status: "SELESAI",
-        fotoBukti: exp.attachment_url || exp.fotoKuitansi,
-        fotoNota: exp.attachment_url || exp.fotoKuitansi,
-        attachment_url: exp.attachment_url || exp.fotoKuitansi,
-        divisi: exp.divisi
-      });
+      const normTgl = normalizeDateStr(exp.tanggal);
+      if (expCluster.length >= 2) {
+        const first = expCluster[0];
+        const last = expCluster[expCluster.length - 1];
+        const totalAbsNom = expCluster.reduce((s, x) => s + Math.abs(Number(x.nominal) || 0), 0);
+        const isKasir = !isNonKas && rekKode === kodeKasir && totalAbsNom > 0;
+        const firstHm = String(first.jam || "00:00:00").slice(0, 5);
+        const lastHm = String(last.jam || "00:00:00").slice(0, 5);
+        const jamDisplay = firstHm !== lastHm ? `${firstHm}\u2013${lastHm}` : first.jam || "14:00";
+        const firstFoto = expCluster.map((x) => x.attachment_url || x.fotoKuitansi).find(Boolean) || void 0;
+        list.push({
+          id: first.idTransaksi,
+          tanggal: normTgl,
+          jam: jamDisplay,
+          timestamp: first.createdAt || first.tanggal,
+          jenis: "PENGELUARAN_DIVISI",
+          jenisLabel: isNonKas ? `Pengeluaran Stok/Non-Kas (${first.kategori})` : `Pengeluaran (${first.kategori})`,
+          arusUang: isNonKas ? "NON_TUNAI" : "KELUAR",
+          arusUangLabel: isNonKas ? "Pemakaian Stok / Sinkron (Non-Kas)" : "Uang Keluar (-)",
+          deskripsi: `[${first.divisi}] ${first.kategori} (${expCluster.length} Rincian Pengeluaran)`,
+          pihakTerkait: first.penerima || first.divisi,
+          kategoriPihak: "DIVISI",
+          rekening: rekKode,
+          nominal: totalAbsNom,
+          nominalMasuk: 0,
+          nominalKeluar: !isNonKas ? totalAbsNom : 0,
+          isArusKasKasir: isKasir,
+          arahKasir: !isKasir ? "NON_KASIR" : "KELUAR",
+          arahKasirLabel: !isKasir ? "Bukan Kasir" : "Keluar Kasir (\u2212)",
+          nominalKasirMasuk: 0,
+          nominalKasirKeluar: isKasir ? totalAbsNom : 0,
+          metode: isNonKas ? cleanNonKasLabel(rekKode) : rekKode === kodeKasir ? "TUNAI" : "TRANSFER",
+          status: "SELESAI",
+          fotoBukti: firstFoto,
+          fotoNota: firstFoto,
+          attachment_url: firstFoto,
+          divisi: first.divisi,
+          batchItemIds: expCluster.map((x) => x.idTransaksi),
+          itemsDetail: expCluster.map((x) => {
+            const xNom = Math.abs(Number(x.nominal) || 0);
+            const xQty = Number(x.qty) > 0 ? Number(x.qty) : 1;
+            const xSat = String(x.satuan || "").trim() || "Biaya";
+            const xHrg = Number(x.hargaSatuan) > 0 ? Math.round(Number(x.hargaSatuan)) : xQty > 0 ? Math.round(xNom / xQty) : xNom;
+            return {
+              nama: String(x.keterangan || "").trim() || x.kategori,
+              qty: xQty,
+              satuan: xSat,
+              harga: xHrg,
+              subtotal: xNom,
+              idTransaksiItem: x.idTransaksi
+            };
+          })
+        });
+      } else {
+        const absNom = Math.abs(rawNom);
+        const isKasir = !isNonKas && rekKode === kodeKasir && absNom > 0;
+        list.push({
+          id: exp.idTransaksi,
+          tanggal: normTgl,
+          jam: exp.jam || "14:00",
+          timestamp: exp.createdAt || exp.tanggal,
+          jenis: "PENGELUARAN_DIVISI",
+          jenisLabel: isNonKas ? `Pengeluaran Stok/Non-Kas (${exp.kategori})` : isKurang ? `Pengurangan/Pengembalian Pengeluaran (${exp.kategori})` : `Pengeluaran (${exp.kategori})`,
+          arusUang: isNonKas ? "NON_TUNAI" : isKurang ? "MASUK" : "KELUAR",
+          arusUangLabel: isNonKas ? "Pemakaian Stok / Sinkron (Non-Kas)" : isKurang ? "Koreksi Masuk (+)" : "Uang Keluar (-)",
+          deskripsi: `[${exp.divisi}] ${exp.kategori}: ${exp.keterangan}`,
+          pihakTerkait: exp.penerima || exp.divisi,
+          kategoriPihak: "DIVISI",
+          rekening: rekKode,
+          nominal: absNom,
+          nominalMasuk: !isNonKas && isKurang ? absNom : 0,
+          nominalKeluar: !isNonKas && !isKurang ? absNom : 0,
+          isArusKasKasir: isKasir,
+          arahKasir: !isKasir ? "NON_KASIR" : isKurang ? "MASUK" : "KELUAR",
+          arahKasirLabel: !isKasir ? "Bukan Kasir" : isKurang ? "Masuk Kasir (+)" : "Keluar Kasir (\u2212)",
+          nominalKasirMasuk: isKasir && isKurang ? absNom : 0,
+          nominalKasirKeluar: isKasir && !isKurang ? absNom : 0,
+          metode: isNonKas ? cleanNonKasLabel(rekKode) : rekKode === kodeKasir ? "TUNAI" : "TRANSFER",
+          status: "SELESAI",
+          fotoBukti: exp.attachment_url || exp.fotoKuitansi,
+          fotoNota: exp.attachment_url || exp.fotoKuitansi,
+          attachment_url: exp.attachment_url || exp.fotoKuitansi,
+          divisi: exp.divisi
+        });
+      }
     }
     function cleanNonKasLabel(rek) {
       if (rek === "STOK_INTERNAL") return "PEMAKAIAN_STOK";
@@ -13718,9 +16227,13 @@ var TransactionService = class {
     for (const t of db.transferRekening || []) {
       const sRek = db.rekening.find((r) => r.kode === t.rekeningSumber);
       const dRek = db.rekening.find((r) => r.kode === t.rekeningTujuan);
-      const isAnakTx = Boolean(
+      const isTitipTx = Boolean(
+        t.tipeMutasiAfiliasi === "TITIP_UANG_KARYAWAN" || t.tipeMutasiAfiliasi === "KEMBALIKAN_TITIP_KARYAWAN" || t.tipeMutasiAfiliasi === "ANTAR_REKENING_TITIP" || this.isRekeningTitipAccount(sRek) || this.isRekeningTitipAccount(dRek)
+      );
+      const isAnakTx = !isTitipTx && Boolean(
         t.idMitraTerkait || this.isAnakPerusahaanRekening(sRek) || this.isAnakPerusahaanRekening(dRek)
       );
+      const namaPemegangTitip = t.namaKaryawanTerkait || (this.isRekeningTitipAccount(dRek) ? dRek?.namaKaryawanTerkait || dRek?.atasNama : sRek?.namaKaryawanTerkait || sRek?.atasNama) || "Karyawan";
       const namaAfiliasi = t.namaMitraTerkait || (this.isAnakPerusahaanRekening(dRek) ? dRek?.nama : this.isAnakPerusahaanRekening(sRek) ? sRek?.nama : "DP Parabot");
       const isTxBerhasil = !t.status || t.status === "BERHASIL";
       const masukKasir = isTxBerhasil && t.rekeningTujuan === kodeKasir && t.nominal > 0;
@@ -13733,11 +16246,11 @@ var TransactionService = class {
         jam: t.jam || "12:00",
         timestamp: t.createdAt || t.tanggal,
         jenis: "TRANSFER_REKENING",
-        jenisLabel: masukKasir ? `Dropping Masuk ke Kasir (dari ${sRek?.nama || t.rekeningSumber})` : isSetorKeBerangkas ? `Pengembalian Kasir ke Berangkas (${dRek?.nama || t.rekeningTujuan})` : keluarKasir ? `Setor / Transfer Keluar Kasir (ke ${dRek?.nama || t.rekeningTujuan})` : isAnakTx ? t.tipeMutasiAfiliasi === "TARIK_DARI_ANAK_PERUSAHAAN" || this.isAnakPerusahaanRekening(sRek) ? "Tarik / Talangan Anak Perusahaan" : "Simpan Dana ke Anak Perusahaan" : "Transfer Antar Rekening",
+        jenisLabel: masukKasir ? `Dropping Masuk ke Kasir (dari ${sRek?.nama || t.rekeningSumber})` : isSetorKeBerangkas ? `Pengembalian Kasir ke Berangkas (${dRek?.nama || t.rekeningTujuan})` : keluarKasir ? `Setor / Transfer Keluar Kasir (ke ${dRek?.nama || t.rekeningTujuan})` : isTitipTx ? this.isRekeningTitipAccount(dRek) && !this.isRekeningTitipAccount(sRek) ? `Titip Uang ke Karyawan (${namaPemegangTitip})` : `Pengembalian Dana Titip (${namaPemegangTitip})` : isAnakTx ? t.tipeMutasiAfiliasi === "TARIK_DARI_ANAK_PERUSAHAAN" || this.isAnakPerusahaanRekening(sRek) ? "Tarik / Talangan Anak Perusahaan" : "Simpan Dana ke Anak Perusahaan" : "Transfer Antar Rekening",
         arusUang: "MUTASI",
-        arusUangLabel: masukKasir ? "Dropping Masuk Kasir (+)" : isSetorKeBerangkas ? "Pengembalian ke Berangkas (\u2212)" : keluarKasir ? "Setor Keluar Kasir (\u2212)" : isAnakTx ? "1 Transaksi Terpadu (Rekening & Mitra)" : "Mutasi Internal",
-        deskripsi: isAnakTx ? `[Terpadu Rekening & Mitra ${namaAfiliasi}] ${t.rekeningSumber} -> ${t.rekeningTujuan} (${t.keterangan || "-"})` : `Transfer Rekening: ${t.rekeningSumber} -> ${t.rekeningTujuan} (${t.keterangan || "-"})`,
-        pihakTerkait: isAnakTx ? `${namaAfiliasi} (Anak Perusahaan & Mitra)` : `${sRek?.nama || t.rekeningSumber} \u2192 ${dRek?.nama || t.rekeningTujuan}`,
+        arusUangLabel: masukKasir ? "Dropping Masuk Kasir (+)" : isSetorKeBerangkas ? "Pengembalian ke Berangkas (\u2212)" : keluarKasir ? "Setor Keluar Kasir (\u2212)" : isTitipTx ? "Mutasi Rekening Titip Karyawan" : isAnakTx ? "1 Transaksi Terpadu (Rekening & Mitra)" : "Mutasi Internal",
+        deskripsi: isTitipTx ? `[Rekening Titip \xB7 ${namaPemegangTitip}] ${t.rekeningSumber} -> ${t.rekeningTujuan} (${t.keterangan || "-"})` : isAnakTx ? `[Terpadu Rekening & Mitra ${namaAfiliasi}] ${t.rekeningSumber} -> ${t.rekeningTujuan} (${t.keterangan || "-"})` : `Transfer Rekening: ${t.rekeningSumber} -> ${t.rekeningTujuan} (${t.keterangan || "-"})`,
+        pihakTerkait: isTitipTx ? `${namaPemegangTitip} (Rekening Titip Uang)` : isAnakTx ? `${namaAfiliasi} (Anak Perusahaan & Mitra)` : `${sRek?.nama || t.rekeningSumber} \u2192 ${dRek?.nama || t.rekeningTujuan}`,
         kategoriPihak: isAnakTx ? "MITRA" : "INTERNAL",
         rekening: `${t.rekeningSumber} -> ${t.rekeningTujuan}`,
         nominal: t.nominal,
@@ -13758,43 +16271,69 @@ var TransactionService = class {
       const nomPokok = Math.round(Number(br.nominalPokok) || 0);
       const rekAdm = br.rekeningAdmin || kodeKasir;
       const kasPokok = br.rekeningKasTunai || kodeKasir;
-      let kasirIn = 0;
-      let kasirOut = 0;
-      if (isTarikTunai) {
-        if (rekAdm === kodeKasir && nomAdmin > 0) kasirIn += nomAdmin;
-        if (kasPokok === kodeKasir && nomPokok > 0) kasirOut += nomPokok;
-      } else {
-        if (rekAdm === kodeKasir && nomAdmin > 0) kasirOut += nomAdmin;
-        if (kasPokok === kodeKasir && nomPokok > 0) kasirIn += nomPokok;
+      const rekBank = br.rekeningBank || "BRI01";
+      const isAdmKasir = rekAdm === kodeKasir;
+      const isPokokKasir = kasPokok === kodeKasir;
+      const tglNorm = normalizeDateStr(br.tanggal);
+      const pihak = br.namaPelanggan || "Nasabah Umum BRILink";
+      const katPihak = br.idMitra && br.idMitra !== "UMUM" ? "MITRA" : "INTERNAL";
+      if (nomAdmin > 0 || nomPokok <= 0) {
+        const admTouchesKasir = isAdmKasir && nomAdmin > 0;
+        list.push({
+          id: br.idTransaksi,
+          tanggal: tglNorm,
+          jam: br.jam || "11:30",
+          timestamp: br.createdAt || br.tanggal,
+          jenis: "BRILINK",
+          jenisLabel: isTarikTunai ? isAdmKasir ? "BRILink: Adm Tarik Tunai Cash (+)" : "BRILink: Adm Tarik Tunai (+)" : "BRILink: Adm Tukar Cash PT (\u2212)",
+          arusUang: isTarikTunai ? "MASUK" : "KELUAR",
+          arusUangLabel: isTarikTunai ? "Uang Masuk (+)" : "Uang Keluar (-)",
+          deskripsi: `${isTarikTunai ? isAdmKasir ? `Biaya Admin Cash Tarik Tunai BRILink (Masuk Kasir ${rekAdm})` : `Biaya Admin Tarik Tunai BRILink (Ikut Transfer ${rekAdm})` : `Biaya Admin Tukar Cash PT (${rekAdm})`}${nomPokok > 0 ? ` \xB7 Pokok Rp ${nomPokok.toLocaleString("id-ID")}` : ""}${br.keterangan ? ` \xB7 ${br.keterangan}` : ""}`,
+          pihakTerkait: pihak,
+          kategoriPihak: katPihak,
+          rekening: rekAdm,
+          nominal: nomAdmin,
+          nominalMasuk: isTarikTunai ? nomAdmin : 0,
+          nominalKeluar: isTarikTunai ? 0 : nomAdmin,
+          isArusKasKasir: admTouchesKasir,
+          arahKasir: !admTouchesKasir ? "NON_KASIR" : isTarikTunai ? "MASUK" : "KELUAR",
+          arahKasirLabel: !admTouchesKasir ? "Bukan Kasir" : isTarikTunai ? "Masuk Kasir (+)" : "Keluar Kasir (\u2212)",
+          nominalKasirMasuk: admTouchesKasir && isTarikTunai ? nomAdmin : 0,
+          nominalKasirKeluar: admTouchesKasir && !isTarikTunai ? nomAdmin : 0,
+          metode: isAdmKasir ? "TUNAI" : "TRANSFER",
+          status: br.status || "BERHASIL",
+          fotoBukti: br.fotoBukti,
+          divisi: br.divisi || "BRILink"
+        });
       }
-      const touchesKasir = kasirIn > 0 || kasirOut > 0;
-      const pokokInfo = nomPokok > 0 ? ` [Pokok Rp ${nomPokok.toLocaleString("id-ID")}: ${isTarikTunai ? `+${br.rekeningBank} / -KAS01` : `-${br.rekeningBank} / +KAS01`}]` : "";
-      list.push({
-        id: br.idTransaksi,
-        tanggal: normalizeDateStr(br.tanggal),
-        jam: br.jam || "11:30",
-        timestamp: br.createdAt || br.tanggal,
-        jenis: "BRILINK",
-        jenisLabel: isTarikTunai ? "BRILink: Adm Tarik Tunai (+)" : "BRILink: Adm Tukar Cash PT (\u2212)",
-        arusUang: isTarikTunai ? "MASUK" : "KELUAR",
-        arusUangLabel: isTarikTunai ? "Uang Masuk (+)" : "Uang Keluar (-)",
-        deskripsi: `${br.keterangan || (isTarikTunai ? "Adm Tarik Tunai" : "Adm Tukar Cash")}${pokokInfo}`,
-        pihakTerkait: br.namaPelanggan || "Nasabah Umum BRILink",
-        kategoriPihak: br.idMitra && br.idMitra !== "UMUM" ? "MITRA" : "INTERNAL",
-        rekening: rekAdm,
-        nominal: nomAdmin,
-        nominalMasuk: isTarikTunai ? nomAdmin : 0,
-        nominalKeluar: isTarikTunai ? 0 : nomAdmin,
-        isArusKasKasir: touchesKasir,
-        arahKasir: !touchesKasir ? "NON_KASIR" : kasirIn >= kasirOut ? "MASUK" : "KELUAR",
-        arahKasirLabel: !touchesKasir ? "Bukan Kasir" : kasirIn > 0 && kasirOut > 0 ? `Adm +Rp ${kasirIn.toLocaleString("id-ID")} / Pokok -Rp ${kasirOut.toLocaleString("id-ID")}` : kasirIn > 0 ? "Masuk Kasir (+)" : "Keluar Kasir (\u2212)",
-        nominalKasirMasuk: kasirIn,
-        nominalKasirKeluar: kasirOut,
-        metode: isTarikTunai ? "ADM_TARIK_TUNAI" : "ADM_TUKAR_CASH",
-        status: br.status || "BERHASIL",
-        fotoBukti: br.fotoBukti,
-        divisi: br.divisi || "BRILink"
-      });
+      if (nomPokok > 0) {
+        list.push({
+          id: nomAdmin > 0 ? `${br.idTransaksi}-POKOK` : br.idTransaksi,
+          tanggal: tglNorm,
+          jam: br.jam || "11:30",
+          timestamp: br.createdAt || br.tanggal,
+          jenis: "BRILINK",
+          jenisLabel: isTarikTunai ? "BRILink: Pokok Tarik Tunai (Kasir \u2192 Bank)" : "BRILink: Pokok Tukar Cash (Bank \u2192 Kasir)",
+          arusUang: "MUTASI",
+          arusUangLabel: isTarikTunai ? "Mutasi Pokok (\u2212Kasir / +Bank)" : "Mutasi Pokok (+Kasir / \u2212Bank)",
+          deskripsi: isTarikTunai ? `Penyerahan uang tunai pokok tarik tunai BRILink ke nasabah (${kasPokok} \u2192 ${rekBank})${nomAdmin > 0 ? ` \xB7 Biaya Admin Rp ${nomAdmin.toLocaleString("id-ID")} dicatat terpisah` : ""}` : `Penerimaan uang tunai pokok tukar cash BRILink (${rekBank} \u2192 ${kasPokok})${nomAdmin > 0 ? ` \xB7 Biaya Admin Rp ${nomAdmin.toLocaleString("id-ID")} dicatat terpisah` : ""}`,
+          pihakTerkait: pihak,
+          kategoriPihak: katPihak,
+          rekening: isTarikTunai ? `${kasPokok} -> ${rekBank}` : `${rekBank} -> ${kasPokok}`,
+          nominal: nomPokok,
+          nominalMasuk: 0,
+          nominalKeluar: 0,
+          isArusKasKasir: isPokokKasir,
+          arahKasir: !isPokokKasir ? "NON_KASIR" : isTarikTunai ? "MUTASI_KELUAR" : "MUTASI_MASUK",
+          arahKasirLabel: !isPokokKasir ? "Bukan Kasir" : isTarikTunai ? "Pokok Keluar Kasir (\u2212)" : "Pokok Masuk Kasir (+)",
+          nominalKasirMasuk: isPokokKasir && !isTarikTunai ? nomPokok : 0,
+          nominalKasirKeluar: isPokokKasir && isTarikTunai ? nomPokok : 0,
+          metode: "MUTASI_BRILINK",
+          status: br.status || "BERHASIL",
+          fotoBukti: br.fotoBukti,
+          divisi: br.divisi || "BRILink"
+        });
+      }
     }
     for (const um of db.uangMasuk || []) {
       const isPiutangUm = um.metode === "PIUTANG" || um.rekeningTujuan === "BON01";
@@ -13808,7 +16347,7 @@ var TransactionService = class {
         jam: um.jam || "12:00",
         timestamp: um.createdAt || um.tanggal,
         jenis: "UANG_MASUK",
-        jenisLabel: isPiutangUm ? `Putus Harga \u2192 Piutang Buyer (${um.noPenjualanHasilBumi || um.idTransaksi})` : um.noPenjualanHasilBumi ? `Uang Masuk Hasil Bumi (${um.noPenjualanHasilBumi})` : isSinkronUm ? `Uang Masuk SINKRON: ${um.kategori}` : `Uang Masuk: ${um.kategori}`,
+        jenisLabel: isPiutangUm ? `Putus Harga \u2192 Piutang Buyer (${um.noPenjualanHasilBumi || um.idTransaksi})` : um.kategori === "SETTLEMENT_BUYER_SJ" ? "Uang Masuk Buyer Surat Jalan (Titip Mitra)" : um.noPenjualanHasilBumi ? `Uang Masuk Hasil Bumi (${um.noPenjualanHasilBumi})` : isSinkronUm ? `Uang Masuk SINKRON: ${um.kategori}` : `Uang Masuk: ${um.kategori}`,
         arusUang: isNonKasUm ? "NON_TUNAI" : "MASUK",
         arusUangLabel: isPiutangUm ? "Putus Harga \u2192 Piutang Mitra (BON01)" : isSinkronUm ? "Sinkron (Non-Kas)" : "Uang Masuk (+)",
         deskripsi: `${um.keterangan}${um.divisi && !isTanpaDivisi(um.divisi) ? ` \xB7 ${um.divisi}` : ""}`,
@@ -13827,6 +16366,48 @@ var TransactionService = class {
         status: isPiutangUm ? "PIUTANG" : "BERHASIL",
         fotoBukti: um.fotoBukti,
         divisi: um.divisi
+      });
+    }
+    for (const sj of db.suratJalan || []) {
+      if (sj.sumberBarang === "STOK_HB_PT" || sj.statusPembayaranMitra !== "LUNAS" || sj.catatArusKasBayarMitra !== true) {
+        continue;
+      }
+      const nom = Math.round(Number(sj.nominalBayarMitraAktual ?? sj.jumlahPembayaranMitra) || 0);
+      if (nom <= 0) continue;
+      const rekKode = sj.rekeningBayarMitraKode || sj.rekeningPtKode || "BNI01";
+      const isKasir = rekKode === kodeKasir;
+      const sjItemsDetail = Array.isArray(sj.detailItems) && sj.detailItems.length > 1 ? sj.detailItems.map((d, idx) => ({
+        nama: d.deskripsi || `${sj.komoditasNama} #${idx + 1}`,
+        qty: Number(d.tonaseAkhirKg) || 0,
+        satuan: "Kg",
+        harga: Number(d.hargaPerKgMitra) || 0,
+        subtotal: Number(d.subtotalMitra) || 0
+      })) : void 0;
+      list.push({
+        id: `SJ-PAY-${sj.noInvoice}`,
+        tanggal: normalizeDateStr(sj.tanggalBayarMitra || sj.tanggal),
+        jam: sj.jamBayarMitra || sj.jam || "12:00",
+        timestamp: sj.createdAt || sj.tanggal,
+        jenis: "SURAT_JALAN_BAYAR_MITRA",
+        jenisLabel: `Bayar Hak Mitra Surat Jalan (${sj.noInvoice})`,
+        arusUang: "KELUAR",
+        arusUangLabel: "Bayar Mitra SJ (\u2212)",
+        deskripsi: `Transfer hak bersih mitra ${sj.namaMitra} \xB7 ${sj.komoditasNama} (${Number(sj.tonaseAkhirKg || 0).toLocaleString("id-ID")} Kg)${sj.potongPiutang && sj.kasbonNominal > 0 ? ` \xB7 Potong Bon Rp ${Math.round(sj.kasbonNominal).toLocaleString("id-ID")}` : ""}`,
+        pihakTerkait: sj.namaMitra || "Mitra",
+        kategoriPihak: "MITRA",
+        rekening: rekKode,
+        nominal: nom,
+        nominalMasuk: 0,
+        nominalKeluar: nom,
+        isArusKasKasir: isKasir && nom > 0,
+        arahKasir: isKasir && nom > 0 ? "KELUAR" : "NON_KASIR",
+        arahKasirLabel: isKasir && nom > 0 ? "Keluar Kasir (\u2212)" : "Bukan Kasir",
+        nominalKasirMasuk: 0,
+        nominalKasirKeluar: isKasir ? nom : 0,
+        metode: isKasir ? "TUNAI" : "TRANSFER",
+        status: "LUNAS",
+        divisi: "PT Wijaya Agro Perkasa",
+        itemsDetail: sjItemsDetail
       });
     }
     list.sort((a, b) => {
@@ -14493,7 +17074,26 @@ var TransactionService = class {
     const masukPinjamanDanaKas01 = (db.pembelianHasilBumi || []).filter(
       (b) => b.tanggal === tanggal && (b.komoditasKode === "PINJAMAN_DANA" || b.komoditasNama?.includes("Pinjaman Uang")) && b.rekeningSumber === "KAS01"
     ).reduce((s, b) => s + (b.totalNominal || 0), 0);
-    const masukTransferKas01 = (db.transferRekening || []).filter((t) => t.tanggal === tanggal && t.rekeningTujuan === "KAS01").reduce((s, t) => s + (t.nominal || 0), 0);
+    const masukTransferKas01 = (db.transferRekening || []).filter((t) => normalizeDateToDmy(t.tanggal, t.tanggal) === tanggal && t.rekeningTujuan === "KAS01").reduce((s, t) => s + (t.nominal || 0), 0);
+    const masukUangMasukKas01 = (db.uangMasuk || []).filter(
+      (um) => normalizeDateToDmy(um.tanggal, um.tanggal) === tanggal && um.metode !== "SINKRON" && um.metode !== "PIUTANG" && um.rekeningTujuan !== "SINKRON" && um.rekeningTujuan !== "BON01" && (um.rekeningTujuan === "KAS01" || !um.rekeningTujuan && um.metode === "TUNAI")
+    ).reduce((s, um) => s + Math.round(Number(um.nominal) || 0), 0);
+    let masukBrilinkKas01 = 0;
+    let keluarBrilinkKas01 = 0;
+    for (const br of db.brilink || []) {
+      if (normalizeDateToDmy(br.tanggal, br.tanggal) !== tanggal) continue;
+      const nomAdm = Math.round(Number(br.nominalAdmin) || 0);
+      const nomPokok = Math.round(Number(br.nominalPokok) || 0);
+      const rekAdm = br.rekeningAdmin || "KAS01";
+      const rekKas = br.rekeningKasTunai || "KAS01";
+      if (br.jenisBrilink === "TARIK_TUNAI") {
+        if (rekAdm === "KAS01" && nomAdm > 0) masukBrilinkKas01 += nomAdm;
+        if (rekKas === "KAS01" && nomPokok > 0) keluarBrilinkKas01 += nomPokok;
+      } else {
+        if (rekAdm === "KAS01" && nomAdm > 0) keluarBrilinkKas01 += nomAdm;
+        if (rekKas === "KAS01" && nomPokok > 0) masukBrilinkKas01 += nomPokok;
+      }
+    }
     const keluarBeliPanenKas01 = (db.pembelianHasilBumi || []).filter(
       (b) => b.tanggal === tanggal && b.metodePembayaran === "TUNAI" && b.rekeningSumber === "KAS01" && b.komoditasKode !== "PINJAMAN_DANA" && !b.komoditasNama?.includes("Pinjaman Uang")
     ).reduce((s, b) => s + (b.totalNominal || 0), 0);
@@ -14518,8 +17118,8 @@ var TransactionService = class {
       saldoKas01SaatIni,
       ringkasanKasHariIni: {
         tanggal,
-        masukTunaiKas01: masukPenjualanKas01 + masukBayarBonKas01 + masukPinjamanDanaKas01 + masukTransferKas01,
-        keluarTunaiKas01: keluarBeliPanenKas01 + keluarKulakanKas01 + keluarKasbonKas01 + keluarBiayaKas01 + keluarTitipanKas01 + keluarGajiKas01 + keluarTransferKas01,
+        masukTunaiKas01: masukPenjualanKas01 + masukBayarBonKas01 + masukPinjamanDanaKas01 + masukTransferKas01 + masukUangMasukKas01 + masukBrilinkKas01,
+        keluarTunaiKas01: keluarBeliPanenKas01 + keluarKulakanKas01 + keluarKasbonKas01 + keluarBiayaKas01 + keluarTitipanKas01 + keluarGajiKas01 + keluarTransferKas01 + keluarBrilinkKas01,
         kompensasiNonTunaiHariIni
       }
     };
@@ -14572,9 +17172,80 @@ var TransactionService = class {
       if (nominalPotong === 0 && nominalFisik <= 0) {
         throw new Error("Tidak ada nominal kliring silang maupun penyelesaian fisik yang diproses");
       }
+      const selectedStayBonIds = Array.from(
+        new Set((params.stayBonIds || []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      const selectedTargetBonIds = Array.from(
+        new Set((params.targetBonIds || []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      if ((selectedStayBonIds.length > 0 || selectedTargetBonIds.length > 0) && nominalPotong > 0) {
+        const sisaByRef = /* @__PURE__ */ new Map();
+        outstandingPenjualan.forEach((p) => {
+          sisaByRef.set(p.noPenjualan, Number(p.sisaPiutang) || 0);
+          if ((p.items || []).length > 1) {
+            const itemBalances = this.computePenjualanItemOpenBalances(db, p);
+            itemBalances.forEach((it) => {
+              sisaByRef.set(it.rowId, it.sisa);
+            });
+          }
+        });
+        outstandingPenjualanHb.forEach((j) => sisaByRef.set(j.noPenjualan, Number(j.sisaPiutang) || 0));
+        outstandingKasbonUang.forEach((k) => sisaByRef.set(k.idTransaksi, Number(k.sisaKasbon) || 0));
+        const sumDeduplicatedIds = (ids) => {
+          const fullParents = /* @__PURE__ */ new Set();
+          ids.forEach((id) => {
+            const parsed = this.parseBonRefAndItemIndex(id);
+            if (parsed.itemIndex === null) fullParents.add(parsed.parentRefId);
+          });
+          return ids.reduce((sum, id) => {
+            const parsed = this.parseBonRefAndItemIndex(id);
+            if (parsed.itemIndex !== null && fullParents.has(parsed.parentRefId)) {
+              return sum;
+            }
+            return sum + (sisaByRef.get(id) || 0);
+          }, 0);
+        };
+        if (selectedStayBonIds.length > 0) {
+          const totalSisaStay = sumDeduplicatedIds(selectedStayBonIds);
+          const totalNonStaySisa = Math.max(0, totalKasbonAwal - totalSisaStay);
+          const sisaPiutangSetelahPotong = Math.max(0, totalKasbonAwal - nominalPotong);
+          if (nominalPotong > totalNonStaySisa) {
+            throw new Error(
+              `Total bon yang dipilih tetap Stay (Rp ${totalSisaStay.toLocaleString("id-ID")}) melebihi sisa piutang setelah kliring (Rp ${sisaPiutangSetelahPotong.toLocaleString("id-ID")}). Kurangi pilihan bon Stay atau sesuaikan nominal potong silang.`
+            );
+          }
+        } else if (selectedTargetBonIds.length > 0) {
+          const totalSisaDipilih = sumDeduplicatedIds(selectedTargetBonIds);
+          if (totalSisaDipilih <= 0) {
+            throw new Error("Nota piutang yang dipilih sudah lunas atau tidak ditemukan.");
+          }
+          if (nominalPotong > totalSisaDipilih) {
+            throw new Error(
+              `Nominal potong silang (Rp ${nominalPotong.toLocaleString("id-ID")}) melebihi total sisa nota yang dipilih (Rp ${totalSisaDipilih.toLocaleString("id-ID")}).`
+            );
+          }
+        }
+      }
       const idReferensiKliring = generateId("KLR");
       const alokasiBonLunas = [];
-      const allocateBonPayment = (amountToAllocate) => {
+      const allocateBonPayment = (amountToAllocate, useCustomSelection = false) => {
+        if (useCustomSelection && selectedStayBonIds.length > 0) {
+          return this.allocateMitraBonFifo(db, mitra.id, amountToAllocate, {
+            stayBonIds: selectedStayBonIds,
+            strictExcludeStay: true
+          });
+        }
+        if (useCustomSelection && selectedTargetBonIds.length > 0) {
+          return this.allocateMitraBonFifo(db, mitra.id, amountToAllocate, {
+            targetBonIds: selectedTargetBonIds,
+            strictTargetOnly: true
+          });
+        }
+        if (selectedStayBonIds.length > 0) {
+          return this.allocateMitraBonFifo(db, mitra.id, amountToAllocate, {
+            stayBonIds: selectedStayBonIds
+          });
+        }
         return this.allocateMitraBonFifo(db, mitra.id, amountToAllocate);
       };
       const settleEmployeeUpahPortion = (amountFromUpah, potonganKasbonSlip, gajiBersihSlip, rekSumberSlip, metodeSlip, ketSlip, idBayarBonRef) => {
@@ -14659,8 +17330,12 @@ var TransactionService = class {
       let runningTitipMurni = titipPanenMurniAwal;
       let runningKasbon = totalKasbonAwal;
       if (nominalPotong > 0) {
-        const alokasiKompensasi = allocateBonPayment(nominalPotong);
+        const alokasiKompensasi = allocateBonPayment(
+          nominalPotong,
+          selectedStayBonIds.length > 0 || selectedTargetBonIds.length > 0
+        );
         alokasiBonLunas.push(...alokasiKompensasi);
+        const targetNoteSuffix = selectedStayBonIds.length > 0 ? ` [Bon Stay: ${selectedStayBonIds.join(", ")}]` : selectedTargetBonIds.length > 0 ? ` [Khusus Nota: ${selectedTargetBonIds.join(", ")}]` : "";
         const sisaBonSetelahPotong = runningKasbon - nominalPotong;
         const sisaTitipSetelahPotong = runningTitipan - nominalPotong;
         const potongDariTitipMurni = Math.min(runningTitipMurni, nominalPotong);
@@ -14680,7 +17355,7 @@ var TransactionService = class {
           rekeningTujuan: "KOMPENSASI_TITIP",
           isKompensasiTitipan: true,
           alokasi: alokasiKompensasi,
-          keterangan: params.keterangan || `Kliring Silang Otomatis Piutang vs Hutang Mitra (${idReferensiKliring})`,
+          keterangan: params.keterangan || `Kliring Silang Piutang vs Hutang Mitra (${idReferensiKliring})${targetNoteSuffix}`,
           createdAt: iso
         });
         if (potongDariTitipMurni > 0) {
@@ -14697,7 +17372,7 @@ var TransactionService = class {
             saldoTitipanSisa: runningTitipMurni - potongDariTitipMurni,
             metodePembayaran: "KOMPENSASI_BON",
             isKompensasiBon: true,
-            keterangan: params.keterangan || `Potong Saldo Titipan untuk Kliring Silang Kasbon Mitra (${idReferensiKliring})`,
+            keterangan: params.keterangan || `Potong Saldo Titipan untuk Kliring Silang Kasbon Mitra (${idReferensiKliring})${targetNoteSuffix}`,
             createdAt: iso
           });
           runningTitipMurni -= potongDariTitipMurni;
@@ -15034,7 +17709,7 @@ var TransactionService = class {
   // ==========================================
   static getTransactionDetail(idTransaksi, jenisHint) {
     const db = dbManager.get();
-    const cleanId = String(idTransaksi || "").trim().replace(/-IT\d+$/i, "");
+    const cleanId = String(idTransaksi || "").trim().replace(/-IT\d+$/i, "").replace(/^(BRI[A-Z0-9]+)-POKOK$/i, "$1");
     if (!cleanId) {
       throw new Error("ID transaksi wajib diisi");
     }
@@ -15107,6 +17782,8 @@ var TransactionService = class {
           idMitraAnakPerusahaan: idTujuan,
           namaAnakPerusahaan: resolvedSale?.namaAnakPerusahaan || silangCredit?.namaMitra || mitraTujuanObj?.nama || "DP Parabot",
           noNotaToko: resolvedSale?.noNotaToko || silangCredit?.noNotaToko || "",
+          metode: resolvedSale?.metode || "KASBON",
+          rekeningTujuan: resolvedSale?.rekeningTujuan || "BON01",
           items,
           totalNominal: resolvedSale?.totalNominal ?? silangCredit?.totalNominal ?? 0,
           sisaPiutangMitra: resolvedSale?.sisaPiutang ?? 0,
@@ -15229,22 +17906,31 @@ var TransactionService = class {
           throw new Error(`Data Nota Silang ${cleanId} tidak ditemukan`);
         }
         const oldNominal = Number(saleRec?.totalNominal ?? creditRec?.totalNominal ?? 0);
-        const alreadyPaidBon = saleRec ? Math.max(0, oldNominal - (Number(saleRec.sisaPiutang) || 0)) : 0;
-        const targetMitraId = params.idMitra || saleRec?.idMitra || creditRec?.idMitraPengambil || "";
-        const mitraPengambil = db.mitra.find((m) => m.id === targetMitraId);
-        if (!mitraPengambil) {
-          throw new Error("Pilih Mitra Pengambil barang yang valid pada Nota Silang");
-        }
+        const wasLunasKasPt = saleRec?.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" || creditRec?.modeNotaSilang === "BAYAR_LUNAS_KAS_PT";
+        const alreadyPaidBon = saleRec && !wasLunasKasPt ? Math.max(0, oldNominal - (Number(saleRec.sisaPiutang) || 0)) : 0;
         const targetTujuanId = params.idMitraAnakPerusahaan || saleRec?.idMitraAnakPerusahaan || creditRec?.idMitra || "MTR-DPPARABOT";
         const pihakPenyedia = db.mitra.find((m) => m.id === targetTujuanId);
         if (!pihakPenyedia) {
           throw new Error("Pilih Anak Perusahaan / Mitra Penyedia barang yang valid");
         }
-        if (pihakPenyedia.id === mitraPengambil.id) {
-          throw new Error("Mitra pengambil tidak boleh sama dengan pihak penyedia pada Nota Silang");
-        }
         const isAnak = pihakPenyedia.id === "MTR-DPPARABOT" || Boolean(pihakPenyedia.isAnakPerusahaan) || pihakPenyedia.role === "ANAK_PERUSAHAAN" || pihakPenyedia.nama.toLowerCase().includes("parabot");
         const resolvedMode = params.modeNotaSilang || saleRec?.modeNotaSilang || creditRec?.modeNotaSilang || (isAnak ? "ANAK_PERUSAHAAN" : "SESAMA_MITRA");
+        const isLunasKasPtNow = resolvedMode === "BAYAR_LUNAS_KAS_PT";
+        const isProyekBersamaNow = resolvedMode === "PROYEK_BERSAMA";
+        const isProyekLunasSinkronNow = isProyekBersamaNow && (params.metode === "SINKRON" || !params.metode && saleRec?.metode === "SINKRON");
+        const targetMitraId = params.idMitra || saleRec?.idMitra || creditRec?.idMitraPengambil || "";
+        const isUmumTarget = isLunasKasPtNow && (!targetMitraId || targetMitraId.toUpperCase() === "UMUM");
+        const mitraPengambilObj = isUmumTarget ? void 0 : db.mitra.find((m) => m.id === targetMitraId);
+        if (!isUmumTarget && !mitraPengambilObj) {
+          throw new Error("Pilih Mitra Pengambil barang yang valid pada Nota Silang");
+        }
+        const mitraPengambil = mitraPengambilObj || {
+          id: "UMUM",
+          nama: String(params.namaMitraManual || "").trim() || saleRec?.namaMitra || creditRec?.namaMitraPengambil || "Customer Umum"
+        };
+        if (mitraPengambil.id !== "UMUM" && pihakPenyedia.id === mitraPengambil.id) {
+          throw new Error("Mitra pengambil tidak boleh sama dengan pihak penyedia pada Nota Silang");
+        }
         const rawItems = params.items && params.items.length > 0 ? params.items : saleRec?.items?.map((i) => ({
           kodeProduk: "NOTA-SILANG",
           namaProduk: i.namaProduk,
@@ -15322,13 +18008,34 @@ var TransactionService = class {
         const rincianRingkas = normalizedItems.map((it) => `${it.namaBarang}${it.qty > 1 ? ` (${it.qty} ${it.satuan})` : ""}`).join(", ");
         const cleanKet = params.keterangan !== void 0 && params.keterangan.trim() ? params.keterangan.trim() : rincianRingkas;
         const totalLabaMarkup = Math.max(0, newTotalJual - newTotalHpp);
+        if (wasLunasKasPt && saleRec && saleRec.rekeningTujuan && saleRec.rekeningTujuan !== "BON01" && saleRec.rekeningTujuan !== "TIT01" && saleRec.rekeningTujuan !== "SINKRON") {
+          const oldRek = db.rekening.find((r) => r.kode === saleRec.rekeningTujuan);
+          if (oldRek && !oldRek.isVirtual) {
+            oldRek.saldoSaatIni -= oldNominal;
+          }
+        }
+        let targetKasPtRekKode = params.rekeningTujuan || (wasLunasKasPt ? saleRec?.rekeningTujuan : void 0) || "KAS01";
+        let targetKasPtMetode = params.metode === "TRANSFER" || !params.metode && saleRec?.metode === "TRANSFER" ? "TRANSFER" : "TUNAI";
+        if (isLunasKasPtNow) {
+          const newRek = db.rekening.find(
+            (r) => r.kode.toUpperCase() === String(targetKasPtRekKode).toUpperCase()
+          );
+          if (!newRek || newRek.isVirtual || newRek.kode === "BON01" || newRek.kode === "TIT01") {
+            throw new Error(`Rekening kas/bank PT "${targetKasPtRekKode}" tidak valid untuk Nota Silang Lunas`);
+          }
+          newRek.saldoSaatIni += newTotalJual;
+          targetKasPtRekKode = newRek.kode;
+        }
         if (saleRec) {
           saleRec.idMitra = mitraPengambil.id;
           saleRec.namaMitra = mitraPengambil.nama;
+          saleRec.tipePembeli = mitraPengambil.id === "UMUM" ? "UMUM" : "REKANAN";
           saleRec.modeNotaSilang = resolvedMode;
           saleRec.idMitraAnakPerusahaan = pihakPenyedia.id;
           saleRec.namaAnakPerusahaan = pihakPenyedia.nama;
           saleRec.noNotaToko = cleanNoNotaToko || void 0;
+          saleRec.metode = isLunasKasPtNow ? targetKasPtMetode : isProyekLunasSinkronNow ? "SINKRON" : "KASBON";
+          saleRec.rekeningTujuan = isLunasKasPtNow ? targetKasPtRekKode : isProyekLunasSinkronNow ? "SINKRON" : "BON01";
           saleRec.items = normalizedItems.map((it) => ({
             kodeProduk: "NOTA-SILANG",
             namaProduk: it.namaBarang,
@@ -15343,16 +18050,22 @@ var TransactionService = class {
           saleRec.totalModalHpp = newTotalHpp;
           saleRec.totalNominal = newTotalJual;
           saleRec.totalLabaKotor = totalLabaMarkup;
-          saleRec.sisaPiutang = Math.max(0, newTotalJual - alreadyPaidBon);
-          saleRec.statusPembayaran = saleRec.sisaPiutang === 0 ? "LUNAS" : "BELUM_BAYAR";
+          saleRec.sisaPiutang = isLunasKasPtNow || isProyekLunasSinkronNow ? 0 : Math.max(0, newTotalJual - alreadyPaidBon);
+          saleRec.statusPembayaran = isLunasKasPtNow || isProyekLunasSinkronNow || saleRec.sisaPiutang === 0 ? "LUNAS" : "BELUM_BAYAR";
           if (params.tanggal) saleRec.tanggal = params.tanggal.trim();
           saleRec.keterangan = cleanKet;
         }
-        if (creditRec) {
+        if (isProyekBersamaNow) {
+          if (creditRec) {
+            db.pembelianHasilBumi = (db.pembelianHasilBumi || []).filter(
+              (b) => b.noPembelian !== creditRec.noPembelian
+            );
+          }
+        } else if (creditRec) {
           creditRec.idMitra = pihakPenyedia.id;
           creditRec.namaMitra = pihakPenyedia.nama;
           creditRec.modeNotaSilang = resolvedMode;
-          creditRec.komoditasNama = mitraPengambil.nama.toUpperCase();
+          creditRec.komoditasNama = isLunasKasPtNow ? `${mitraPengambil.nama.toUpperCase()} (LUNAS \u2192 ${targetKasPtRekKode})` : mitraPengambil.nama.toUpperCase();
           creditRec.idMitraPengambil = mitraPengambil.id;
           creditRec.namaMitraPengambil = mitraPengambil.nama;
           creditRec.noNotaToko = cleanNoNotaToko || void 0;
@@ -15365,11 +18078,11 @@ var TransactionService = class {
           }));
           creditRec.totalNominal = newTotalHpp;
           if (params.tanggal) creditRec.tanggal = params.tanggal.trim();
-          creditRec.keterangan = `${mitraPengambil.nama.toUpperCase()} \u2014 ${cleanKet}${cleanNoNotaToko ? ` [Nota #${cleanNoNotaToko}]` : ""}`;
+          creditRec.keterangan = isLunasKasPtNow ? `${mitraPengambil.nama.toUpperCase()} [BAYAR ${targetKasPtMetode} \u2192 ${targetKasPtRekKode}] \u2014 ${cleanKet}${cleanNoNotaToko ? ` [Nota #${cleanNoNotaToko}]` : ""}` : `${mitraPengambil.nama.toUpperCase()} \u2014 ${cleanKet}${cleanNoNotaToko ? ` [Nota #${cleanNoNotaToko}]` : ""}`;
         }
-        auditSummary = `Edit Nota Silang ${cleanId} (${mitraPengambil.nama} \u21C4 ${pihakPenyedia.nama}): Piutang Mitra Rp ${newTotalJual.toLocaleString("id-ID")} & Hutang ke ${pihakPenyedia.nama} Rp ${newTotalHpp.toLocaleString("id-ID")}${totalLabaMarkup > 0 ? ` (Laba Markup: Rp ${totalLabaMarkup.toLocaleString("id-ID")})` : ""}`;
+        auditSummary = isProyekBersamaNow ? `Edit Proyek Bersama ${cleanId} (${mitraPengambil.nama} \xB7 ${pihakPenyedia.nama} Lunas Sinkron): Rp ${newTotalJual.toLocaleString("id-ID")} [${isProyekLunasSinkronNow ? "LUNAS SINKRON" : "AKUMULASI BIAYA"}]` : isLunasKasPtNow ? `Edit Nota Silang Lunas ${cleanId} (${mitraPengambil.nama} \u2192 ${pihakPenyedia.nama}): Kas/Bank ${targetKasPtRekKode} Rp ${newTotalJual.toLocaleString("id-ID")} & Hutang ke ${pihakPenyedia.nama} Rp ${newTotalHpp.toLocaleString("id-ID")}` : `Edit Nota Silang ${cleanId} (${mitraPengambil.nama} \u21C4 ${pihakPenyedia.nama}): Piutang Mitra Rp ${newTotalJual.toLocaleString("id-ID")} & Hutang ke ${pihakPenyedia.nama} Rp ${newTotalHpp.toLocaleString("id-ID")}${totalLabaMarkup > 0 ? ` (Laba Markup: Rp ${totalLabaMarkup.toLocaleString("id-ID")})` : ""}`;
         auditNominal = newTotalJual;
-        auditRekening = "BON01";
+        auditRekening = isLunasKasPtNow ? targetKasPtRekKode : isProyekLunasSinkronNow ? "SINKRON" : "BON01";
         updatedRecord = saleRec || creditRec;
       } else if (jenis === "PEMBELIAN_HASIL_BUMI") {
         const record = db.pembelianHasilBumi.find((p) => p.noPembelian === cleanId);
@@ -15417,7 +18130,8 @@ var TransactionService = class {
           const oldKomoditas = db.stokHasilBumi.find(
             (k) => k.kode === record.komoditasKode || k.nama.toUpperCase().trim() === record.komoditasNama.toUpperCase().trim()
           );
-          if (oldKomoditas) {
+          const oldIsTitipNonFisik = Boolean(record.isTitipNonFisik);
+          if (oldKomoditas && !oldIsTitipNonFisik) {
             oldKomoditas.stok = Math.round((oldKomoditas.stok - oldKg) * 100) / 100;
           }
           if (!record.isBelumPutusHarga && (record.metodePembayaran === "TUNAI" || record.metodePembayaran === "TRANSFER") && record.rekeningSumber && record.rekeningSumber !== "TIT01" && record.rekeningSumber !== "BON01" && record.rekeningSumber !== "SINKRON") {
@@ -15442,6 +18156,7 @@ var TransactionService = class {
             throw new Error("Berat bersih hasil timbangan harus lebih dari 0 Kg");
           }
           const isBelumPutus = params.isBelumPutusHarga !== void 0 ? Boolean(params.isBelumPutusHarga) : Boolean(record.isBelumPutusHarga);
+          const newIsTitipNonFisik = isBelumPutus ? params.isTitipNonFisik !== void 0 ? Boolean(params.isTitipNonFisik) : Boolean(record.isTitipNonFisik) : false;
           let hargaPerKg = Math.max(0, Number(params.hargaPerKg ?? record.hargaPerKg ?? 0));
           let totalNominal = Math.round(beratBersih * hargaPerKg);
           if (params.nominal !== void 0 && params.hargaPerKg === void 0 && Number(params.nominal) >= 0) {
@@ -15451,8 +18166,10 @@ var TransactionService = class {
           if (!isBelumPutus && hargaPerKg <= 0) {
             throw new Error("Harga beli per Kg harus lebih dari Rp 0 (atau centang Belum Putus Harga)");
           }
-          newKomoditas.stok = Math.round((newKomoditas.stok + beratBersih) * 100) / 100;
-          newKomoditas.updateTerakhir = iso;
+          if (!newIsTitipNonFisik) {
+            newKomoditas.stok = Math.round((newKomoditas.stok + beratBersih) * 100) / 100;
+            newKomoditas.updateTerakhir = iso;
+          }
           if (oldKomoditas && oldKomoditas.stok < 0) {
             throw new Error(
               `Tidak dapat mengurangi tonase pembelian menjadi ${beratBersih} Kg karena stok "${oldKomoditas.nama}" di gudang menjadi minus (${oldKomoditas.stok} Kg \u2014 sebagian barang sudah terjual keluar gudang).`
@@ -15514,6 +18231,7 @@ var TransactionService = class {
           record.rekeningSumber = finalRekSumber;
           record.status = finalStatus;
           record.isBelumPutusHarga = isBelumPutus;
+          record.isTitipNonFisik = newIsTitipNonFisik;
           record.statusHarga = isBelumPutus ? "BELUM_PUTUS_HARGA" : "HARGA_PUTUS";
           if (params.divisi !== void 0) record.divisi = params.divisi.trim();
           if (params.tanggal) record.tanggal = params.tanggal.trim();
@@ -16018,8 +18736,40 @@ var TransactionService = class {
           finalRekTujuan = bankAcc.kode;
         } else if (newMetode === "KASBON") {
           finalRekTujuan = "BON01";
+          if (alreadyPaidBon > 0 && newTotalNominal < alreadyPaidBon) {
+            throw new Error(
+              `Total penjualan baru (Rp ${newTotalNominal.toLocaleString("id-ID")}) lebih kecil dari nominal DP/Bayar Bon yang sudah tercatat (Rp ${alreadyPaidBon.toLocaleString("id-ID")}). Edit atau hapus pembayaran DP/Bon terlebih dahulu.`
+            );
+          }
           sisaPiutang = Math.max(0, newTotalNominal - alreadyPaidBon);
           statusPembayaran = sisaPiutang === 0 ? "LUNAS" : "BELUM_BAYAR";
+        }
+        const linkedDpIdx = (db.bayarBon || []).findIndex(
+          (b) => record.idBayarBonDp && b.idTransaksi === record.idBayarBonDp || b.noPenjualanTerkait === cleanId
+        );
+        if (linkedDpIdx !== -1) {
+          const linkedDp = db.bayarBon[linkedDpIdx];
+          if (newMetode !== "KASBON") {
+            const dpNom = Math.round(Number(linkedDp.nominalBayar) || 0);
+            if ((linkedDp.metode === "TUNAI" || linkedDp.metode === "TRANSFER") && linkedDp.rekeningTujuan && linkedDp.rekeningTujuan !== "BON01" && linkedDp.rekeningTujuan !== "TIT01" && linkedDp.rekeningTujuan !== "SINKRON") {
+              const dpRek = db.rekening.find((r) => r.kode === linkedDp.rekeningTujuan);
+              if (dpRek && !dpRek.isVirtual) dpRek.saldoSaatIni -= dpNom;
+            }
+            db.bayarBon.splice(linkedDpIdx, 1);
+            record.dpNominal = void 0;
+            record.dpMetode = void 0;
+            record.dpRekeningTujuan = void 0;
+            record.idBayarBonDp = void 0;
+          } else {
+            linkedDp.idMitra = party.id;
+            linkedDp.namaMitra = party.nama;
+            if (params.tanggal) linkedDp.tanggal = params.tanggal.trim();
+            const dpAlok = (linkedDp.alokasi || []).find((a) => a.refId === cleanId);
+            if (dpAlok) {
+              dpAlok.nominalSebelum = newTotalNominal;
+              dpAlok.nominalSisa = sisaPiutang;
+            }
+          }
         }
         record.idMitra = party.id;
         record.namaMitra = party.nama;
@@ -16188,6 +18938,16 @@ var TransactionService = class {
         record.alokasi = newAlokasi;
         if (params.tanggal) record.tanggal = params.tanggal.trim();
         if (params.keterangan !== void 0) record.keterangan = params.keterangan.trim();
+        const parentPj = (db.penjualan || []).find(
+          (p) => p.idBayarBonDp === cleanId || record.noPenjualanTerkait && p.noPenjualan === record.noPenjualanTerkait
+        );
+        if (parentPj) {
+          parentPj.dpNominal = newNominal;
+          if (record.metode === "TUNAI" || record.metode === "TRANSFER") {
+            parentPj.dpMetode = record.metode;
+            parentPj.dpRekeningTujuan = record.rekeningTujuan;
+          }
+        }
         auditSummary = `Edit Pembayaran Bon ${cleanId} (${record.namaMitra}): Rp ${oldNominal.toLocaleString("id-ID")} -> Rp ${newNominal.toLocaleString("id-ID")}`;
         auditNominal = newNominal;
         auditRekening = record.rekeningTujuan;
@@ -16439,6 +19199,9 @@ var TransactionService = class {
               }
               linkedJhb.labaKotor = totalKesepakatanBaru - modal;
             }
+            this.syncLinkedPenjualanHbToRekapCtr(db, linkedJhb, {
+              hargaDealPerKg: hrgDeal
+            });
           }
         }
         record.idMitra = party.id;
@@ -16600,6 +19363,7 @@ var TransactionService = class {
         const record = (db.upahHarian || []).find((u) => u.id === cleanId);
         const oldTotal = Number(record.totalUpahHarian || record.jumlah || record.upahHarian) || 0;
         const oldTanggalKerja = normalizeDateToDmy(record.tanggalKerja, record.tanggalKerja);
+        const oldKet = record.ket === "BON" || record.status === "TERCATAT" ? "BON" : "LUNAS";
         if (params.idKaryawan) {
           const kry = (db.karyawan || []).find((k) => k.id === params.idKaryawan);
           if (kry) {
@@ -16630,6 +19394,28 @@ var TransactionService = class {
           record.hariTanggal = formatHariTanggalLabel(record.tanggalKerja) || record.hariTanggal;
         }
         if (params.keterangan !== void 0) record.keterangan = params.keterangan.trim();
+        const requestedKet = params.ket === "LUNAS" || params.statusUpah === "SUDAH_DIBAYAR" ? "LUNAS" : params.ket === "BON" || params.statusUpah === "TERCATAT" ? "BON" : void 0;
+        if (requestedKet === "LUNAS") {
+          record.ket = "LUNAS";
+          record.status = "SUDAH_DIBAYAR";
+          if (totalUpahHarian === 0 && !record.idPayrollSettlement) {
+            record.tanggalDibayar = void 0;
+          }
+        } else if (requestedKet === "BON") {
+          record.ket = "BON";
+          record.status = "TERCATAT";
+          if (!record.idPayrollSettlement) {
+            record.tanggalDibayar = void 0;
+          }
+          record.rekening = "HUTANG";
+        } else if (totalUpahHarian === 0 && oldTotal > 0) {
+          record.ket = "LUNAS";
+          record.status = "SUDAH_DIBAYAR";
+          if (!record.idPayrollSettlement) {
+            record.tanggalDibayar = void 0;
+          }
+        }
+        const newKet = record.ket === "BON" || record.status === "TERCATAT" ? "BON" : "LUNAS";
         if (record.idPayrollSettlement) {
           const linkedSlip = (db.penggajian || []).find((g) => g.id === record.idPayrollSettlement);
           const isSingleDaySlip = linkedSlip && linkedSlip.tipeGaji === "HARIAN" && (!linkedSlip.daftarUpahHarianIds || linkedSlip.daftarUpahHarianIds.length === 1 && linkedSlip.daftarUpahHarianIds[0] === record.id);
@@ -16662,7 +19448,8 @@ var TransactionService = class {
             }
           }
         }
-        auditSummary = `Edit Upah Harian ${cleanId} (${record.namaKaryawan}): Rp ${oldTotal.toLocaleString("id-ID")} -> Rp ${totalUpahHarian.toLocaleString("id-ID")}`;
+        const ketAuditNote = oldKet !== newKet ? ` [Status: ${oldKet} -> ${newKet}]` : "";
+        auditSummary = `Edit Upah Harian ${cleanId} (${record.namaKaryawan}): Rp ${oldTotal.toLocaleString("id-ID")} -> Rp ${totalUpahHarian.toLocaleString("id-ID")}${ketAuditNote}`;
         auditNominal = totalUpahHarian;
         auditRekening = record.rekening || "HUTANG_UPAH";
         updatedRecord = record;
@@ -16880,25 +19667,43 @@ var TransactionService = class {
         const nom = Number(saleRec?.totalNominal ?? creditRec?.totalNominal ?? 0);
         const namaPengambil = saleRec?.namaMitra || creditRec?.namaMitraPengambil || "Mitra";
         const namaPenyedia = saleRec?.namaAnakPerusahaan || creditRec?.namaMitra || "Penyedia";
+        const isLunasKasPt = saleRec?.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (saleRec.metode === "TUNAI" || saleRec.metode === "TRANSFER");
+        if (isLunasKasPt && saleRec) {
+          const rekTujuanKode = saleRec.rekeningTujuan || "KAS01";
+          const rekTujuanObj = db.rekening.find((r) => r.kode === rekTujuanKode);
+          if (rekTujuanObj) {
+            rekTujuanObj.saldoSaatIni = Math.round(Number(rekTujuanObj.saldoSaatIni) || 0) - Math.round(Number(saleRec.totalNominal) || 0);
+          }
+        }
         db.penjualan = (db.penjualan || []).filter(
           (p) => !(Boolean(p.isNotaSilang) && p.noPenjualan === cleanId)
         );
         db.pembelianHasilBumi = (db.pembelianHasilBumi || []).filter(
           (b) => !(Boolean(b.isNotaSilang || b.komoditasKode === "NOTA_SILANG") && (b.idNotaSilangRef === cleanId || b.noPembelian === `${cleanId}-DPP` || b.noPembelian === `${cleanId}-MTR` || b.noPembelian === cleanId))
         );
-        auditSummary = `Hapus Nota Silang ${cleanId} (${namaPengambil} \u21C4 ${namaPenyedia}, Rp ${nom.toLocaleString("id-ID")})`;
+        auditSummary = isLunasKasPt ? `Hapus Nota Lunas DP \u2192 Kas PT ${cleanId} (${namaPengambil} \u2192 ${saleRec?.rekeningTujuan || "KAS01"} | Hutang ke ${namaPenyedia}, Rp ${nom.toLocaleString("id-ID")})` : `Hapus Nota Silang ${cleanId} (${namaPengambil} \u21C4 ${namaPenyedia}, Rp ${nom.toLocaleString("id-ID")})`;
         auditNominal = nom;
-        auditRekening = "BON01";
+        auditRekening = isLunasKasPt ? saleRec?.rekeningTujuan || "KAS01" : "BON01";
       } else if (jenis === "PEMBELIAN_HASIL_BUMI") {
         const idx = (db.pembelianHasilBumi || []).findIndex((p) => p.noPembelian === cleanId);
         if (idx === -1) throw new Error(`Transaksi Pembelian Hasil Bumi ${cleanId} tidak ditemukan`);
         const target = db.pembelianHasilBumi[idx];
         if ((target.isNotaSilang || target.komoditasKode === "NOTA_SILANG") && target.idNotaSilangRef) {
           ensureNoBayarBonAllocation(target.idNotaSilangRef, "Nota Silang");
+          const pairedSale = (db.penjualan || []).find(
+            (p) => p.noPenjualan === target.idNotaSilangRef
+          );
+          if (pairedSale?.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (pairedSale.metode === "TUNAI" || pairedSale.metode === "TRANSFER")) {
+            const rekTujuanKode = pairedSale.rekeningTujuan || "KAS01";
+            const rekTujuanObj = db.rekening.find((r) => r.kode === rekTujuanKode);
+            if (rekTujuanObj) {
+              rekTujuanObj.saldoSaatIni = Math.round(Number(rekTujuanObj.saldoSaatIni) || 0) - Math.round(Number(pairedSale.totalNominal) || 0);
+            }
+          }
           db.penjualan = (db.penjualan || []).filter((p) => p.noPenjualan !== target.idNotaSilangRef);
         }
         const beratBersih = Number(target.beratBersih) || 0;
-        if (beratBersih > 0 && target.komoditasKode !== "PINJAMAN_DANA" && target.komoditasKode !== "TITIP_DANA" && target.komoditasKode !== "NOTA_SILANG" && !target.isNotaSilang) {
+        if (beratBersih > 0 && target.komoditasKode !== "PINJAMAN_DANA" && target.komoditasKode !== "TITIP_DANA" && target.komoditasKode !== "NOTA_SILANG" && !target.isNotaSilang && !target.isTitipNonFisik) {
           const kom = (db.stokHasilBumi || []).find(
             (k) => String(k.kode || "").trim().toUpperCase() === String(target.komoditasKode || "").trim().toUpperCase() || String(k.nama || "").trim().toUpperCase() === String(target.komoditasNama || "").trim().toUpperCase()
           );
@@ -16958,6 +19763,7 @@ var TransactionService = class {
             rek.saldoSaatIni -= nom;
           }
         }
+        this.syncLinkedPenjualanHbToRekapCtr(db, target, { remove: true });
         jhbArr.splice(idx, 1);
         db.penjualanHasilBumi = jhbArr;
         auditSummary = `Hapus Penjualan Hasil Bumi ${cleanId} (${target.komoditasNama} - ${target.namaMitra}, Rp ${nom.toLocaleString("id-ID")})`;
@@ -17001,7 +19807,14 @@ var TransactionService = class {
         if (idx === -1) throw new Error(`Transaksi Penjualan ${cleanId} tidak ditemukan`);
         const target = db.penjualan[idx];
         if (target.metode === "KASBON") {
-          ensureNoBayarBonAllocation(cleanId, "Nota Penjualan Kasbon");
+          const otherLinkedBayar = (db.bayarBon || []).find(
+            (b) => b.idTransaksi !== target.idBayarBonDp && b.noPenjualanTerkait !== cleanId && (b.alokasi || []).some((a) => a.refId === cleanId)
+          );
+          if (otherLinkedBayar) {
+            throw new Error(
+              `Nota Penjualan Kasbon (${cleanId}) sudah memiliki riwayat Pembayaran Bon terkait (${otherLinkedBayar.idTransaksi}). Hapus transaksi Pembayaran Bon tersebut terlebih dahulu agar saldo Kas/Bank dan piutang tetap akurat.`
+            );
+          }
         }
         for (const it of target.items || []) {
           const cleanKode = String(it.kodeProduk || "").trim().toUpperCase();
@@ -17019,6 +19832,18 @@ var TransactionService = class {
         if ((target.metode === "TUNAI" || target.metode === "TRANSFER") && target.rekeningTujuan && target.rekeningTujuan !== "BON01" && target.rekeningTujuan !== "SINKRON" && target.rekeningTujuan !== "PENGELUARAN" && target.rekeningTujuan !== "INTERNAL_PT") {
           const rek = (db.rekening || []).find((r) => r.kode === target.rekeningTujuan);
           if (rek && !rek.isVirtual) rek.saldoSaatIni -= nom;
+        }
+        const linkedDpIdx = (db.bayarBon || []).findIndex(
+          (b) => target.idBayarBonDp && b.idTransaksi === target.idBayarBonDp || b.noPenjualanTerkait === cleanId
+        );
+        if (linkedDpIdx !== -1) {
+          const dpRec = db.bayarBon[linkedDpIdx];
+          const dpNom = Math.round(Number(dpRec.nominalBayar) || 0);
+          if ((dpRec.metode === "TUNAI" || dpRec.metode === "TRANSFER") && dpRec.rekeningTujuan && dpRec.rekeningTujuan !== "BON01" && dpRec.rekeningTujuan !== "TIT01" && dpRec.rekeningTujuan !== "SINKRON") {
+            const dpRek = (db.rekening || []).find((r) => r.kode === dpRec.rekeningTujuan);
+            if (dpRek && !dpRek.isVirtual) dpRek.saldoSaatIni -= dpNom;
+          }
+          db.bayarBon.splice(linkedDpIdx, 1);
         }
         if (target.idPengeluaranTerkait) {
           db.pengeluaran = (db.pengeluaran || []).filter(
@@ -17055,6 +19880,15 @@ var TransactionService = class {
           if (rek && !rek.isVirtual) rek.saldoSaatIni -= nom;
         }
         reverseBayarBonAllocations(target.alokasi || []);
+        const parentPj = (db.penjualan || []).find(
+          (p) => p.idBayarBonDp === cleanId || target.noPenjualanTerkait && p.noPenjualan === target.noPenjualanTerkait
+        );
+        if (parentPj) {
+          parentPj.dpNominal = void 0;
+          parentPj.dpMetode = void 0;
+          parentPj.dpRekeningTujuan = void 0;
+          parentPj.idBayarBonDp = void 0;
+        }
         db.pencairanTitipan = (db.pencairanTitipan || []).filter(
           (p) => p.idPencairan !== `${cleanId}-SINKRON` && !(cleanId.endsWith("-POTBON") && p.idPencairan === cleanId.replace(/-POTBON$/, "-POTTIT")) && !(cleanId.endsWith("-BON") && p.idPencairan === cleanId.replace(/-BON$/, "-TIT"))
         );
@@ -17149,6 +19983,7 @@ var TransactionService = class {
                 linkedJhb.labaKotor = totalBaru > 0 ? totalBaru - modal : 0;
               }
             }
+            this.syncLinkedPenjualanHbToRekapCtr(db, linkedJhb);
           }
         }
         umArr.splice(idx, 1);
@@ -17242,8 +20077,13 @@ var TransactionService = class {
             db.bayarBon = (db.bayarBon || []).filter((b) => b.idTransaksi !== target.idBayarBonTerkait);
           }
         }
+        if (target.idTitipanGajiTerkait) {
+          db.pembelianHasilBumi = (db.pembelianHasilBumi || []).filter(
+            (pb) => pb.noPembelian !== target.idTitipanGajiTerkait
+          );
+        }
         db.penggajian.splice(idx, 1);
-        auditSummary = `Hapus Slip Penggajian ${cleanId} (${target.namaKaryawan}, Bersih Rp ${bersih.toLocaleString("id-ID")})`;
+        auditSummary = `Hapus Slip Penggajian ${cleanId} (${target.namaKaryawan}, Bersih Rp ${bersih.toLocaleString("id-ID")}${(target.nominalDititipkan || 0) > 0 ? `, Batal Titip Rp ${(target.nominalDititipkan || 0).toLocaleString("id-ID")}` : ""})`;
         auditNominal = bersih;
         auditRekening = target.rekeningSumber || "KAS01";
       } else {
@@ -17337,11 +20177,11 @@ var TransactionService = class {
         linkedRek.saldoAwal = 0;
         linkedRek.saldoSaatIni = 0;
         db.transferRekening = (db.transferRekening || []).filter(
-          (t) => t.rekeningSumber !== linkedRek.kode && t.rekeningTujuan !== linkedRek.kode && t.idMitraTerkait !== cleanId
+          (t) => t.rekeningSumber !== linkedRek.kode && t.rekeningTujuan !== linkedRek.kode && !(t.idMitraTerkait === cleanId && t.tipeMutasiAfiliasi !== "TITIP_UANG_KARYAWAN" && t.tipeMutasiAfiliasi !== "KEMBALIKAN_TITIP_KARYAWAN" && t.tipeMutasiAfiliasi !== "ANTAR_REKENING_TITIP")
         );
       } else {
         db.transferRekening = (db.transferRekening || []).filter(
-          (t) => t.idMitraTerkait !== cleanId
+          (t) => !(t.idMitraTerkait === cleanId && t.tipeMutasiAfiliasi !== "TITIP_UANG_KARYAWAN" && t.tipeMutasiAfiliasi !== "KEMBALIKAN_TITIP_KARYAWAN" && t.tipeMutasiAfiliasi !== "ANTAR_REKENING_TITIP")
         );
       }
       dbManager.synchronizeVirtualAccounts();
@@ -17774,7 +20614,10 @@ var TransactionService = class {
     let mutasiPokokBrilinkKasirHariIni = 0;
     let opnameDeltaHariIni = 0;
     for (const p of db.penjualan || []) {
-      if (p.metode === "KASBON" || p.metode === "SINKRON" || p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang || p.rekeningTujuan === "INTERNAL_PT" || p.rekeningTujuan === "SINKRON" || p.rekeningTujuan === "PENGELUARAN") {
+      const isSilangLunasKasPt = Boolean(
+        p.isNotaSilang && p.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (p.metode === "TUNAI" || p.metode === "TRANSFER")
+      );
+      if (p.metode === "KASBON" || p.metode === "SINKRON" || p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang && !isSilangLunasKasPt || p.rekeningTujuan === "INTERNAL_PT" || p.rekeningTujuan === "SINKRON" || p.rekeningTujuan === "PENGELUARAN") {
         continue;
       }
       const nom = Math.round(Number(p.totalNominal) || 0);
@@ -17789,11 +20632,11 @@ var TransactionService = class {
           tanggal: normalizeDmy(p.tanggal),
           jam: p.jam || "00:00:00",
           arah: "MASUK",
-          kategoriKode: "PENJUALAN_TOKO",
-          kategoriLabel: "Penjualan Toko",
+          kategoriKode: isSilangLunasKasPt ? "NOTA_SILANG_LUNAS_MASUK" : "PENJUALAN_TOKO",
+          kategoriLabel: isSilangLunasKasPt ? `Titipan Lunas ${p.namaAnakPerusahaan || "DP Parabot"} (Hutang PT)` : "Penjualan Toko",
           divisi: p.divisi,
           pihak: p.namaMitra || "Pelanggan Umum",
-          deskripsi: itemsText || p.keterangan || "Penjualan barang toko",
+          deskripsi: isSilangLunasKasPt ? `${p.namaMitra || "Customer Umum"} bayar lunas di ${p.namaAnakPerusahaan || "DP Parabot"}: ${itemsText || p.keterangan || ""}` : itemsText || p.keterangan || "Penjualan barang toko",
           metode: p.metode,
           rekeningKode: isKasir ? kodeKasir : rekKode,
           rekeningNama: getRekName(isKasir ? kodeKasir : rekKode),
@@ -17848,7 +20691,7 @@ var TransactionService = class {
           jam: um.jam || "00:00:00",
           arah: "MASUK",
           kategoriKode: "UANG_MASUK",
-          kategoriLabel: um.kategori || "Uang Masuk / Realisasi HB",
+          kategoriLabel: um.kategori === "SETTLEMENT_BUYER_SJ" ? "Uang Masuk Buyer Surat Jalan" : um.kategori || "Uang Masuk / Realisasi HB",
           divisi: um.divisi,
           pihak: um.namaPengirim || um.pengirim || "Pengirim",
           deskripsi: um.keterangan || (um.komoditasNama ? `Realisasi ${um.komoditasNama} (${Number(um.tonaseAkhirKg) > 0 ? `Akhir: ${Number(um.tonaseAkhirKg).toLocaleString("id-ID")} Kg` : `${Number(um.beratMuatKg || 0).toLocaleString("id-ID")} Kg`}${um.hargaDealPerKg || um.hargaRealisasiPerKg ? ` @ Rp ${(um.hargaDealPerKg || um.hargaRealisasiPerKg || 0).toLocaleString("id-ID")}/Kg` : ""})` : "Penerimaan Uang Masuk"),
@@ -18208,6 +21051,36 @@ var TransactionService = class {
           pihak: g.namaKaryawan || "Karyawan",
           deskripsi: g.keterangan || `Slip Gaji ${g.periodeBulan || ""}`.trim(),
           metode: g.metodePembayaran,
+          rekeningKode: rekKode,
+          rekeningNama: getRekName(rekKode),
+          nominalTotal: nom,
+          nominalKasirTunai: isKasir ? nom : 0,
+          nominalBank: !isKasir ? nom : 0
+        });
+      }
+    }
+    for (const sj of db.suratJalan || []) {
+      if (sj.sumberBarang === "STOK_HB_PT" || sj.statusPembayaranMitra !== "LUNAS" || sj.catatArusKasBayarMitra !== true) {
+        continue;
+      }
+      const nom = Math.round(Number(sj.nominalBayarMitraAktual ?? sj.jumlahPembayaranMitra) || 0);
+      if (nom <= 0) continue;
+      const rekKode = sj.rekeningBayarMitraKode || sj.rekeningPtKode || "BNI01";
+      const isKasir = rekKode === kodeKasir;
+      const tglBayar = sj.tanggalBayarMitra || sj.tanggal;
+      if (isKasir) addFutureKasirDelta(tglBayar, -nom);
+      if (normalizeDmy(tglBayar) === targetTanggal) {
+        detailUangKeluar.push({
+          id: `SJ-PAY-${sj.noInvoice}`,
+          tanggal: normalizeDmy(tglBayar),
+          jam: sj.jamBayarMitra || sj.jam || "00:00:00",
+          arah: "KELUAR",
+          kategoriKode: "BAYAR_MITRA_SJ",
+          kategoriLabel: "Bayar Hak Mitra Surat Jalan",
+          divisi: "PT Wijaya Agro Perkasa",
+          pihak: sj.namaMitra || "Mitra",
+          deskripsi: `Pelunasan hak bersih mitra ${sj.noInvoice} \xB7 ${sj.komoditasNama} (${Number(sj.tonaseAkhirKg || 0).toLocaleString("id-ID")} Kg)`,
+          metode: isKasir ? "TUNAI" : "TRANSFER",
           rekeningKode: rekKode,
           rekeningNama: getRekName(rekKode),
           nominalTotal: nom,
@@ -18697,7 +21570,25 @@ var TransactionService = class {
   // =========================================================================
   static async getInvoiceSuratJalanList() {
     const db = dbManager.get();
-    return Array.isArray(db.suratJalan) ? db.suratJalan : [];
+    const list = Array.isArray(db.suratJalan) ? db.suratJalan : [];
+    const needsInternalNormalize = list.some(
+      (sj) => isInternalMilikSendiriSuratJalan(sj) && sj.statusUangBuyer === "DITERIMA" && sj.statusPembayaranMitra === "PENDING"
+    );
+    if (needsInternalNormalize) {
+      await dbManager.executeTransaction((txDb) => {
+        for (const sj of txDb.suratJalan || []) {
+          if (isInternalMilikSendiriSuratJalan(sj) && sj.statusUangBuyer === "DITERIMA" && sj.statusPembayaranMitra === "PENDING") {
+            sj.statusPembayaranMitra = "LUNAS";
+            sj.tanggalBayarMitra = sj.tanggalUangBuyerMasuk || sj.tanggal;
+            sj.catatArusKasBayarMitra = false;
+            sj.nominalBayarMitraAktual = 0;
+          }
+        }
+        dbManager.syncRekapCtrDefaultsAndNov4();
+      });
+    }
+    const latest = dbManager.get().suratJalan;
+    return sortTransactionsByDateDesc(latest);
   }
   static async createInvoiceSuratJalan(params) {
     const createdRecord = await dbManager.executeTransaction((db) => {
@@ -18834,6 +21725,10 @@ var TransactionService = class {
         });
       }
       const idPengeluaranBayarMitra = void 0;
+      const matchedSelectedCtr = params.rekapCtrId ? (db.rekapCtr || []).find((c) => c.id === params.rekapCtrId) : void 0;
+      const resolvedRekapCtrId = matchedSelectedCtr?.id || params.rekapCtrId?.trim() || void 0;
+      const resolvedRekapCtrNoUrut = matchedSelectedCtr?.noUrut ?? (params.rekapCtrNoUrut !== void 0 ? Number(params.rekapCtrNoUrut) : void 0);
+      const resolvedRekapCtrNoKontrak = (matchedSelectedCtr?.noKontrak || params.rekapCtrNoKontrak || "").trim() || void 0;
       const newRecord = {
         id: idRecord,
         noInvoice,
@@ -18872,6 +21767,9 @@ var TransactionService = class {
         statusPembayaranMitra: finalStatus,
         sumberBarang: isStokHbPt ? "STOK_HB_PT" : "MITRA",
         noPenjualanHasilBumi: params.noPenjualanHasilBumi?.trim() || void 0,
+        rekapCtrId: resolvedRekapCtrId,
+        rekapCtrNoUrut: resolvedRekapCtrNoUrut,
+        rekapCtrNoKontrak: resolvedRekapCtrNoKontrak,
         catatArusKas,
         tanggalBayarMitra: finalStatus === "LUNAS" ? finalTanggal : void 0,
         idUangMasukBuyer,
@@ -18902,6 +21800,451 @@ var TransactionService = class {
     }
     return createdRecord;
   }
+  static async updateInvoiceSuratJalan(idInvoice, params) {
+    const updatedRecord = await dbManager.executeTransaction((db) => {
+      const { tanggal: todayWib, jam, iso } = getWIBDateTime();
+      if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
+      if (!Array.isArray(db.bayarBon)) db.bayarBon = [];
+      const record = db.suratJalan.find((s) => s.id === idInvoice || s.noInvoice === idInvoice);
+      if (!record) {
+        throw new Error(`Invoice Surat Jalan ${idInvoice} tidak ditemukan`);
+      }
+      if (record.statusPembayaranMitra !== "PENDING") {
+        throw new Error(
+          `Invoice ${record.noInvoice} sudah berstatus LUNAS / dicairkan sehingga tidak dapat diedit.`
+        );
+      }
+      if (record.statusUangBuyer === "DITERIMA") {
+        throw new Error(
+          `Invoice ${record.noInvoice} sudah menerima Uang Masuk Buyer (${record.rekeningTerimaBuyerKode || record.rekeningPtKode}). Batalkan dulu "Terima Uang Buyer" jika ingin mengubah nominal invoice.`
+        );
+      }
+      const oldNoInvoice = record.noInvoice;
+      const oldNoPenjualanHb = record.noPenjualanHasilBumi;
+      const oldTanggal = record.tanggal;
+      const oldBuyer = (record.kategoriKode || "").trim().toUpperCase();
+      const finalNoInvoice = (params.noInvoice || "").trim() || oldNoInvoice;
+      if (finalNoInvoice !== oldNoInvoice && db.suratJalan.some((s) => s.id !== record.id && s.noInvoice === finalNoInvoice)) {
+        throw new Error(`Nomor Invoice ${finalNoInvoice} sudah digunakan oleh transaksi lain.`);
+      }
+      const finalTanggal = normalizeDateToDmy(params.tanggal, record.tanggal || todayWib);
+      const isStokHbPt = (params.sumberBarang || record.sumberBarang) === "STOK_HB_PT";
+      const finalMitraId = isStokHbPt ? params.idMitra || "STOK_HB_PT" : (params.idMitra || record.idMitra).trim();
+      const finalMitraNama = isStokHbPt ? (params.namaMitra || "STOK BARANG HB (PT WAP)").trim() : (params.namaMitra || record.namaMitra).trim();
+      const rawInputs = Array.isArray(params.detailItems) && params.detailItems.length > 0 ? params.detailItems : [
+        {
+          id: "partai-1",
+          deskripsi: params.komoditasNama ?? record.komoditasNama ?? "KOPI",
+          platTruk: params.platTruk ?? record.platTruk ?? "",
+          tonaseAwalKg: Number(params.tonaseAwalKg ?? record.tonaseAwalKg) || 0,
+          tonaseAkhirKg: Number(params.tonaseAkhirKg ?? record.tonaseAkhirKg) || 0,
+          basisMitra: Number(params.basisMitra ?? record.basisMitra) || 0,
+          basisBuyer: Number(params.basisBuyer ?? record.basisBuyer ?? params.basisMitra ?? record.basisMitra) || 0,
+          rendemen: Number(params.rendemen ?? record.rendemen) || 0,
+          hargaPerKgMitra: params.hargaPerKgMitra ?? record.hargaPerKgMitra,
+          hargaPerKgBuyer: params.hargaPerKgBuyer ?? record.hargaPerKgBuyer,
+          keterangan: ""
+        }
+      ];
+      const detailItems = rawInputs.map((row, idx) => {
+        const dTonaseAwalKg = Number(row.tonaseAwalKg) || 0;
+        const dTonaseAkhirKg = Number(row.tonaseAkhirKg) || 0;
+        if (dTonaseAkhirKg <= 0) {
+          throw new Error(`Tonase Akhir (Kg) pada baris detail #${idx + 1} wajib lebih dari 0`);
+        }
+        const dRendemen = Number(row.rendemen) || 0;
+        const dBasisMitra = Number(row.basisMitra) || 0;
+        const dBasisBuyer = Number(row.basisBuyer) || dBasisMitra;
+        const dHargaPerKgMitra = row.hargaPerKgMitra !== void 0 && Number(row.hargaPerKgMitra) > 0 ? Number(row.hargaPerKgMitra) : Math.round(dBasisMitra * (dRendemen / 100) * 100) / 100;
+        const dHargaPerKgBuyer = row.hargaPerKgBuyer !== void 0 && Number(row.hargaPerKgBuyer) > 0 ? Number(row.hargaPerKgBuyer) : Math.round(dBasisBuyer * (dRendemen / 100) * 100) / 100;
+        const dSubtotalMitra = Math.round(dTonaseAkhirKg * dHargaPerKgMitra);
+        const dSubtotalBuyer = Math.round(dTonaseAkhirKg * dHargaPerKgBuyer);
+        const dSusutKg = dTonaseAwalKg > 0 && dTonaseAkhirKg > 0 ? Math.round((dTonaseAwalKg - dTonaseAkhirKg) * 10) / 10 : 0;
+        return {
+          id: (row.id || "").trim() || `partai-${idx + 1}`,
+          deskripsi: (row.deskripsi || params.komoditasNama || "KOPI").trim(),
+          platTruk: (row.platTruk || "").trim(),
+          tonaseAwalKg: dTonaseAwalKg,
+          tonaseAkhirKg: dTonaseAkhirKg,
+          susutKg: dSusutKg,
+          basisMitra: dBasisMitra,
+          basisBuyer: dBasisBuyer,
+          rendemen: dRendemen,
+          hargaPerKgMitra: dHargaPerKgMitra,
+          hargaPerKgBuyer: dHargaPerKgBuyer,
+          subtotalMitra: dSubtotalMitra,
+          subtotalBuyer: dSubtotalBuyer,
+          keterangan: (row.keterangan || "").trim()
+        };
+      });
+      const tonaseAwalKg = Math.round(detailItems.reduce((sum, d) => sum + d.tonaseAwalKg, 0) * 100) / 100;
+      const tonaseAkhirKg = Math.round(detailItems.reduce((sum, d) => sum + d.tonaseAkhirKg, 0) * 100) / 100;
+      if (tonaseAkhirKg <= 0) {
+        throw new Error("Tonase Akhir Invoice (Kg) wajib lebih dari 0");
+      }
+      const uniqueKomoditas = Array.from(
+        new Set(detailItems.map((d) => d.deskripsi.trim()).filter(Boolean))
+      );
+      const uniquePlatTruk = Array.from(
+        new Set(detailItems.map((d) => (d.platTruk || "").trim()).filter(Boolean))
+      );
+      const komoditasNamaSummary = uniqueKomoditas.join(", ") || params.komoditasNama || record.komoditasNama || "KOPI";
+      const platTrukSummary = uniquePlatTruk.join(", ") || params.platTruk || "";
+      const primaryDetail = detailItems[0];
+      const basisMitra = primaryDetail.basisMitra;
+      const basisBuyer = primaryDetail.basisBuyer;
+      const rendemen = primaryDetail.rendemen;
+      const totalPenjualanMitra = detailItems.reduce((sum, d) => sum + d.subtotalMitra, 0);
+      const totalPenjualanBuyer = detailItems.reduce((sum, d) => sum + d.subtotalBuyer, 0);
+      const hargaPerKgMitra = detailItems.length === 1 ? primaryDetail.hargaPerKgMitra : Math.round(totalPenjualanMitra / tonaseAkhirKg * 100) / 100;
+      const hargaPerKgBuyer = detailItems.length === 1 ? primaryDetail.hargaPerKgBuyer : Math.round(totalPenjualanBuyer / tonaseAkhirKg * 100) / 100;
+      const marginHargaPt = isStokHbPt ? 0 : Math.max(0, totalPenjualanBuyer - totalPenjualanMitra);
+      const pajakNominal = params.pajakNominal !== void 0 && Number(params.pajakNominal) >= 0 ? Math.round(Number(params.pajakNominal)) : isStokHbPt ? 0 : Math.round(totalPenjualanMitra * 25e-4);
+      const komisiNominal = Math.round(Number(params.komisiNominal ?? record.komisiNominal) || 0);
+      const potongPiutang = isStokHbPt ? false : params.potongPiutang !== void 0 ? Boolean(params.potongPiutang) : Boolean(record.potongPiutang);
+      const kasbonNominal = potongPiutang ? Math.round(Number(params.kasbonNominal ?? record.kasbonNominal) || 0) : 0;
+      const potonganLainNominal = Math.round(
+        Number(params.potonganLainNominal ?? record.potonganLainNominal) || 0
+      );
+      const tambahanNominal = Math.round(
+        Number(params.tambahanNominal ?? record.tambahanNominal) || 0
+      );
+      const totalKeuntunganPt = isStokHbPt ? komisiNominal : marginHargaPt + komisiNominal;
+      const totalPotongan = pajakNominal + komisiNominal + kasbonNominal + potonganLainNominal;
+      const jumlahPembayaranMitra = Math.max(0, totalPenjualanMitra - totalPotongan + tambahanNominal);
+      const susutKg = tonaseAwalKg > 0 && tonaseAkhirKg > 0 ? Math.round((tonaseAwalKg - tonaseAkhirKg) * 10) / 10 : 0;
+      const buyerLabel = (params.kategoriKode || record.kategoriKode || "").trim().toUpperCase() || "SKA";
+      const targetRekKode = (params.rekeningPtKode || record.rekeningPtKode || "BNI01").trim();
+      const bankAccObj = db.rekening.find((r) => r.kode === targetRekKode) || db.rekening.find((r) => /bni\s*direct/i.test(r.nama || "")) || db.rekening.find((r) => !r.isVirtual && r.status === "AKTIF");
+      const bankAccKode = bankAccObj?.kode || targetRekKode || "BNI01";
+      const bankDisplayName = bankAccKode === "BNI01" && !/direct/i.test(bankAccObj?.nama || "") ? "BNI DIRECT" : (bankAccObj?.nama || bankAccKode).toUpperCase();
+      const finalStatus = isStokHbPt ? "LUNAS" : params.statusPembayaranMitra === "LUNAS" ? "LUNAS" : "PENDING";
+      if (!isStokHbPt && finalStatus === "LUNAS" && potongPiutang && kasbonNominal > 0) {
+        const computeMitraTotalBonSaldo = (mitraId) => {
+          const sPj = (db.penjualan || []).filter(
+            (p) => p.idMitra === mitraId && p.metode === "KASBON" && p.statusPembayaran === "BELUM_BAYAR" && (p.sisaPiutang || 0) > 0
+          ).reduce((s, p) => s + (Number(p.sisaPiutang) || 0), 0);
+          const sJhb = (db.penjualanHasilBumi || []).filter(
+            (j) => j.idMitra === mitraId && j.metodePembayaran === "PIUTANG" && j.statusPembayaran === "BELUM_BAYAR" && (j.sisaPiutang || 0) > 0
+          ).reduce((s, j) => s + (Number(j.sisaPiutang) || 0), 0);
+          const sKbu = (db.kasbonUang || []).filter((k) => k.idMitra === mitraId && k.status !== "LUNAS" && (k.sisaKasbon || 0) > 0).reduce((s, k) => s + (Number(k.sisaKasbon) || 0), 0);
+          return sPj + sJhb + sKbu;
+        };
+        const idBayarBonMitra = generateId("BYB");
+        const totalBonSebelum = computeMitraTotalBonSaldo(finalMitraId);
+        const alokasiList = this.allocateMitraBonFifo(db, finalMitraId, kasbonNominal);
+        const totalAllocated = alokasiList.reduce((s, a) => s + (a.nominalDibayar || 0), 0);
+        db.bayarBon.unshift({
+          idTransaksi: idBayarBonMitra,
+          idMitra: finalMitraId,
+          namaMitra: finalMitraNama,
+          tanggal: finalTanggal,
+          jam,
+          totalBonSebelum,
+          nominalBayar: kasbonNominal,
+          sisaBonSetelah: Math.max(0, totalBonSebelum - totalAllocated),
+          alokasi: alokasiList,
+          metode: bankAccKode === "KAS01" ? "TUNAI" : "TRANSFER",
+          rekeningTujuan: bankAccKode,
+          isSuratJalanPotongBon: true,
+          keterangan: `Potong Piutang dari Pencairan Surat Jalan ${finalNoInvoice} (Bayar via ${bankDisplayName})`,
+          createdAt: iso
+        });
+        record.idBayarBonMitra = idBayarBonMitra;
+      }
+      record.noInvoice = finalNoInvoice;
+      record.tanggal = finalTanggal;
+      record.idMitra = finalMitraId;
+      record.namaMitra = finalMitraNama;
+      record.komoditasNama = komoditasNamaSummary;
+      record.kategoriKode = buyerLabel;
+      record.platTruk = platTrukSummary;
+      record.tonaseAwalKg = tonaseAwalKg;
+      record.tonaseAkhirKg = tonaseAkhirKg;
+      record.susutKg = susutKg;
+      record.basisMitra = basisMitra;
+      record.basisBuyer = basisBuyer;
+      record.rendemen = rendemen;
+      record.hargaPerKgMitra = hargaPerKgMitra;
+      record.hargaPerKgBuyer = hargaPerKgBuyer;
+      record.totalPenjualanMitra = totalPenjualanMitra;
+      record.totalPenjualanBuyer = totalPenjualanBuyer;
+      record.detailItems = detailItems;
+      record.catatan = (params.catatan ?? record.catatan ?? "").trim() || "Pembayaran Via Transfer";
+      record.marginHargaPt = marginHargaPt;
+      record.pajakNominal = pajakNominal;
+      record.komisiNominal = komisiNominal;
+      record.kasbonNominal = kasbonNominal;
+      record.potongPiutang = potongPiutang;
+      record.potonganLainLabel = params.potonganLainLabel ?? record.potonganLainLabel ?? "";
+      record.potonganLainNominal = potonganLainNominal;
+      record.tambahanLabel = params.tambahanLabel ?? record.tambahanLabel ?? "";
+      record.tambahanNominal = tambahanNominal;
+      record.totalKeuntunganPt = totalKeuntunganPt;
+      record.totalPotongan = totalPotongan;
+      record.jumlahPembayaranMitra = jumlahPembayaranMitra;
+      record.rekeningPtKode = bankAccKode;
+      record.statusPembayaranMitra = finalStatus;
+      record.sumberBarang = isStokHbPt ? "STOK_HB_PT" : "MITRA";
+      record.noPenjualanHasilBumi = params.noPenjualanHasilBumi !== void 0 ? params.noPenjualanHasilBumi.trim() || void 0 : record.noPenjualanHasilBumi;
+      const oldRekapCtrId = record.rekapCtrId;
+      if (params.rekapCtrId !== void 0) {
+        const cleanCtrId = params.rekapCtrId.trim();
+        if (!cleanCtrId) {
+          record.rekapCtrId = void 0;
+          record.rekapCtrNoUrut = void 0;
+          record.rekapCtrNoKontrak = void 0;
+        } else {
+          const pickedCtr = (db.rekapCtr || []).find((c) => c.id === cleanCtrId);
+          record.rekapCtrId = pickedCtr?.id || cleanCtrId;
+          record.rekapCtrNoUrut = pickedCtr?.noUrut ?? params.rekapCtrNoUrut;
+          record.rekapCtrNoKontrak = (pickedCtr?.noKontrak || params.rekapCtrNoKontrak || "").trim() || void 0;
+        }
+      }
+      record.catatArusKas = false;
+      record.idUangMasukBuyer = void 0;
+      record.idUangMasukKomisi = void 0;
+      record.idPengeluaranBayarMitra = void 0;
+      record.tanggalBayarMitra = finalStatus === "LUNAS" ? finalTanggal : void 0;
+      if (Array.isArray(db.rekapCtr)) {
+        const refMatch = (ref) => {
+          if (!ref) return false;
+          if (ref === oldNoInvoice || ref.startsWith(`${oldNoInvoice}-`)) return true;
+          if (ref === record.id || ref.startsWith(`${record.id}-`)) return true;
+          if (oldNoPenjualanHb && (ref === oldNoPenjualanHb || ref.startsWith(`${oldNoPenjualanHb}-`))) {
+            return true;
+          }
+          return false;
+        };
+        let matchedContract;
+        let firstMatchIdx = -1;
+        let preservedCekList = false;
+        for (const c of db.rekapCtr) {
+          const idxInC = (c.rows || []).findIndex((r) => refMatch(r.sourceRefId));
+          if (idxInC !== -1 && !matchedContract) {
+            matchedContract = c;
+            firstMatchIdx = idxInC;
+            preservedCekList = Boolean(c.rows[idxInC]?.cekList);
+          }
+          c.rows = (c.rows || []).filter((r) => !refMatch(r.sourceRefId));
+        }
+        const ctrChangedExplicitly = params.rekapCtrId !== void 0 && (record.rekapCtrId || "") !== (oldRekapCtrId || "") && Boolean(record.rekapCtrId) && matchedContract?.id !== record.rekapCtrId;
+        const canKeepInSameContract = !ctrChangedExplicitly && matchedContract && (record.rekapCtrId && matchedContract.id === record.rekapCtrId || matchedContract.noUrut <= 27 || !record.rekapCtrId && oldTanggal === finalTanggal && oldBuyer === buyerLabel);
+        if (canKeepInSameContract && matchedContract) {
+          const refBase = finalNoInvoice || record.noPenjualanHasilBumi || record.id;
+          const ketBaru = finalStatus === "PENDING" ? "BELUM CAIR" : "";
+          const replacementRows = detailItems.map((d, idx) => {
+            const basisWapVal = d.basisBuyer || d.basisMitra || d.hargaPerKgMitra || 0;
+            const basisSupVal = isStokHbPt ? basisWapVal : d.basisMitra || d.hargaPerKgMitra || 0;
+            return {
+              id: `CTR-${matchedContract.noUrut}-${record.id}-${idx + 1}`,
+              basisWap: basisWapVal,
+              basisSuplayer: basisSupVal,
+              namaSuplayer: isStokHbPt ? "STOK HB (PT WAP)" : finalMitraNama.toUpperCase(),
+              idMitra: finalMitraId,
+              qtySuplayer: d.tonaseAkhirKg,
+              tglMasuk: finalTanggal,
+              truck: (d.platTruk || platTrukSummary || "").replace(/\s+/g, "").toUpperCase(),
+              qtyAwal: d.tonaseAwalKg > 0 ? d.tonaseAwalKg : d.tonaseAkhirKg,
+              qtyAkhir: d.tonaseAkhirKg,
+              rendemen: d.rendemen || 100,
+              pajakNominal: isStokHbPt ? 0 : detailItems.length === 1 ? pajakNominal : pajakNominal === 0 ? 0 : null,
+              komisiNominal: isStokHbPt ? 0 : idx === 0 ? komisiNominal : 0,
+              cekList: idx === 0 ? preservedCekList : false,
+              statusPencairan: finalStatus,
+              sourceType: isStokHbPt && record.noPenjualanHasilBumi ? "PENJUALAN_HB" : "SURAT_JALAN",
+              sourceRefId: idx === 0 ? refBase : `${refBase}-${idx + 1}`,
+              isStokHbPt,
+              keterangan: ketBaru
+            };
+          });
+          const insertAt = Math.min(Math.max(0, firstMatchIdx), matchedContract.rows.length);
+          matchedContract.rows.splice(insertAt, 0, ...replacementRows);
+        } else {
+          db.rekapCtr = db.rekapCtr.filter((c) => c.noUrut <= 27 || (c.rows || []).length > 0);
+        }
+      }
+      dbManager.syncRekapCtrDefaultsAndNov4();
+      dbManager.synchronizeVirtualAccounts();
+      this.addAuditLog(
+        db,
+        "UPDATE",
+        record.id,
+        `Edit Invoice Surat Jalan ${finalNoInvoice} [${finalMitraNama} \xB7 ${tonaseAkhirKg} Kg \xB7 ${detailItems.length} Partai \xB7 Buyer: ${buyerLabel}] Total Inv Rp ${totalPenjualanMitra.toLocaleString(
+          "id-ID"
+        )} \xB7 Status: ${finalStatus}`,
+        totalPenjualanBuyer,
+        bankAccKode
+      );
+      return record;
+    });
+    try {
+      await supabaseSyncEngine.pushToSupabase(dbManager.get(), { allowOverwrite: true });
+    } catch (syncErr) {
+      console.warn("[SuratJalan] Immediate Supabase push warning:", syncErr);
+    }
+    return updatedRecord;
+  }
+  static async terimaUangBuyerSuratJalan(idInvoice, params) {
+    const updated = await dbManager.executeTransaction((db) => {
+      const { tanggal: todayWib, jam, iso } = getWIBDateTime();
+      if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
+      if (!Array.isArray(db.uangMasuk)) db.uangMasuk = [];
+      const record = db.suratJalan.find((s) => s.id === idInvoice || s.noInvoice === idInvoice);
+      if (!record) {
+        throw new Error(`Invoice Surat Jalan ${idInvoice} tidak ditemukan`);
+      }
+      const isInternalOwn = isInternalMilikSendiriSuratJalan(record);
+      if (record.statusUangBuyer === "DITERIMA" && record.idUangMasukBuyer) {
+        throw new Error(
+          `Uang masuk buyer untuk Invoice ${record.noInvoice} sudah dicatat sebelumnya di rekening ${record.rekeningTerimaBuyerKode || record.rekeningPtKode}.`
+        );
+      }
+      const finalTanggal = normalizeDateToDmy(params?.tanggal, todayWib);
+      const targetRek = (params?.rekeningTujuan || record.rekeningPtKode || "BNI01").trim();
+      const bankAcc = db.rekening.find((r) => r.kode === targetRek && !r.isVirtual && r.status === "AKTIF") || db.rekening.find((r) => r.kode === record.rekeningPtKode && !r.isVirtual && r.status === "AKTIF") || db.rekening.find((r) => /bni\s*direct/i.test(r.nama || "") && !r.isVirtual && r.status === "AKTIF") || db.rekening.find((r) => !r.isVirtual && r.status === "AKTIF");
+      if (!bankAcc) {
+        throw new Error(`Rekening penerima "${targetRek}" tidak ditemukan atau tidak aktif.`);
+      }
+      const defaultBuyerNominal = Math.round(
+        Number(record.totalPenjualanBuyer || record.totalPenjualanMitra) || 0
+      );
+      const nominalMasuk = Math.round(
+        params?.nominalMasuk !== void 0 && Number(params.nominalMasuk) > 0 ? Number(params.nominalMasuk) : defaultBuyerNominal
+      );
+      if (nominalMasuk <= 0) {
+        throw new Error("Nominal uang masuk buyer harus lebih dari Rp 0.");
+      }
+      const bankKode = bankAcc.kode;
+      const bankDisplayName = bankKode === "BNI01" && !/direct/i.test(bankAcc.nama || "") ? "BNI DIRECT" : (bankAcc.nama || bankKode).toUpperCase();
+      const buyerLabel = (record.kategoriKode || "BUYER").trim().toUpperCase();
+      const catatanClean = (params?.catatan || "").trim();
+      const idUangMasukBuyer = generateId("UM-SJ");
+      bankAcc.saldoSaatIni = Math.round((Number(bankAcc.saldoSaatIni) || 0) + nominalMasuk);
+      const targetDivisiTerima = isInternalOwn && /gudang/i.test(record.namaMitra || "") ? "Gudang Wijaya Agro" : "PT Wijaya Agro Perkasa";
+      db.uangMasuk.unshift({
+        idTransaksi: idUangMasukBuyer,
+        tanggal: finalTanggal,
+        jam,
+        kategori: "SETTLEMENT_BUYER_SJ",
+        idMitra: record.idMitra,
+        namaPengirim: isInternalOwn ? `${buyerLabel} (Penjualan ${record.namaMitra})` : `${buyerLabel} (Titip SJ: ${record.namaMitra})`,
+        pengirim: isInternalOwn ? `${buyerLabel} (Penjualan ${record.namaMitra})` : `${buyerLabel} (Titip SJ: ${record.namaMitra})`,
+        divisi: targetDivisiTerima,
+        nominal: nominalMasuk,
+        metode: bankKode === "KAS01" ? "TUNAI" : "TRANSFER",
+        rekeningTujuan: bankKode,
+        keterangan: `${isInternalOwn ? "Uang Masuk Penjualan Sendiri" : "Uang Masuk Buyer"} ${buyerLabel} \xB7 Invoice ${record.noInvoice} \xB7 ${record.namaMitra} (${record.komoditasNama} ${Number(record.tonaseAkhirKg || 0).toLocaleString("id-ID")} Kg)${catatanClean ? ` \xB7 ${catatanClean}` : ""}`,
+        createdAt: iso
+      });
+      record.statusUangBuyer = "DITERIMA";
+      record.tanggalUangBuyerMasuk = finalTanggal;
+      record.jamUangBuyerMasuk = jam;
+      record.nominalUangBuyerMasuk = nominalMasuk;
+      record.rekeningTerimaBuyerKode = bankKode;
+      record.catatanUangBuyer = catatanClean || void 0;
+      record.idUangMasukBuyer = idUangMasukBuyer;
+      record.rekeningPtKode = bankKode;
+      record.catatArusKas = true;
+      if (isInternalOwn) {
+        record.statusPembayaranMitra = "LUNAS";
+        record.tanggalBayarMitra = finalTanggal;
+        record.catatArusKasBayarMitra = false;
+        record.nominalBayarMitraAktual = 0;
+        dbManager.syncRekapCtrDefaultsAndNov4();
+      }
+      dbManager.synchronizeVirtualAccounts();
+      this.addAuditLog(
+        db,
+        "UPDATE",
+        record.id,
+        isInternalOwn ? `Terima Dana Buyer ${buyerLabel} untuk SJ Milik Sendiri ${record.noInvoice} (${record.namaMitra}) masuk ke ${bankDisplayName} (+Rp ${nominalMasuk.toLocaleString("id-ID")}) \u2014 Selesai (Tanpa Bayar Mitra)` : `Tahap 1 Terima Uang Buyer ${buyerLabel} untuk SJ ${record.noInvoice} (Mitra ${record.namaMitra}) masuk ke ${bankDisplayName} (+Rp ${nominalMasuk.toLocaleString("id-ID")})`,
+        nominalMasuk,
+        bankKode
+      );
+      return record;
+    });
+    try {
+      await supabaseSyncEngine.pushToSupabase(dbManager.get(), { allowOverwrite: true });
+    } catch (syncErr) {
+      console.warn("[SuratJalan] Immediate Supabase push warning:", syncErr);
+    }
+    return updated;
+  }
+  static async batalTerimaUangBuyerSuratJalan(idInvoice) {
+    const updated = await dbManager.executeTransaction((db) => {
+      if (!Array.isArray(db.suratJalan)) db.suratJalan = [];
+      if (!Array.isArray(db.uangMasuk)) db.uangMasuk = [];
+      const record = db.suratJalan.find((s) => s.id === idInvoice || s.noInvoice === idInvoice);
+      if (!record) {
+        throw new Error(`Invoice Surat Jalan ${idInvoice} tidak ditemukan`);
+      }
+      const isInternalOwn = isInternalMilikSendiriSuratJalan(record);
+      if (record.statusPembayaranMitra === "LUNAS" && !isInternalOwn) {
+        throw new Error(
+          `Invoice ${record.noInvoice} sudah dibayarkan ke mitra (LUNAS). Hapus / batalkan transaksi invoice jika ingin mengulang seluruh proses.`
+        );
+      }
+      if (record.statusUangBuyer !== "DITERIMA") {
+        throw new Error(`Invoice ${record.noInvoice} belum memiliki catatan Uang Masuk Buyer.`);
+      }
+      let revertedNominal = Math.round(Number(record.nominalUangBuyerMasuk) || 0);
+      let revertedRek = record.rekeningTerimaBuyerKode || record.rekeningPtKode || "BNI01";
+      if (record.idUangMasukBuyer) {
+        const uIdx = db.uangMasuk.findIndex((u) => u.idTransaksi === record.idUangMasukBuyer);
+        if (uIdx !== -1) {
+          const uRecord = db.uangMasuk[uIdx];
+          revertedNominal = Math.round(Number(uRecord.nominal) || revertedNominal);
+          revertedRek = uRecord.rekeningTujuan || revertedRek;
+          const acc = db.rekening.find((r) => r.kode === revertedRek);
+          if (acc) {
+            acc.saldoSaatIni = Math.round((Number(acc.saldoSaatIni) || 0) - revertedNominal);
+          }
+          db.uangMasuk.splice(uIdx, 1);
+        } else if (revertedNominal > 0) {
+          const acc = db.rekening.find((r) => r.kode === revertedRek);
+          if (acc) {
+            acc.saldoSaatIni = Math.round((Number(acc.saldoSaatIni) || 0) - revertedNominal);
+          }
+        }
+      } else if (revertedNominal > 0) {
+        const acc = db.rekening.find((r) => r.kode === revertedRek);
+        if (acc) {
+          acc.saldoSaatIni = Math.round((Number(acc.saldoSaatIni) || 0) - revertedNominal);
+        }
+      }
+      record.statusUangBuyer = "BELUM_DITERIMA";
+      record.tanggalUangBuyerMasuk = void 0;
+      record.jamUangBuyerMasuk = void 0;
+      record.nominalUangBuyerMasuk = void 0;
+      record.rekeningTerimaBuyerKode = void 0;
+      record.catatanUangBuyer = void 0;
+      record.idUangMasukBuyer = void 0;
+      if (isInternalOwn) {
+        record.statusPembayaranMitra = "PENDING";
+        record.tanggalBayarMitra = void 0;
+        record.catatArusKasBayarMitra = false;
+        record.nominalBayarMitraAktual = 0;
+        dbManager.syncRekapCtrDefaultsAndNov4();
+      }
+      dbManager.synchronizeVirtualAccounts();
+      this.addAuditLog(
+        db,
+        "UPDATE",
+        record.id,
+        `Batalkan Tahap 1 Terima Uang Buyer SJ ${record.noInvoice} (Mitra ${record.namaMitra}) \xB7 Saldo ${revertedRek} dikurangi Rp ${revertedNominal.toLocaleString("id-ID")}`,
+        revertedNominal,
+        revertedRek
+      );
+      return record;
+    });
+    try {
+      await supabaseSyncEngine.pushToSupabase(dbManager.get(), { allowOverwrite: true });
+    } catch (syncErr) {
+      console.warn("[SuratJalan] Immediate Supabase push warning:", syncErr);
+    }
+    return updated;
+  }
   static async cairkanInvoiceSuratJalan(idInvoice, params) {
     const updated = await dbManager.executeTransaction((db) => {
       const { tanggal: todayWib, jam, iso } = getWIBDateTime();
@@ -18912,14 +22255,37 @@ var TransactionService = class {
       if (!record) {
         throw new Error(`Invoice Surat Jalan ${idInvoice} tidak ditemukan`);
       }
+      if (isInternalMilikSendiriSuratJalan(record)) {
+        throw new Error(
+          `Invoice ${record.noInvoice} adalah penjualan milik sendiri (${record.namaMitra}), sehingga tidak ada pembayaran ke mitra luar. Cukup catat penerimaan dana dari buyer.`
+        );
+      }
       if (record.statusPembayaranMitra === "LUNAS") {
         throw new Error(`Invoice ${record.noInvoice} sudah lunas dicairkan ke mitra.`);
       }
       const finalTanggal = normalizeDateToDmy(params?.tanggal, todayWib);
-      const targetRek = (params?.rekeningSumber || record.rekeningPtKode || "BNI01").trim();
-      const bankAcc = db.rekening.find((r) => r.kode === targetRek) || db.rekening.find((r) => r.kode === record.rekeningPtKode) || db.rekening.find((r) => /bni\s*direct/i.test(r.nama || "")) || db.rekening.find((r) => !r.isVirtual && r.status === "AKTIF");
+      const targetRek = (params?.rekeningSumber || record.rekeningTerimaBuyerKode || record.rekeningPtKode || "BNI01").trim();
+      const bankAcc = db.rekening.find((r) => r.kode === targetRek && !r.isVirtual && r.status === "AKTIF") || db.rekening.find((r) => r.kode === targetRek) || db.rekening.find((r) => r.kode === record.rekeningPtKode) || db.rekening.find((r) => /bni\s*direct/i.test(r.nama || "")) || db.rekening.find((r) => !r.isVirtual && r.status === "AKTIF");
       const bankKode = bankAcc?.kode || targetRek || "BNI01";
       const bankDisplayName = bankKode === "BNI01" && !/direct/i.test(bankAcc?.nama || "") ? "BNI DIRECT" : (bankAcc?.nama || bankKode).toUpperCase();
+      const shouldTouchKas = params?.catatArusKas !== void 0 ? Boolean(params.catatArusKas) : record.statusUangBuyer === "DITERIMA";
+      const nominalBayarMitra = Math.round(Number(record.jumlahPembayaranMitra) || 0);
+      if (shouldTouchKas && record.sumberBarang !== "STOK_HB_PT" && nominalBayarMitra > 0) {
+        if (!bankAcc || bankAcc.isVirtual) {
+          throw new Error(`Rekening sumber "${bankKode}" tidak valid untuk pemotongan kas riil.`);
+        }
+        bankAcc.saldoSaatIni = Math.round((Number(bankAcc.saldoSaatIni) || 0) - nominalBayarMitra);
+        record.catatArusKas = true;
+        record.catatArusKasBayarMitra = true;
+        record.rekeningBayarMitraKode = bankKode;
+        record.nominalBayarMitraAktual = nominalBayarMitra;
+        record.jamBayarMitra = jam;
+      } else {
+        record.catatArusKasBayarMitra = false;
+        record.rekeningBayarMitraKode = bankKode;
+        record.nominalBayarMitraAktual = nominalBayarMitra;
+        record.jamBayarMitra = jam;
+      }
       if (record.sumberBarang !== "STOK_HB_PT" && record.potongPiutang && (record.kasbonNominal || 0) > 0) {
         const kasbonNominal = Math.round(Number(record.kasbonNominal) || 0);
         const computeMitraTotalBonSaldo = (mitraId) => {
@@ -18983,8 +22349,8 @@ var TransactionService = class {
         db,
         "UPDATE",
         record.id,
-        `Pencairan Surat Jalan ${record.noInvoice} a.n. ${record.namaMitra} (Non-Kas / Tidak Mengubah Saldo ${bankDisplayName})${record.potongPiutang && record.kasbonNominal > 0 ? ` \xB7 Bayar Bon Rp ${record.kasbonNominal.toLocaleString("id-ID")} via ${bankDisplayName} tercatat di Rekening Koran Mitra` : ""}`,
-        record.jumlahPembayaranMitra,
+        `Tahap 2 Pencairan Surat Jalan ${record.noInvoice} a.n. ${record.namaMitra} (${shouldTouchKas ? `Kas Riil \xB7 Saldo ${bankDisplayName} \u2212Rp ${nominalBayarMitra.toLocaleString("id-ID")}` : `Non-Kas / Tidak Mengubah Saldo ${bankDisplayName}`})${record.potongPiutang && record.kasbonNominal > 0 ? ` \xB7 Bayar Bon Rp ${record.kasbonNominal.toLocaleString("id-ID")} via ${bankDisplayName} tercatat di Rekening Koran Mitra` : ""}`,
+        nominalBayarMitra,
         bankKode
       );
       return record;
@@ -19007,8 +22373,11 @@ var TransactionService = class {
         if (uIdx !== -1) {
           const uRecord = db.uangMasuk[uIdx];
           const acc = db.rekening.find((r) => r.kode === uRecord.rekeningTujuan);
-          if (acc) acc.saldoSaatIni -= uRecord.nominal;
+          if (acc) acc.saldoSaatIni = Math.round((Number(acc.saldoSaatIni) || 0) - (Number(uRecord.nominal) || 0));
           db.uangMasuk.splice(uIdx, 1);
+        } else if (target.statusUangBuyer === "DITERIMA" && (target.nominalUangBuyerMasuk || 0) > 0) {
+          const acc = db.rekening.find((r) => r.kode === (target.rekeningTerimaBuyerKode || target.rekeningPtKode));
+          if (acc) acc.saldoSaatIni = Math.round((Number(acc.saldoSaatIni) || 0) - (Number(target.nominalUangBuyerMasuk) || 0));
         }
       }
       if (target.idUangMasukKomisi && Array.isArray(db.uangMasuk)) {
@@ -19059,9 +22428,14 @@ var TransactionService = class {
           revertedFromPengeluaran = true;
         }
       }
-      if (target.sumberBarang !== "STOK_HB_PT" && target.catatArusKas !== false && !revertedFromPengeluaran && target.statusPembayaranMitra === "LUNAS" && (target.jumlahPembayaranMitra || 0) > 0 && target.rekeningPtKode && target.rekeningPtKode !== "SINKRON") {
-        const acc = db.rekening.find((r) => r.kode === target.rekeningPtKode);
-        if (acc) acc.saldoSaatIni += target.jumlahPembayaranMitra;
+      const shouldRevertBayarMitra = !isInternalMilikSendiriSuratJalan(target) && !revertedFromPengeluaran && target.statusPembayaranMitra === "LUNAS" && (target.catatArusKasBayarMitra === true || target.catatArusKasBayarMitra === void 0 && target.catatArusKas !== false);
+      const revertNominalMitra = Math.round(
+        Number(target.nominalBayarMitraAktual ?? target.jumlahPembayaranMitra) || 0
+      );
+      const revertRekMitra = target.rekeningBayarMitraKode || target.rekeningPtKode;
+      if (shouldRevertBayarMitra && revertNominalMitra > 0 && revertRekMitra && revertRekMitra !== "SINKRON") {
+        const acc = db.rekening.find((r) => r.kode === revertRekMitra);
+        if (acc) acc.saldoSaatIni = Math.round((Number(acc.saldoSaatIni) || 0) + revertNominalMitra);
       }
       db.suratJalan.splice(idx, 1);
       if (Array.isArray(db.rekapCtr)) {
@@ -19150,6 +22524,8 @@ var TransactionService = class {
         db.rekapCtr = contracts.map((c) => ({
           ...c,
           noUrut: Number(c.noUrut) || 0,
+          noKontrak: c.noKontrak ? String(c.noKontrak).trim() : void 0,
+          statusKontrak: c.statusKontrak === "SELESAI" ? "SELESAI" : "AKTIF",
           qtyCtr: Number(c.qtyCtr) || 0,
           openingCumulativeLr: c.openingCumulativeLr !== void 0 ? Number(c.openingCumulativeLr) : void 0,
           rows: Array.isArray(c.rows) ? c.rows.map((r) => ({
@@ -19742,6 +23118,1715 @@ var TransactionService = class {
     return res;
   }
 };
+
+// src/server/services/billboardRekapService.ts
+var NAMA_BULAN_ID = [
+  "Januari",
+  "Februari",
+  "Maret",
+  "April",
+  "Mei",
+  "Juni",
+  "Juli",
+  "Agustus",
+  "September",
+  "Oktober",
+  "November",
+  "Desember"
+];
+function parseDateDDMMYYYY(tanggal) {
+  const norm = normalizeDateToDmy(tanggal, tanggal);
+  const parts = String(norm || "").trim().split("/");
+  if (parts.length !== 3) return null;
+  const hari = Number(parts[0]);
+  const bulan = Number(parts[1]);
+  const tahun = Number(parts[2]);
+  if (!hari || !bulan || !tahun || bulan < 1 || bulan > 12 || tahun < 2e3) return null;
+  return { hari, bulan, tahun };
+}
+function normalizeText(s) {
+  return String(s || "").replace(/\s+/g, " ").trim().toUpperCase();
+}
+function compactText(s) {
+  return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+function getInventarisDisplayLabel(unit) {
+  const rawNama = String(unit.namaItem || "").trim().toUpperCase();
+  const rawPlat = String(unit.nomorPlat || "").trim().toUpperCase();
+  if (rawPlat && rawPlat !== "-" && !rawNama.includes(rawPlat)) {
+    return `${rawNama} (${rawPlat})`;
+  }
+  return rawNama || rawPlat || unit.kode;
+}
+function isPreviousMonthSettlementSlip(sl) {
+  const ket = normalizeText(sl.keterangan);
+  const per = normalizeText(sl.periodeBulan);
+  if (ket.includes("BULAN SEBELUMNYA")) return true;
+  if (ket.includes("POTONG BON")) return true;
+  if (/^GAJI\s+(BULAN\s+)?(JANUARI|FEBRUARI|MARET|APRIL|MEI|JUNI|JULI|AGUSTUS|SEPTEMBER|OKTOBER|NOVEMBER|DESEMBER)/.test(per)) {
+    return true;
+  }
+  if (/GAJI\s+(BULAN\s+)?(JANUARI|FEBRUARI|MARET|APRIL|MEI|JUNI|JULI|AGUSTUS|SEPTEMBER|OKTOBER|NOVEMBER|DESEMBER)/.test(ket)) {
+    return true;
+  }
+  return false;
+}
+function shortCommodityName(nama) {
+  const up = normalizeText(nama);
+  if (up.includes("KOPI JALAN") || up === "JALAN") return "JALAN";
+  if (up === "KOPI" || up.includes("KOPI ROBUSTA") || up.includes("KOPI BIJI") || up.startsWith("KOPI")) return "KOPI";
+  if (up.includes("LADA")) return "LADA";
+  if (up.includes("KULIT KAYU MANIS KA") || /\bKA\b/.test(up)) return "KA";
+  if (up.includes("KULIT KAYU MANIS KB") || /\bKB\b/.test(up)) return "KB";
+  if (up.includes("KULIT KAYU MANIS KF") || /\bKF\b/.test(up)) return "KF";
+  if (up.includes("STIK")) return "STIK";
+  return up;
+}
+function resolveDivisiMeta(nama) {
+  const n = normalizeText(nama);
+  if (n.includes("PT WIJAYA AGRO") || n === "PT WAP" || n === "WAP") {
+    return { order: 1, kodeSingkat: "PT WAP", themeKey: "WAP" };
+  }
+  if (n.includes("GUDANG WIJAYA AGRO") || n === "GWA") {
+    return { order: 2, kodeSingkat: "GWA", themeKey: "GWA" };
+  }
+  if (n.includes("CV WIJAYA AGRO") || n === "CV WA") {
+    return { order: 3, kodeSingkat: "CV WA", themeKey: "CVWA" };
+  }
+  if (n.includes("WIJAYA TRANSPORT") || n === "WT" || n.includes("WIJAYA TRANS")) {
+    return { order: 4, kodeSingkat: "W T", themeKey: "WT" };
+  }
+  if (n.includes("BRILINK") || n.includes("BRI LINK")) {
+    return { order: 5, kodeSingkat: "BRI LINK", themeKey: "BRILINK" };
+  }
+  if (n.includes("OKUSSA")) {
+    return { order: 6, kodeSingkat: "OKUSSA", themeKey: "OKUSSA" };
+  }
+  if (n.includes("WIJAYA KARYA") || n === "WK") {
+    return { order: 7, kodeSingkat: "WK", themeKey: "WK" };
+  }
+  return { order: 99, kodeSingkat: nama.toUpperCase().slice(0, 10), themeKey: "OTHER" };
+}
+function classifyProductDivision(kategori, nama, kode) {
+  const kat = normalizeText(kategori);
+  const nm = normalizeText(nama);
+  const kd = normalizeText(kode);
+  if (kat === "OKUSSA" || kat.includes("OKUSSA") || nm.includes("OKUSSA") || nm.includes("ROSTING") || nm.includes("ROASTING") || nm.includes("BUBUK KOPI") || nm.includes("LANANG") || nm.includes("ROBUSTA") || kd.startsWith("OKU")) {
+    return "OKUSSA";
+  }
+  if (kat === "SOLAR" || kat === "BBM" || kat.includes("TRANSPORT") || kat.includes("SPAREPART") || /\bSOLAR\b/.test(nm)) {
+    return "WT";
+  }
+  if (kat === "SAPROTAN" || kat === "PUPUK" || kat.includes("CV WA") || kat.includes("CV WIJAYA") || kat.includes("PESTISIDA") || kat.includes("HERBISIDA") || /\b(UREA|NPK|PHONSKA|TSP|SP36|KCL|PUPUK|ROUNDUP|GRAMOXONE)\b/.test(nm)) {
+    return "CVWA";
+  }
+  return "WK";
+}
+function getBillboardRekapEksekutif(params) {
+  dbManager.synchronizeDivisiAccounts();
+  const db = dbManager.get();
+  const wib = getWIBDateTime();
+  const todayParsed = parseDateDDMMYYYY(wib.tanggal) || { hari: 1, bulan: 11, tahun: 2026 };
+  const monthSet = /* @__PURE__ */ new Map();
+  const registerDate = (tgl) => {
+    const p = parseDateDDMMYYYY(tgl);
+    if (!p) return;
+    const key = `${p.tahun}-${String(p.bulan).padStart(2, "0")}`;
+    if (!monthSet.has(key)) monthSet.set(key, { bulan: p.bulan, tahun: p.tahun });
+  };
+  registerDate(wib.tanggal);
+  for (const x of db.penjualan || []) registerDate(x.tanggal);
+  for (const x of db.penjualanHasilBumi || []) registerDate(x.tanggal);
+  for (const x of db.pembelianHasilBumi || []) registerDate(x.tanggal);
+  for (const x of db.pembelianBarang || []) registerDate(x.tanggal);
+  for (const x of db.pengeluaran || []) registerDate(x.tanggal);
+  for (const x of db.upahHarian || []) registerDate(x.tanggalKerja);
+  for (const x of db.penggajian || []) registerDate(x.tanggal);
+  for (const x of db.uangMasuk || []) registerDate(x.tanggal);
+  for (const x of db.brilink || []) registerDate(x.tanggal);
+  const availableMonths = Array.from(monthSet.values()).sort((a, b) => b.tahun !== a.tahun ? b.tahun - a.tahun : b.bulan - a.bulan).map((m) => ({
+    bulan: m.bulan,
+    tahun: m.tahun,
+    label: `${NAMA_BULAN_ID[m.bulan - 1] || m.bulan} ${m.tahun}`
+  }));
+  const requestedBulan = Number(params?.bulan) || todayParsed.bulan;
+  const requestedTahun = Number(params?.tahun) || todayParsed.tahun;
+  const periodeMode = "BULAN";
+  const matchesPeriod = (tgl) => {
+    const p = parseDateDDMMYYYY(tgl);
+    if (!p) return false;
+    return p.bulan === requestedBulan && p.tahun === requestedTahun;
+  };
+  const ringkasanHb = TransactionService.getRingkasanStokHasilBumiBulanan({
+    bulan: requestedBulan,
+    tahun: requestedTahun
+  });
+  const gwaOrderPriority = (shortName) => {
+    const orderMap = {
+      KOPI: 1,
+      LADA: 2,
+      KA: 3,
+      KB: 4,
+      KF: 5,
+      STIK: 6,
+      JALAN: 7
+    };
+    return orderMap[shortName] ?? 50;
+  };
+  const gwaItems = (ringkasanHb.komoditasItems || []).map((k) => {
+    const qty = Math.round((Number(k.readyGudangSaatIniKg) || 0) * 100) / 100;
+    const hargaUnit = Math.round(Number(k.rataRataModalGudangPerKg) || 0);
+    const nilai = Math.round(Number(k.nilaiModalReadyGudang) || 0);
+    return {
+      kode: k.kode,
+      nama: shortCommodityName(k.nama),
+      satuan: k.satuan || "Kg",
+      qty,
+      hargaUnit,
+      nilai
+    };
+  }).sort((a, b) => {
+    const pa = gwaOrderPriority(a.nama);
+    const pb = gwaOrderPriority(b.nama);
+    if (pa !== pb) return pa - pb;
+    return a.nama.localeCompare(b.nama);
+  });
+  const kopiJalanHb = (db.stokHasilBumi || []).find(
+    (h) => h.kode === "HB-01B" || normalizeText(h.nama).includes("KOPI JALAN")
+  );
+  if (kopiJalanHb && !gwaItems.some((g) => g.nama === "JALAN")) {
+    const qty = Math.round((Number(kopiJalanHb.stok) || 0) * 100) / 100;
+    const hargaUnit = Math.round(Number(kopiJalanHb.hargaBeliStandar) || 0);
+    gwaItems.push({
+      kode: kopiJalanHb.kode,
+      nama: "JALAN",
+      satuan: kopiJalanHb.satuan || "Kg",
+      qty,
+      hargaUnit,
+      nilai: Math.round(qty * hargaUnit)
+    });
+  }
+  const gwaTotalNilai = gwaItems.reduce((s, it) => s + it.nilai, 0);
+  const gwaTotalQty = Math.round(gwaItems.reduce((s, it) => s + it.qty, 0) * 100) / 100;
+  const wtItems = [];
+  const cvWaItems = [];
+  const okussaItems = [];
+  const wkItems = [];
+  const produkByKode = new Map((db.produk || []).map((p) => [String(p.kode || "").toUpperCase(), p]));
+  const seenProductKodes = /* @__PURE__ */ new Set();
+  for (const sb of db.stokBarang || []) {
+    const key = String(sb.kode || "").toUpperCase();
+    const prd = produkByKode.get(key);
+    if (isProdukTanpaStok(prd || sb, db.kategoriProduk)) continue;
+    seenProductKodes.add(key);
+    const qty = Math.round((Number(sb.stok) || 0) * 100) / 100;
+    const hargaUnit = Math.round(Number(prd?.hargaBeli) || Number(prd?.hargaJual) || 0);
+    const nilai = Math.round(Math.max(0, qty) * hargaUnit);
+    const row = {
+      kode: sb.kode,
+      nama: (prd?.nama || sb.namaProduk || sb.kode).toUpperCase(),
+      satuan: prd?.satuan || sb.satuan || "Unit",
+      qty,
+      hargaUnit,
+      nilai
+    };
+    const bucket = classifyProductDivision(prd?.kategori || sb.kategori, row.nama, row.kode);
+    if (bucket === "OKUSSA") okussaItems.push(row);
+    else if (bucket === "WT") wtItems.push(row);
+    else if (bucket === "CVWA") cvWaItems.push(row);
+    else wkItems.push(row);
+  }
+  for (const prd of db.produk || []) {
+    const key = String(prd.kode || "").toUpperCase();
+    if (seenProductKodes.has(key)) continue;
+    if (isProdukTanpaStok(prd, db.kategoriProduk)) continue;
+    const row = {
+      kode: prd.kode,
+      nama: (prd.nama || prd.kode).toUpperCase(),
+      satuan: prd.satuan || "Unit",
+      qty: 0,
+      hargaUnit: Math.round(Number(prd.hargaBeli) || Number(prd.hargaJual) || 0),
+      nilai: 0
+    };
+    const bucket = classifyProductDivision(prd.kategori, row.nama, row.kode);
+    if (bucket === "OKUSSA") okussaItems.push(row);
+    else if (bucket === "WT") wtItems.push(row);
+    else if (bucket === "CVWA") cvWaItems.push(row);
+    else wkItems.push(row);
+  }
+  const sortBarangRows = (list) => list.sort((a, b) => {
+    if (b.nilai !== a.nilai) return b.nilai - a.nilai;
+    return a.nama.localeCompare(b.nama);
+  });
+  sortBarangRows(wtItems);
+  sortBarangRows(cvWaItems);
+  sortBarangRows(okussaItems);
+  sortBarangRows(wkItems);
+  const wtTotal = wtItems.reduce((s, it) => s + it.nilai, 0);
+  const cvWaTotal = cvWaItems.reduce((s, it) => s + it.nilai, 0);
+  const okussaTotal = okussaItems.reduce((s, it) => s + it.nilai, 0);
+  const wkTotal = wkItems.reduce((s, it) => s + it.nilai, 0);
+  const totalBarang = gwaTotalNilai + wtTotal + cvWaTotal + okussaTotal + wkTotal;
+  const barangByTheme = {
+    WAP: 0,
+    GWA: gwaTotalNilai,
+    CVWA: cvWaTotal,
+    WT: wtTotal,
+    BRILINK: 0,
+    OKUSSA: okussaTotal,
+    WK: wkTotal
+  };
+  const allMasterDivisi = dbManager.getDivisiList();
+  const resolveMasterLogo = (idDivisi, namaDivisi, fallbackLogo) => {
+    const found = allMasterDivisi.find(
+      (md) => md.id.toLowerCase() === idDivisi.toLowerCase() || normalizeText(md.nama) === normalizeText(namaDivisi)
+    );
+    if (found?.logoUrl && found.logoUrl.trim()) return found.logoUrl.trim();
+    if (normalizeText(namaDivisi).includes("PT WIJAYA AGRO")) {
+      return db.profilPerusahaan?.logoUrl?.trim() || DEFAULT_PT_LOGO_URL;
+    }
+    return fallbackLogo && fallbackLogo.trim() ? fallbackLogo.trim() : void 0;
+  };
+  const lrDivisi = TransactionService.getLabaRugiDivisiSummary(
+    periodeMode === "BULAN" ? { bulan: requestedBulan, tahun: requestedTahun } : void 0
+  );
+  const canonicalDivisions = [
+    { idDivisi: "DIV-WAP", nama: "PT Wijaya Agro Perkasa", logoUrl: resolveMasterLogo("DIV-WAP", "PT Wijaya Agro Perkasa", DEFAULT_PT_LOGO_URL), themeKey: "WAP", kodeSingkat: "PT WAP", order: 1 },
+    { idDivisi: "DIV-GWA", nama: "Gudang Wijaya Agro", logoUrl: resolveMasterLogo("DIV-GWA", "Gudang Wijaya Agro"), themeKey: "GWA", kodeSingkat: "GWA", order: 2 },
+    { idDivisi: "DIV-CVA", nama: "CV Wijaya Agro", logoUrl: resolveMasterLogo("DIV-CVA", "CV Wijaya Agro"), themeKey: "CVWA", kodeSingkat: "CV WA", order: 3 },
+    { idDivisi: "DIV-WT", nama: "Wijaya Transport", logoUrl: resolveMasterLogo("DIV-WT", "Wijaya Transport"), themeKey: "WT", kodeSingkat: "W T", order: 4 },
+    { idDivisi: "DIV-BRILINK", nama: "BRILink", logoUrl: resolveMasterLogo("DIV-BRILINK", "BRILink"), themeKey: "BRILINK", kodeSingkat: "BRI LINK", order: 5 },
+    { idDivisi: "DIV-OKU", nama: "Okussa", logoUrl: resolveMasterLogo("DIV-OKU", "Okussa"), themeKey: "OKUSSA", kodeSingkat: "OKUSSA", order: 6 },
+    { idDivisi: "DIV-WK", nama: "Wijaya Karya", logoUrl: resolveMasterLogo("DIV-WK", "Wijaya Karya"), themeKey: "WK", kodeSingkat: "WK", order: 7 }
+  ];
+  const divisiMapByTheme = /* @__PURE__ */ new Map();
+  for (const c of canonicalDivisions) {
+    divisiMapByTheme.set(c.themeKey, {
+      idDivisi: c.idDivisi,
+      kodeSingkat: c.kodeSingkat,
+      nama: c.nama,
+      logoUrl: c.logoUrl,
+      themeKey: c.themeKey,
+      inNominal: 0,
+      outNominal: 0,
+      barangNominal: barangByTheme[c.themeKey] || 0,
+      labaRugi: 0
+    });
+  }
+  const extraDivisions = [];
+  for (const d of lrDivisi.items || []) {
+    const meta = resolveDivisiMeta(d.divisi);
+    if (meta.themeKey !== "OTHER" && divisiMapByTheme.has(meta.themeKey)) {
+      const existing = divisiMapByTheme.get(meta.themeKey);
+      existing.idDivisi = d.idDivisi || existing.idDivisi;
+      existing.nama = d.divisi || existing.nama;
+      const masterLogo = resolveMasterLogo(existing.idDivisi, existing.nama, d.logoUrl || existing.logoUrl);
+      if (masterLogo) existing.logoUrl = masterLogo;
+      existing.inNominal += Math.round(Number(d.uangMasuk) || 0);
+      existing.outNominal += Math.round(Number(d.uangKeluar) || 0);
+      existing.labaRugi = Math.round(existing.inNominal - existing.outNominal);
+    } else {
+      const inNom = Math.round(Number(d.uangMasuk) || 0);
+      const outNom = Math.round(Number(d.uangKeluar) || 0);
+      if (inNom > 0 || outNom > 0) {
+        extraDivisions.push({
+          idDivisi: d.idDivisi,
+          kodeSingkat: meta.kodeSingkat,
+          nama: d.divisi,
+          logoUrl: resolveMasterLogo(d.idDivisi, d.divisi, d.logoUrl),
+          themeKey: "OTHER",
+          inNominal: inNom,
+          outNominal: outNom,
+          barangNominal: 0,
+          labaRugi: Math.round(inNom - outNom)
+        });
+      }
+    }
+  }
+  const divisiMatrix = [
+    ...canonicalDivisions.map((c) => divisiMapByTheme.get(c.themeKey)),
+    ...extraDivisions
+  ];
+  const divisiTotal = {
+    inNominal: divisiMatrix.reduce((s, d) => s + d.inNominal, 0),
+    outNominal: divisiMatrix.reduce((s, d) => s + d.outNominal, 0),
+    barangNominal: totalBarang,
+    labaRugi: divisiMatrix.reduce((s, d) => s + d.labaRugi, 0)
+  };
+  const payrollBulanan = TransactionService.getRekapBulananPayroll({
+    bulan: requestedBulan,
+    tahun: requestedTahun
+  });
+  const payrollByKryId = new Map(
+    (payrollBulanan.items || []).map((item) => [item.idKaryawan, item])
+  );
+  const activeEmployees = (db.karyawan || []).filter((k) => k.status !== "NONAKTIF");
+  const gajiList = activeEmployees.map((kry) => {
+    const pItem = payrollByKryId.get(kry.id);
+    let gajiHarian = 0;
+    let gajiBulanan = 0;
+    if (pItem && Array.isArray(pItem.rincianHarian) && pItem.rincianHarian.length > 0) {
+      for (const row of pItem.rincianHarian) {
+        const nom = Math.round(Number(row.totalUpah ?? row.jumlah) || 0);
+        const itemNorm = normalizeText(row.item);
+        if (itemNorm.includes("GAJI BULANAN") || itemNorm === "BULANAN") {
+          gajiBulanan += nom;
+        } else {
+          gajiHarian += nom;
+        }
+      }
+    } else {
+      const slipsInPeriod = (db.penggajian || []).filter(
+        (g) => g.idKaryawan === kry.id && matchesPeriod(g.tanggalKerja || g.tanggal)
+      );
+      for (const sl of slipsInPeriod) {
+        const hasLinkedDaily = Array.isArray(sl.daftarUpahHarianIds) && sl.daftarUpahHarianIds.length > 0;
+        if (hasLinkedDaily) continue;
+        if (isPreviousMonthSettlementSlip(sl)) continue;
+        const kotor = Math.round(Number(sl.totalGajiKotor) || Number(sl.gajiBersihDibayar) || 0);
+        if (sl.tipeGaji === "BULANAN") {
+          gajiBulanan += kotor;
+        } else {
+          gajiHarian += kotor;
+        }
+      }
+    }
+    return {
+      id: kry.id,
+      nama: kry.nama.toUpperCase(),
+      jabatan: kry.jabatan || "",
+      gajiHarian,
+      gajiBulanan,
+      total: gajiHarian + gajiBulanan
+    };
+  });
+  const subTotGajiHarian = gajiList.reduce((s, r) => s + r.gajiHarian, 0);
+  const subTotGajiBulanan = gajiList.reduce((s, r) => s + r.gajiBulanan, 0);
+  const totalGaji = subTotGajiHarian + subTotGajiBulanan;
+  const activeInventaris = (db.inventaris || []).filter((u) => u.status !== "NONAKTIF");
+  const masterItems = TransactionService.getMasterItemPengeluaran();
+  const buildRows = [];
+  let runningNo = 1;
+  const usedInventarisCompact = /* @__PURE__ */ new Set();
+  for (const unit of activeInventaris) {
+    const label = getInventarisDisplayLabel(unit);
+    const cLabel = compactText(label);
+    if (cLabel) usedInventarisCompact.add(cLabel);
+    if (unit.namaItem) usedInventarisCompact.add(compactText(unit.namaItem));
+    if (unit.nomorPlat && unit.nomorPlat !== "-") {
+      usedInventarisCompact.add(compactText(unit.nomorPlat));
+    }
+    buildRows.push({
+      no: runningNo++,
+      kode: unit.kode || unit.id,
+      nama: label,
+      kelompok: "INVENTARIS",
+      nominal: 0,
+      jumlahTrx: 0,
+      linkedInventarisId: unit.id,
+      nomorPlat: unit.nomorPlat,
+      namaUnitRaw: unit.namaItem
+    });
+  }
+  const customGreenMasters = masterItems.filter((m) => {
+    const namaUp = normalizeText(m.nama);
+    if (namaUp === "PEMBAYARAN_SUPPLIER_SJ") return false;
+    const kel = resolveKelompokItemPengeluaran(namaUp, m.kelompok);
+    if (kel !== "INVENTARIS") return false;
+    if (activeInventaris.length > 0 && m.isSystemDefault) return false;
+    const c = compactText(namaUp);
+    return c.length > 0 && !usedInventarisCompact.has(c);
+  });
+  for (const m of customGreenMasters) {
+    const namaUp = normalizeText(m.nama);
+    const c = compactText(namaUp);
+    usedInventarisCompact.add(c);
+    buildRows.push({
+      no: runningNo++,
+      kode: m.kode || `EXP-INV-${runningNo}`,
+      nama: namaUp,
+      kelompok: "INVENTARIS",
+      nominal: 0,
+      jumlahTrx: 0
+    });
+  }
+  const activeOrangeMasters = masterItems.length > 0 ? masterItems.filter((m) => {
+    const namaUp = normalizeText(m.nama);
+    if (namaUp === "PEMBAYARAN_SUPPLIER_SJ") return false;
+    return resolveKelompokItemPengeluaran(namaUp, m.kelompok) === "BIASA";
+  }) : DAFTAR_24_ITEM_PENGELUARAN.filter((d) => d.kelompok === "BIASA").map((d) => ({
+    id: d.kode,
+    kode: d.kode,
+    nama: d.nama,
+    kelompok: "BIASA"
+  }));
+  const seenOrange = /* @__PURE__ */ new Set();
+  for (const m of activeOrangeMasters) {
+    const namaUp = normalizeText(m.nama);
+    const c = compactText(namaUp);
+    if (!c || seenOrange.has(c)) continue;
+    seenOrange.add(c);
+    buildRows.push({
+      no: runningNo++,
+      kode: m.kode || `EXP-BIA-${runningNo}`,
+      nama: namaUp,
+      kelompok: "BIASA",
+      nominal: 0,
+      jumlahTrx: 0
+    });
+  }
+  for (const ex of db.pengeluaran || []) {
+    if (!matchesPeriod(ex.tanggal)) continue;
+    const katNorm = normalizeText(ex.kategori || "LAIN-LAIN");
+    if (katNorm === "PEMBAYARAN_SUPPLIER_SJ") continue;
+    const katCompact = compactText(katNorm);
+    const nom = Math.round(Number(ex.nominal) || 0);
+    let matchedRow = ex.idInventaris ? buildRows.find((r) => r.linkedInventarisId && r.linkedInventarisId === ex.idInventaris) : void 0;
+    if (!matchedRow && katCompact) {
+      matchedRow = buildRows.find((r) => {
+        if (compactText(r.nama) === katCompact) return true;
+        if (r.nomorPlat && compactText(r.nomorPlat) === katCompact) return true;
+        if (r.namaUnitRaw && compactText(r.namaUnitRaw) === katCompact) return true;
+        return false;
+      });
+    }
+    if (matchedRow) {
+      matchedRow.nominal += nom;
+      matchedRow.jumlahTrx += 1;
+    } else if (nom !== 0) {
+      const kel = resolveKelompokItemPengeluaran(katNorm, ex.kelompokPengeluaran);
+      buildRows.push({
+        no: runningNo++,
+        kode: `EXP-EXTRA-${runningNo}`,
+        nama: katNorm,
+        kelompok: kel,
+        nominal: nom,
+        jumlahTrx: 1
+      });
+    }
+  }
+  const pengeluaranList = buildRows.map(
+    ({ linkedInventarisId: _l, nomorPlat: _p, namaUnitRaw: _n, ...clean }, idx) => ({
+      ...clean,
+      no: idx + 1
+    })
+  );
+  const totalPengeluaranInventaris = pengeluaranList.filter((p) => p.kelompok === "INVENTARIS").reduce((s, p) => s + p.nominal, 0);
+  const totalPengeluaranBiasa = pengeluaranList.filter((p) => p.kelompok === "BIASA").reduce((s, p) => s + p.nominal, 0);
+  const totalPengeluaran = totalPengeluaranInventaris + totalPengeluaranBiasa;
+  const totalKeluarGabungan = totalGaji + totalPengeluaran;
+  const physicalAccounts = (db.rekening || []).filter(
+    (r) => r.status === "AKTIF" && !r.isVirtual && !r.isRekeningTitip && !r.isAnakPerusahaan && !String(r.kode || "").toUpperCase().startsWith("REK-")
+  );
+  const rekeningOrderPriority = (kode, nama) => {
+    const s = `${kode} ${nama}`.toUpperCase();
+    if (s.includes("KAS01") || s.includes("KASIR") || s.includes("KAS UTAMA")) return 1;
+    if (s.includes("GUDANG")) return 2;
+    if (s.includes("BERANGKAS") || s.includes("BRANKAS")) return 3;
+    if (s.includes("BNI DIRECT")) return 4;
+    if (s.includes("BNI")) return 5;
+    if (s.includes("BRI")) return 6;
+    if (s.includes("BCA")) return 7;
+    if (s.includes("MANDIRI")) return 8;
+    if (s.includes("SUMSEL")) return 9;
+    return 50;
+  };
+  const rekeningList = physicalAccounts.map((r) => ({
+    kode: r.kode,
+    nama: r.nama.toUpperCase(),
+    saldo: Math.round(Number(r.saldoSaatIni) || 0)
+  })).sort((a, b) => {
+    const pa = rekeningOrderPriority(a.kode, a.nama);
+    const pb = rekeningOrderPriority(b.kode, b.nama);
+    if (pa !== pb) return pa - pb;
+    return a.nama.localeCompare(b.nama);
+  });
+  const totalRekening = rekeningList.reduce((s, r) => s + r.saldo, 0);
+  const rekapMitra = TransactionService.getRekapMasterMitra();
+  const notaSuplayer = Math.round(Number(rekapMitra.totalRekeningMitraNotaSupplier) || 0);
+  const kasTotal = notaSuplayer + totalBarang + totalRekening;
+  const periodeLabel = `${(NAMA_BULAN_ID[requestedBulan - 1] || "").toUpperCase()} ${requestedTahun}`;
+  const tanggalBanner = requestedBulan === todayParsed.bulan && requestedTahun === todayParsed.tahun ? `TGL ${todayParsed.hari}-${todayParsed.bulan}-${todayParsed.tahun}` : `PERIODE ${String(requestedBulan).padStart(2, "0")}-${requestedTahun}`;
+  return {
+    updatedAt: wib.iso,
+    tanggalWIB: wib.tanggal,
+    jamWIB: wib.jam,
+    periodeMode,
+    selectedBulan: requestedBulan,
+    selectedTahun: requestedTahun,
+    periodeLabel,
+    tanggalBanner,
+    availableMonths,
+    divisiMatrix,
+    divisiTotal,
+    gajiList,
+    subTotGajiHarian,
+    subTotGajiBulanan,
+    totalGaji,
+    totalKeluarGabungan,
+    pengeluaranList,
+    totalPengeluaranInventaris,
+    totalPengeluaranBiasa,
+    totalPengeluaran,
+    kasSummary: {
+      notaSuplayer,
+      labaRugi: divisiTotal.labaRugi,
+      barang: totalBarang,
+      rekening: totalRekening,
+      total: kasTotal
+    },
+    rekeningList,
+    totalRekening,
+    barangPerDivisi: {
+      gwa: {
+        judul: "GUDANG WIJAYA AGRO (GWA)",
+        items: gwaItems,
+        totalNilai: gwaTotalNilai,
+        totalQty: gwaTotalQty
+      },
+      wt: {
+        judul: "WIJAYA TRANSPORT",
+        items: wtItems,
+        totalNilai: wtTotal,
+        totalQty: Math.round(wtItems.reduce((s, i) => s + i.qty, 0) * 100) / 100
+      },
+      cvWa: {
+        judul: "CV WA",
+        items: cvWaItems,
+        totalNilai: cvWaTotal,
+        totalQty: Math.round(cvWaItems.reduce((s, i) => s + i.qty, 0) * 100) / 100
+      },
+      okussa: {
+        judul: "OKUSSA",
+        items: okussaItems,
+        totalNilai: okussaTotal,
+        totalQty: Math.round(okussaItems.reduce((s, i) => s + i.qty, 0) * 100) / 100
+      },
+      wk: {
+        judul: "WIJAYA KARYA (WK)",
+        items: wkItems,
+        totalNilai: wkTotal,
+        totalQty: Math.round(wkItems.reduce((s, i) => s + i.qty, 0) * 100) / 100
+      },
+      totalBarang
+    }
+  };
+}
+
+// src/server/services/mutasiAuditService.ts
+function toDateKey(tgl) {
+  if (!tgl) return 0;
+  const parts = String(tgl).trim().split(/[-/]/);
+  if (parts.length !== 3) return 0;
+  if (parts[0].length === 4) {
+    return Number(parts[0]) * 1e4 + Number(parts[1]) * 100 + Number(parts[2]);
+  }
+  return Number(parts[2]) * 1e4 + Number(parts[1]) * 100 + Number(parts[0]);
+}
+function toTsMs(tanggal, jam, createdAt) {
+  return parseTransactionDateTimeMs({ tanggal, jam, createdAt });
+}
+function buildFinalAuditResponse(params) {
+  const wib = getWIBDateTime();
+  const sorted = [...params.rawRows].sort((a, b) => {
+    if (a.timestampMs !== b.timestampMs) return a.timestampMs - b.timestampMs;
+    return a.id.localeCompare(b.id);
+  });
+  let running = Math.round(Number(params.saldoAwal) || 0);
+  let totalMasuk = 0;
+  let totalKeluar = 0;
+  const katMap = /* @__PURE__ */ new Map();
+  const mutasi = sorted.map((r) => {
+    const masuk = Math.max(0, Math.round(Number(r.masuk) || 0));
+    const keluar = Math.max(0, Math.round(Number(r.keluar) || 0));
+    totalMasuk += masuk;
+    totalKeluar += keluar;
+    running = Math.round(running + masuk - keluar);
+    const existingKat = katMap.get(r.kategori) || {
+      kategori: r.kategori,
+      kategoriLabel: r.kategoriLabel,
+      jumlahTrx: 0,
+      totalMasuk: 0,
+      totalKeluar: 0,
+      net: 0
+    };
+    existingKat.jumlahTrx += 1;
+    existingKat.totalMasuk += masuk;
+    existingKat.totalKeluar += keluar;
+    existingKat.net = existingKat.totalMasuk - existingKat.totalKeluar;
+    katMap.set(r.kategori, existingKat);
+    return {
+      ...r,
+      masuk,
+      keluar,
+      saldoBerjalan: running
+    };
+  });
+  const ringkasanKategori = Array.from(katMap.values()).sort(
+    (a, b) => Math.max(b.totalKeluar, b.totalMasuk) - Math.max(a.totalKeluar, a.totalMasuk)
+  );
+  const saldoAwal = Math.round(Number(params.saldoAwal) || 0);
+  const saldoHitungMutasi = Math.round(saldoAwal + totalMasuk - totalKeluar);
+  const saldoTercatatSistem = Math.round(Number(params.saldoTercatatSistem) || 0);
+  const selisihAudit = Math.round(saldoTercatatSistem - saldoHitungMutasi);
+  return {
+    targetType: params.targetType,
+    kode: params.kode,
+    nama: params.nama,
+    nomorRekening: params.nomorRekening,
+    atasNama: params.atasNama,
+    kategoriRekening: params.kategoriRekening,
+    ledgerStartDate: params.ledgerStartDate,
+    updatedAt: wib.iso,
+    saldoAwal,
+    totalMasuk,
+    totalKeluar,
+    saldoHitungMutasi,
+    saldoTercatatSistem,
+    selisihAudit,
+    statusRekonsiliasi: selisihAudit === 0 ? "KLOP" : "ADA_SELISIH",
+    jumlahTransaksi: mutasi.length,
+    ringkasanKategori,
+    mutasi
+  };
+}
+function getMutasiRekeningKas(kodeInput) {
+  dbManager.synchronizeVirtualAccounts();
+  const db = dbManager.get();
+  const cleanKode = String(kodeInput || "").trim();
+  const rek = (db.rekening || []).find(
+    (r) => r.kode.toUpperCase() === cleanKode.toUpperCase()
+  );
+  if (!rek) {
+    throw new Error(`Rekening "${cleanKode}" tidak ditemukan.`);
+  }
+  if (rek.kategori === "OPERASIONAL_DIVISI" || rek.kode.toUpperCase().startsWith("REK-") && !rek.isAnakPerusahaan && rek.kategori !== "ANAK_PERUSAHAAN" && !rek.isRekeningTitip && rek.kategori !== "REKENING_TITIP") {
+    return getMutasiDivisi(rek.kode);
+  }
+  const targetKode = rek.kode;
+  const targetUp = targetKode.toUpperCase();
+  const isKas01 = targetUp === "KAS01";
+  const cutoff = rek.ledgerStartDate ? toDateKey(rek.ledgerStartDate) : 0;
+  const inRange = (tgl) => !cutoff || toDateKey(tgl) >= cutoff;
+  const rekNameMap = new Map(
+    (db.rekening || []).map((r) => [r.kode.toUpperCase(), `${r.nama} (${r.kode})`])
+  );
+  const fmtRek = (k) => k ? rekNameMap.get(k.toUpperCase()) || k : "-";
+  const rawRows = [];
+  const bayarBonIdSet = new Set((db.bayarBon || []).map((b) => b.idTransaksi));
+  for (const p of db.penjualan || []) {
+    if (!inRange(p.tanggal)) continue;
+    const isNotaSilangLunasKasPt = Boolean(
+      p.isNotaSilang && p.modeNotaSilang === "BAYAR_LUNAS_KAS_PT" && (p.metode === "TUNAI" || p.metode === "TRANSFER")
+    );
+    if (p.metode === "SINKRON" || p.metode === "INTERNAL_PT" || p.metode === "PEMAKAIAN_PENGELUARAN" || p.isNotaSilang && !isNotaSilangLunasKasPt) {
+      continue;
+    }
+    if (p.metode === "KASBON") {
+      const dpNom = Math.round(Number(p.dpNominal) || 0);
+      const alreadyInBayarBon = Boolean(p.idBayarBonDp && bayarBonIdSet.has(p.idBayarBonDp));
+      if (dpNom > 0 && !alreadyInBayarBon) {
+        const dpRek = String(p.dpRekeningTujuan || (p.dpMetode === "TUNAI" ? "KAS01" : "")).toUpperCase();
+        if (dpRek === targetUp) {
+          const ringkas = (p.items || []).map((i) => `${i.namaProduk} (${i.qty})`).slice(0, 3).join(", ");
+          rawRows.push({
+            id: `PJ-DP-${p.noPenjualan}`,
+            refId: p.noPenjualan,
+            tanggal: p.tanggal,
+            jam: p.jam || "00:00:00",
+            timestampMs: toTsMs(p.tanggal, p.jam, p.createdAt),
+            kategori: "PENJUALAN_DP",
+            kategoriLabel: "DP Penjualan Kasbon",
+            uraian: `DP Kasbon ${p.noPenjualan}${ringkas ? ` \xB7 ${ringkas}` : ""}`,
+            pihakTerkait: p.namaMitra || "Umum",
+            divisi: p.divisi || "Wijaya Karya",
+            rekeningTerkait: targetKode,
+            metode: p.dpMetode || "TUNAI",
+            masuk: dpNom,
+            keluar: 0
+          });
+        }
+      }
+      continue;
+    }
+    const rekTujuan = String(p.rekeningTujuan || (p.metode === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekTujuan === targetUp || isKas01 && !p.rekeningTujuan && p.metode === "TUNAI") {
+      const nom = Math.round(Number(p.totalNominal) || 0);
+      if (nom > 0) {
+        const ringkas = (p.items || []).map((i) => `${i.namaProduk} (${i.qty})`).slice(0, 3).join(", ");
+        rawRows.push({
+          id: isNotaSilangLunasKasPt ? `NSL-KAS-${p.noPenjualan}` : `PJ-${p.noPenjualan}`,
+          refId: p.noPenjualan,
+          tanggal: p.tanggal,
+          jam: p.jam || "00:00:00",
+          timestampMs: toTsMs(p.tanggal, p.jam, p.createdAt),
+          kategori: isNotaSilangLunasKasPt ? "NOTA_SILANG_LUNAS_MASUK" : "PENJUALAN_TOKO",
+          kategoriLabel: isNotaSilangLunasKasPt ? `Titipan Lunas ${p.namaAnakPerusahaan || "DP Parabot"} (Hutang PT)` : "Penjualan Barang Toko",
+          uraian: isNotaSilangLunasKasPt ? `Terima lunas (${p.metode}) belanja ${p.namaAnakPerusahaan || "DP Parabot"} a.n. ${p.namaMitra || "Customer Umum"} \u2192 Hutang PT ke ${p.namaAnakPerusahaan || "DP Parabot"}${ringkas ? `: ${ringkas}` : ""}` : `Penjualan ${p.metode}${ringkas ? `: ${ringkas}` : ""}`,
+          pihakTerkait: isNotaSilangLunasKasPt ? `${p.namaMitra || "Customer Umum"} \u2192 ${p.namaAnakPerusahaan || "DP Parabot"}` : p.namaMitra || "Umum",
+          divisi: p.divisi || (isNotaSilangLunasKasPt ? "PT Wijaya Agro Perkasa" : "Wijaya Karya"),
+          rekeningTerkait: targetKode,
+          metode: p.metode,
+          masuk: nom,
+          keluar: 0
+        });
+      }
+    }
+  }
+  for (const j of db.penjualanHasilBumi || []) {
+    if (!inRange(j.tanggal)) continue;
+    if (j.metodePembayaran === "PIUTANG" || j.metodePembayaran === "BELUM_PUTUS_HARGA" || j.metodePembayaran === "SINKRON") {
+      continue;
+    }
+    const rekTujuan = String(j.rekeningTujuan || (j.metodePembayaran === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekTujuan === targetUp || isKas01 && !j.rekeningTujuan && j.metodePembayaran === "TUNAI") {
+      const nom = Math.round(Number(j.totalNominal) || 0);
+      if (nom > 0) {
+        rawRows.push({
+          id: `JHB-${j.noPenjualan}`,
+          refId: j.noPenjualan,
+          tanggal: j.tanggal,
+          jam: j.jam || "00:00:00",
+          timestampMs: toTsMs(j.tanggal, j.jam, j.createdAt),
+          kategori: "PENJUALAN_HB",
+          kategoriLabel: "Penjualan Hasil Bumi",
+          uraian: `Jual ${j.komoditasNama} (${Number(j.beratBersih || 0).toLocaleString("id-ID")} Kg)${j.keterangan ? ` \xB7 ${j.keterangan}` : ""}`,
+          pihakTerkait: j.namaMitra || "-",
+          divisi: j.divisi || "Gudang Wijaya Agro",
+          rekeningTerkait: targetKode,
+          metode: j.metodePembayaran,
+          masuk: nom,
+          keluar: 0
+        });
+      }
+    }
+  }
+  for (const um of db.uangMasuk || []) {
+    if (!inRange(um.tanggal)) continue;
+    if (um.metode === "SINKRON" || String(um.rekeningTujuan || "").toUpperCase() === "SINKRON") continue;
+    const rekTujuan = String(um.rekeningTujuan || (um.metode === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekTujuan === targetUp || isKas01 && !um.rekeningTujuan && um.metode === "TUNAI") {
+      const nom = Math.round(Number(um.nominal) || 0);
+      if (nom > 0) {
+        const isSjBuyer = um.kategori === "SETTLEMENT_BUYER_SJ";
+        rawRows.push({
+          id: `UM-${um.idTransaksi}`,
+          refId: um.idTransaksi,
+          tanggal: um.tanggal,
+          jam: um.jam || "00:00:00",
+          timestampMs: toTsMs(um.tanggal, um.jam, um.createdAt),
+          kategori: isSjBuyer ? "UANG_MASUK_SJ" : "UANG_MASUK",
+          kategoriLabel: isSjBuyer ? "Uang Masuk Buyer (Surat Jalan)" : `Uang Masuk (${um.kategori || "Umum"})`,
+          uraian: um.keterangan || `Uang Masuk (${um.kategori})`,
+          pihakTerkait: um.namaPengirim || um.pengirim || "-",
+          divisi: um.divisi || "PT Wijaya Agro Perkasa",
+          rekeningTerkait: targetKode,
+          metode: um.metode,
+          masuk: nom,
+          keluar: 0
+        });
+      }
+    }
+  }
+  for (const b of db.bayarBon || []) {
+    if (!inRange(b.tanggal)) continue;
+    if (b.metode === "SINKRON" || b.metode === "KOMPENSASI_TITIP" || b.metode === "POTONG_GAJI" || b.isKompensasiTitipan || b.isPotongGaji || b.isSuratJalanPotongBon) {
+      continue;
+    }
+    const rekTujuan = String(b.rekeningTujuan || (b.metode === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekTujuan === targetUp || isKas01 && !b.rekeningTujuan && b.metode === "TUNAI") {
+      const nom = Math.round(Number(b.nominalBayar) || 0);
+      if (nom > 0) {
+        rawRows.push({
+          id: `BYB-${b.idTransaksi}`,
+          refId: b.idTransaksi,
+          tanggal: b.tanggal,
+          jam: b.jam || "00:00:00",
+          timestampMs: toTsMs(b.tanggal, b.jam, b.createdAt),
+          kategori: "BAYAR_BON",
+          kategoriLabel: "Pelunasan Piutang / Bayar Bon",
+          uraian: b.keterangan || `Pelunasan Kasbon / Piutang dari ${b.namaMitra}`,
+          pihakTerkait: b.namaMitra || "-",
+          divisi: "PT Wijaya Agro Perkasa",
+          rekeningTerkait: targetKode,
+          metode: b.metode,
+          masuk: nom,
+          keluar: 0
+        });
+      }
+    }
+  }
+  for (const b of db.pembelianHasilBumi || []) {
+    if (!inRange(b.tanggal)) continue;
+    const isPinjamanDana = b.komoditasKode === "PINJAMAN_DANA" || Boolean(b.komoditasNama?.includes("Pinjaman Uang"));
+    if (isPinjamanDana) {
+      if (String(b.rekeningSumber || "").toUpperCase() === targetUp) {
+        const nom = Math.round(Number(b.totalNominal) || 0);
+        if (nom > 0) {
+          rawRows.push({
+            id: `PINJ-${b.noPembelian}`,
+            refId: b.noPembelian,
+            tanggal: b.tanggal,
+            jam: b.jam || "00:00:00",
+            timestampMs: toTsMs(b.tanggal, b.jam, b.createdAt),
+            kategori: "PINJAMAN_DANA_MITRA",
+            kategoriLabel: "Pinjaman / Titip Dana Mitra (Masuk)",
+            uraian: b.keterangan || `Pinjaman / Titip Dana dari ${b.namaMitra}`,
+            pihakTerkait: b.namaMitra || "-",
+            divisi: b.divisi || "PT Wijaya Agro Perkasa",
+            rekeningTerkait: targetKode,
+            metode: b.metodePembayaran,
+            masuk: nom,
+            keluar: 0
+          });
+        }
+      }
+      continue;
+    }
+    if (b.metodePembayaran === "TITIP" || b.metodePembayaran === "SINKRON" || b.isNotaSilang || b.komoditasKode === "NOTA_SILANG") {
+      continue;
+    }
+    const rekSumber = String(b.rekeningSumber || (b.metodePembayaran === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekSumber === targetUp || isKas01 && !b.rekeningSumber && b.metodePembayaran === "TUNAI") {
+      const nom = Math.round(Number(b.totalNominal) || 0);
+      if (nom > 0) {
+        rawRows.push({
+          id: `BHB-${b.noPembelian}`,
+          refId: b.noPembelian,
+          tanggal: b.tanggal,
+          jam: b.jam || "00:00:00",
+          timestampMs: toTsMs(b.tanggal, b.jam, b.createdAt),
+          kategori: "PEMBELIAN_HB",
+          kategoriLabel: "Pembelian Hasil Bumi",
+          uraian: `Beli ${b.komoditasNama} (${Number(b.beratBersih || 0).toLocaleString("id-ID")} Kg)${b.keterangan ? ` \xB7 ${b.keterangan}` : ""}`,
+          pihakTerkait: b.namaMitra || "-",
+          divisi: b.divisi || "Gudang Wijaya Agro",
+          rekeningTerkait: targetKode,
+          metode: b.metodePembayaran,
+          masuk: 0,
+          keluar: nom
+        });
+      }
+    }
+  }
+  for (const pb of db.pembelianBarang || []) {
+    if (!inRange(pb.tanggal)) continue;
+    if (pb.metodePembayaran === "HUTANG" || pb.metodePembayaran === "SINKRON") continue;
+    const rekSumber = String(pb.rekeningSumber || (pb.metodePembayaran === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekSumber === targetUp || isKas01 && !pb.rekeningSumber && pb.metodePembayaran === "TUNAI") {
+      const nom = Math.round(Number(pb.totalNominal) || 0);
+      if (nom > 0) {
+        const ringkas = (pb.items || []).map((i) => `${i.namaProduk} (${i.qty})`).slice(0, 3).join(", ");
+        rawRows.push({
+          id: `PB-${pb.noPembelian}`,
+          refId: pb.noPembelian,
+          tanggal: pb.tanggal,
+          jam: pb.jam || "00:00:00",
+          timestampMs: toTsMs(pb.tanggal, pb.jam, pb.createdAt),
+          kategori: "PEMBELIAN_BARANG",
+          kategoriLabel: "Pembelian / Kulakan Barang",
+          uraian: `Kulakan${ringkas ? `: ${ringkas}` : ""}${pb.keterangan ? ` \xB7 ${pb.keterangan}` : ""}`,
+          pihakTerkait: pb.namaMitra || "-",
+          divisi: pb.divisi || "Wijaya Karya",
+          rekeningTerkait: targetKode,
+          metode: pb.metodePembayaran,
+          masuk: 0,
+          keluar: nom
+        });
+      }
+    }
+  }
+  for (const ex of db.pengeluaran || []) {
+    if (!inRange(ex.tanggal)) continue;
+    if (ex.isNonKas || String(ex.rekeningSumber || "").toUpperCase() === "SINKRON" || String(ex.rekeningSumber || "").toUpperCase() === "STOK_INTERNAL") {
+      continue;
+    }
+    const rekSumber = String(ex.rekeningSumber || "KAS01").toUpperCase();
+    if (rekSumber === targetUp) {
+      const nom = Math.round(Number(ex.nominal) || 0);
+      if (nom !== 0) {
+        const isBayarSj = String(ex.kategori || "").toUpperCase() === "PEMBAYARAN_SUPPLIER_SJ";
+        rawRows.push({
+          id: `EXP-${ex.idTransaksi}`,
+          refId: ex.idTransaksi,
+          tanggal: ex.tanggal,
+          jam: ex.jam || "00:00:00",
+          timestampMs: toTsMs(ex.tanggal, ex.jam, ex.createdAt),
+          kategori: isBayarSj ? "BAYAR_SUPPLIER_SJ" : "PENGELUARAN",
+          kategoriLabel: isBayarSj ? "Pembayaran Supplier (Surat Jalan)" : "Pengeluaran Operasional",
+          uraian: `[${ex.kategori}] ${ex.keterangan || "-"}`,
+          pihakTerkait: ex.penerima || ex.kategori || "-",
+          divisi: ex.divisi || "PT Wijaya Agro Perkasa",
+          rekeningTerkait: targetKode,
+          metode: targetUp === "KAS01" ? "TUNAI" : "TRANSFER",
+          masuk: nom < 0 ? Math.abs(nom) : 0,
+          keluar: nom > 0 ? nom : 0
+        });
+      }
+    }
+  }
+  for (const k of db.kasbonUang || []) {
+    if (!inRange(k.tanggal)) continue;
+    if (k.isNotaLalu || String(k.rekeningSumber || "").toUpperCase() === "BON01" || String(k.rekeningSumber || "").toUpperCase() === "SINKRON" || k.metode === "SINKRON") {
+      continue;
+    }
+    const rekSumber = String(k.rekeningSumber || (k.metode === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekSumber === targetUp || isKas01 && !k.rekeningSumber && k.metode === "TUNAI") {
+      const nom = Math.round(Number(k.nominal) || 0);
+      if (nom > 0) {
+        rawRows.push({
+          id: `KBU-${k.idTransaksi}`,
+          refId: k.idTransaksi,
+          tanggal: k.tanggal,
+          jam: k.jam || "00:00:00",
+          timestampMs: toTsMs(k.tanggal, k.jam, k.createdAt),
+          kategori: "KASBON_UANG",
+          kategoriLabel: "Kasbon Uang Pinjaman",
+          uraian: k.keterangan || `Kasbon Uang kepada ${k.namaMitra}`,
+          pihakTerkait: k.namaMitra || "-",
+          divisi: "PT Wijaya Agro Perkasa",
+          rekeningTerkait: targetKode,
+          metode: k.metode,
+          masuk: 0,
+          keluar: nom
+        });
+      }
+    }
+  }
+  for (const pt of db.pencairanTitipan || []) {
+    if (!inRange(pt.tanggal)) continue;
+    if (pt.metodePembayaran === "SINKRON" || pt.metodePembayaran === "KOMPENSASI_BON" || pt.isKompensasiBon) {
+      continue;
+    }
+    const rekSumber = String(pt.rekeningSumber || (pt.metodePembayaran === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekSumber === targetUp || isKas01 && !pt.rekeningSumber && pt.metodePembayaran === "TUNAI") {
+      const nom = Math.round(Number(pt.nominalPencairan) || 0);
+      if (nom > 0) {
+        rawRows.push({
+          id: `PT-${pt.idPencairan}`,
+          refId: pt.idPencairan,
+          tanggal: pt.tanggal,
+          jam: pt.jam || "00:00:00",
+          timestampMs: toTsMs(pt.tanggal, pt.jam, pt.createdAt),
+          kategori: "PENCAIRAN_TITIPAN",
+          kategoriLabel: "Pencairan Titipan / Bayar Hutang Mitra",
+          uraian: pt.keterangan || `Pencairan Titipan Hasil Bumi \u2014 ${pt.namaMitra}`,
+          pihakTerkait: pt.namaMitra || "-",
+          divisi: "Gudang Wijaya Agro",
+          rekeningTerkait: targetKode,
+          metode: pt.metodePembayaran,
+          masuk: 0,
+          keluar: nom
+        });
+      }
+    }
+  }
+  for (const g of db.penggajian || []) {
+    if (!inRange(g.tanggal)) continue;
+    if (g.metodePembayaran === "SINKRON") continue;
+    if (g.metodePembayaran === "SPLIT") {
+      const rekTunai = String(g.rekeningSumberTunai || "KAS01").toUpperCase();
+      const rekTrf = String(g.rekeningSumberTransfer || "").toUpperCase();
+      if (rekTunai === targetUp && (Number(g.nominalTunai) || 0) > 0) {
+        rawRows.push({
+          id: `GJ-TUNAI-${g.id}`,
+          refId: g.slipNomor || g.id,
+          tanggal: g.tanggal,
+          jam: g.jam || "00:00:00",
+          timestampMs: toTsMs(g.tanggal, g.jam),
+          kategori: "PENGGAJIAN",
+          kategoriLabel: "Pembayaran Gaji Karyawan",
+          uraian: `Gaji (Bagian Tunai) ${g.namaKaryawan} \u2014 ${g.periodeBulan}`,
+          pihakTerkait: g.namaKaryawan,
+          divisi: g.divisi || "PT Wijaya Agro Perkasa",
+          rekeningTerkait: targetKode,
+          metode: "SPLIT (TUNAI)",
+          masuk: 0,
+          keluar: Math.round(Number(g.nominalTunai) || 0)
+        });
+      }
+      if (rekTrf === targetUp && (Number(g.nominalTransfer) || 0) > 0) {
+        rawRows.push({
+          id: `GJ-TRF-${g.id}`,
+          refId: g.slipNomor || g.id,
+          tanggal: g.tanggal,
+          jam: g.jam || "00:00:00",
+          timestampMs: toTsMs(g.tanggal, g.jam),
+          kategori: "PENGGAJIAN",
+          kategoriLabel: "Pembayaran Gaji Karyawan",
+          uraian: `Gaji (Bagian Transfer) ${g.namaKaryawan} \u2014 ${g.periodeBulan}`,
+          pihakTerkait: g.namaKaryawan,
+          divisi: g.divisi || "PT Wijaya Agro Perkasa",
+          rekeningTerkait: targetKode,
+          metode: "SPLIT (TRANSFER)",
+          masuk: 0,
+          keluar: Math.round(Number(g.nominalTransfer) || 0)
+        });
+      }
+      continue;
+    }
+    const rekSumber = String(g.rekeningSumber || (g.metodePembayaran === "TUNAI" ? "KAS01" : "")).toUpperCase();
+    if (rekSumber === targetUp || isKas01 && !g.rekeningSumber && g.metodePembayaran === "TUNAI") {
+      const nom = Math.round(Number(g.gajiBersihDibayar) || 0);
+      if (nom > 0) {
+        rawRows.push({
+          id: `GJ-${g.id}`,
+          refId: g.slipNomor || g.id,
+          tanggal: g.tanggal,
+          jam: g.jam || "00:00:00",
+          timestampMs: toTsMs(g.tanggal, g.jam),
+          kategori: "PENGGAJIAN",
+          kategoriLabel: "Pembayaran Gaji Karyawan",
+          uraian: g.keterangan || `Gaji ${g.namaKaryawan} (${g.periodeBulan})`,
+          pihakTerkait: g.namaKaryawan,
+          divisi: g.divisi || "PT Wijaya Agro Perkasa",
+          rekeningTerkait: targetKode,
+          metode: g.metodePembayaran,
+          masuk: 0,
+          keluar: nom
+        });
+      }
+    }
+  }
+  for (const t of db.transferRekening || []) {
+    if (!inRange(t.tanggal)) continue;
+    if (t.status && t.status !== "BERHASIL") continue;
+    const nom = Math.round(Number(t.nominal) || 0);
+    if (nom <= 0) continue;
+    if (String(t.rekeningTujuan || "").toUpperCase() === targetUp) {
+      rawRows.push({
+        id: `TRF-IN-${t.noTransfer}`,
+        refId: t.noTransfer,
+        tanggal: t.tanggal,
+        jam: t.jam || "00:00:00",
+        timestampMs: toTsMs(t.tanggal, t.jam, t.createdAt),
+        kategori: "TRANSFER_MASUK",
+        kategoriLabel: "Transfer Masuk (Pindah Buku)",
+        uraian: `Dari ${fmtRek(t.rekeningSumber)}${t.keterangan ? ` \xB7 ${t.keterangan}` : ""}`,
+        pihakTerkait: fmtRek(t.rekeningSumber),
+        divisi: "Internal PT",
+        rekeningTerkait: t.rekeningSumber,
+        metode: "TRANSFER",
+        masuk: nom,
+        keluar: 0
+      });
+    }
+    if (String(t.rekeningSumber || "").toUpperCase() === targetUp) {
+      rawRows.push({
+        id: `TRF-OUT-${t.noTransfer}`,
+        refId: t.noTransfer,
+        tanggal: t.tanggal,
+        jam: t.jam || "00:00:00",
+        timestampMs: toTsMs(t.tanggal, t.jam, t.createdAt),
+        kategori: "TRANSFER_KELUAR",
+        kategoriLabel: "Transfer Keluar (Pindah Buku)",
+        uraian: `Ke ${fmtRek(t.rekeningTujuan)}${t.keterangan ? ` \xB7 ${t.keterangan}` : ""}`,
+        pihakTerkait: fmtRek(t.rekeningTujuan),
+        divisi: "Internal PT",
+        rekeningTerkait: t.rekeningTujuan,
+        metode: "TRANSFER",
+        masuk: 0,
+        keluar: nom
+      });
+    }
+  }
+  for (const br of db.brilink || []) {
+    if (!inRange(br.tanggal)) continue;
+    const nomAdmin = Math.round(Number(br.nominalAdmin) || 0);
+    const nomPokok = Math.round(Number(br.nominalPokok) || 0);
+    const rekAdm = String(br.rekeningAdmin || "KAS01").toUpperCase();
+    const rekKas = String(br.rekeningKasTunai || "KAS01").toUpperCase();
+    const rekBank = String(br.rekeningBank || "").toUpperCase();
+    if (br.jenisBrilink === "TARIK_TUNAI") {
+      if (nomAdmin > 0 && rekAdm === targetUp) {
+        rawRows.push({
+          id: `BRI-ADM-${br.idTransaksi}`,
+          refId: br.idTransaksi,
+          tanggal: br.tanggal,
+          jam: br.jam || "00:00:00",
+          timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+          kategori: "BRILINK",
+          kategoriLabel: "BRILink (Admin / Pokok)",
+          uraian: `BRILink Adm Tarik Tunai: ${br.keterangan || br.namaPelanggan}`,
+          pihakTerkait: br.namaPelanggan || "Nasabah BRILink",
+          divisi: br.divisi || "BRILink",
+          rekeningTerkait: targetKode,
+          metode: "BRILINK",
+          masuk: nomAdmin,
+          keluar: 0
+        });
+      }
+      if (nomPokok > 0 && rekBank && rekBank === targetUp) {
+        rawRows.push({
+          id: `BRI-POK-IN-${br.idTransaksi}`,
+          refId: br.idTransaksi,
+          tanggal: br.tanggal,
+          jam: br.jam || "00:00:00",
+          timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+          kategori: "BRILINK",
+          kategoriLabel: "BRILink (Admin / Pokok)",
+          uraian: `BRILink Pokok Masuk (Tarik Tunai Nasabah): ${br.keterangan || br.namaPelanggan}`,
+          pihakTerkait: br.namaPelanggan || "Nasabah BRILink",
+          divisi: br.divisi || "BRILink",
+          rekeningTerkait: targetKode,
+          metode: "BRILINK",
+          masuk: nomPokok,
+          keluar: 0
+        });
+      }
+      if (nomPokok > 0 && rekKas === targetUp) {
+        rawRows.push({
+          id: `BRI-POK-OUT-${br.idTransaksi}`,
+          refId: br.idTransaksi,
+          tanggal: br.tanggal,
+          jam: br.jam || "00:00:00",
+          timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+          kategori: "BRILINK",
+          kategoriLabel: "BRILink (Admin / Pokok)",
+          uraian: `BRILink Kas Keluar (Tarik Tunai Nasabah): ${br.keterangan || br.namaPelanggan}`,
+          pihakTerkait: br.namaPelanggan || "Nasabah BRILink",
+          divisi: br.divisi || "BRILink",
+          rekeningTerkait: targetKode,
+          metode: "BRILINK",
+          masuk: 0,
+          keluar: nomPokok
+        });
+      }
+    } else {
+      if (nomAdmin > 0 && rekAdm === targetUp) {
+        rawRows.push({
+          id: `BRI-ADM-${br.idTransaksi}`,
+          refId: br.idTransaksi,
+          tanggal: br.tanggal,
+          jam: br.jam || "00:00:00",
+          timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+          kategori: "BRILINK",
+          kategoriLabel: "BRILink (Admin / Pokok)",
+          uraian: `BRILink Adm Tukar Cash PT: ${br.keterangan || br.namaPelanggan}`,
+          pihakTerkait: br.namaPelanggan || "Agen BRILink",
+          divisi: br.divisi || "BRILink",
+          rekeningTerkait: targetKode,
+          metode: "BRILINK",
+          masuk: 0,
+          keluar: nomAdmin
+        });
+      }
+      if (nomPokok > 0 && rekBank && rekBank === targetUp) {
+        rawRows.push({
+          id: `BRI-POK-OUT-${br.idTransaksi}`,
+          refId: br.idTransaksi,
+          tanggal: br.tanggal,
+          jam: br.jam || "00:00:00",
+          timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+          kategori: "BRILINK",
+          kategoriLabel: "BRILink (Admin / Pokok)",
+          uraian: `BRILink Transfer Pokok (Tukar Cash PT): ${br.keterangan || br.namaPelanggan}`,
+          pihakTerkait: br.namaPelanggan || "Agen BRILink",
+          divisi: br.divisi || "BRILink",
+          rekeningTerkait: targetKode,
+          metode: "BRILINK",
+          masuk: 0,
+          keluar: nomPokok
+        });
+      }
+      if (nomPokok > 0 && rekKas === targetUp) {
+        rawRows.push({
+          id: `BRI-POK-IN-${br.idTransaksi}`,
+          refId: br.idTransaksi,
+          tanggal: br.tanggal,
+          jam: br.jam || "00:00:00",
+          timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+          kategori: "BRILINK",
+          kategoriLabel: "BRILink (Admin / Pokok)",
+          uraian: `BRILink Cash Masuk (Tukar Cash PT): ${br.keterangan || br.namaPelanggan}`,
+          pihakTerkait: br.namaPelanggan || "Agen BRILink",
+          divisi: br.divisi || "BRILink",
+          rekeningTerkait: targetKode,
+          metode: "BRILINK",
+          masuk: nomPokok,
+          keluar: 0
+        });
+      }
+    }
+  }
+  if (isKas01) {
+    for (const op of db.cashOpnameLogs || []) {
+      if (!inRange(op.tanggal)) continue;
+      if (op.sesuaikanSaldoSistem && op.selisih) {
+        const diff = Math.round(Number(op.selisih) || 0);
+        if (diff !== 0) {
+          rawRows.push({
+            id: `OPN-${op.id}`,
+            refId: op.id,
+            tanggal: op.tanggal,
+            jam: op.jam || "00:00:00",
+            timestampMs: toTsMs(op.tanggal, op.jam, op.createdAt),
+            kategori: "CASH_OPNAME",
+            kategoriLabel: "Penyesuaian Cash Opname",
+            uraian: op.catatan || "Penyesuaian selisih fisik laci kasir",
+            pihakTerkait: op.petugasKasir || "Kasir",
+            divisi: "Internal PT",
+            rekeningTerkait: "KAS01",
+            metode: "OPNAME",
+            masuk: diff > 0 ? diff : 0,
+            keluar: diff < 0 ? Math.abs(diff) : 0
+          });
+        }
+      }
+    }
+  }
+  return buildFinalAuditResponse({
+    targetType: "REKENING_KAS",
+    kode: rek.kode,
+    nama: rek.nama,
+    nomorRekening: rek.nomorRekening,
+    atasNama: rek.atasNama,
+    kategoriRekening: rek.kategori || "PERUSAHAAN",
+    ledgerStartDate: rek.ledgerStartDate,
+    saldoAwal: rek.saldoAwal || 0,
+    saldoTercatatSistem: rek.saldoSaatIni || 0,
+    rawRows
+  });
+}
+function getMutasiDivisi(namaOrKodeInput) {
+  dbManager.synchronizeDivisiAccounts();
+  const db = dbManager.get();
+  const cleanKey = String(namaOrKodeInput || "").trim().toLowerCase();
+  const allDivisi = dbManager.getDivisiList().filter((d) => !isExcludedFromDivisi(d.nama) && !isExcludedFromDivisi(d.id));
+  const targetDiv = allDivisi.find(
+    (d) => d.nama.toLowerCase() === cleanKey || d.kodeRekening.toLowerCase() === cleanKey || d.id.toLowerCase() === cleanKey
+  );
+  if (!targetDiv) {
+    throw new Error(`Divisi "${namaOrKodeInput}" tidak ditemukan.`);
+  }
+  const norm = (s) => String(s || "").trim().toLowerCase();
+  const targetNorm = norm(targetDiv.nama);
+  const rekDiv = (db.rekening || []).find((r) => r.kode === targetDiv.kodeRekening);
+  const divisiByRekKode = new Map(allDivisi.map((d) => [d.kodeRekening.toUpperCase(), norm(d.nama)]));
+  const produkUpperMap = new Map((db.produk || []).map((p) => [String(p.kode || "").trim().toUpperCase(), p]));
+  const cleanDiv = (d) => d && !isExcludedFromDivisi(d) ? d : void 0;
+  const resolveStoreItemDivNorm = (kodeProduk, fallbackDivisi, metode) => {
+    if (isTanpaDivisi(fallbackDivisi)) return "__tanpa_divisi__";
+    if (metode === "INTERNAL_PT") return norm(cleanDiv(fallbackDivisi) || "PT Wijaya Agro Perkasa");
+    const cleanKode = String(kodeProduk || "").trim().toUpperCase();
+    if (cleanKode && cleanKode !== "REKAP-NOTA" && cleanKode !== "NOTA-SILANG") {
+      const prod = produkUpperMap.get(cleanKode);
+      if (String(prod?.kategori || "").trim().toUpperCase() === "OKUSSA") {
+        return norm("Okussa");
+      }
+      return norm("Wijaya Karya");
+    }
+    if (norm(cleanDiv(fallbackDivisi)) === "okussa") return norm("Okussa");
+    return norm("Wijaya Karya");
+  };
+  const resolveHasilBumiDivNorm = (divisi) => {
+    if (isTanpaDivisi(divisi)) return "__tanpa_divisi__";
+    return norm(cleanDiv(divisi) || "Gudang Wijaya Agro");
+  };
+  const resolveBebanDivNorm = (divisi, rekeningSumber) => {
+    if (isTanpaDivisi(divisi)) return "__tanpa_divisi__";
+    const validDiv = cleanDiv(divisi);
+    if (validDiv && String(validDiv).trim()) return norm(validDiv);
+    if (rekeningSumber) {
+      const mapped = divisiByRekKode.get(String(rekeningSumber).toUpperCase());
+      if (mapped) return mapped;
+    }
+    return norm("PT Wijaya Agro Perkasa");
+  };
+  const penjualanNotaSharesMap = /* @__PURE__ */ new Map();
+  for (const p of db.penjualan || []) {
+    if (p.isNotaSilang || p.metode === "PEMAKAIAN_PENGELUARAN") continue;
+    if (p.noPenjualan) {
+      const perDiv = /* @__PURE__ */ new Map();
+      if (Array.isArray(p.items) && p.items.length > 0) {
+        for (const it of p.items) {
+          const dn = resolveStoreItemDivNorm(it.kodeProduk, p.divisi, p.metode);
+          const sub = Number(it.subtotal) || (Number(it.qty) || 0) * (Number(it.harga) || 0);
+          perDiv.set(dn, (perDiv.get(dn) || 0) + sub);
+        }
+      } else {
+        const dn = resolveStoreItemDivNorm(void 0, p.divisi, p.metode);
+        perDiv.set(dn, Number(p.totalNominal) || 0);
+      }
+      const sumSub = Array.from(perDiv.values()).reduce((s, v) => s + v, 0) || 1;
+      penjualanNotaSharesMap.set(
+        p.noPenjualan,
+        Array.from(perDiv.entries()).map(([divNorm, val]) => ({ divNorm, ratio: val / sumSub }))
+      );
+    }
+  }
+  for (const j of db.penjualanHasilBumi || []) {
+    if (j.noPenjualan) {
+      penjualanNotaSharesMap.set(j.noPenjualan, [{ divNorm: resolveHasilBumiDivNorm(j.divisi), ratio: 1 }]);
+    }
+  }
+  const rawRows = [];
+  for (const p of db.penjualan || []) {
+    if (p.metode !== "TUNAI" && p.metode !== "TRANSFER") continue;
+    if (p.isNotaSilang) continue;
+    let matchingSub = 0;
+    let ringkas = "";
+    if (Array.isArray(p.items) && p.items.length > 0) {
+      const matched = p.items.filter((it) => resolveStoreItemDivNorm(it.kodeProduk, p.divisi, p.metode) === targetNorm);
+      if (matched.length === 0) continue;
+      matchingSub = matched.reduce((s, it) => s + (Number(it.subtotal) || (Number(it.qty) || 0) * (Number(it.harga) || 0)), 0);
+      ringkas = matched.map((it) => `${it.namaProduk} (${it.qty} ${it.satuan})`).slice(0, 3).join(", ");
+    } else if (resolveStoreItemDivNorm(void 0, p.divisi, p.metode) === targetNorm) {
+      matchingSub = Number(p.totalNominal) || 0;
+    }
+    if (matchingSub > 0) {
+      rawRows.push({
+        id: `DIV-PJ-${p.noPenjualan}`,
+        refId: p.noPenjualan,
+        tanggal: p.tanggal,
+        jam: p.jam || "00:00:00",
+        timestampMs: toTsMs(p.tanggal, p.jam, p.createdAt),
+        kategori: "PENJUALAN_TOKO",
+        kategoriLabel: "Penjualan Barang / Jasa",
+        uraian: `Penjualan ${p.metode}${ringkas ? `: ${ringkas}` : ""}`,
+        pihakTerkait: p.namaMitra || "Umum",
+        divisi: targetDiv.nama,
+        rekeningTerkait: p.rekeningTujuan || (p.metode === "TUNAI" ? "KAS01" : "-"),
+        metode: p.metode,
+        masuk: Math.round(matchingSub),
+        keluar: 0
+      });
+    }
+  }
+  for (const j of db.penjualanHasilBumi || []) {
+    if (resolveHasilBumiDivNorm(j.divisi) !== targetNorm) continue;
+    if (j.metodePembayaran !== "TUNAI" && j.metodePembayaran !== "TRANSFER") continue;
+    const nom = Math.round(Number(j.totalNominal) || 0);
+    if (nom > 0) {
+      rawRows.push({
+        id: `DIV-JHB-${j.noPenjualan}`,
+        refId: j.noPenjualan,
+        tanggal: j.tanggal,
+        jam: j.jam || "00:00:00",
+        timestampMs: toTsMs(j.tanggal, j.jam, j.createdAt),
+        kategori: "PENJUALAN_HB",
+        kategoriLabel: "Penjualan Hasil Bumi",
+        uraian: `Jual ${j.komoditasNama} (${Number(j.beratBersih || 0).toLocaleString("id-ID")} Kg)`,
+        pihakTerkait: j.namaMitra || "-",
+        divisi: targetDiv.nama,
+        rekeningTerkait: j.rekeningTujuan || "-",
+        metode: j.metodePembayaran,
+        masuk: nom,
+        keluar: 0
+      });
+    }
+  }
+  for (const b of db.bayarBon || []) {
+    if (b.metode !== "TUNAI" && b.metode !== "TRANSFER") continue;
+    if (b.isKompensasiTitipan || b.isPotongGaji) continue;
+    for (const alok of b.alokasi || []) {
+      if (alok.jenis === "KASBON_BARANG" && (alok.nominalDibayar || 0) > 0) {
+        const shares = penjualanNotaSharesMap.get(alok.refId) || [];
+        for (const sh of shares) {
+          if (sh.divNorm === targetNorm) {
+            const nomAlok = Math.round((Number(alok.nominalDibayar) || 0) * sh.ratio);
+            if (nomAlok > 0) {
+              rawRows.push({
+                id: `DIV-BYB-${b.idTransaksi}-${alok.refId}`,
+                refId: b.idTransaksi,
+                tanggal: b.tanggal,
+                jam: b.jam || "00:00:00",
+                timestampMs: toTsMs(b.tanggal, b.jam, b.createdAt),
+                kategori: "PELUNASAN_PIUTANG",
+                kategoriLabel: "Pelunasan Piutang Nota",
+                uraian: `Pelunasan Nota ${alok.refId}${b.keterangan ? ` (${b.keterangan})` : ""}`,
+                pihakTerkait: b.namaMitra || "-",
+                divisi: targetDiv.nama,
+                rekeningTerkait: b.rekeningTujuan || "-",
+                metode: b.metode,
+                masuk: nomAlok,
+                keluar: 0
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+  for (const um of db.uangMasuk || []) {
+    if (isTanpaDivisi(um.divisi)) continue;
+    if (norm(cleanDiv(um.divisi) || "PT Wijaya Agro Perkasa") !== targetNorm) continue;
+    if (isExcludedUangMasukFromDivisiCashflow(um)) continue;
+    const nom = Math.round(Number(um.nominal) || 0);
+    if (nom > 0) {
+      rawRows.push({
+        id: `DIV-UM-${um.idTransaksi}`,
+        refId: um.idTransaksi,
+        tanggal: um.tanggal,
+        jam: um.jam || "00:00:00",
+        timestampMs: toTsMs(um.tanggal, um.jam, um.createdAt),
+        kategori: "UANG_MASUK",
+        kategoriLabel: "Uang Masuk Divisi",
+        uraian: `[${um.kategori}] ${um.keterangan || "-"}`,
+        pihakTerkait: um.namaPengirim || um.pengirim || "-",
+        divisi: targetDiv.nama,
+        rekeningTerkait: um.rekeningTujuan || "-",
+        metode: um.metode,
+        masuk: nom,
+        keluar: 0
+      });
+    }
+  }
+  if (targetNorm === norm("PT Wijaya Agro Perkasa")) {
+    const sjPtEntries = computeSuratJalanKeuntunganPtEntries(db.suratJalan, db.uangMasuk);
+    for (const e of sjPtEntries) {
+      if (e.nominal > 0) {
+        rawRows.push({
+          id: `DIV-SJPT-${e.id}`,
+          refId: e.id,
+          tanggal: e.tanggal,
+          jam: e.jam || "00:00:00",
+          timestampMs: toTsMs(e.tanggal, e.jam, e.createdAt),
+          kategori: "KEUNTUNGAN_SJ",
+          kategoriLabel: "Komisi / Keuntungan Surat Jalan",
+          uraian: e.keterangan,
+          pihakTerkait: e.buyerKode ? `${e.namaMitra} (${e.buyerKode})` : e.namaMitra,
+          divisi: targetDiv.nama,
+          rekeningTerkait: e.rekeningFisik || "BNI01",
+          metode: "SURAT_JALAN",
+          masuk: Math.round(e.nominal),
+          keluar: 0
+        });
+      }
+    }
+  }
+  for (const br of db.brilink || []) {
+    if (isTanpaDivisi(br.divisi)) continue;
+    if (norm(cleanDiv(br.divisi) || "BRILink") !== targetNorm) continue;
+    const adm = Math.round(Number(br.nominalAdmin) || 0);
+    if (adm <= 0) continue;
+    if (br.jenisBrilink === "TARIK_TUNAI") {
+      rawRows.push({
+        id: `DIV-BRI-IN-${br.idTransaksi}`,
+        refId: br.idTransaksi,
+        tanggal: br.tanggal,
+        jam: br.jam || "00:00:00",
+        timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+        kategori: "BRILINK_ADMIN",
+        kategoriLabel: "Admin BRILink (Tarik Tunai)",
+        uraian: br.keterangan || `Adm Tarik Tunai \u2014 ${br.namaPelanggan}`,
+        pihakTerkait: br.namaPelanggan || "Nasabah",
+        divisi: targetDiv.nama,
+        rekeningTerkait: br.rekeningAdmin || "KAS01",
+        metode: "BRILINK",
+        masuk: adm,
+        keluar: 0
+      });
+    } else if (br.jenisBrilink === "TUKAR_CASH") {
+      rawRows.push({
+        id: `DIV-BRI-OUT-${br.idTransaksi}`,
+        refId: br.idTransaksi,
+        tanggal: br.tanggal,
+        jam: br.jam || "00:00:00",
+        timestampMs: toTsMs(br.tanggal, br.jam, br.createdAt),
+        kategori: "BRILINK_ADMIN",
+        kategoriLabel: "Admin BRILink (Tukar Cash)",
+        uraian: br.keterangan || `Adm Tukar Cash \u2014 ${br.namaPelanggan}`,
+        pihakTerkait: br.namaPelanggan || "Agen BRILink",
+        divisi: targetDiv.nama,
+        rekeningTerkait: br.rekeningAdmin || "KAS01",
+        metode: "BRILINK",
+        masuk: 0,
+        keluar: adm
+      });
+    }
+  }
+  for (const pb of db.pembelianBarang || []) {
+    if (pb.metodePembayaran !== "TUNAI" && pb.metodePembayaran !== "TRANSFER") continue;
+    let subNom = 0;
+    let ringkas = "";
+    if (Array.isArray(pb.items) && pb.items.length > 0) {
+      const matched = pb.items.filter((it) => resolveStoreItemDivNorm(it.kodeProduk, pb.divisi) === targetNorm);
+      if (matched.length === 0) continue;
+      subNom = matched.reduce((s, it) => s + (Number(it.subtotal) || (Number(it.qty) || 0) * (Number(it.hargaBeliSatuan) || 0)), 0);
+      ringkas = matched.map((it) => `${it.namaProduk} (${it.qty} ${it.satuan})`).slice(0, 3).join(", ");
+    } else if (resolveStoreItemDivNorm(void 0, pb.divisi) === targetNorm) {
+      subNom = Number(pb.totalNominal) || 0;
+    }
+    if (subNom > 0) {
+      rawRows.push({
+        id: `DIV-PB-${pb.noPembelian}`,
+        refId: pb.noPembelian,
+        tanggal: pb.tanggal,
+        jam: pb.jam || "00:00:00",
+        timestampMs: toTsMs(pb.tanggal, pb.jam, pb.createdAt),
+        kategori: "PEMBELIAN_BARANG",
+        kategoriLabel: "Pembelian Barang (Kas/Transfer)",
+        uraian: `Kulakan${ringkas ? `: ${ringkas}` : ""}`,
+        pihakTerkait: pb.namaMitra || "-",
+        divisi: targetDiv.nama,
+        rekeningTerkait: pb.rekeningSumber || "-",
+        metode: pb.metodePembayaran,
+        masuk: 0,
+        keluar: Math.round(subNom)
+      });
+    }
+  }
+  for (const phb of db.pembelianHasilBumi || []) {
+    if (resolveHasilBumiDivNorm(phb.divisi) !== targetNorm) continue;
+    if (phb.komoditasKode === "PINJAMAN_DANA" || phb.komoditasKode === "TITIP_DANA" || phb.komoditasKode === "NOTA_SILANG" || phb.isNotaSilang || phb.isBelumPutusHarga || String(phb.komoditasNama || "").toLowerCase().includes("pinjaman uang")) {
+      continue;
+    }
+    if ((phb.metodePembayaran === "TUNAI" || phb.metodePembayaran === "TRANSFER") && phb.rekeningSumber !== "TIT01" && phb.rekeningSumber !== "BON01") {
+      const nom = Math.round(Number(phb.totalNominal) || 0);
+      if (nom > 0) {
+        rawRows.push({
+          id: `DIV-BHB-${phb.noPembelian}`,
+          refId: phb.noPembelian,
+          tanggal: phb.tanggal,
+          jam: phb.jam || "00:00:00",
+          timestampMs: toTsMs(phb.tanggal, phb.jam, phb.createdAt),
+          kategori: "PEMBELIAN_HB",
+          kategoriLabel: "Pembelian Hasil Bumi (Kas/Transfer)",
+          uraian: `Beli ${phb.komoditasNama} (${Number(phb.beratBersih || 0).toLocaleString("id-ID")} Kg)`,
+          pihakTerkait: phb.namaMitra || "-",
+          divisi: targetDiv.nama,
+          rekeningTerkait: phb.rekeningSumber || "-",
+          metode: phb.metodePembayaran,
+          masuk: 0,
+          keluar: nom
+        });
+      }
+    }
+  }
+  for (const ex of db.pengeluaran || []) {
+    if (resolveBebanDivNorm(ex.divisi, ex.rekeningSumber) !== targetNorm) continue;
+    const nom = Math.round(Number(ex.nominal) || 0);
+    if (nom !== 0) {
+      rawRows.push({
+        id: `DIV-EXP-${ex.idTransaksi}`,
+        refId: ex.idTransaksi,
+        tanggal: ex.tanggal,
+        jam: ex.jam || "00:00:00",
+        timestampMs: toTsMs(ex.tanggal, ex.jam, ex.createdAt),
+        kategori: "PENGELUARAN",
+        kategoriLabel: "Beban & Pengeluaran Operasional",
+        uraian: `[${ex.kategori}] ${ex.keterangan || "-"}`,
+        pihakTerkait: ex.penerima || ex.kategori || "-",
+        divisi: targetDiv.nama,
+        rekeningTerkait: ex.rekeningSumber || "-",
+        metode: ex.rekeningSumber || "-",
+        masuk: nom < 0 ? Math.abs(nom) : 0,
+        keluar: nom > 0 ? nom : 0
+      });
+    }
+  }
+  for (const gj of db.penggajian || []) {
+    if (resolveBebanDivNorm(gj.divisi, gj.rekeningSumber) !== targetNorm) continue;
+    const nom = Math.round(Number(gj.gajiBersihDibayar) || 0);
+    if (nom > 0) {
+      rawRows.push({
+        id: `DIV-GJ-${gj.id}`,
+        refId: gj.slipNomor || gj.id,
+        tanggal: gj.tanggal,
+        jam: gj.jam || "00:00:00",
+        timestampMs: toTsMs(gj.tanggal, gj.jam),
+        kategori: "PENGGAJIAN",
+        kategoriLabel: "Gaji & Upah Karyawan",
+        uraian: `Gaji ${gj.namaKaryawan} (${gj.periodeBulan})`,
+        pihakTerkait: gj.namaKaryawan,
+        divisi: targetDiv.nama,
+        rekeningTerkait: gj.rekeningSumber || "-",
+        metode: gj.metodePembayaran,
+        masuk: 0,
+        keluar: nom
+      });
+    }
+  }
+  for (const t of db.transferRekening || []) {
+    if (t.status && t.status !== "BERHASIL") continue;
+    const nom = Math.round(Number(t.nominal) || 0);
+    if (nom <= 0) continue;
+    if (t.rekeningTujuan === targetDiv.kodeRekening) {
+      rawRows.push({
+        id: `DIV-DROP-IN-${t.noTransfer}`,
+        refId: t.noTransfer,
+        tanggal: t.tanggal,
+        jam: t.jam || "00:00:00",
+        timestampMs: toTsMs(t.tanggal, t.jam, t.createdAt),
+        kategori: "DROPPING_MASUK",
+        kategoriLabel: "Dropping Kas Masuk Divisi",
+        uraian: `Dropping dari ${t.rekeningSumber}${t.keterangan ? ` \xB7 ${t.keterangan}` : ""}`,
+        pihakTerkait: t.rekeningSumber,
+        divisi: targetDiv.nama,
+        rekeningTerkait: t.rekeningSumber,
+        metode: "DROPPING",
+        masuk: nom,
+        keluar: 0
+      });
+    }
+    if (t.rekeningSumber === targetDiv.kodeRekening) {
+      rawRows.push({
+        id: `DIV-DROP-OUT-${t.noTransfer}`,
+        refId: t.noTransfer,
+        tanggal: t.tanggal,
+        jam: t.jam || "00:00:00",
+        timestampMs: toTsMs(t.tanggal, t.jam, t.createdAt),
+        kategori: "DROPPING_KELUAR",
+        kategoriLabel: "Transfer Keluar Divisi",
+        uraian: `Transfer ke ${t.rekeningTujuan}${t.keterangan ? ` \xB7 ${t.keterangan}` : ""}`,
+        pihakTerkait: t.rekeningTujuan,
+        divisi: targetDiv.nama,
+        rekeningTerkait: t.rekeningTujuan,
+        metode: "TRANSFER",
+        masuk: 0,
+        keluar: nom
+      });
+    }
+  }
+  return buildFinalAuditResponse({
+    targetType: "DIVISI",
+    kode: targetDiv.kodeRekening,
+    nama: targetDiv.nama,
+    atasNama: targetDiv.penanggungJawab || `Divisi ${targetDiv.nama}`,
+    kategoriRekening: "OPERASIONAL_DIVISI",
+    saldoAwal: rekDiv?.saldoAwal || 0,
+    saldoTercatatSistem: rekDiv?.saldoSaatIni || 0,
+    rawRows
+  });
+}
+async function sinkronkanSaldoRekeningKeMutasi(kodeRekening) {
+  const auditBefore = getMutasiRekeningKas(kodeRekening);
+  if (auditBefore.targetType !== "REKENING_KAS") {
+    throw new Error("Sinkronisasi saldo langsung hanya berlaku untuk rekening kas/bank fisik.");
+  }
+  const wib = getWIBDateTime();
+  return await dbManager.executeTransaction((db) => {
+    const rek = (db.rekening || []).find(
+      (r) => r.kode.toUpperCase() === auditBefore.kode.toUpperCase()
+    );
+    if (!rek) throw new Error(`Rekening ${kodeRekening} tidak ditemukan.`);
+    const saldoSebelumnya = Math.round(Number(rek.saldoSaatIni) || 0);
+    const saldoSesudah = auditBefore.saldoHitungMutasi;
+    const selisihDiperbaiki = saldoSesudah - saldoSebelumnya;
+    rek.saldoSaatIni = saldoSesudah;
+    if (!Array.isArray(db.auditLogs)) db.auditLogs = [];
+    db.auditLogs.unshift({
+      id: `AUD-RECON-${Date.now()}`,
+      timestamp: wib.iso,
+      tanggal: wib.tanggal,
+      jam: wib.jam,
+      user: "Admin / Audit Rekening",
+      jenisTransaksi: "UPDATE",
+      idTransaksi: rek.kode,
+      detail: `Rekonsiliasi Mutasi Rekening ${rek.nama} (${rek.kode}): Saldo Sistem Rp ${saldoSebelumnya.toLocaleString("id-ID")} \u2192 Disinkronkan ke Hasil Mutasi Riil Rp ${saldoSesudah.toLocaleString("id-ID")} (Koreksi Selisih: ${selisihDiperbaiki >= 0 ? "+" : ""}Rp ${selisihDiperbaiki.toLocaleString("id-ID")})`,
+      nominal: Math.abs(selisihDiperbaiki),
+      rekeningTerkait: rek.kode
+    });
+    return {
+      kode: rek.kode,
+      nama: rek.nama,
+      saldoSebelumnya,
+      saldoSesudah,
+      selisihDiperbaiki
+    };
+  });
+}
 
 // src/utils/fullBackupSpreadsheet.ts
 import * as XLSX2 from "xlsx";
@@ -21135,14 +26220,15 @@ apiRouter.post("/rekening", async (req, res) => {
       keterangan,
       kategori,
       rekeningIndukPenyimpan,
-      idMitraTerkait
+      idMitraTerkait,
+      idKaryawanTerkait
     } = req.body;
     if (!kode || !nama || !atasNama) {
       return res.status(400).json({ success: false, message: "Kode, Nama, dan Atas Nama wajib diisi" });
     }
     const cleanKode = String(kode).toUpperCase().trim();
-    if (cleanKode === "BON01" || cleanKode === "TIT01") {
-      return res.status(400).json({ success: false, message: "Kode BON01 dan TIT01 adalah reserved kode sistem" });
+    if (cleanKode === "BON01" || cleanKode === "TIT01" || cleanKode === "SINKRON") {
+      return res.status(400).json({ success: false, message: "Kode BON01, TIT01, dan SINKRON adalah reserved kode sistem" });
     }
     const created = await dbManager.executeTransaction((db) => {
       if (db.rekening.some((r) => r.kode === cleanKode)) {
@@ -21150,8 +26236,47 @@ apiRouter.post("/rekening", async (req, res) => {
       }
       const parsedSaldo = parseNominalInput(saldoAwal);
       const saldo = parsedSaldo !== null ? parsedSaldo : 0;
-      const finalKategori = kategori === "ANAK_PERUSAHAAN" || kategori === "OPERASIONAL_DIVISI" || kategori === "PERUSAHAAN" ? kategori : "PERUSAHAAN";
+      const finalKategori = kategori === "REKENING_TITIP" || kategori === "ANAK_PERUSAHAAN" || kategori === "OPERASIONAL_DIVISI" || kategori === "PERUSAHAAN" ? kategori : "PERUSAHAAN";
       const isAnak = finalKategori === "ANAK_PERUSAHAAN";
+      const isTitip = finalKategori === "REKENING_TITIP";
+      let resolvedKryId;
+      let resolvedKryNama;
+      let resolvedMitraId = isAnak ? idMitraTerkait : void 0;
+      let resolvedMitraNama;
+      if (isTitip) {
+        if (!idKaryawanTerkait) {
+          throw new Error("Pilih Karyawan yang dipercaya memegang Rekening Titip Uang");
+        }
+        const kry = (db.karyawan || []).find((k) => k.id === String(idKaryawanTerkait).trim());
+        if (!kry) {
+          throw new Error("Karyawan pemegang Rekening Titip tidak ditemukan");
+        }
+        resolvedKryId = kry.id;
+        resolvedKryNama = kry.nama;
+        const mtrId = kry.idMitraTerkait || `MTR-${kry.id}`;
+        let mtr = (db.mitra || []).find(
+          (m) => m.id === mtrId || m.idKaryawanTerkait === kry.id
+        );
+        if (!mtr) {
+          mtr = {
+            id: mtrId,
+            kode: kry.nik || kry.id,
+            nama: kry.nama,
+            role: "KARYAWAN",
+            telepon: kry.telepon || "-",
+            alamat: kry.alamat || "-",
+            status: kry.status || "AKTIF",
+            fotoUrl: kry.fotoUrl,
+            isKaryawan: true,
+            idKaryawanTerkait: kry.id,
+            catatan: `Karyawan: ${kry.jabatan || "Staff"} (${kry.divisi || kry.departemen || "Gudang Wijaya Agro"})`
+          };
+          db.mitra.push(mtr);
+          kry.idMitraTerkait = mtr.id;
+        }
+        resolvedMitraId = mtr.id;
+        resolvedMitraNama = mtr.nama;
+      }
       const newRek = {
         kode: cleanKode,
         nama: String(nama).trim(),
@@ -21161,16 +26286,43 @@ apiRouter.post("/rekening", async (req, res) => {
         saldoSaatIni: saldo,
         status: "AKTIF",
         isVirtual: false,
+        isRekeningTitip: isTitip,
         isAnakPerusahaan: isAnak,
-        idMitraTerkait: isAnak ? idMitraTerkait : void 0,
+        ...resolvedKryId ? { idKaryawanTerkait: resolvedKryId } : {},
+        ...resolvedKryNama ? { namaKaryawanTerkait: resolvedKryNama } : {},
+        ...resolvedMitraId ? { idMitraTerkait: resolvedMitraId } : {},
+        ...resolvedMitraNama ? { namaMitraTerkait: resolvedMitraNama } : {},
         kategori: finalKategori,
         rekeningIndukPenyimpan: finalKategori === "OPERASIONAL_DIVISI" ? rekeningIndukPenyimpan || "KAS01" : void 0,
-        keterangan: keterangan || (isAnak ? "Anak Perusahaan PT. Wijaya Agro Perkasa (Bukan Bank) \u2014 Terintegrasi otomatis sebagai Mitra dalam 1 transaksi terpadu" : "")
+        keterangan: keterangan || (isTitip ? `Rekening Titip Uang Perusahaan (Amanah Transaksi Karyawan: ${resolvedKryNama}) \u2014 Terhubung langsung ke Rekening Koran Karyawan` : isAnak ? "Anak Perusahaan PT. Wijaya Agro Perkasa (Bukan Bank) \u2014 Terintegrasi otomatis sebagai Mitra dalam 1 transaksi terpadu" : "")
       };
       db.rekening.push(newRek);
       return newRek;
     });
     res.json({ success: true, data: created });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+apiRouter.get("/rekening-titip/audit", (req, res) => {
+  try {
+    const kodeRekening = req.query.kode ? String(req.query.kode) : void 0;
+    const idKaryawan = req.query.idKaryawan ? String(req.query.idKaryawan) : void 0;
+    const idMitra = req.query.idMitra ? String(req.query.idMitra) : void 0;
+    const data = TransactionService.getRekeningTitipAudit({ kodeRekening, idKaryawan, idMitra });
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+apiRouter.get("/rekening-titip/:kode/audit", (req, res) => {
+  try {
+    const kode = decodeURIComponent(String(req.params.kode || "")).toUpperCase().trim();
+    const list = TransactionService.getRekeningTitipAudit({ kodeRekening: kode });
+    if (list.length === 0) {
+      return res.status(404).json({ success: false, message: `Rekening Titip ${kode} tidak ditemukan` });
+    }
+    res.json({ success: true, data: list[0] });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -21188,6 +26340,7 @@ async function handleUpdateRekeningRequest(rawKode, body) {
     keterangan,
     kategori,
     rekeningIndukPenyimpan,
+    idKaryawanTerkait,
     saldoSaatIni,
     saldoAwal,
     alasanPenyesuaian
@@ -21205,12 +26358,54 @@ async function handleUpdateRekeningRequest(rawKode, body) {
     if (keterangan !== void 0) rek.keterangan = keterangan;
     if (!rek.isVirtual && kategori) {
       rek.kategori = kategori;
+      rek.isRekeningTitip = kategori === "REKENING_TITIP";
       rek.isAnakPerusahaan = kategori === "ANAK_PERUSAHAAN";
       if (kategori === "OPERASIONAL_DIVISI") {
         rek.rekeningIndukPenyimpan = rekeningIndukPenyimpan || rek.rekeningIndukPenyimpan || "KAS01";
       } else {
         delete rek.rekeningIndukPenyimpan;
       }
+      if (!rek.isRekeningTitip) {
+        delete rek.idKaryawanTerkait;
+        delete rek.namaKaryawanTerkait;
+        if (!rek.isAnakPerusahaan) {
+          delete rek.idMitraTerkait;
+          delete rek.namaMitraTerkait;
+        }
+      }
+    }
+    if (rek.isRekeningTitip || rek.kategori === "REKENING_TITIP") {
+      const targetKryId = idKaryawanTerkait !== void 0 ? String(idKaryawanTerkait || "").trim() : rek.idKaryawanTerkait;
+      if (!targetKryId) {
+        throw new Error("Pilih Karyawan yang dipercaya memegang Rekening Titip Uang");
+      }
+      const kry = (db.karyawan || []).find((k) => k.id === targetKryId);
+      if (!kry) {
+        throw new Error("Karyawan pemegang Rekening Titip tidak ditemukan");
+      }
+      rek.idKaryawanTerkait = kry.id;
+      rek.namaKaryawanTerkait = kry.nama;
+      const mtrId = kry.idMitraTerkait || `MTR-${kry.id}`;
+      let mtr = (db.mitra || []).find((m) => m.id === mtrId || m.idKaryawanTerkait === kry.id);
+      if (!mtr) {
+        mtr = {
+          id: mtrId,
+          kode: kry.nik || kry.id,
+          nama: kry.nama,
+          role: "KARYAWAN",
+          telepon: kry.telepon || "-",
+          alamat: kry.alamat || "-",
+          status: kry.status || "AKTIF",
+          fotoUrl: kry.fotoUrl,
+          isKaryawan: true,
+          idKaryawanTerkait: kry.id,
+          catatan: `Karyawan: ${kry.jabatan || "Staff"} (${kry.divisi || kry.departemen || "Gudang Wijaya Agro"})`
+        };
+        db.mitra.push(mtr);
+        kry.idMitraTerkait = mtr.id;
+      }
+      rek.idMitraTerkait = mtr.id;
+      rek.namaMitraTerkait = mtr.nama;
     }
     if (rek.isAnakPerusahaan && rek.idMitraTerkait && nama) {
       const linkedMitra = db.mitra.find((m) => m.id === rek.idMitraTerkait);
@@ -21463,7 +26658,10 @@ apiRouter.post("/mitra", async (req, res) => {
       if (db.mitra.some((m) => m.kode === cleanKode)) {
         throw new Error(`Mitra dengan kode ${cleanKode} sudah ada`);
       }
-      const mitraId = `MTR-${Date.now().toString().slice(-4)}`;
+      let mitraId = `MTR-${Date.now().toString().slice(-6)}`;
+      while (db.mitra.some((m) => m.id === mitraId)) {
+        mitraId = `MTR-${Math.floor(1e5 + Math.random() * 9e5)}`;
+      }
       const newMitra = {
         id: mitraId,
         kode: cleanKode,
@@ -21488,7 +26686,10 @@ apiRouter.post("/mitra", async (req, res) => {
           newMitra.idKaryawanTerkait = existingKry.id;
           if (fotoUrl) existingKry.fotoUrl = String(fotoUrl);
         } else {
-          const kryId = `KRY-${Date.now().toString().slice(-4)}`;
+          let kryId = `KRY-${Date.now().toString().slice(-6)}`;
+          while ((db.karyawan || []).some((k) => k.id === kryId)) {
+            kryId = `KRY-${Math.floor(1e5 + Math.random() * 9e5)}`;
+          }
           const now = getWIBDateTime();
           newMitra.idKaryawanTerkait = kryId;
           db.karyawan.push({
@@ -21617,7 +26818,10 @@ apiRouter.put("/mitra/:id", async (req, res) => {
           mitra.idKaryawanTerkait = kry.id;
           mitra.isKaryawan = true;
         } else {
-          const kryId = `KRY-${Date.now().toString().slice(-4)}`;
+          let kryId = `KRY-${Date.now().toString().slice(-6)}`;
+          while ((db.karyawan || []).some((k) => k.id === kryId)) {
+            kryId = `KRY-${Math.floor(1e5 + Math.random() * 9e5)}`;
+          }
           const now = getWIBDateTime();
           mitra.idKaryawanTerkait = kryId;
           mitra.isKaryawan = true;
@@ -22466,7 +27670,7 @@ apiRouter.post("/transaksi/penjualan", async (req, res) => {
 apiRouter.get("/transaksi/penjualan", (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.penjualan });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.penjualan) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -22483,7 +27687,7 @@ apiRouter.post("/transaksi/pembelian-barang", async (req, res) => {
 apiRouter.get("/transaksi/pembelian-barang", (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.pembelianBarang || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.pembelianBarang) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -22525,7 +27729,7 @@ apiRouter.post("/transaksi/pembelian-hasil-bumi", async (req, res) => {
 apiRouter.get("/transaksi/pembelian-hasil-bumi", (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.pembelianHasilBumi });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.pembelianHasilBumi) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -22679,12 +27883,44 @@ apiRouter.post("/surat-jalan", async (req, res) => {
     res.status(400).json({ success: false, message: err.message });
   }
 });
+apiRouter.put("/surat-jalan/:id", async (req, res) => {
+  try {
+    const record = await TransactionService.updateInvoiceSuratJalan(req.params.id, req.body);
+    res.json({ success: true, data: record });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+apiRouter.post("/surat-jalan/terima-uang-buyer", async (req, res) => {
+  try {
+    const { idInvoice, rekeningTujuan, tanggal, nominalMasuk, catatan } = req.body;
+    const record = await TransactionService.terimaUangBuyerSuratJalan(idInvoice, {
+      rekeningTujuan,
+      tanggal,
+      nominalMasuk,
+      catatan
+    });
+    res.json({ success: true, data: record });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
+apiRouter.post("/surat-jalan/batal-terima-uang-buyer", async (req, res) => {
+  try {
+    const { idInvoice } = req.body;
+    const record = await TransactionService.batalTerimaUangBuyerSuratJalan(idInvoice);
+    res.json({ success: true, data: record });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+});
 apiRouter.post("/surat-jalan/cairkan", async (req, res) => {
   try {
-    const { idInvoice, rekeningSumber, tanggal } = req.body;
+    const { idInvoice, rekeningSumber, tanggal, catatArusKas } = req.body;
     const record = await TransactionService.cairkanInvoiceSuratJalan(idInvoice, {
       rekeningSumber,
-      tanggal
+      tanggal,
+      catatArusKas
     });
     res.json({ success: true, data: record });
   } catch (err) {
@@ -22727,7 +27963,7 @@ apiRouter.post("/rekap-ctr/sync", async (_req, res) => {
 apiRouter.get("/transaksi/penjualan-hasil-bumi", (_req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.penjualanHasilBumi || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.penjualanHasilBumi) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -22773,7 +28009,7 @@ apiRouter.post("/transaksi/kasbon-uang", async (req, res) => {
 apiRouter.get("/transaksi/kasbon-uang", (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.kasbonUang });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.kasbonUang) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -22849,7 +28085,7 @@ apiRouter.post("/transaksi/bayar-bon", async (req, res) => {
 apiRouter.get("/transaksi/bayar-bon", (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.bayarBon });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.bayarBon) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -22865,7 +28101,7 @@ apiRouter.post("/transaksi/transfer-rekening", async (req, res) => {
 apiRouter.get("/transaksi/transfer-rekening", (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.transferRekening });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.transferRekening) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -23326,7 +28562,7 @@ apiRouter.get("/karyawan/rekap", (_req, res) => {
 apiRouter.get("/karyawan/upah-harian", (_req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.upahHarian || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.upahHarian) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -23411,7 +28647,10 @@ apiRouter.post("/karyawan", async (req, res) => {
       if (db.karyawan.some((k) => k.nik === cleanNik)) {
         throw new Error(`Karyawan dengan NIK ${cleanNik} sudah terdaftar`);
       }
-      const id = `KRY-${Date.now().toString().slice(-4)}`;
+      let id = `KRY-${Date.now().toString().slice(-6)}`;
+      while ((db.karyawan || []).some((k) => k.id === id) || (db.mitra || []).some((m) => m.id === `MTR-${id}`)) {
+        id = `KRY-${Math.floor(1e5 + Math.random() * 9e5)}`;
+      }
       const idMitra = `MTR-${id}`;
       const rawDiv = String(divisi || departemen || "Gudang Wijaya Agro").trim();
       const selectedDivisi = isExcludedFromDivisi(rawDiv) ? "PT Wijaya Agro Perkasa" : rawDiv;
@@ -23722,7 +28961,7 @@ apiRouter.post("/transaksi/penggajian/batch", async (req, res) => {
 apiRouter.get("/transaksi/penggajian", (req, res) => {
   try {
     const db = dbManager.get();
-    res.json({ success: true, data: db.penggajian || [] });
+    res.json({ success: true, data: sortTransactionsByDateDesc(db.penggajian) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -23753,7 +28992,7 @@ apiRouter.get("/transaksi/upah-harian", (req, res) => {
         return parts.length >= 3 && Number(parts[1]) === bNum && Number(parts[2]) === tNum;
       });
     }
-    res.json({ success: true, data: list });
+    res.json({ success: true, data: sortTransactionsByDateDesc(list) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -23947,6 +29186,59 @@ apiRouter.get("/database/backup-full-bundle", (_req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+apiRouter.get("/billboard/rekap-eksekutif", (req, res) => {
+  try {
+    const bulan = req.query.bulan ? Number(req.query.bulan) : void 0;
+    const tahun = req.query.tahun ? Number(req.query.tahun) : void 0;
+    const data = getBillboardRekapEksekutif({ periode: "BULAN", bulan, tahun });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+apiRouter.get("/audit/mutasi-rekening/:kode", (req, res) => {
+  try {
+    const kode = decodeURIComponent(String(req.params.kode || "")).trim();
+    if (!kode) {
+      return res.status(400).json({ success: false, message: "Kode rekening wajib diisi" });
+    }
+    const data = getMutasiRekeningKas(kode);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message || "Gagal memuat mutasi rekening" });
+  }
+});
+apiRouter.get("/audit/mutasi-divisi/:namaOrKode", (req, res) => {
+  try {
+    const namaOrKode = decodeURIComponent(String(req.params.namaOrKode || "")).trim();
+    if (!namaOrKode) {
+      return res.status(400).json({ success: false, message: "Nama atau kode divisi wajib diisi" });
+    }
+    const data = getMutasiDivisi(namaOrKode);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message || "Gagal memuat mutasi divisi" });
+  }
+});
+apiRouter.post("/audit/mutasi-rekening/:kode/sinkron-saldo", async (req, res) => {
+  try {
+    const kode = decodeURIComponent(String(req.params.kode || "")).trim();
+    if (!kode) {
+      return res.status(400).json({ success: false, message: "Kode rekening wajib diisi" });
+    }
+    const data = await sinkronkanSaldoRekeningKeMutasi(kode);
+    res.json({
+      success: true,
+      data,
+      message: `Saldo ${data.nama} (${data.kode}) berhasil disinkronkan ke hasil mutasi riil Rp ${data.saldoSesudah.toLocaleString("id-ID")}.`
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message || "Gagal menyinkronkan saldo rekening" });
+  }
+});
 apiRouter.get("/database/backup-xlsx", (_req, res) => {
   try {
     const db = dbManager.get();
@@ -24079,7 +29371,7 @@ apiRouter.post("/supabase/test", async (_req, res) => {
 apiRouter.post("/supabase/sync-push", async (_req, res) => {
   try {
     const db = dbManager.get();
-    const result = await supabaseSyncEngine.pushToSupabase(db);
+    const result = await supabaseSyncEngine.pushToSupabase(db, { allowOverwrite: true });
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -24266,7 +29558,7 @@ apiRouter.get("/erp-snapshot", (_req, res) => {
         rekening: db.rekening || [],
         mitra: db.mitra || [],
         karyawan: karyawanEnriched,
-        upahHarian: db.upahHarian || [],
+        upahHarian: sortTransactionsByDateDesc(db.upahHarian),
         produk: db.produk || [],
         kategoriProduk,
         stokBarang: (db.stokBarang || []).map((s) => {
@@ -24278,20 +29570,20 @@ apiRouter.get("/erp-snapshot", (_req, res) => {
           };
         }),
         stokHasilBumi: db.stokHasilBumi || [],
-        penjualan: db.penjualan || [],
-        pembelianHasilBumi: db.pembelianHasilBumi || [],
-        penjualanHasilBumi: db.penjualanHasilBumi || [],
-        pembelianBarang: db.pembelianBarang || [],
+        penjualan: sortTransactionsByDateDesc(db.penjualan),
+        pembelianHasilBumi: sortTransactionsByDateDesc(db.pembelianHasilBumi),
+        penjualanHasilBumi: sortTransactionsByDateDesc(db.penjualanHasilBumi),
+        pembelianBarang: sortTransactionsByDateDesc(db.pembelianBarang),
         brilink: TransactionService.getBrilinkList(),
         uangMasuk: TransactionService.getUangMasukList(),
         pencairanTitipan: TransactionService.getPencairanTitipanList(),
-        kasbonUang: db.kasbonUang || [],
-        bayarBon: db.bayarBon || [],
+        kasbonUang: sortTransactionsByDateDesc(db.kasbonUang),
+        bayarBon: sortTransactionsByDateDesc(db.bayarBon),
         pengeluaran: TransactionService.getPengeluaranList(),
         masterItemPengeluaran: TransactionService.getMasterItemPengeluaran(),
         notaSilang: TransactionService.getNotaSilangList(),
-        transferRekening: db.transferRekening || [],
-        penggajian: db.penggajian || [],
+        transferRekening: sortTransactionsByDateDesc(db.transferRekening),
+        penggajian: sortTransactionsByDateDesc(db.penggajian),
         auditLogs: db.auditLogs || [],
         profilPerusahaan: TransactionService.getProfilPerusahaan(),
         inventaris: db.inventaris || [],

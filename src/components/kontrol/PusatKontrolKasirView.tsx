@@ -26,6 +26,13 @@ import {
   exportBeritaAcaraOpnameToPdf,
   exportBuktiKliringToPdf,
 } from '../../utils/exportKontrolKasirPdf.ts';
+import {
+  CaraAlokasiKliring,
+  KliringBonChecklistPanel,
+  SelectableOpenBonNote,
+  extractOpenBonNotesFromRekeningKoran,
+  findSuggestedStayBonIds,
+} from '../common/KliringBonChecklistPanel.tsx';
 
 interface Props {
   mitraList: Mitra[];
@@ -79,6 +86,11 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
   const [keteranganKliring, setKeteranganKliring] = useState<string>('');
   const [submittingKliring, setSubmittingKliring] = useState<boolean>(false);
   const [lastKliringResult, setLastKliringResult] = useState<HasilKliringSilangResponse | null>(null);
+  const [openBonNotes, setOpenBonNotes] = useState<SelectableOpenBonNote[]>([]);
+  const [loadingOpenNotes, setLoadingOpenNotes] = useState<boolean>(false);
+  const [caraAlokasiKliring, setCaraAlokasiKliring] = useState<CaraAlokasiKliring>('OTOMATIS_FIFO');
+  const [stayBonIds, setStayBonIds] = useState<string[]>([]);
+  const [selectedTargetBonIds, setSelectedTargetBonIds] = useState<string[]>([]);
 
   // --- TAB 2: DETEKTOR & MERGER NAMA KEMBAR STATES ---
   const [primaryMitraId, setPrimaryMitraId] = useState<string>('');
@@ -167,22 +179,88 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
     return overview.semuaMitraSaldo.find((m) => m.idMitra === selectedKliringMitraId) || null;
   }, [overview, selectedKliringMitraId]);
 
-  // Sync default potong silang & penyelesaian fisik when selecting a Mitra
+  // Sync default potong silang & penyelesaian fisik when selecting a Mitra or when potensiPotongSilang changes
   useEffect(() => {
     if (!activeKliringCandidate) {
       setNominalPotongInput('');
       setNominalFisikInput('');
       setAksiSisa('HANYA_POTONG_SILANG');
+      setOpenBonNotes([]);
+      setCaraAlokasiKliring('OTOMATIS_FIFO');
+      setStayBonIds([]);
+      setSelectedTargetBonIds([]);
       return;
     }
     const maxPotong = activeKliringCandidate.potensiPotongSilang;
     setNominalPotongInput(String(maxPotong));
     setAksiSisa('HANYA_POTONG_SILANG');
     setNominalFisikInput('0');
-  }, [activeKliringCandidate?.idMitra]);
+    setCaraAlokasiKliring('OTOMATIS_FIFO');
+    setStayBonIds([]);
+    setSelectedTargetBonIds([]);
+  }, [activeKliringCandidate?.idMitra, activeKliringCandidate?.potensiPotongSilang]);
+
+  // Muat daftar bon terbuka mitra terpilih agar kasir bisa memilih bon yang tetap Stay / dilunasi
+  const loadOpenBonNotesForCandidate = useCallback(
+    async (mitraId: string, totalKasbon: number, potensiPotong: number) => {
+      setLoadingOpenNotes(true);
+      try {
+        const stmt = await api.getRekeningKoranMitra(mitraId);
+        const list = extractOpenBonNotesFromRekeningKoran(stmt.history || []);
+        setOpenBonNotes(list);
+        const defaultSisaStay = Math.max(0, totalKasbon - potensiPotong);
+        if (list.length >= 2 && defaultSisaStay > 0) {
+          setCaraAlokasiKliring('PILIH_STAY');
+          setStayBonIds(findSuggestedStayBonIds(list, defaultSisaStay));
+        } else {
+          setCaraAlokasiKliring('OTOMATIS_FIFO');
+          setStayBonIds([]);
+        }
+      } catch {
+        setOpenBonNotes([]);
+        setStayBonIds([]);
+      } finally {
+        setLoadingOpenNotes(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!activeKliringCandidate?.idMitra) {
+      setOpenBonNotes([]);
+      return;
+    }
+    loadOpenBonNotesForCandidate(
+      activeKliringCandidate.idMitra,
+      activeKliringCandidate.totalKasbon,
+      activeKliringCandidate.potensiPotongSilang
+    );
+  }, [
+    activeKliringCandidate?.idMitra,
+    activeKliringCandidate?.totalKasbon,
+    activeKliringCandidate?.potensiPotongSilang,
+    loadOpenBonNotesForCandidate,
+  ]);
 
   const parsedPotongSilang = Math.max(0, Math.round(Number(nominalPotongInput) || 0));
   const parsedNominalFisik = Math.max(0, Math.round(Number(nominalFisikInput) || 0));
+
+  const totalStayNotesSisa = useMemo(
+    () =>
+      openBonNotes
+        .filter((n) => stayBonIds.includes(n.refId))
+        .reduce((sum, n) => sum + n.sisa, 0),
+    [openBonNotes, stayBonIds]
+  );
+
+  const totalSelectedTargetNotesSisa = useMemo(
+    () =>
+      openBonNotes
+        .filter((n) => selectedTargetBonIds.includes(n.refId))
+        .reduce((sum, n) => sum + n.sisa, 0),
+    [openBonNotes, selectedTargetBonIds]
+  );
 
   const postPotongPreview = useMemo(() => {
     if (!activeKliringCandidate) {
@@ -214,6 +292,44 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
     e.preventDefault();
     if (!activeKliringCandidate) return;
 
+    if (
+      parsedPotongSilang > 0 &&
+      caraAlokasiKliring === 'PILIH_STAY' &&
+      postPotongPreview.sisaBonSetelahPotong > 0 &&
+      openBonNotes.length >= 2 &&
+      stayBonIds.length === 0
+    ) {
+      setErrorMsg(
+        `Centang dulu transaksi mana saja yang tetap Stay (belum dibayar) hingga totalnya ${formatRupiah(postPotongPreview.sisaBonSetelahPotong)}, atau klik tab "Urut Terlama (FIFO)" jika tidak perlu pilih manual.`
+      );
+      return;
+    }
+
+    if (
+      parsedPotongSilang > 0 &&
+      caraAlokasiKliring === 'PILIH_STAY' &&
+      stayBonIds.length > 0 &&
+      totalStayNotesSisa > postPotongPreview.sisaBonSetelahPotong
+    ) {
+      setErrorMsg(
+        `Total bon yang dipilih tetap Stay (${formatRupiah(totalStayNotesSisa)}) melebihi sisa piutang setelah kliring (${formatRupiah(postPotongPreview.sisaBonSetelahPotong)}). Kurangi pilihan bon Stay atau kecilkan nominal potong silang.`
+      );
+      return;
+    }
+
+    if (parsedPotongSilang > 0 && caraAlokasiKliring === 'PILIH_NOTA') {
+      if (selectedTargetBonIds.length === 0) {
+        setErrorMsg('Centang minimal 1 nota bon yang ingin dilunasi pada mode Pilih Bon Dilunasi.');
+        return;
+      }
+      if (parsedPotongSilang > totalSelectedTargetNotesSisa) {
+        setErrorMsg(
+          `Nominal potong silang (${formatRupiah(parsedPotongSilang)}) melebihi total nota yang dipilih (${formatRupiah(totalSelectedTargetNotesSisa)}).`
+        );
+        return;
+      }
+    }
+
     try {
       setSubmittingKliring(true);
       setErrorMsg(null);
@@ -226,11 +342,23 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
         nominalPenyelesaianFisik: aksiSisa === 'HANYA_POTONG_SILANG' ? 0 : parsedNominalFisik,
         metodeFisik,
         rekeningFisik: metodeFisik === 'TUNAI' ? 'KAS01' : rekeningFisik,
+        stayBonIds:
+          parsedPotongSilang > 0 && caraAlokasiKliring === 'PILIH_STAY' && stayBonIds.length > 0
+            ? stayBonIds
+            : undefined,
+        targetBonIds:
+          parsedPotongSilang > 0 &&
+          caraAlokasiKliring === 'PILIH_NOTA' &&
+          selectedTargetBonIds.length > 0
+            ? selectedTargetBonIds
+            : undefined,
         keterangan: keteranganKliring.trim() || undefined,
       });
 
       setLastKliringResult(res);
       setKeteranganKliring('');
+      setStayBonIds([]);
+      setSelectedTargetBonIds([]);
       const netH = Math.max(0, res.saldoTitipanAkhir - res.sisaKasbonAkhir);
       const netP = Math.max(0, res.sisaKasbonAkhir - res.saldoTitipanAkhir);
       const posTxt =
@@ -814,6 +942,64 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
                   />
                 </div>
 
+                {/* Checklist Pilih Bon Stay (Belum Dibayar) / Bon Dilunasi — selalu tampil saat mitra punya bon */}
+                {activeKliringCandidate.totalKasbon > 0 && (
+                  <KliringBonChecklistPanel
+                    compact
+                    openBonNotes={openBonNotes}
+                    loadingOpenNotes={loadingOpenNotes}
+                    caraAlokasi={caraAlokasiKliring}
+                    onChangeCaraAlokasi={(nextMode) => {
+                      setCaraAlokasiKliring(nextMode);
+                      setErrorMsg(null);
+                      if (nextMode === 'OTOMATIS_FIFO') {
+                        setStayBonIds([]);
+                        setSelectedTargetBonIds([]);
+                        setNominalPotongInput(String(activeKliringCandidate.potensiPotongSilang));
+                      } else if (nextMode === 'PILIH_STAY') {
+                        setSelectedTargetBonIds([]);
+                        const nextPotong =
+                          parsedPotongSilang > 0
+                            ? parsedPotongSilang
+                            : activeKliringCandidate.potensiPotongSilang;
+                        if (parsedPotongSilang <= 0 && activeKliringCandidate.potensiPotongSilang > 0) {
+                          setNominalPotongInput(String(activeKliringCandidate.potensiPotongSilang));
+                        }
+                        const targetStay = Math.max(
+                          0,
+                          activeKliringCandidate.totalKasbon - nextPotong
+                        );
+                        if (stayBonIds.length === 0) {
+                          setStayBonIds(findSuggestedStayBonIds(openBonNotes, targetStay));
+                        }
+                      } else if (nextMode === 'PILIH_NOTA') {
+                        setStayBonIds([]);
+                        if (selectedTargetBonIds.length === 0) {
+                          const exactMatch = openBonNotes.find(
+                            (n) =>
+                              n.sisa === activeKliringCandidate.saldoTitipan &&
+                              n.sisa <= activeKliringCandidate.potensiPotongSilang
+                          );
+                          if (exactMatch) {
+                            setSelectedTargetBonIds([exactMatch.refId]);
+                            setNominalPotongInput(String(exactMatch.sisa));
+                          }
+                        }
+                      }
+                    }}
+                    stayBonIds={stayBonIds}
+                    onChangeStayBonIds={setStayBonIds}
+                    selectedTargetBonIds={selectedTargetBonIds}
+                    onChangeSelectedTargetBonIds={(nextIds, suggestedPotong) => {
+                      setSelectedTargetBonIds(nextIds);
+                      setNominalPotongInput(String(suggestedPotong));
+                    }}
+                    totalPiutang={activeKliringCandidate.totalKasbon}
+                    nominalPotong={parsedPotongSilang}
+                    maxPotongSilang={activeKliringCandidate.potensiPotongSilang}
+                  />
+                )}
+
                 {/* Step 2: Penyelesaian Sisa */}
                 <div className="space-y-2">
                   <label className="block text-xs font-semibold text-zinc-800">
@@ -974,7 +1160,11 @@ export const PusatKontrolKasirView: React.FC<Props> = ({
                   disabled={
                     submittingKliring ||
                     (parsedPotongSilang <= 0 &&
-                      (aksiSisa === 'HANYA_POTONG_SILANG' || parsedNominalFisik <= 0))
+                      (aksiSisa === 'HANYA_POTONG_SILANG' || parsedNominalFisik <= 0)) ||
+                    (parsedPotongSilang > 0 &&
+                      caraAlokasiKliring === 'PILIH_STAY' &&
+                      stayBonIds.length > 0 &&
+                      totalStayNotesSisa > postPotongPreview.sisaBonSetelahPotong)
                   }
                   className="w-full py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
                 >

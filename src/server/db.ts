@@ -3606,7 +3606,20 @@ class DatabaseManager {
     let netKasir = 0;
     for (const p of this.db.penjualan || []) {
       if (!inRange(p.tanggal)) continue;
-      if (p.metode === 'KASBON' || p.metode === 'SINKRON' || p.metode === 'INTERNAL_PT' || p.metode === 'PEMAKAIAN_PENGELUARAN' || p.isNotaSilang) continue;
+      const isSilangLunasKasPt = Boolean(
+        p.isNotaSilang &&
+          p.modeNotaSilang === 'BAYAR_LUNAS_KAS_PT' &&
+          (p.metode === 'TUNAI' || p.metode === 'TRANSFER')
+      );
+      if (
+        p.metode === 'KASBON' ||
+        p.metode === 'SINKRON' ||
+        p.metode === 'INTERNAL_PT' ||
+        p.metode === 'PEMAKAIAN_PENGELUARAN' ||
+        (p.isNotaSilang && !isSilangLunasKasPt)
+      ) {
+        continue;
+      }
       if (p.rekeningTujuan === 'KAS01' || p.metode === 'TUNAI') netKasir += Math.round(Number(p.totalNominal) || 0);
     }
     for (const j of this.db.penjualanHasilBumi || []) {

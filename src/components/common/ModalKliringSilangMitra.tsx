@@ -13,6 +13,13 @@ import { api } from '../../api/client.ts';
 import { HasilKliringSilangResponse, Rekening } from '../../server/types.ts';
 import { formatRupiah, formatRupiahSingkat } from '../../utils/format.ts';
 import { ReceiptData } from './PrintReceiptModal.tsx';
+import {
+  CaraAlokasiKliring,
+  KliringBonChecklistPanel,
+  SelectableOpenBonNote,
+  extractOpenBonNotesFromRekeningKoran,
+  findSuggestedStayBonIds,
+} from './KliringBonChecklistPanel.tsx';
 
 export interface KliringSilangTargetMitra {
   id: string;
@@ -46,6 +53,11 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
   onSuccess,
 }) => {
   const [activeMode, setActiveMode] = useState<KliringModalMode>('KLIRING_SILANG');
+  const [caraAlokasi, setCaraAlokasi] = useState<CaraAlokasiKliring>('OTOMATIS_FIFO');
+  const [openBonNotes, setOpenBonNotes] = useState<SelectableOpenBonNote[]>([]);
+  const [loadingOpenNotes, setLoadingOpenNotes] = useState<boolean>(false);
+  const [stayBonIds, setStayBonIds] = useState<string[]>([]);
+  const [selectedBonIds, setSelectedBonIds] = useState<string[]>([]);
   const [nominalPotongInput, setNominalPotongInput] = useState<string>('');
   const [aksiSisa, setAksiSisa] = useState<
     'HANYA_POTONG_SILANG' | 'CAIRKAN_SISA_TITIPAN' | 'TERIMA_PELUNASAN_SISA_BON'
@@ -100,6 +112,9 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
           : 'KLIRING_SILANG';
 
       setActiveMode(resolvedMode);
+      setCaraAlokasi('OTOMATIS_FIFO');
+      setStayBonIds([]);
+      setSelectedBonIds([]);
       setNominalPotongInput(defaultMax > 0 ? defaultMax.toLocaleString('id-ID') : '');
       setAksiSisa('HANYA_POTONG_SILANG');
       setNominalFisikInput('');
@@ -116,6 +131,66 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
       setErrorMsg('');
     }
   }, [isOpen, mitra, initialMode, bankAccounts]);
+
+  // Muat daftar nota piutang yang masih belum lunas agar kasir bisa memilih bon yang tetap Stay atau bon yang dilunasi
+  useEffect(() => {
+    if (!isOpen || !mitra?.id) {
+      setOpenBonNotes([]);
+      setStayBonIds([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingOpenNotes(true);
+    api
+      .getRekeningKoranMitra(mitra.id)
+      .then((stmt) => {
+        if (cancelled) return;
+        const list = extractOpenBonNotesFromRekeningKoran(stmt.history || []);
+        setOpenBonNotes(list);
+
+        const piutang = Math.max(0, Math.round(mitra.totalBonMitra || 0));
+        const hutang = Math.max(0, Math.round(mitra.totalHutangTitipPanen || 0));
+        const defaultPotong = Math.min(piutang, hutang);
+        const defaultSisaStay = Math.max(0, piutang - defaultPotong);
+
+        if (list.length >= 2 && defaultSisaStay > 0) {
+          setCaraAlokasi('PILIH_STAY');
+          setStayBonIds(findSuggestedStayBonIds(list, defaultSisaStay));
+        } else {
+          setCaraAlokasi('OTOMATIS_FIFO');
+          setStayBonIds([]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOpenBonNotes([]);
+          setStayBonIds([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOpenNotes(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, mitra?.id, mitra?.totalBonMitra, mitra?.totalHutangTitipPanen]);
+
+  const totalSelectedNotesSisa = useMemo(
+    () =>
+      openBonNotes
+        .filter((n) => selectedBonIds.includes(n.refId))
+        .reduce((sum, n) => sum + n.sisa, 0),
+    [openBonNotes, selectedBonIds]
+  );
+
+  const totalStayNotesSisa = useMemo(
+    () =>
+      openBonNotes
+        .filter((n) => stayBonIds.includes(n.refId))
+        .reduce((sum, n) => sum + n.sisa, 0),
+    [openBonNotes, stayBonIds]
+  );
 
   if (!isOpen || !mitra) return null;
 
@@ -202,6 +277,12 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
         return;
       }
     } else {
+      const isPilihNotaMode = caraAlokasi === 'PILIH_NOTA';
+      const isPilihStayMode = caraAlokasi === 'PILIH_STAY';
+      if (isPilihNotaMode && selectedBonIds.length === 0) {
+        setErrorMsg('Centang minimal 1 nota piutang yang ingin dilunasi dengan Kliring Silang.');
+        return;
+      }
       if (nominalPotong <= 0 && nominalFisik <= 0) {
         setErrorMsg('Masukkan nominal kliring potong bon lebih dari Rp 0.');
         return;
@@ -209,6 +290,30 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
       if (nominalPotong > maxPotongSilang) {
         setErrorMsg(
           `Nominal potong silang melebihi batas maksimal silang (${formatRupiah(maxPotongSilang)}).`
+        );
+        return;
+      }
+      if (
+        isPilihStayMode &&
+        nominalPotong > 0 &&
+        sisaPiutangSetelahPotong > 0 &&
+        openBonNotes.length >= 2 &&
+        stayBonIds.length === 0
+      ) {
+        setErrorMsg(
+          `Centang dulu transaksi mana saja yang tetap Stay (belum dibayar) hingga totalnya ${formatRupiah(sisaPiutangSetelahPotong)}, atau klik tab "Urut Terlama (FIFO)" jika tidak perlu pilih manual.`
+        );
+        return;
+      }
+      if (isPilihStayMode && stayBonIds.length > 0 && totalStayNotesSisa > sisaPiutangSetelahPotong) {
+        setErrorMsg(
+          `Total bon yang dipilih tetap Stay (${formatRupiah(totalStayNotesSisa)}) melebihi sisa piutang setelah kliring (${formatRupiah(sisaPiutangSetelahPotong)}). Kurangi pilihan bon Stay atau kecilkan nominal potong silang.`
+        );
+        return;
+      }
+      if (isPilihNotaMode && nominalPotong > totalSelectedNotesSisa) {
+        setErrorMsg(
+          `Nominal potong silang (${formatRupiah(nominalPotong)}) melebihi total nota yang dipilih (${formatRupiah(totalSelectedNotesSisa)}).`
         );
         return;
       }
@@ -236,6 +341,14 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
 
     setSubmitting(true);
     try {
+      const stayIdsToSend =
+        !isAmbilDuluMode && caraAlokasi === 'PILIH_STAY' && stayBonIds.length > 0
+          ? stayBonIds
+          : undefined;
+      const targetIdsToSend =
+        !isAmbilDuluMode && caraAlokasi === 'PILIH_NOTA' && selectedBonIds.length > 0
+          ? selectedBonIds
+          : undefined;
       const res = await api.processKliringSilang({
         idMitra: mitra.id,
         nominalPotongSilang: nominalPotong,
@@ -244,6 +357,8 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
           effectiveAksiSisa === 'HANYA_POTONG_SILANG' ? 0 : nominalFisik,
         metodeFisik,
         rekeningFisik: metodeFisik === 'TUNAI' ? 'KAS01' : rekeningFisik,
+        stayBonIds: stayIdsToSend,
+        targetBonIds: targetIdsToSend,
         keterangan:
           keterangan.trim() ||
           (isAmbilDuluMode && totalPiutang > 0
@@ -287,6 +402,23 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
                   value: formatRupiah(res.nominalPotongSilang),
                   highlight: true,
                 },
+                ...(res.alokasiBonLunas && res.alokasiBonLunas.length > 0
+                  ? [
+                      {
+                        label: 'Nota Piutang Dilunasi',
+                        value: res.alokasiBonLunas
+                          .map(
+                            (a) =>
+                              `${a.refId} (${
+                                a.nominalSisa === 0
+                                  ? 'LUNAS'
+                                  : `Sisa ${formatRupiahSingkat(a.nominalSisa)}`
+                              })`
+                          )
+                          .join(', '),
+                      },
+                    ]
+                  : []),
               ]
             : []),
           ...(res.nominalPenyelesaianFisik > 0
@@ -450,48 +582,119 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
           {!isAmbilDuluMode ? (
             <>
               {/* MODE 1: KLIRING SILANG (POTONG / ANGSUR BON) */}
+              {/* Checklist Pilihan Bon Stay (Tetap Belum Dibayar) / Bon Dilunasi / FIFO */}
+              <KliringBonChecklistPanel
+                openBonNotes={openBonNotes}
+                loadingOpenNotes={loadingOpenNotes}
+                caraAlokasi={caraAlokasi}
+                onChangeCaraAlokasi={(nextMode) => {
+                  setCaraAlokasi(nextMode);
+                  setErrorMsg('');
+                  if (nextMode === 'OTOMATIS_FIFO') {
+                    setStayBonIds([]);
+                    setSelectedBonIds([]);
+                    setNominalPotongInput(
+                      maxPotongSilang > 0 ? maxPotongSilang.toLocaleString('id-ID') : ''
+                    );
+                  } else if (nextMode === 'PILIH_STAY') {
+                    setSelectedBonIds([]);
+                    const nextPotong =
+                      nominalPotong > 0 ? nominalPotong : maxPotongSilang;
+                    if (nominalPotong <= 0 && maxPotongSilang > 0) {
+                      setNominalPotongInput(maxPotongSilang.toLocaleString('id-ID'));
+                    }
+                    const targetStay = Math.max(0, totalPiutang - nextPotong);
+                    if (stayBonIds.length === 0) {
+                      setStayBonIds(findSuggestedStayBonIds(openBonNotes, targetStay));
+                    }
+                  } else if (nextMode === 'PILIH_NOTA') {
+                    setStayBonIds([]);
+                    if (selectedBonIds.length === 0) {
+                      const exactMatch = openBonNotes.find(
+                        (n) => n.sisa === totalHutangPt && n.sisa <= maxPotongSilang
+                      );
+                      if (exactMatch) {
+                        setSelectedBonIds([exactMatch.refId]);
+                        setNominalPotongInput(exactMatch.sisa.toLocaleString('id-ID'));
+                      } else {
+                        setNominalPotongInput('');
+                      }
+                    }
+                  }
+                }}
+                stayBonIds={stayBonIds}
+                onChangeStayBonIds={setStayBonIds}
+                selectedTargetBonIds={selectedBonIds}
+                onChangeSelectedTargetBonIds={(nextIds, suggestedPotong) => {
+                  setSelectedBonIds(nextIds);
+                  setNominalPotongInput(
+                    suggestedPotong > 0 ? suggestedPotong.toLocaleString('id-ID') : ''
+                  );
+                }}
+                totalPiutang={totalPiutang}
+                nominalPotong={nominalPotong}
+                maxPotongSilang={maxPotongSilang}
+              />
+
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-1.5">
                   <label className="font-bold text-zinc-800">
                     Nominal Potong / Angsur Bon dari Titipan (Rp)
                   </label>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {selisihHutangAwal > 0 && selisihHutangAwal < maxPotongSilang && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setNominalPotongInput(selisihHutangAwal.toLocaleString('id-ID'))
-                        }
-                        className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold cursor-pointer"
-                        title="Gunakan nominal sebesar selisih hutang untuk mengangsur piutang bon"
-                      >
-                        Angsur Senilai Hutang ({formatRupiahSingkat(selisihHutangAwal)})
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setNominalPotongInput(maxPotongSilang.toLocaleString('id-ID'))
-                      }
-                      className="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-white text-[11px] font-bold cursor-pointer"
-                    >
-                      {totalHutangPt < totalPiutang
-                        ? `Pakai Semua Sisa Titip (${formatRupiahSingkat(maxPotongSilang)})`
-                        : `Lunasi Penuh Piutang (${formatRupiahSingkat(maxPotongSilang)})`}
-                    </button>
-                    {maxPotongSilang > 1 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setNominalPotongInput(
-                            Math.round(maxPotongSilang / 2).toLocaleString('id-ID')
-                          )
-                        }
-                        className="px-2 py-1 rounded bg-white hover:bg-zinc-50 text-zinc-700 border border-zinc-300 text-[11px] font-semibold cursor-pointer"
-                      >
-                        50%
-                      </button>
-                    )}
+                    {caraAlokasi !== 'PILIH_NOTA' &&
+                      selisihHutangAwal > 0 &&
+                      selisihHutangAwal < maxPotongSilang && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setNominalPotongInput(selisihHutangAwal.toLocaleString('id-ID'))
+                          }
+                          className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold cursor-pointer"
+                          title="Gunakan nominal sebesar selisih hutang untuk mengangsur piutang bon"
+                        >
+                          Angsur Senilai Hutang ({formatRupiahSingkat(selisihHutangAwal)})
+                        </button>
+                      )}
+                    {(() => {
+                      const effectiveMax =
+                        caraAlokasi === 'PILIH_NOTA'
+                          ? Math.min(maxPotongSilang, totalSelectedNotesSisa)
+                          : maxPotongSilang;
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            disabled={effectiveMax <= 0}
+                            onClick={() =>
+                              setNominalPotongInput(
+                                effectiveMax > 0 ? effectiveMax.toLocaleString('id-ID') : ''
+                              )
+                            }
+                            className="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-white text-[11px] font-bold cursor-pointer"
+                          >
+                            {caraAlokasi === 'PILIH_NOTA'
+                              ? `Sesuai Nota Dipilih (${formatRupiahSingkat(effectiveMax)})`
+                              : totalHutangPt < totalPiutang
+                                ? `Pakai Semua Sisa Titip (${formatRupiahSingkat(effectiveMax)})`
+                                : `Lunasi Penuh Piutang (${formatRupiahSingkat(effectiveMax)})`}
+                          </button>
+                          {effectiveMax > 1 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setNominalPotongInput(
+                                  Math.round(effectiveMax / 2).toLocaleString('id-ID')
+                                )
+                              }
+                              className="px-2 py-1 rounded bg-white hover:bg-zinc-50 text-zinc-700 border border-zinc-300 text-[11px] font-semibold cursor-pointer"
+                            >
+                              50%
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -507,7 +710,13 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
                   className="w-full px-3 py-2.5 border border-zinc-300 rounded-lg font-mono tabular-nums font-bold text-sm text-zinc-900 focus:outline-hidden focus:ring-1 focus:ring-zinc-900"
                 />
                 <p className="text-[11px] text-zinc-500">
-                  Mengurangi Piutang Mitra sekaligus mengurangi Saldo Titipan tanpa mutasi kas fisik (Maksimal {formatRupiah(maxPotongSilang)}).
+                  Mengurangi Piutang Mitra sekaligus mengurangi Saldo Titipan tanpa mutasi kas fisik (Maksimal{' '}
+                  {formatRupiah(
+                    caraAlokasi === 'PILIH_NOTA'
+                      ? Math.min(maxPotongSilang, totalSelectedNotesSisa)
+                      : maxPotongSilang
+                  )}
+                  ).
                 </p>
               </div>
 
@@ -852,7 +1061,10 @@ export const ModalKliringSilangMitra: React.FC<Props> = ({
                 submitting ||
                 (isAmbilDuluMode
                   ? nominalFisik <= 0 || nominalFisik > totalHutangPt
-                  : nominalPotong <= 0 && nominalFisik <= 0)
+                  : (nominalPotong <= 0 && nominalFisik <= 0) ||
+                    (caraAlokasi === 'PILIH_STAY' &&
+                      stayBonIds.length > 0 &&
+                      totalStayNotesSisa > sisaPiutangSetelahPotong))
               }
               className={`inline-flex items-center gap-1.5 px-4 py-2 text-white rounded-lg font-bold shadow-xs cursor-pointer disabled:opacity-50 ${
                 isAmbilDuluMode

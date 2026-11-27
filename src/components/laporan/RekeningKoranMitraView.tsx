@@ -40,6 +40,7 @@ import {
   UserCheck,
   ArrowDownCircle,
   ArrowUpCircle,
+  HardHat,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -1908,6 +1909,123 @@ export const RekeningKoranMitraView: React.FC<Props> = ({
                   </div>
                 </div>
               </>
+            );
+          })()}
+
+          {/* PANEL REKAP TOTAL BIAYA BANGUNAN / PROYEK BERSAMA */}
+          {(() => {
+            const isProyekAccount =
+              /BANGUNAN|PROYEK|KONSTRUKSI/i.test(statement.namaMitra || '') ||
+              statement.history.some((h) =>
+                (h.jenis || '').toUpperCase().includes('PROYEK BERSAMA')
+              );
+            if (!isProyekAccount) return null;
+
+            let totalMaterialTokoWap = 0;
+            let countMaterialTokoWap = 0;
+            let totalMaterialDpParabot = 0;
+            let countMaterialDpParabot = 0;
+            let totalKasbonProyek = 0;
+            let countKasbonProyek = 0;
+
+            statement.history.forEach((h) => {
+              const jenisUp = (h.jenis || '').toUpperCase();
+              const isCreditOnly =
+                jenisUp.includes('BAYAR') ||
+                jenisUp.includes('PELUNASAN') ||
+                jenisUp.includes('PENCAIRAN') ||
+                jenisUp.includes('TITIP') ||
+                jenisUp.includes('PEMBELIAN') ||
+                jenisUp.includes('UPAH') ||
+                jenisUp.includes('GAJI');
+              if (isCreditOnly) return;
+
+              const nilai = h.debet > 0 ? h.debet : Number(h.nominalTransaksi || 0);
+              if (nilai <= 0) return;
+
+              if (jenisUp.includes('PROYEK BERSAMA') || Boolean(h.isNotaSilang)) {
+                totalMaterialDpParabot += nilai;
+                countMaterialDpParabot += 1;
+              } else if (jenisUp.includes('PENJUALAN')) {
+                totalMaterialTokoWap += nilai;
+                countMaterialTokoWap += 1;
+              } else if (
+                jenisUp.includes('KASBON') ||
+                jenisUp.includes('NOTA LALU') ||
+                jenisUp.includes('PIUTANG')
+              ) {
+                totalKasbonProyek += nilai;
+                countKasbonProyek += 1;
+              }
+            });
+
+            const grandTotalBiayaProyek =
+              totalMaterialTokoWap + totalMaterialDpParabot + totalKasbonProyek;
+
+            return (
+              <div className="bg-violet-50/70 border border-violet-200 rounded-xl p-4 sm:p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-2 rounded-lg bg-violet-700 text-white shrink-0">
+                      <HardHat className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-black text-violet-950 tracking-tight">
+                        Rekap Total Biaya Bangunan / Proyek: {statement.namaMitra}
+                      </div>
+                      <p className="text-xs text-violet-900/80 mt-0.5 leading-snug">
+                        Akumulasi seluruh pengeluaran proyek dari awal hingga sekarang (tetap terhitung utuh meskipun nota sudah dilunasi / disinkronkan via <strong>SINKRON</strong>).
+                      </p>
+                    </div>
+                  </div>
+                  <div className="bg-violet-900 text-white px-4 py-2.5 rounded-xl shrink-0 text-right">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-violet-200">
+                      Total Biaya Terpakai
+                    </div>
+                    <div className="text-lg font-black font-mono tabular-nums">
+                      {formatRupiah(grandTotalBiayaProyek)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3.5 bg-white rounded-lg border border-violet-200/80 space-y-1">
+                    <div className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider">
+                      Material Toko WAP
+                    </div>
+                    <div className="text-base font-black text-indigo-900 font-mono tabular-nums">
+                      {formatRupiah(totalMaterialTokoWap)}
+                    </div>
+                    <div className="text-[11px] text-zinc-500">
+                      {countMaterialTokoWap} nota penjualan toko WAP
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-white rounded-lg border border-violet-200/80 space-y-1">
+                    <div className="text-[10px] font-bold text-violet-800 uppercase tracking-wider">
+                      Material DP Parabot (Proyek Bersama)
+                    </div>
+                    <div className="text-base font-black text-violet-900 font-mono tabular-nums">
+                      {formatRupiah(totalMaterialDpParabot)}
+                    </div>
+                    <div className="text-[11px] text-zinc-500">
+                      {countMaterialDpParabot} item material · DP Lunas Sinkron
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-white rounded-lg border border-violet-200/80 space-y-1">
+                    <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">
+                      Kasbon / Belanja Luar &amp; Tukang
+                    </div>
+                    <div className="text-base font-black text-amber-900 font-mono tabular-nums">
+                      {formatRupiah(totalKasbonProyek)}
+                    </div>
+                    <div className="text-[11px] text-zinc-500">
+                      {countKasbonProyek} catatan kasbon / sinkron
+                    </div>
+                  </div>
+                </div>
+              </div>
             );
           })()}
 

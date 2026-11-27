@@ -202,10 +202,18 @@ export function getMutasiRekeningKas(kodeInput: string): AuditMutasiResponse {
 
   const bayarBonIdSet = new Set((db.bayarBon || []).map((b) => b.idTransaksi));
 
-  // 1. PENJUALAN BARANG TOKO (Tunai / Transfer + DP Kasbon jika belum masuk db.bayarBon)
+  // 1. PENJUALAN BARANG TOKO (Tunai / Transfer + DP Kasbon jika belum masuk db.bayarBon) & NOTA SILANG BAYAR LUNAS MASUK KAS PT
   for (const p of db.penjualan || []) {
     if (!inRange(p.tanggal)) continue;
-    if (p.metode === 'SINKRON' || p.metode === 'INTERNAL_PT' || p.metode === 'PEMAKAIAN_PENGELUARAN' || p.isNotaSilang) {
+    const isNotaSilangLunasKasPt = Boolean(
+      p.isNotaSilang && p.modeNotaSilang === 'BAYAR_LUNAS_KAS_PT' && (p.metode === 'TUNAI' || p.metode === 'TRANSFER')
+    );
+    if (
+      p.metode === 'SINKRON' ||
+      p.metode === 'INTERNAL_PT' ||
+      p.metode === 'PEMAKAIAN_PENGELUARAN' ||
+      (p.isNotaSilang && !isNotaSilangLunasKasPt)
+    ) {
       continue;
     }
 
@@ -243,16 +251,22 @@ export function getMutasiRekeningKas(kodeInput: string): AuditMutasiResponse {
       if (nom > 0) {
         const ringkas = (p.items || []).map((i) => `${i.namaProduk} (${i.qty})`).slice(0, 3).join(', ');
         rawRows.push({
-          id: `PJ-${p.noPenjualan}`,
+          id: isNotaSilangLunasKasPt ? `NSL-KAS-${p.noPenjualan}` : `PJ-${p.noPenjualan}`,
           refId: p.noPenjualan,
           tanggal: p.tanggal,
           jam: p.jam || '00:00:00',
           timestampMs: toTsMs(p.tanggal, p.jam, p.createdAt),
-          kategori: 'PENJUALAN_TOKO',
-          kategoriLabel: 'Penjualan Barang Toko',
-          uraian: `Penjualan ${p.metode}${ringkas ? `: ${ringkas}` : ''}`,
-          pihakTerkait: p.namaMitra || 'Umum',
-          divisi: p.divisi || 'Wijaya Karya',
+          kategori: isNotaSilangLunasKasPt ? 'NOTA_SILANG_LUNAS_MASUK' : 'PENJUALAN_TOKO',
+          kategoriLabel: isNotaSilangLunasKasPt
+            ? `Titipan Lunas ${p.namaAnakPerusahaan || 'DP Parabot'} (Hutang PT)`
+            : 'Penjualan Barang Toko',
+          uraian: isNotaSilangLunasKasPt
+            ? `Terima lunas (${p.metode}) belanja ${p.namaAnakPerusahaan || 'DP Parabot'} a.n. ${p.namaMitra || 'Customer Umum'} → Hutang PT ke ${p.namaAnakPerusahaan || 'DP Parabot'}${ringkas ? `: ${ringkas}` : ''}`
+            : `Penjualan ${p.metode}${ringkas ? `: ${ringkas}` : ''}`,
+          pihakTerkait: isNotaSilangLunasKasPt
+            ? `${p.namaMitra || 'Customer Umum'} → ${p.namaAnakPerusahaan || 'DP Parabot'}`
+            : p.namaMitra || 'Umum',
+          divisi: p.divisi || (isNotaSilangLunasKasPt ? 'PT Wijaya Agro Perkasa' : 'Wijaya Karya'),
           rekeningTerkait: targetKode,
           metode: p.metode,
           masuk: nom,

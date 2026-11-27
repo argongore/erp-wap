@@ -30,6 +30,7 @@ import { api } from '../../api/client.ts';
 import { PrintReceiptModal, ReceiptData } from '../common/PrintReceiptModal.tsx';
 import { ModalPinjamUangMitra } from '../common/ModalPinjamUangMitra.tsx';
 import { ModalEditTransaksiUniversal } from '../common/ModalEditTransaksiUniversal.tsx';
+import { SearchableMitraSelect } from '../common/SearchableMitraSelect.tsx';
 import { buildThermalReceiptPiutangHutangMitra } from '../../utils/thermalPiutangHutangReceipt.ts';
 
 interface Props {
@@ -717,38 +718,40 @@ export const BayarTitipanHasilBumiView: React.FC<Props> = ({
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-            {/* Pilih Mitra */}
+            {/* Pilih Mitra (dengan Fitur Search) */}
             <div>
               <label className="block font-semibold text-zinc-700 mb-1">
                 Pilih Mitra Pemilik Titipan <span className="text-rose-500">*</span>
               </label>
-              <select
-                required
+              <SearchableMitraSelect
+                mitras={activeTitipPartners}
                 value={selectedMitraId}
-                onChange={(e) => setSelectedMitraId(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-1 focus:ring-zinc-900 text-zinc-800 font-semibold"
-              >
-                <option value="">-- Pilih Mitra --</option>
-                {activeTitipPartners.map((m) => {
-                  let labelSaldo = '';
-                  if (m.selisihHutangPt > 0) {
-                    labelSaldo = `Hutang: ${formatRupiah(m.selisihHutangPt)} (Titip ${formatRupiahSingkat(
-                      m.saldoTitipAktif
-                    )}${m.saldoBonAktif > 0 ? ` − Piutang ${formatRupiahSingkat(m.saldoBonAktif)}` : ''})`;
-                  } else if (m.selisihPiutangMitra > 0) {
-                    labelSaldo = `Titip ${formatRupiahSingkat(
-                      m.saldoTitipAktif
-                    )} | Piutang: ${formatRupiah(m.selisihPiutangMitra)}`;
-                  } else {
-                    labelSaldo = `Impas Rp 0 (Titip ${formatRupiahSingkat(m.saldoTitipAktif)} = Piutang)`;
+                onChange={(id) => setSelectedMitraId(id)}
+                placeholder="-- Cari & Pilih Mitra Pemilik Titipan --"
+                searchPlaceholder="Ketik nama mitra, kode, atau no HP..."
+                accent="amber"
+                getRoleLabel={(m) =>
+                  getRoleMitraLabel(m.role, {
+                    isAnakPerusahaan: m.isAnakPerusahaan,
+                    isKaryawan: Boolean(m.idKaryawanTerkait),
+                  })
+                }
+                getSubLabel={(m) => {
+                  const pos = partnerPositionMap.get(m.id);
+                  if (!pos) return '';
+                  if (pos.selisihHutangPt > 0) {
+                    return `Hutang: ${formatRupiah(pos.selisihHutangPt)} (Titip ${formatRupiahSingkat(
+                      pos.saldoTitipAktif
+                    )}${pos.saldoBonAktif > 0 ? ` − Piutang ${formatRupiahSingkat(pos.saldoBonAktif)}` : ''})`;
                   }
-                  return (
-                    <option key={m.id} value={m.id}>
-                      {m.nama} — {labelSaldo}
-                    </option>
-                  );
-                })}
-              </select>
+                  if (pos.selisihPiutangMitra > 0) {
+                    return `Titip ${formatRupiahSingkat(
+                      pos.saldoTitipAktif
+                    )} | Piutang: ${formatRupiah(pos.selisihPiutangMitra)}`;
+                  }
+                  return `Impas Rp 0 (Titip ${formatRupiahSingkat(pos.saldoTitipAktif)} = Piutang)`;
+                }}
+              />
             </div>
 
             {/* Rincian Posisi Berjalan (Walaupun Belum Di-Kliring) */}

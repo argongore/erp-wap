@@ -1195,6 +1195,7 @@ export default function App() {
               {activeTab === 'kasir-nota-silang' && (
                 <NotaSilangView
                   mitraList={mitraList}
+                  rekeningList={rekeningList}
                   onSuccess={handleTransactionSuccess}
                   onRefresh={loadAllData}
                   onOpenRekeningKoranMitra={handleOpenMitraStatement}

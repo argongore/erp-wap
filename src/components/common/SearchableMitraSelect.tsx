@@ -11,6 +11,7 @@ interface SearchableMitraSelectProps {
   accent?: 'emerald' | 'rose' | 'amber' | 'indigo' | 'teal';
   showRolePrefix?: boolean;
   getRoleLabel?: (mitra: Mitra) => string;
+  getSubLabel?: (mitra: Mitra) => string;
   className?: string;
 }
 
@@ -23,6 +24,7 @@ export const SearchableMitraSelect: React.FC<SearchableMitraSelectProps> = ({
   accent = 'emerald',
   showRolePrefix = false,
   getRoleLabel,
+  getSubLabel,
   className = '',
 }) => {
   const [open, setOpen] = useState(false);
@@ -156,22 +158,38 @@ export const SearchableMitraSelect: React.FC<SearchableMitraSelectProps> = ({
         }`}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <User className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          {selectedMitra ? (
+            <User className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          ) : (
+            <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          )}
           {selectedMitra ? (
             <span className="truncate">
               {showRolePrefix && selectedMitra.role === 'KARYAWAN' ? '[KARYAWAN] ' : ''}
               {selectedMitra.nama}{' '}
               <span className="font-mono font-normal text-zinc-500">({selectedMitra.kode})</span>
+              {getSubLabel && getSubLabel(selectedMitra) && (
+                <span className="font-mono font-normal text-zinc-600">
+                  {' '}
+                  — {getSubLabel(selectedMitra)}
+                </span>
+              )}
             </span>
           ) : (
             <span className="text-zinc-400 font-normal truncate">{placeholder}</span>
           )}
         </div>
-        <ChevronDown
-          className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform duration-150 ${
-            open ? 'rotate-180' : ''
-          }`}
-        />
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-200/80 text-zinc-600 text-[10px] font-semibold">
+            <Search className="w-2.5 h-2.5" />
+            <span>Cari</span>
+          </span>
+          <ChevronDown
+            className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform duration-150 ${
+              open ? 'rotate-180' : ''
+            }`}
+          />
+        </div>
       </button>
 
       {open && (
@@ -249,11 +267,16 @@ export const SearchableMitraSelect: React.FC<SearchableMitraSelectProps> = ({
                         </span>
                       </div>
                       <div className="text-[10px] text-zinc-500 flex items-center gap-2 mt-0.5 truncate">
-                        <span className={`px-1.5 py-0.2 rounded font-semibold text-[9.5px] ${accentStyles.badge}`}>
+                        <span className={`px-1.5 py-0.2 rounded font-semibold text-[9.5px] shrink-0 ${accentStyles.badge}`}>
                           {resolveRoleText(m)}
                         </span>
-                        {m.telepon && <span className="font-mono">{m.telepon}</span>}
+                        {m.telepon && <span className="font-mono shrink-0">{m.telepon}</span>}
                       </div>
+                      {getSubLabel && getSubLabel(m) && (
+                        <div className="text-[10.5px] font-mono font-semibold text-amber-900 mt-0.5 truncate">
+                          {getSubLabel(m)}
+                        </div>
+                      )}
                     </div>
                     {isSelected && <Check className={`w-4 h-4 shrink-0 ${accentStyles.check}`} />}
                   </button>

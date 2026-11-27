@@ -13,8 +13,18 @@ import {
   History,
   ArrowUpRight,
   Pencil,
+  Banknote,
+  Landmark,
+  User,
+  HardHat,
 } from 'lucide-react';
-import { Mitra, NotaSilangItemInput, NotaSilangRecordSummary } from '../../server/types.ts';
+import {
+  Mitra,
+  ModeNotaSilang,
+  NotaSilangItemInput,
+  NotaSilangRecordSummary,
+  Rekening,
+} from '../../server/types.ts';
 import { api } from '../../api/client.ts';
 import { formatRupiah, getWIBTodayString } from '../../utils/format.ts';
 import { ReceiptData } from '../common/PrintReceiptModal.tsx';
@@ -24,6 +34,7 @@ import { SearchableMitraSelect } from '../common/SearchableMitraSelect.tsx';
 
 interface Props {
   mitraList: Mitra[];
+  rekeningList: Rekening[];
   onSuccess: (receipt: ReceiptData) => void;
   onRefresh: () => void;
   onOpenRekeningKoranMitra?: (idMitra: string) => void;
@@ -36,6 +47,7 @@ interface CartSilangRow extends NotaSilangItemInput {
 
 export const NotaSilangView: React.FC<Props> = ({
   mitraList,
+  rekeningList,
   onSuccess,
   onRefresh,
   onOpenRekeningKoranMitra,
@@ -63,19 +75,69 @@ export const NotaSilangView: React.FC<Props> = ({
     return dp?.id || anakPerusahaanOptions[0]?.id || 'MTR-DPPARABOT';
   }, [anakPerusahaanOptions]);
 
-  // Mode Nota Silang: Fokus Utama = ANAK_PERUSAHAAN, Opsi Tambahan = SESAMA_MITRA
-  const [modeNotaSilang, setModeNotaSilang] = useState<'ANAK_PERUSAHAAN' | 'SESAMA_MITRA'>(
-    'ANAK_PERUSAHAAN'
-  );
+  // Rekening Kas / Bank PT aktif (non-virtual, non-operasional divisi, non-titip)
+  const rekeningKasPtOptions = useMemo(() => {
+    const filtered = rekeningList.filter(
+      (r) =>
+        !r.isVirtual &&
+        r.status === 'AKTIF' &&
+        r.kode !== 'BON01' &&
+        r.kode !== 'TIT01' &&
+        r.kode !== 'SINKRON' &&
+        r.kategori !== 'OPERASIONAL_DIVISI' &&
+        !r.isAnakPerusahaan &&
+        !r.isRekeningTitip &&
+        !r.kode.startsWith('REK-')
+    );
+    return filtered.length > 0
+      ? filtered
+      : rekeningList.filter(
+          (r) =>
+            !r.isVirtual &&
+            r.status === 'AKTIF' &&
+            r.kode !== 'BON01' &&
+            r.kode !== 'TIT01' &&
+            r.kode !== 'SINKRON'
+        );
+  }, [rekeningList]);
+
+  const defaultBankTransferKode = useMemo(() => {
+    const bank = rekeningKasPtOptions.find((r) => r.kode !== 'KAS01');
+    return bank?.kode || rekeningKasPtOptions[0]?.kode || 'KAS01';
+  }, [rekeningKasPtOptions]);
+
+  // Mode Nota Silang:
+  // 1. ANAK_PERUSAHAAN (Bon Mitra di DP Parabot)
+  // 2. BAYAR_LUNAS_KAS_PT (Customer/Mitra bayar lunas di DP Parabot, uang masuk Kas/Bank PT -> Hutang PT ke DP Parabot)
+  // 3. PROYEK_BERSAMA (Proyek Bersama PT WAP & DP Parabot: DP otomatis Lunas Sinkron Rp 0 hutang, tercatat di buku proyek)
+  // 4. SESAMA_MITRA (Opsi silang piutang sesama mitra)
+  const [modeNotaSilang, setModeNotaSilang] = useState<ModeNotaSilang>('ANAK_PERUSAHAAN');
+  const [statusProyek, setStatusProyek] = useState<'BON_PROYEK' | 'LUNAS_SINKRON'>('BON_PROYEK');
 
   const mitraPengambilBaseOptions = useMemo(
     () => activeMitras.filter((m) => m.id !== defaultAnakId),
     [activeMitras, defaultAnakId]
   );
 
+  const defaultProyekMitraId = useMemo(() => {
+    const rmWap = mitraPengambilBaseOptions.find((m) =>
+      /BANGUNAN RUMAH MAKAN/i.test(m.nama)
+    );
+    if (rmWap) return rmWap.id;
+    const anyProyek = mitraPengambilBaseOptions.find((m) =>
+      /BANGUNAN|PROYEK|KONSTRUKSI/i.test(m.nama)
+    );
+    return anyProyek?.id || '';
+  }, [mitraPengambilBaseOptions]);
+
   const [idMitraPengambil, setIdMitraPengambil] = useState<string>(
     mitraPengambilBaseOptions[0]?.id || ''
   );
+  const [tipePembeliLunas, setTipePembeliLunas] = useState<'UMUM' | 'MITRA'>('UMUM');
+  const [namaPembeliUmum, setNamaPembeliUmum] = useState<string>('');
+  const [metodeBayarKasPt, setMetodeBayarKasPt] = useState<'TUNAI' | 'TRANSFER'>('TUNAI');
+  const [rekeningTujuanKasPt, setRekeningTujuanKasPt] = useState<string>('KAS01');
+
   const [idMitraAnakPerusahaan, setIdMitraAnakPerusahaan] = useState<string>(defaultAnakId);
   const [tanggalInput, setTanggalInput] = useState<string>(getWIBTodayString());
   const [noNotaToko, setNoNotaToko] = useState<string>('');
@@ -92,9 +154,7 @@ export const NotaSilangView: React.FC<Props> = ({
   const [historyList, setHistoryList] = useState<NotaSilangRecordSummary[]>([]);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
   const [searchHistory, setSearchHistory] = useState<string>('');
-  const [filterModeHistory, setFilterModeHistory] = useState<
-    'ALL' | 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA'
-  >('ALL');
+  const [filterModeHistory, setFilterModeHistory] = useState<'ALL' | ModeNotaSilang>('ALL');
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
@@ -108,12 +168,43 @@ export const NotaSilangView: React.FC<Props> = ({
     }
   }, [mitraPengambilBaseOptions, idMitraPengambil]);
 
-  // Synchronize counterparty selection when switching between Fokus Utama (Anak Perusahaan) & Opsi Sesama Mitra
+  // Sinkronkan rekening tujuan Kas/Bank PT saat metode pembayaran berubah
   useEffect(() => {
-    if (modeNotaSilang === 'ANAK_PERUSAHAAN') {
+    if (metodeBayarKasPt === 'TUNAI') {
+      const hasKas01 = rekeningKasPtOptions.some((r) => r.kode === 'KAS01');
+      if (hasKas01 && rekeningTujuanKasPt !== 'KAS01') {
+        setRekeningTujuanKasPt('KAS01');
+      } else if (!hasKas01 && rekeningKasPtOptions[0]) {
+        setRekeningTujuanKasPt(rekeningKasPtOptions[0].kode);
+      }
+    } else {
+      const validTransfer = rekeningKasPtOptions.some(
+        (r) => r.kode === rekeningTujuanKasPt && r.kode !== 'KAS01'
+      );
+      if (!validTransfer && defaultBankTransferKode) {
+        setRekeningTujuanKasPt(defaultBankTransferKode);
+      }
+    }
+  }, [metodeBayarKasPt, rekeningKasPtOptions, defaultBankTransferKode]);
+
+  // Synchronize counterparty & project mitra selection when switching mode
+  useEffect(() => {
+    if (
+      modeNotaSilang === 'ANAK_PERUSAHAAN' ||
+      modeNotaSilang === 'BAYAR_LUNAS_KAS_PT' ||
+      modeNotaSilang === 'PROYEK_BERSAMA'
+    ) {
       const validAnak = anakPerusahaanOptions.some((m) => m.id === idMitraAnakPerusahaan);
       if (!validAnak && defaultAnakId) {
         setIdMitraAnakPerusahaan(defaultAnakId);
+      }
+      if (modeNotaSilang === 'PROYEK_BERSAMA') {
+        setPakaiHargaMusiman(false);
+        const currObj = activeMitras.find((m) => m.id === idMitraPengambil);
+        const isAlreadyProject = currObj && /BANGUNAN|PROYEK|KONSTRUKSI/i.test(currObj.nama);
+        if (!isAlreadyProject && defaultProyekMitraId) {
+          setIdMitraPengambil(defaultProyekMitraId);
+        }
       }
     } else {
       // SESAMA_MITRA: pilih mitra reguler yang berbeda dari idMitraPengambil
@@ -130,7 +221,14 @@ export const NotaSilangView: React.FC<Props> = ({
         setIdMitraAnakPerusahaan(pool[0].id);
       }
     }
-  }, [modeNotaSilang, idMitraPengambil, activeMitras, anakPerusahaanOptions, defaultAnakId]);
+  }, [
+    modeNotaSilang,
+    idMitraPengambil,
+    activeMitras,
+    anakPerusahaanOptions,
+    defaultAnakId,
+    defaultProyekMitraId,
+  ]);
 
   const loadHistory = async () => {
     setLoadingHistory(true);
@@ -175,7 +273,21 @@ export const NotaSilangView: React.FC<Props> = ({
     [activeMitras, idMitraAnakPerusahaan]
   );
 
+  const selectedRekeningKasPtObj = useMemo(
+    () => rekeningKasPtOptions.find((r) => r.kode === rekeningTujuanKasPt),
+    [rekeningKasPtOptions, rekeningTujuanKasPt]
+  );
+
   const isModeSesamaMitra = modeNotaSilang === 'SESAMA_MITRA';
+  const isModeBayarLunasKasPt = modeNotaSilang === 'BAYAR_LUNAS_KAS_PT';
+  const isModeProyekBersama = modeNotaSilang === 'PROYEK_BERSAMA';
+
+  const displayNamaPembeli = useMemo(() => {
+    if (isModeBayarLunasKasPt && tipePembeliLunas === 'UMUM') {
+      return namaPembeliUmum.trim() || 'Customer Umum';
+    }
+    return selectedMitraObj?.nama || 'Mitra Pengambil';
+  }, [isModeBayarLunasKasPt, tipePembeliLunas, namaPembeliUmum, selectedMitraObj]);
 
   const handleAddItem = () => {
     setErrorMsg('');
@@ -278,12 +390,18 @@ export const NotaSilangView: React.FC<Props> = ({
       ];
     }
 
-    if (!idMitraPengambil) {
+    const isUmumLunas = isModeBayarLunasKasPt && tipePembeliLunas === 'UMUM';
+
+    if (!isUmumLunas && !idMitraPengambil) {
       setErrorMsg('Pilih Mitra yang mengambil barang terlebih dahulu.');
       return;
     }
-    if (!idMitraAnakPerusahaan || idMitraPengambil === idMitraAnakPerusahaan) {
+    if (!idMitraAnakPerusahaan || (!isUmumLunas && idMitraPengambil === idMitraAnakPerusahaan)) {
       setErrorMsg('Pihak pengambil dan pihak penyedia barang tidak boleh mitra yang sama.');
+      return;
+    }
+    if (isModeBayarLunasKasPt && !rekeningTujuanKasPt) {
+      setErrorMsg('Pilih Rekening Kas / Bank PT tujuan penerimaan pembayaran lunas.');
       return;
     }
     if (itemsToSubmit.length === 0) {
@@ -293,10 +411,16 @@ export const NotaSilangView: React.FC<Props> = ({
 
     setSubmitting(true);
     try {
+      const effectivePakaiMarkup = pakaiHargaMusiman && !isModeProyekBersama;
       const res = await api.processNotaSilang({
-        idMitraPengambil,
+        idMitraPengambil: isUmumLunas ? 'UMUM' : idMitraPengambil,
+        tipePembeli: isModeBayarLunasKasPt ? tipePembeliLunas : 'MITRA',
+        namaPembeliUmum: isUmumLunas ? namaPembeliUmum.trim() || 'Customer Umum' : undefined,
         idMitraAnakPerusahaan,
         modeNotaSilang,
+        statusProyek: isModeProyekBersama ? statusProyek : undefined,
+        metodeBayarKasPt: isModeBayarLunasKasPt ? metodeBayarKasPt : undefined,
+        rekeningTujuanKasPt: isModeBayarLunasKasPt ? rekeningTujuanKasPt : undefined,
         tanggal: tanggalInput,
         noNotaToko: noNotaToko.trim() || undefined,
         fotoNota: fotoNota || undefined,
@@ -306,12 +430,12 @@ export const NotaSilangView: React.FC<Props> = ({
           qty: it.qty,
           satuan: it.satuan,
           harga: it.harga,
-          markup: pakaiHargaMusiman ? Math.max(0, Number((it as any).markupPerSatuan || 0)) : 0,
+          markup: effectivePakaiMarkup ? Math.max(0, Number((it as any).markupPerSatuan || 0)) : 0,
         })),
-        ...(pakaiHargaMusiman && totalMarkupMusiman > 0
+        ...(effectivePakaiMarkup && totalMarkupMusiman > 0
           ? { tambahanHargaMusiman: totalMarkupMusiman }
           : {}),
-      } as any);
+      });
 
       setCart([]);
       setNamaBarangInput('');
@@ -320,41 +444,89 @@ export const NotaSilangView: React.FC<Props> = ({
       setNoNotaToko('');
       setKeterangan('');
       setFotoNota('');
+      setNamaPembeliUmum('');
       setPakaiHargaMusiman(false);
-      const totalHppDP = Number(res.bukuAnakPerusahaan?.totalNominal) || grandTotal;
-      const totalJualMitra = Number(res.totalNominal) || Number(res.penjualanMitra?.totalNominal) || totalPiutangMitra;
-      const labaSelisih = Math.max(0, totalJualMitra - totalHppDP);
+      const totalHppDP = res.bukuAnakPerusahaan
+        ? Number(res.bukuAnakPerusahaan.totalNominal) || grandTotal
+        : grandTotal;
+      const totalJualMitra =
+        Number(res.totalNominal) || Number(res.penjualanMitra?.totalNominal) || totalPiutangMitra;
+      const labaSelisih = isModeProyekBersama ? 0 : Math.max(0, totalJualMitra - totalHppDP);
+      const rekLabel =
+        selectedRekeningKasPtObj?.nama || rekeningTujuanKasPt || 'Kas Utama Kasir';
 
-      setSuccessMsg(
-        `Nota Silang ${res.noNotaSilang} (${
-          isModeSesamaMitra ? 'Sesama Mitra' : 'Mitra ⇄ Anak Perusahaan'
-        }) berhasil dibukukan! Piutang ${res.mitraPengambilNama} tercatat ${formatRupiah(
-          totalJualMitra
-        )} & Hutang ke ${res.anakPerusahaanNama} tercatat ${formatRupiah(totalHppDP)}${
-          labaSelisih > 0 ? ` [Selisih Markup Toko: +${formatRupiah(labaSelisih)}]` : ''
-        }.`
-      );
+      if (isModeProyekBersama) {
+        const statusDesc =
+          statusProyek === 'LUNAS_SINKRON'
+            ? 'Langsung Lunas SINKRON (Rp 0 piutang aktif, masuk rekap total biaya bangunan)'
+            : 'Akumulasi Biaya Proyek di Saldo Berjalan (dapat ditutup SINKRON kapan saja)';
+        setSuccessMsg(
+          `Nota Proyek Bersama ${res.noNotaSilang} berhasil dicatat di buku ${
+            res.mitraPengambilNama
+          } senilai ${formatRupiah(totalJualMitra)} (${statusDesc}). Nota di ${
+            res.anakPerusahaanNama
+          } otomatis LUNAS SINKRON (Rp 0 hutang PT, tidak mengganggu Rekening Koran ${
+            res.anakPerusahaanNama
+          }).`
+        );
+      } else if (isModeBayarLunasKasPt) {
+        setSuccessMsg(
+          `Nota Lunas DP → Kas PT ${res.noNotaSilang} berhasil dibukukan! Pembayaran ${metodeBayarKasPt} dari ${res.mitraPengambilNama} sebesar ${formatRupiah(
+            totalJualMitra
+          )} masuk ke ${rekLabel} (${rekeningTujuanKasPt}), dan Hutang PT ke ${
+            res.anakPerusahaanNama
+          } otomatis bertambah ${formatRupiah(totalHppDP)} (tanpa bon pembeli).`
+        );
+      } else {
+        setSuccessMsg(
+          `Nota Silang ${res.noNotaSilang} (${
+            isModeSesamaMitra ? 'Sesama Mitra' : 'Mitra ⇄ Anak Perusahaan'
+          }) berhasil dibukukan! Piutang ${res.mitraPengambilNama} tercatat ${formatRupiah(
+            totalJualMitra
+          )} & Hutang ke ${res.anakPerusahaanNama} tercatat ${formatRupiah(totalHppDP)}${
+            labaSelisih > 0 ? ` [Selisih Markup Toko: +${formatRupiah(labaSelisih)}]` : ''
+          }.`
+        );
+      }
       loadHistory();
       onRefresh();
 
       const receipt: ReceiptData = {
-        title: isModeSesamaMitra
+        title: isModeProyekBersama
+          ? 'BUKTI MATERIAL PROYEK BERSAMA (LUNAS SINKRON DP)'
+          : isModeBayarLunasKasPt
+          ? 'BUKTI NOTA LUNAS ANAK PERUSAHAAN → KAS / BANK PT'
+          : isModeSesamaMitra
           ? 'BUKTI PEMBUKUAN NOTA SILANG (SESAMA MITRA PT)'
           : 'BUKTI PEMBUKUAN NOTA SILANG (MITRA & ANAK PERUSAHAAN)',
-        subtitle: `Pengambil: ${res.mitraPengambilNama} | ${
+        subtitle: `${
+          isModeProyekBersama
+            ? 'Akun Proyek'
+            : isModeBayarLunasKasPt
+            ? 'Pembeli (Lunas)'
+            : 'Pengambil'
+        }: ${res.mitraPengambilNama} | ${
           isModeSesamaMitra ? 'Mitra Penyedia' : 'Anak Perusahaan'
         }: ${res.anakPerusahaanNama}`,
         nomorTransaksi: res.noNotaSilang,
         tanggal: res.penjualanMitra.tanggal,
         jam: res.penjualanMitra.jam,
         mitra: res.mitraPengambilNama,
-        rekening: isModeSesamaMitra
+        rekening: isModeProyekBersama
+          ? statusProyek === 'LUNAS_SINKRON'
+            ? 'PROYEK BERSAMA · LUNAS SINKRON (NON-KAS / RP 0 HUTANG DP)'
+            : 'PROYEK BERSAMA · AKUMULASI BIAYA (DP OTOMATIS LUNAS SINKRON)'
+          : isModeBayarLunasKasPt
+          ? `LUNAS (${metodeBayarKasPt}) → ${rekLabel} (${rekeningTujuanKasPt})`
+          : isModeSesamaMitra
           ? 'NOTA SILANG SESAMA MITRA (PIUTANG MITRA → PT → MITRA PENYEDIA)'
           : 'NOTA SILANG UTAMA (PIUTANG MITRA → PT → ANAK PERUSAHAAN)',
         kategori: 'NOTA_SILANG',
         fotoNota: res.penjualanMitra.fotoNota,
         items: itemsToSubmit.map((it) => {
-          const mk = pakaiHargaMusiman ? Math.max(0, Number((it as any).markupPerSatuan || 0)) : 0;
+          const mk = effectivePakaiMarkup
+            ? Math.max(0, Number((it as any).markupPerSatuan || 0))
+            : 0;
           const hJual = it.harga + mk;
           return {
             nama: mk > 0 ? `${it.namaBarang} (+Markup ${formatRupiah(mk)})` : it.namaBarang,
@@ -364,34 +536,89 @@ export const NotaSilangView: React.FC<Props> = ({
             subtotal: Math.round(it.qty * hJual),
           };
         }),
-        detailRows: [
-          { label: 'Mitra Pengambil Barang', value: res.mitraPengambilNama },
-          {
-            label: isModeSesamaMitra ? 'Mitra Penyedia Barang' : 'Toko / Anak Perusahaan',
-            value: res.anakPerusahaanNama,
-          },
-          { label: 'No. Nota Referensi', value: noNotaToko.trim() || '-' },
-          {
-            label: `Nota Piutang ${res.mitraPengambilNama} ke PT`,
-            value: `${formatRupiah(totalJualMitra)} (Harga Jual ke Mitra)`,
-            highlight: true,
-          },
-          {
-            label: `Nota Hutang ke ${res.anakPerusahaanNama}`,
-            value: `${formatRupiah(totalHppDP)} (Harga Pokok Struk Toko)`,
-          },
-          ...(labaSelisih > 0
-            ? [{ label: 'Laba / Markup Toko', value: `+${formatRupiah(labaSelisih)}` }]
-            : []),
-          {
-            label: 'Total Tagihan Piutang Mitra',
-            value: totalJualMitra,
-            isTotal: true,
-          },
-        ],
+        detailRows: isModeProyekBersama
+          ? [
+              { label: 'Akun Proyek / Bangunan', value: res.mitraPengambilNama },
+              { label: 'Sumber Material (Toko Anak Perusahaan)', value: res.anakPerusahaanNama },
+              { label: 'No. Nota Referensi', value: noNotaToko.trim() || '-' },
+              {
+                label: `Status Nota di ${res.anakPerusahaanNama}`,
+                value: 'OTOMATIS LUNAS SINKRON (Rp 0 Hutang PT)',
+                highlight: true,
+              },
+              {
+                label: `Pencatatan di Buku ${res.mitraPengambilNama}`,
+                value:
+                  statusProyek === 'LUNAS_SINKRON'
+                    ? 'Lunas SINKRON (Rekap Biaya Proyek)'
+                    : 'Akumulasi Biaya Proyek (Saldo Berjalan)',
+              },
+              {
+                label: 'Mutasi Kas / Bank PT',
+                value: 'Rp 0 (Non-Kas / Sinkron)',
+              },
+              {
+                label: 'Total Biaya Material Proyek',
+                value: totalJualMitra,
+                isTotal: true,
+              },
+            ]
+          : isModeBayarLunasKasPt
+          ? [
+              { label: 'Pembeli Barang (Status LUNAS)', value: res.mitraPengambilNama },
+              { label: 'Toko / Anak Perusahaan', value: res.anakPerusahaanNama },
+              { label: 'No. Nota Referensi', value: noNotaToko.trim() || '-' },
+              {
+                label: `Uang Masuk ke ${rekLabel} (${rekeningTujuanKasPt})`,
+                value: `+${formatRupiah(totalJualMitra)} (${metodeBayarKasPt})`,
+                highlight: true,
+              },
+              {
+                label: `Hutang PT ke ${res.anakPerusahaanNama}`,
+                value: `+${formatRupiah(totalHppDP)} (Buku JML UANG)`,
+              },
+              {
+                label: 'Status Piutang / Bon Pembeli',
+                value: 'LUNAS (Rp 0)',
+              },
+              {
+                label: 'Total Pembayaran Diterima PT',
+                value: totalJualMitra,
+                isTotal: true,
+              },
+            ]
+          : [
+              { label: 'Mitra Pengambil Barang', value: res.mitraPengambilNama },
+              {
+                label: isModeSesamaMitra ? 'Mitra Penyedia Barang' : 'Toko / Anak Perusahaan',
+                value: res.anakPerusahaanNama,
+              },
+              { label: 'No. Nota Referensi', value: noNotaToko.trim() || '-' },
+              {
+                label: `Nota Piutang ${res.mitraPengambilNama} ke PT`,
+                value: `${formatRupiah(totalJualMitra)} (Harga Jual ke Mitra)`,
+                highlight: true,
+              },
+              {
+                label: `Nota Hutang ke ${res.anakPerusahaanNama}`,
+                value: `${formatRupiah(totalHppDP)} (Harga Pokok Struk Toko)`,
+              },
+              ...(labaSelisih > 0
+                ? [{ label: 'Laba / Markup Toko', value: `+${formatRupiah(labaSelisih)}` }]
+                : []),
+              {
+                label: 'Total Tagihan Piutang Mitra',
+                value: totalJualMitra,
+                isTotal: true,
+              },
+            ],
         catatan:
           keterangan ||
-          `Saat ${res.mitraPengambilNama} melunasi ke PT, pelunasan hanya mengurangi bon Mitra ke PT tanpa melunasi buku ${res.anakPerusahaanNama}.`,
+          (isModeProyekBersama
+            ? `Material proyek bersama PT WAP & ${res.anakPerusahaanNama}. Nota di ${res.anakPerusahaanNama} otomatis LUNAS SINKRON (tidak menambah hutang PT) dan seluruh item terekap di buku ${res.mitraPengambilNama}.`
+            : isModeBayarLunasKasPt
+            ? `Pembeli sudah membayar LUNAS (${metodeBayarKasPt}) masuk ke ${rekLabel}. Dana tercatat sebagai hutang PT di buku ${res.anakPerusahaanNama}.`
+            : `Saat ${res.mitraPengambilNama} melunasi ke PT, pelunasan hanya mengurangi bon Mitra ke PT tanpa melunasi buku ${res.anakPerusahaanNama}.`),
         kasir: 'Kasir Wijaya Agro',
       };
 
@@ -410,9 +637,16 @@ export const NotaSilangView: React.FC<Props> = ({
     setDeleting(true);
     try {
       await api.deleteNotaSilang(deleteTarget.noNotaSilang);
+      const rowMode = resolveHistoryRowMode(deleteTarget);
+      const wasLunas = rowMode === 'BAYAR_LUNAS_KAS_PT';
+      const wasProyek = rowMode === 'PROYEK_BERSAMA';
       setDeleteTarget(null);
       setSuccessMsg(
-        `Nota Silang ${deleteTarget.noNotaSilang} berhasil dibatalkan dari kedua buku.`
+        wasProyek
+          ? `Nota Proyek Bersama ${deleteTarget.noNotaSilang} berhasil dihapus dari catatan biaya ${deleteTarget.namaMitra} (Buku ${deleteTarget.namaAnakPerusahaan} dan Kas PT tidak terpengaruh).`
+          : wasLunas
+          ? `Nota Lunas ${deleteTarget.noNotaSilang} berhasil dibatalkan. Saldo Kas/Bank PT dan hutang PT ke ${deleteTarget.namaAnakPerusahaan} otomatis dikembalikan.`
+          : `Nota Silang ${deleteTarget.noNotaSilang} berhasil dibatalkan dari kedua buku.`
       );
       loadHistory();
       onRefresh();
@@ -423,9 +657,7 @@ export const NotaSilangView: React.FC<Props> = ({
     }
   };
 
-  const resolveHistoryRowMode = (
-    ns: NotaSilangRecordSummary
-  ): 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA' => {
+  const resolveHistoryRowMode = (ns: NotaSilangRecordSummary): ModeNotaSilang => {
     if (ns.modeNotaSilang) return ns.modeNotaSilang;
     const targetMitra = mitraList.find((m) => m.id === ns.idMitraAnakPerusahaan);
     if (
@@ -464,10 +696,14 @@ export const NotaSilangView: React.FC<Props> = ({
           </div>
           <div>
             <h1 className="text-xl font-black text-zinc-900 tracking-tight">
-              Pembukuan Nota Silang (Fokus Utama: Mitra ⇄ Anak Perusahaan · Opsi: Sesama Mitra)
+              Pembukuan Nota Silang, Titipan Lunas &amp; Proyek Bersama
             </h1>
             <p className="text-xs text-zinc-600 mt-1 leading-relaxed">
-              <strong>Fokus Utama:</strong> Mitra PT mengambil barang piutang di toko Anak Perusahaan (contoh: <strong>DP Parabot</strong>) dengan PT sebagai penanggung jawab. Tersedia juga <strong>Opsi Nota Silang Sesama Mitra</strong> apabila transaksi silang dilakukan antar sesama mitra PT.
+              Kelola pengambilan barang di toko Anak Perusahaan (<strong>DP Parabot</strong>) untuk{' '}
+              <strong>Bon / Piutang Mitra</strong>,{' '}
+              <strong>Bayar Lunas masuk Kas/Bank PT</strong>,{' '}
+              <strong>Proyek Bersama PT WAP &amp; DP Parabot (Lunas Sinkron · Rp 0 Hutang DP)</strong>, serta opsi{' '}
+              <strong>Sesama Mitra</strong>.
             </p>
           </div>
         </div>
@@ -491,7 +727,7 @@ export const NotaSilangView: React.FC<Props> = ({
         {/* Left Column: Pilih Jenis Nota Silang, Pihak Terkait & Input Keranjang */}
         <div className="lg:col-span-7 space-y-4">
           <div className="bg-white rounded-xl border border-zinc-200 p-5 space-y-4 text-xs">
-            {/* Mode Switcher: Fokus Utama (Anak Perusahaan) vs Opsi Sesama Mitra */}
+            {/* Mode Switcher: 4 Mode Transaksi (2x2 Grid) */}
             <div className="space-y-2">
               <div className="font-bold text-zinc-800 uppercase tracking-wider text-[11px]">
                 Pilih Jenis Pembukuan Nota Silang
@@ -507,9 +743,7 @@ export const NotaSilangView: React.FC<Props> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-black text-xs">
-                      1. Mitra ⇄ Anak Perusahaan (Utama)
-                    </span>
+                    <span className="font-black text-xs">1. Bon Mitra ⇄ DP Parabot</span>
                     <Building2 className="w-4 h-4 shrink-0 opacity-85" />
                   </div>
                   <p
@@ -519,7 +753,55 @@ export const NotaSilangView: React.FC<Props> = ({
                         : 'text-indigo-800/80'
                     }`}
                   >
-                    Fokus utama: Mitra ambil barang di DP Parabot / Anak Perusahaan PT
+                    Mitra ambil barang bon di DP Parabot (+Bon Mitra, +Hutang PT ke DP)
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setModeNotaSilang('BAYAR_LUNAS_KAS_PT')}
+                  className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                    modeNotaSilang === 'BAYAR_LUNAS_KAS_PT'
+                      ? 'bg-emerald-700 text-white border-emerald-800'
+                      : 'bg-emerald-50/60 hover:bg-emerald-50 text-emerald-950 border-emerald-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-black text-xs">2. Bayar Lunas DP → Kas PT</span>
+                    <Banknote className="w-4 h-4 shrink-0 opacity-85" />
+                  </div>
+                  <p
+                    className={`text-[11px] mt-1 leading-snug ${
+                      modeNotaSilang === 'BAYAR_LUNAS_KAS_PT'
+                        ? 'text-emerald-100'
+                        : 'text-emerald-800/80'
+                    }`}
+                  >
+                    Ambil barang di DP Parabot bayar lunas, uang masuk Kas/Bank PT → Hutang PT ke DP
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setModeNotaSilang('PROYEK_BERSAMA')}
+                  className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                    modeNotaSilang === 'PROYEK_BERSAMA'
+                      ? 'bg-violet-700 text-white border-violet-800'
+                      : 'bg-violet-50/60 hover:bg-violet-50 text-violet-950 border-violet-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-black text-xs">3. Proyek Bersama (Sinkron DP)</span>
+                    <HardHat className="w-4 h-4 shrink-0 opacity-85" />
+                  </div>
+                  <p
+                    className={`text-[11px] mt-1 leading-snug ${
+                      modeNotaSilang === 'PROYEK_BERSAMA'
+                        ? 'text-violet-100'
+                        : 'text-violet-900/80'
+                    }`}
+                  >
+                    Material proyek (cth: Bangunan RM WAP) ambil di DP: DP otomatis Lunas Sinkron (Rp 0 hutang), tercatat per item di buku proyek
                   </p>
                 </button>
 
@@ -533,9 +815,7 @@ export const NotaSilangView: React.FC<Props> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-black text-xs">
-                      2. Nota Silang Sesama Mitra (Opsi)
-                    </span>
+                    <span className="font-black text-xs">4. Sesama Mitra (Opsi)</span>
                     <Users className="w-4 h-4 shrink-0 opacity-85" />
                   </div>
                   <p
@@ -543,43 +823,127 @@ export const NotaSilangView: React.FC<Props> = ({
                       modeNotaSilang === 'SESAMA_MITRA' ? 'text-teal-100' : 'text-zinc-500'
                     }`}
                   >
-                    Opsi tambahan: Silang piutang barang dari Mitra A ke Mitra B melalui PT
+                    Opsi tambahan: Silang piutang barang dari Mitra A ke Mitra B via PT
                   </p>
                 </button>
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2 border-t border-zinc-100">
-              {/* Mitra Pengambil */}
+              {/* Pembeli / Pengambil Barang */}
               <div className="space-y-1.5">
-                <label className="block font-bold text-zinc-700 flex items-center justify-between">
-                  <span>
-                    Mitra Pengambil Barang (+Bon ke PT) <span className="text-rose-500">*</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-indigo-700">Cari Nama / Kode</span>
-                </label>
-                <SearchableMitraSelect
-                  mitras={filteredMitraPengambil}
-                  value={idMitraPengambil}
-                  onChange={(id) => setIdMitraPengambil(id)}
-                  placeholder="Cari & pilih mitra pengambil..."
-                  searchPlaceholder="Ketik nama mitra pengambil (cth: SAMLAWI)..."
-                  accent="indigo"
-                />
+                {isModeBayarLunasKasPt ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="font-bold text-zinc-700">
+                        Pembeli Barang (Lunas / Tanpa Bon)
+                      </label>
+                      <div className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 p-0.5 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setTipePembeliLunas('UMUM')}
+                          className={`px-2 py-0.5 rounded font-bold cursor-pointer ${
+                            tipePembeliLunas === 'UMUM'
+                              ? 'bg-emerald-700 text-white'
+                              : 'text-emerald-900 hover:bg-emerald-100'
+                          }`}
+                        >
+                          Customer Umum
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTipePembeliLunas('MITRA')}
+                          className={`px-2 py-0.5 rounded font-bold cursor-pointer ${
+                            tipePembeliLunas === 'MITRA'
+                              ? 'bg-emerald-700 text-white'
+                              : 'text-emerald-900 hover:bg-emerald-100'
+                          }`}
+                        >
+                          Mitra Terdaftar
+                        </button>
+                      </div>
+                    </div>
+
+                    {tipePembeliLunas === 'UMUM' ? (
+                      <div className="relative">
+                        <User className="w-3.5 h-3.5 text-emerald-700 absolute left-3 top-2.5" />
+                        <input
+                          type="text"
+                          value={namaPembeliUmum}
+                          onChange={(e) => setNamaPembeliUmum(e.target.value)}
+                          placeholder="Nama Customer Umum (cth: Bapak Budi / Pembeli Cash)"
+                          className="w-full pl-8 pr-3 py-2 border border-emerald-300 bg-emerald-50/30 rounded-lg font-semibold text-zinc-900 focus:bg-white focus:border-emerald-600 focus:outline-none"
+                        />
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          Boleh dikosongkan jika ingin dicatat sebagai <strong>Customer Umum</strong>.
+                        </p>
+                      </div>
+                    ) : (
+                      <SearchableMitraSelect
+                        mitras={filteredMitraPengambil}
+                        value={idMitraPengambil}
+                        onChange={(id) => setIdMitraPengambil(id)}
+                        placeholder="Cari & pilih mitra yang bayar lunas..."
+                        searchPlaceholder="Ketik nama mitra (cth: SAMLAWI)..."
+                        accent="emerald"
+                      />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <label className="block font-bold text-zinc-700 flex items-center justify-between">
+                      <span>
+                        {isModeProyekBersama
+                          ? 'Akun Proyek / Bangunan (Pencatatan Biaya)'
+                          : 'Mitra Pengambil Barang (+Bon ke PT)'}{' '}
+                        <span className="text-rose-500">*</span>
+                      </span>
+                      <span className="text-[10px] font-semibold text-indigo-700">
+                        Cari Nama / Kode
+                      </span>
+                    </label>
+                    <SearchableMitraSelect
+                      mitras={filteredMitraPengambil}
+                      value={idMitraPengambil}
+                      onChange={(id) => setIdMitraPengambil(id)}
+                      placeholder={
+                        isModeProyekBersama
+                          ? 'Pilih akun proyek (cth: BANGUNAN RUMAH MAKAN WAP)...'
+                          : 'Cari & pilih mitra pengambil...'
+                      }
+                      searchPlaceholder={
+                        isModeProyekBersama
+                          ? 'Ketik BANGUNAN / nama proyek...'
+                          : 'Ketik nama mitra pengambil (cth: SAMLAWI)...'
+                      }
+                      accent="indigo"
+                    />
+                  </>
+                )}
               </div>
 
-              {/* Pihak Kedua: Anak Perusahaan (Fokus Utama) ATAU Mitra Penyedia (Sesama Mitra) */}
+              {/* Pihak Kedua: Anak Perusahaan (DP Parabot) ATAU Mitra Penyedia */}
               <div className="space-y-1.5">
                 <label className="block font-bold text-zinc-700 flex items-center justify-between">
                   <span>
                     {isModeSesamaMitra
                       ? 'Mitra Penyedia Barang (+JML UANG di Buku Mitra)'
+                      : isModeProyekBersama
+                      ? 'Toko Anak Perusahaan (Otomatis Lunas Sinkron · Rp 0 Hutang)'
+                      : isModeBayarLunasKasPt
+                      ? 'Toko Anak Perusahaan (+Hutang PT)'
                       : 'Toko Anak Perusahaan Penyedia (Fokus Utama)'}{' '}
                     <span className="text-rose-500">*</span>
                   </span>
                   <span
                     className={`text-[10px] font-semibold ${
-                      isModeSesamaMitra ? 'text-teal-700' : 'text-amber-700'
+                      isModeSesamaMitra
+                        ? 'text-teal-700'
+                        : isModeProyekBersama
+                        ? 'text-violet-700'
+                        : isModeBayarLunasKasPt
+                        ? 'text-emerald-700'
+                        : 'text-amber-700'
                     }`}
                   >
                     Cari Nama / Kode
@@ -600,20 +964,146 @@ export const NotaSilangView: React.FC<Props> = ({
                       ? 'Ketik nama mitra penyedia, kode, atau HP...'
                       : 'Ketik nama toko anak perusahaan atau kode...'
                   }
-                  accent={isModeSesamaMitra ? 'teal' : 'amber'}
+                  accent={isModeSesamaMitra ? 'teal' : isModeBayarLunasKasPt ? 'emerald' : 'amber'}
                 />
 
                 <p className="text-[10px] text-zinc-500 leading-snug">
-                  Otomatis tercatat di buku{' '}
-                  <strong>
-                    {selectedCounterpartyObj?.nama ||
-                      (isModeSesamaMitra ? 'Mitra Penyedia' : 'DP Parabot')}
-                  </strong>{' '}
-                  pada kolom <strong>JML UANG</strong> atas nama{' '}
-                  <strong>{selectedMitraObj?.nama || 'Mitra'}</strong>.
+                  {isModeProyekBersama ? (
+                    <>
+                      Rekening Koran{' '}
+                      <strong>{selectedCounterpartyObj?.nama || 'DP Parabot'}</strong>{' '}
+                      <strong>TIDAK berubah sama sekali (Rp 0 Hutang PT)</strong> karena proyek
+                      bersama sudah otomatis dianggap <strong>LUNAS SINKRON</strong>.
+                    </>
+                  ) : (
+                    <>
+                      Otomatis tercatat di buku{' '}
+                      <strong>
+                        {selectedCounterpartyObj?.nama ||
+                          (isModeSesamaMitra ? 'Mitra Penyedia' : 'DP Parabot')}
+                      </strong>{' '}
+                      pada kolom <strong>JML UANG</strong> (Hutang PT) atas transaksi{' '}
+                      <strong>{displayNamaPembeli}</strong>.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
+
+            {/* Pengaturan Status Pencatatan di Buku Proyek (Khusus Mode PROYEK_BERSAMA) */}
+            {isModeProyekBersama && (
+              <div className="p-3.5 rounded-xl border border-violet-200 bg-violet-50/70 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-bold text-violet-950 flex items-center gap-1.5">
+                    <HardHat className="w-4 h-4 text-violet-700" />
+                    <span>Cara Pencatatan di Buku {selectedMitraObj?.nama || 'Proyek / Bangunan'}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setStatusProyek('BON_PROYEK')}
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      statusProyek === 'BON_PROYEK'
+                        ? 'bg-violet-700 text-white border-violet-800'
+                        : 'bg-white text-violet-950 border-violet-200 hover:bg-violet-50'
+                    }`}
+                  >
+                    <div className="font-bold text-[11px]">
+                      Akumulasi Biaya (Saldo Berjalan)
+                    </div>
+                    <p
+                      className={`text-[10px] mt-0.5 leading-snug ${
+                        statusProyek === 'BON_PROYEK' ? 'text-violet-100' : 'text-zinc-600'
+                      }`}
+                    >
+                      Digabung langsung dengan material Toko WAP di Saldo Berjalan agar total belanja bangunan langsung terlihat; dapat di-lunas SINKRON kapan saja.
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatusProyek('LUNAS_SINKRON')}
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      statusProyek === 'LUNAS_SINKRON'
+                        ? 'bg-violet-700 text-white border-violet-800'
+                        : 'bg-white text-violet-950 border-violet-200 hover:bg-violet-50'
+                    }`}
+                  >
+                    <div className="font-bold text-[11px]">
+                      Langsung Lunas SINKRON (Rp 0 Piutang)
+                    </div>
+                    <p
+                      className={`text-[10px] mt-0.5 leading-snug ${
+                        statusProyek === 'LUNAS_SINKRON' ? 'text-violet-100' : 'text-zinc-600'
+                      }`}
+                    >
+                      Tidak menambah angka Piutang/Bon PT; langsung tercatat per item di History &amp; Rekap Total Biaya Bangunan.
+                    </p>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Pembayaran Masuk ke Kas / Bank PT (Khusus Mode BAYAR_LUNAS_KAS_PT) */}
+            {isModeBayarLunasKasPt && (
+              <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/60 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-bold text-emerald-950 flex items-center gap-1.5">
+                    <Landmark className="w-4 h-4 text-emerald-700" />
+                    <span>Rekening Penerimaan Uang Lunas (Masuk Kas / Bank PT)</span>
+                  </div>
+                  <div className="inline-flex rounded-lg border border-emerald-300 bg-white p-0.5 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setMetodeBayarKasPt('TUNAI')}
+                      className={`px-3 py-1 rounded-md font-bold cursor-pointer ${
+                        metodeBayarKasPt === 'TUNAI'
+                          ? 'bg-emerald-700 text-white'
+                          : 'text-emerald-900 hover:bg-emerald-50'
+                      }`}
+                    >
+                      Tunai / Cash Kasir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMetodeBayarKasPt('TRANSFER')}
+                      className={`px-3 py-1 rounded-md font-bold cursor-pointer ${
+                        metodeBayarKasPt === 'TRANSFER'
+                          ? 'bg-emerald-700 text-white'
+                          : 'text-emerald-900 hover:bg-emerald-50'
+                      }`}
+                    >
+                      Transfer Bank PT
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-emerald-950 mb-1">
+                    Pilih Rekening Kas / Bank PT Penerima Uang <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={rekeningTujuanKasPt}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRekeningTujuanKasPt(val);
+                      if (val === 'KAS01') {
+                        setMetodeBayarKasPt('TUNAI');
+                      } else {
+                        setMetodeBayarKasPt('TRANSFER');
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-emerald-300 rounded-lg bg-white font-bold text-zinc-900"
+                  >
+                    {rekeningKasPtOptions.map((rk) => (
+                      <option key={rk.kode} value={rk.kode}>
+                        {rk.nama} ({rk.kode}) — Saldo: {formatRupiah(rk.saldoSaatIni)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-zinc-100">
               <div>
@@ -768,16 +1258,34 @@ export const NotaSilangView: React.FC<Props> = ({
 
         {/* Right Column: Keranjang Nota Silang + Simulasi Pembukuan Silang */}
         <div className="lg:col-span-5 space-y-4">
-          <div className="bg-white rounded-xl border border-indigo-200 overflow-hidden">
+          <div
+            className={`bg-white rounded-xl border overflow-hidden ${
+              isModeProyekBersama
+                ? 'border-violet-200'
+                : isModeBayarLunasKasPt
+                ? 'border-emerald-200'
+                : 'border-indigo-200'
+            }`}
+          >
             <div
               className={`p-4 text-white flex items-center justify-between ${
-                isModeSesamaMitra ? 'bg-teal-900' : 'bg-indigo-900'
+                isModeProyekBersama
+                  ? 'bg-violet-900'
+                  : isModeBayarLunasKasPt
+                  ? 'bg-emerald-900'
+                  : isModeSesamaMitra
+                  ? 'bg-teal-900'
+                  : 'bg-indigo-900'
               }`}
             >
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-4 h-4 text-amber-300" />
                 <span className="text-xs font-bold uppercase tracking-wider">
-                  Keranjang Nota Silang ({cart.length} Barang)
+                  {isModeProyekBersama
+                    ? `Keranjang Material Proyek (${cart.length} Item)`
+                    : isModeBayarLunasKasPt
+                    ? `Keranjang Nota Lunas DP (${cart.length} Barang)`
+                    : `Keranjang Nota Silang (${cart.length} Barang)`}
                 </span>
               </div>
               {cart.length > 0 && (
@@ -882,56 +1390,127 @@ export const NotaSilangView: React.FC<Props> = ({
                 </span>
               </div>
 
-              {/* Opsi Harga Musiman (Piutang Mitra Per Item) */}
-              <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/60 space-y-1.5">
-                <label className="flex items-center gap-2 text-xs font-bold text-amber-900 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={pakaiHargaMusiman}
-                    onChange={(e) => setPakaiHargaMusiman(e.target.checked)}
-                    className="rounded border-amber-400"
-                  />
-                  <span>Gunakan Harga Musiman (Markup Per Item di Keranjang)</span>
-                </label>
-                <p className="text-[11px] text-amber-800">
-                  Piutang ke <strong>DP Parabot</strong> tetap sesuai <strong>Harga Struk ({formatRupiah(grandTotal)})</strong>. Jika dicentang, isi <strong>+Markup Musiman</strong> pada masing-masing barang di keranjang di atas (Total Markup: <strong>+{formatRupiah(totalMarkupMusiman)}</strong>).
-                </p>
-              </div>
+              {/* Opsi Harga Musiman (Piutang Mitra Per Item) - tidak perlu pada Proyek Bersama */}
+              {!isModeProyekBersama && (
+                <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/60 space-y-1.5">
+                  <label className="flex items-center gap-2 text-xs font-bold text-amber-900 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={pakaiHargaMusiman}
+                      onChange={(e) => setPakaiHargaMusiman(e.target.checked)}
+                      className="rounded border-amber-400"
+                    />
+                    <span>Gunakan Harga Musiman (Markup Per Item di Keranjang)</span>
+                  </label>
+                  <p className="text-[11px] text-amber-800">
+                    Piutang ke <strong>DP Parabot</strong> tetap sesuai{' '}
+                    <strong>Harga Struk ({formatRupiah(grandTotal)})</strong>. Jika dicentang, isi{' '}
+                    <strong>+Markup Musiman</strong> pada masing-masing barang di keranjang di atas
+                    (Total Markup: <strong>+{formatRupiah(totalMarkupMusiman)}</strong>).
+                  </p>
+                </div>
+              )}
 
               {/* Simulasi Efek Pembukuan */}
               <div
                 className={`p-3 rounded-xl border space-y-1.5 text-[11px] ${
-                  isModeSesamaMitra
+                  isModeProyekBersama
+                    ? 'bg-violet-50/80 border-violet-200 text-violet-950'
+                    : isModeBayarLunasKasPt
+                    ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+                    : isModeSesamaMitra
                     ? 'bg-teal-50/80 border-teal-200 text-teal-950'
                     : 'bg-indigo-50/80 border-indigo-200 text-indigo-950'
                 }`}
               >
                 <div className="font-bold uppercase tracking-wider text-[10px]">
                   Alur Pembukuan Otomatis (
-                  {isModeSesamaMitra ? 'Opsi Sesama Mitra' : 'Fokus Utama: Anak Perusahaan'}):
+                  {isModeProyekBersama
+                    ? 'Proyek Bersama · DP Parabot Lunas Sinkron'
+                    : isModeBayarLunasKasPt
+                    ? 'Bayar Lunas DP → Masuk Kas / Bank PT'
+                    : isModeSesamaMitra
+                    ? 'Opsi Sesama Mitra'
+                    : 'Fokus Utama: Bon Anak Perusahaan'}
+                  ):
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span>1. Buku {selectedMitraObj?.nama || 'Mitra Pengambil'}:</span>
-                  <strong className="font-mono tabular-nums text-amber-800">
-                    +Bon ke PT {formatRupiah(totalPiutangMitra)}
-                  </strong>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span>
-                    2. Buku{' '}
-                    {selectedCounterpartyObj?.nama ||
-                      (isModeSesamaMitra ? 'Mitra Penyedia' : 'DP Parabot')}
-                    :
-                  </span>
-                  <strong className="font-mono tabular-nums text-sky-800">
-                    +JML UANG {formatRupiah(grandTotal)}
-                  </strong>
-                </div>
-                <div className="text-[10px] pt-1 border-t border-zinc-300/60 leading-snug opacity-90">
-                  3. Kas/Bank PT saat ini <strong>tetap Rp 0 berubah</strong>. Saat{' '}
-                  {selectedMitraObj?.nama || 'Mitra'} membayar bon ke PT nanti, uang masuk ke PT
-                  dan hanya melunasi bon {selectedMitraObj?.nama || 'Mitra'} ke PT.
-                </div>
+                {isModeProyekBersama ? (
+                  <>
+                    <div className="flex justify-between gap-2">
+                      <span>1. Buku {selectedMitraObj?.nama || 'Proyek / Bangunan'}:</span>
+                      <strong className="font-mono tabular-nums text-violet-900">
+                        {statusProyek === 'LUNAS_SINKRON'
+                          ? `Lunas SINKRON ${formatRupiah(grandTotal)}`
+                          : `+Biaya Proyek ${formatRupiah(grandTotal)}`}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>2. Buku {selectedCounterpartyObj?.nama || 'DP Parabot'}:</span>
+                      <strong className="font-mono tabular-nums text-emerald-700">
+                        OTOMATIS LUNAS (Rp 0 Hutang)
+                      </strong>
+                    </div>
+                    <div className="text-[10px] pt-1 border-t border-violet-300/60 leading-snug opacity-95">
+                      3. Kas/Bank PT <strong>tetap Rp 0 berubah (Non-Kas / Sinkron)</strong>. Setiap
+                      material tercatat rinci per item di Rekening Koran{' '}
+                      <strong>{selectedMitraObj?.nama || 'Bangunan'}</strong> dan otomatis masuk ke
+                      panel <strong>Rekap Total Biaya Bangunan</strong> tanpa menyentuh saldo{' '}
+                      {selectedCounterpartyObj?.nama || 'DP Parabot'}.
+                    </div>
+                  </>
+                ) : isModeBayarLunasKasPt ? (
+                  <>
+                    <div className="flex justify-between gap-2">
+                      <span>
+                        1. {selectedRekeningKasPtObj?.nama || rekeningTujuanKasPt} (
+                        {rekeningTujuanKasPt}):
+                      </span>
+                      <strong className="font-mono tabular-nums text-emerald-800">
+                        +Uang Masuk {formatRupiah(totalPiutangMitra)}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>
+                        2. Buku {selectedCounterpartyObj?.nama || 'DP Parabot'} (Hutang PT):
+                      </span>
+                      <strong className="font-mono tabular-nums text-sky-800">
+                        +JML UANG {formatRupiah(grandTotal)}
+                      </strong>
+                    </div>
+                    <div className="text-[10px] pt-1 border-t border-emerald-300/60 leading-snug opacity-95">
+                      3. Pembeli <strong>{displayNamaPembeli}</strong> berstatus{' '}
+                      <strong>LUNAS ({metodeBayarKasPt})</strong> — tidak dicatat sebagai bon /
+                      piutang (Rp 0). Pembayaran dari PT ke{' '}
+                      {selectedCounterpartyObj?.nama || 'DP Parabot'} dilakukan nanti lewat menu
+                      Bayar Titipan / Hutang.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between gap-2">
+                      <span>1. Buku {selectedMitraObj?.nama || 'Mitra Pengambil'}:</span>
+                      <strong className="font-mono tabular-nums text-amber-800">
+                        +Bon ke PT {formatRupiah(totalPiutangMitra)}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>
+                        2. Buku{' '}
+                        {selectedCounterpartyObj?.nama ||
+                          (isModeSesamaMitra ? 'Mitra Penyedia' : 'DP Parabot')}
+                        :
+                      </span>
+                      <strong className="font-mono tabular-nums text-sky-800">
+                        +JML UANG {formatRupiah(grandTotal)}
+                      </strong>
+                    </div>
+                    <div className="text-[10px] pt-1 border-t border-zinc-300/60 leading-snug opacity-90">
+                      3. Kas/Bank PT saat ini <strong>tetap Rp 0 berubah</strong>. Saat{' '}
+                      {selectedMitraObj?.nama || 'Mitra'} membayar bon ke PT nanti, uang masuk ke PT
+                      dan hanya melunasi bon {selectedMitraObj?.nama || 'Mitra'} ke PT.
+                    </div>
+                  </>
+                )}
               </div>
 
               <button
@@ -942,7 +1521,11 @@ export const NotaSilangView: React.FC<Props> = ({
                 }
                 onClick={handleSubmitNotaSilang}
                 className={`w-full py-2.5 px-4 rounded-xl disabled:opacity-50 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer ${
-                  isModeSesamaMitra
+                  isModeProyekBersama
+                    ? 'bg-violet-700 hover:bg-violet-800'
+                    : isModeBayarLunasKasPt
+                    ? 'bg-emerald-700 hover:bg-emerald-800'
+                    : isModeSesamaMitra
                     ? 'bg-teal-700 hover:bg-teal-800'
                     : 'bg-indigo-700 hover:bg-indigo-800'
                 }`}
@@ -950,8 +1533,12 @@ export const NotaSilangView: React.FC<Props> = ({
                 <FileText className="w-4 h-4" />
                 <span>
                   {submitting
-                    ? 'Menyimpan Nota Silang...'
-                    : `Simpan Nota Silang (${formatRupiah(grandTotal)})`}
+                    ? 'Menyimpan Pembukuan...'
+                    : isModeProyekBersama
+                    ? `Catat Material Proyek Bersama (${formatRupiah(grandTotal)})`
+                    : isModeBayarLunasKasPt
+                    ? `Simpan Nota Lunas → Kas PT (${formatRupiah(totalPiutangMitra)})`
+                    : `Simpan Nota Silang (${formatRupiah(totalPiutangMitra)})`}
                 </span>
               </button>
             </div>
@@ -996,7 +1583,29 @@ export const NotaSilangView: React.FC<Props> = ({
                     : 'text-zinc-600 hover:text-zinc-900'
                 }`}
               >
-                Anak Perusahaan
+                Bon DP
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterModeHistory('BAYAR_LUNAS_KAS_PT')}
+                className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
+                  filterModeHistory === 'BAYAR_LUNAS_KAS_PT'
+                    ? 'bg-emerald-700 text-white'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                Lunas → Kas PT
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterModeHistory('PROYEK_BERSAMA')}
+                className={`px-2.5 py-1 rounded-md font-semibold cursor-pointer ${
+                  filterModeHistory === 'PROYEK_BERSAMA'
+                    ? 'bg-violet-700 text-white'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                Proyek Bersama
               </button>
               <button
                 type="button"
@@ -1054,29 +1663,87 @@ export const NotaSilangView: React.FC<Props> = ({
                 filteredHistory.map((ns) => {
                   const rowMode = resolveHistoryRowMode(ns);
                   const isSesama = rowMode === 'SESAMA_MITRA';
+                  const isLunasKasPt = rowMode === 'BAYAR_LUNAS_KAS_PT';
+                  const isProyek = rowMode === 'PROYEK_BERSAMA';
                   return (
                     <tr key={ns.noNotaSilang} className="hover:bg-zinc-50/80">
-                      <td className="py-3 px-3.5 font-mono font-bold text-indigo-800 whitespace-nowrap">
+                      <td
+                        className={`py-3 px-3.5 font-mono font-bold whitespace-nowrap ${
+                          isProyek
+                            ? 'text-violet-800'
+                            : isLunasKasPt
+                            ? 'text-emerald-800'
+                            : 'text-indigo-800'
+                        }`}
+                      >
                         <div>{ns.noNotaSilang}</div>
                         <div className="text-[10px] font-sans font-normal text-zinc-500">
-                          {isSesama ? 'Sesama Mitra' : 'Anak Perusahaan'}
+                          {isProyek
+                            ? 'Proyek Bersama · Sinkron DP'
+                            : isLunasKasPt
+                            ? 'Bayar Lunas → Kas PT'
+                            : isSesama
+                            ? 'Sesama Mitra'
+                            : 'Bon Anak Perusahaan'}
                           {ns.noNotaToko ? ` · Ref: ${ns.noNotaToko}` : ''}
                         </div>
+                        {isLunasKasPt && (
+                          <div className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-sans font-bold">
+                            <span>
+                              LUNAS · {ns.metodeBayarKasPt || 'TUNAI'} →{' '}
+                              {ns.rekeningTujuanKasPt || 'KAS01'}
+                            </span>
+                          </div>
+                        )}
+                        {isProyek && (
+                          <div className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-50 border border-violet-200 text-violet-800 text-[10px] font-sans font-bold">
+                            <span>
+                              DP LUNAS SINKRON ·{' '}
+                              {ns.statusProyek === 'LUNAS_SINKRON'
+                                ? 'Lunas Sinkron'
+                                : 'Akumulasi Biaya'}
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-3.5 font-mono tabular-nums text-zinc-600 whitespace-nowrap">
                         {ns.tanggal}
                       </td>
-                      <td className="py-3 px-3.5 font-bold text-zinc-900">{ns.namaMitra}</td>
+                      <td className="py-3 px-3.5">
+                        <div className="font-bold text-zinc-900">{ns.namaMitra}</div>
+                        {isLunasKasPt && (
+                          <div className="text-[10px] text-emerald-700 font-semibold">
+                            {ns.idMitra === 'UMUM' ? 'Customer Umum · Lunas' : 'Mitra · Lunas'}
+                          </div>
+                        )}
+                        {isProyek && (
+                          <div className="text-[10px] text-violet-700 font-semibold">
+                            Akun Proyek Bersama
+                          </div>
+                        )}
+                      </td>
                       <td className="py-3 px-3.5">
                         <div
                           className={`font-bold ${
-                            isSesama ? 'text-teal-800' : 'text-amber-900'
+                            isProyek
+                              ? 'text-violet-900'
+                              : isSesama
+                              ? 'text-teal-800'
+                              : isLunasKasPt
+                              ? 'text-emerald-900'
+                              : 'text-amber-900'
                           }`}
                         >
                           {ns.namaAnakPerusahaan}
                         </div>
                         <div className="text-[10px] text-zinc-500">
-                          {isSesama ? 'Mitra Penyedia' : 'Anak Perusahaan PT'}
+                          {isProyek
+                            ? 'Otomatis Lunas Sinkron (Rp 0 Hutang)'
+                            : isSesama
+                            ? 'Mitra Penyedia'
+                            : isLunasKasPt
+                            ? 'Hutang PT ke Toko Anak Perusahaan'
+                            : 'Anak Perusahaan PT'}
                         </div>
                       </td>
                       <td className="py-3 px-3.5 text-zinc-700 min-w-[280px]">
@@ -1136,22 +1803,26 @@ export const NotaSilangView: React.FC<Props> = ({
 
                           {onOpenRekeningKoranMitra && (
                             <>
-                              <button
-                                type="button"
-                                onClick={() => onOpenRekeningKoranMitra(ns.idMitra)}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-50 hover:bg-amber-600 text-amber-900 hover:text-white border border-amber-300 text-[10px] font-bold cursor-pointer transition-colors"
-                                title={`Buka Rekening Koran ${ns.namaMitra}`}
-                              >
-                                <span>Buku Mitra</span>
-                                <ArrowUpRight className="w-3 h-3" />
-                              </button>
+                              {ns.idMitra && ns.idMitra !== 'UMUM' && (
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenRekeningKoranMitra(ns.idMitra)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-50 hover:bg-amber-600 text-amber-900 hover:text-white border border-amber-300 text-[10px] font-bold cursor-pointer transition-colors"
+                                  title={`Buka Rekening Koran ${ns.namaMitra}`}
+                                >
+                                  <span>{isProyek ? 'Buku Proyek' : 'Buku Mitra'}</span>
+                                  <ArrowUpRight className="w-3 h-3" />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => onOpenRekeningKoranMitra(ns.idMitraAnakPerusahaan)}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded bg-sky-50 hover:bg-sky-700 text-sky-900 hover:text-white border border-sky-300 text-[10px] font-bold cursor-pointer transition-colors"
                                 title={`Buka Rekening Koran ${ns.namaAnakPerusahaan}`}
                               >
-                                <span>{isSesama ? 'Buku Mitra 2' : 'Buku Toko'}</span>
+                                <span>
+                                  {isProyek ? 'Buku DP' : isSesama ? 'Buku Mitra 2' : 'Buku Toko'}
+                                </span>
                                 <ArrowUpRight className="w-3 h-3" />
                               </button>
                             </>
@@ -1195,10 +1866,33 @@ export const NotaSilangView: React.FC<Props> = ({
               Batalkan Nota Silang {deleteTarget.noNotaSilang}?
             </div>
             <p className="text-zinc-600 leading-relaxed">
-              Membatalkan Nota Silang ini akan menghapus piutang pada buku{' '}
-              <strong>{deleteTarget.namaMitra}</strong> sekaligus menghapus catatan JML UANG pada
-              buku <strong>{deleteTarget.namaAnakPerusahaan}</strong> senilai{' '}
-              <strong>{formatRupiah(deleteTarget.totalNominal)}</strong>.
+              {resolveHistoryRowMode(deleteTarget) === 'PROYEK_BERSAMA' ? (
+                <>
+                  Membatalkan Nota Proyek Bersama ini hanya akan menghapus catatan biaya material
+                  senilai <strong>{formatRupiah(deleteTarget.totalNominal)}</strong> dari buku{' '}
+                  <strong>{deleteTarget.namaMitra}</strong>. Rekening Koran{' '}
+                  <strong>{deleteTarget.namaAnakPerusahaan}</strong> dan Kas PT tidak berubah.
+                </>
+              ) : resolveHistoryRowMode(deleteTarget) === 'BAYAR_LUNAS_KAS_PT' ? (
+                <>
+                  Membatalkan Nota Lunas ini akan mengurangi kembali saldo{' '}
+                  <strong>
+                    {deleteTarget.rekeningTujuanNama ||
+                      deleteTarget.rekeningTujuanKasPt ||
+                      'Kas Utama Kasir'}
+                  </strong>{' '}
+                  sekaligus menghapus catatan hutang PT (JML UANG) pada buku{' '}
+                  <strong>{deleteTarget.namaAnakPerusahaan}</strong> senilai{' '}
+                  <strong>{formatRupiah(deleteTarget.totalNominal)}</strong>.
+                </>
+              ) : (
+                <>
+                  Membatalkan Nota Silang ini akan menghapus piutang pada buku{' '}
+                  <strong>{deleteTarget.namaMitra}</strong> sekaligus menghapus catatan JML UANG
+                  pada buku <strong>{deleteTarget.namaAnakPerusahaan}</strong> senilai{' '}
+                  <strong>{formatRupiah(deleteTarget.totalNominal)}</strong>.
+                </>
+              )}
             </p>
             <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
               <button

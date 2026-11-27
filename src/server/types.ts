@@ -696,9 +696,9 @@ export interface TransaksiPenjualan {
   kategoriPengeluaran?: string;
   idPengeluaranTerkait?: string;
   idInventaris?: string;
-  // Pembukuan Nota Silang (Utama: Mitra ⇄ Anak Perusahaan seperti DP Parabot | Opsi: Sesama Mitra)
+  // Pembukuan Nota Silang (Utama: Mitra ⇄ Anak Perusahaan seperti DP Parabot | Bayar Lunas Masuk Kas PT | Opsi: Sesama Mitra)
   isNotaSilang?: boolean;
-  modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+  modeNotaSilang?: ModeNotaSilang;
   idMitraAnakPerusahaan?: string;
   namaAnakPerusahaan?: string;
   noNotaToko?: string;
@@ -881,7 +881,7 @@ export interface TransaksiPembelianHasilBumi {
   tanggalNotaLalu?: string;
   // Metadata Nota Silang pada sisi Anak Perusahaan (mis. DP Parabot) atau Sesama Mitra Penyedia
   isNotaSilang?: boolean;
-  modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+  modeNotaSilang?: ModeNotaSilang;
   idNotaSilangRef?: string;
   idMitraPengambil?: string;
   namaMitraPengambil?: string;
@@ -890,6 +890,12 @@ export interface TransaksiPembelianHasilBumi {
   keterangan: string;
   createdAt: string;
 }
+
+export type ModeNotaSilang =
+  | 'ANAK_PERUSAHAAN'
+  | 'BAYAR_LUNAS_KAS_PT'
+  | 'PROYEK_BERSAMA'
+  | 'SESAMA_MITRA';
 
 export interface NotaSilangItemInput {
   namaBarang: string;
@@ -902,7 +908,11 @@ export interface NotaSilangItemInput {
 export interface NotaSilangRecordSummary {
   noNotaSilang: string;
   noRefAnakPerusahaan: string;
-  modeNotaSilang?: 'ANAK_PERUSAHAAN' | 'SESAMA_MITRA';
+  modeNotaSilang?: ModeNotaSilang;
+  statusProyek?: 'BON_PROYEK' | 'LUNAS_SINKRON';
+  metodeBayarKasPt?: 'TUNAI' | 'TRANSFER';
+  rekeningTujuanKasPt?: string;
+  rekeningTujuanNama?: string;
   tanggal: string;
   jam: string;
   idMitra: string;
@@ -1076,6 +1086,7 @@ export interface AlokasiPembayaranBon {
   nominalDibayar: number;
   nominalSisa: number;
   isNotaNgunci?: boolean;
+  itemAlokasi?: Array<{ itemIndex: number; nominalDibayar: number }>;
 }
 
 export interface TransaksiBayarBon {
